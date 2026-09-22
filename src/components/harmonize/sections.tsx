@@ -62,7 +62,7 @@ type CreateProps = {
   openCreate?: boolean;
   onCreateOpen?: () => void;
   onCreateClose?: () => void;
-  onSaved?: (message: string) => void;
+  onSaved?: (message: string, undo?: () => void) => void;
 };
 
 export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
@@ -177,6 +177,20 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     onSaved?.(`${target.patient}: ${nextStatus}.`);
   }
 
+  function markAppointmentAsMissed(target: Appointment) {
+    const previousStatus = target.status;
+    const matchesTarget = (item: Appointment) =>
+      item.time === target.time &&
+      item.patient === target.patient &&
+      item.procedure === target.procedure &&
+      item.professional === target.professional;
+
+    setAppointmentRows((current) => current.map((item) => item === target ? { ...item, status: "Faltou" } : item));
+    onSaved?.(`${target.patient} foi marcado como faltou.`, () => {
+      setAppointmentRows((current) => current.map((item) => matchesTarget(item) ? { ...item, status: previousStatus } : item));
+    });
+  }
+
   return (
     <div className="mx-auto max-w-[1260px]">
       <div className="hp-page-enter mb-5 flex flex-col gap-4 border-b border-[#ececf2] pb-4 sm:flex-row sm:items-center sm:justify-between">
@@ -220,21 +234,32 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
       </div>
 
       <div className="hp-panel-enter overflow-x-auto rounded-[7px] bg-white px-3 shadow-[0_8px_28px_rgba(38,39,58,0.035)] sm:px-5">
-        <div className="grid min-w-[920px] grid-cols-[84px_1.15fr_1.05fr_1.1fr_1.25fr_106px] border-b border-[#eeeef3] px-3 py-3 text-[9px] font-bold uppercase text-[#adaeba]">
+        <div className="grid min-w-[1040px] grid-cols-[84px_1.1fr_1fr_1.05fr_1.15fr_210px] border-b border-[#eeeef3] px-3 py-3 text-[9px] font-bold uppercase text-[#adaeba]">
           <span>Horário</span><span>Atendimento</span><span>Status</span><span>Profissional</span><span>Paciente</span><span></span>
         </div>
         <div className="hp-list-stagger">
-        {filteredAppointments.map((appointment, index) => (
-          <div className="relative grid min-w-[920px] grid-cols-[84px_1.15fr_1.05fr_1.1fr_1.25fr_106px] items-center border-b border-[#f0f0f4] px-3 py-4 text-[11px] transition-[background-color,transform] duration-200 last:border-0 hover:-translate-y-0.5 hover:bg-[#fbfbfe]" key={`${appointment.time}-${appointment.patient}`}>
-            <span className="absolute bottom-2 left-0 top-2 w-[3px] rounded-full" style={{ backgroundColor: rowColors[index % rowColors.length] }} />
-            <strong className="text-[#5147dc]">{appointment.time}</strong>
-            <div><strong className="block text-[#3d3e51]">{appointment.procedure}</strong><span className="mt-1 block text-[9px] text-[#aaaab7]">Consulta clínica</span></div>
-            <StatusBadge status={appointment.status} />
-            <div className="flex items-center gap-2"><span className="grid h-6 w-6 place-items-center rounded-full bg-[#f0efff] text-[8px] font-black text-[#5147dc]">{appointment.professional.replace("Dra. ", "").replace("Dr. ", "").slice(0, 2).toUpperCase()}</span><strong className="text-[#5a5b6e]">{appointment.professional}</strong></div>
-            <div><strong className="block uppercase text-[#444557]">{appointment.patient}</strong><span className="mt-1 block text-[9px] text-[#aaaab7]">Paciente</span></div>
-            <Button className="border-[#5147dc] text-[#5147dc]" key="action" size="sm" variant="secondary" disabled={appointment.status === "Atendido"} onClick={() => advanceAppointment(appointment)}>{appointment.status === "Em atendimento" ? "Finalizar" : appointment.status === "Atendido" ? "Concluído" : "Atender"} <ArrowRight className="h-3 w-3" /></Button>
-          </div>
-        ))}
+        {filteredAppointments.map((appointment, index) => {
+          const isCompleted = appointment.status === "Atendido";
+          const isMissed = appointment.status === "Faltou";
+          const primaryLabel = appointment.status === "Em atendimento" ? "Finalizar" : isCompleted ? "Concluído" : isMissed ? "Faltou" : "Atender";
+
+          return (
+            <div className="relative grid min-w-[1040px] grid-cols-[84px_1.1fr_1fr_1.05fr_1.15fr_210px] items-center border-b border-[#f0f0f4] px-3 py-4 text-[11px] transition-[background-color,transform] duration-200 last:border-0 hover:-translate-y-0.5 hover:bg-[#fbfbfe]" key={`${appointment.time}-${appointment.patient}`}>
+              <span className="absolute bottom-2 left-0 top-2 w-[3px] rounded-full" style={{ backgroundColor: rowColors[index % rowColors.length] }} />
+              <strong className="text-[#5147dc]">{appointment.time}</strong>
+              <div><strong className="block text-[#3d3e51]">{appointment.procedure}</strong><span className="mt-1 block text-[9px] text-[#aaaab7]">Consulta clínica</span></div>
+              <StatusBadge status={appointment.status} />
+              <div className="flex items-center gap-2"><span className="grid h-6 w-6 place-items-center rounded-full bg-[#f0efff] text-[8px] font-black text-[#5147dc]">{appointment.professional.replace("Dra. ", "").replace("Dr. ", "").slice(0, 2).toUpperCase()}</span><strong className="text-[#5a5b6e]">{appointment.professional}</strong></div>
+              <div><strong className="block uppercase text-[#444557]">{appointment.patient}</strong><span className="mt-1 block text-[9px] text-[#aaaab7]">Paciente</span></div>
+              <div className="flex justify-end gap-2">
+                <Button className="border-[#5147dc] text-[#5147dc]" key="action" size="sm" variant="secondary" disabled={isCompleted || isMissed} onClick={() => advanceAppointment(appointment)}>{primaryLabel} <ArrowRight className="h-3 w-3" /></Button>
+                {!isCompleted && !isMissed ? (
+                  <Button className="border-[#f2c8c3] text-[#b42318] hover:border-[#b42318] hover:text-[#b42318]" key="missed" size="sm" variant="secondary" onClick={() => markAppointmentAsMissed(appointment)}>Faltou</Button>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
         </div>
       </div>
       <Modal open={openCreate} onClose={onCreateClose} title="Novo agendamento" description="Inclua o atendimento na agenda de hoje.">
