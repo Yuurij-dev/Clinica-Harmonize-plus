@@ -9,6 +9,7 @@ type SidebarProps = {
   onSelect: (section: SectionId) => void;
   mobileOpen: boolean;
   onClose: () => void;
+  onNewAppointment: () => void;
 };
 
 export function Sidebar({
@@ -16,9 +17,10 @@ export function Sidebar({
   onSelect,
   mobileOpen,
   onClose,
+  onNewAppointment,
 }: SidebarProps) {
   const content = (
-    <aside className="flex h-full w-[220px] flex-col border-r border-[#eeeef3] bg-white px-4 py-5 text-[#28293d]">
+    <aside className="hp-sidebar-enter flex h-full w-[220px] flex-col border-r border-[#eeeef3] bg-white px-4 py-5 text-[#28293d]">
       <div className="mb-7 flex items-center justify-between gap-3 px-1">
         <div className="min-w-0">
           <div className="flex items-center gap-2.5">
@@ -40,7 +42,7 @@ export function Sidebar({
         </button>
       </div>
 
-      <Button className="mb-6 w-full justify-start whitespace-nowrap px-3 text-[11px]" variant="primary">
+      <Button className="mb-6 w-full justify-start whitespace-nowrap px-3 text-[11px]" variant="primary" onClick={onNewAppointment}>
         <Plus className="h-4 w-4" />
         Novo agendamento
       </Button>
@@ -53,8 +55,8 @@ export function Sidebar({
           return (
             <button
               key={item.id}
-              className={cn(
-                "flex h-10 w-full items-center justify-between rounded-[6px] px-3 text-left text-[12px] font-semibold transition",
+            className={cn(
+                "hp-pressable flex h-10 w-full items-center justify-between rounded-[6px] px-3 text-left text-[12px] font-semibold",
                 isActive
                   ? "bg-[#f0efff] text-[#5147dc]"
                   : "text-[#747587] hover:bg-[#f7f7fa] hover:text-[#2c2d41]",
@@ -88,15 +90,15 @@ export function Sidebar({
       </div>
       <div
         className={cn(
-          "fixed inset-0 z-40 bg-[#202136]/30 backdrop-blur-sm transition lg:hidden",
+          "fixed inset-0 z-40 bg-[#202136]/30 backdrop-blur-sm transition-opacity duration-300 lg:hidden",
           mobileOpen ? "opacity-100" : "pointer-events-none opacity-0",
         )}
         onClick={onClose}
       />
       <div
         className={cn(
-          "fixed inset-y-0 left-0 z-50 transition-transform lg:hidden",
-          mobileOpen ? "translate-x-0" : "hidden -translate-x-full",
+          "fixed inset-y-0 left-0 z-50 transition-transform duration-300 ease-out lg:hidden",
+          mobileOpen ? "translate-x-0" : "pointer-events-none -translate-x-full",
         )}
       >
         {content}

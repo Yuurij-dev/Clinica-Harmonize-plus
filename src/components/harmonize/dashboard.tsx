@@ -10,11 +10,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DetailCard, ProgressBar, StatusBadge } from "./shared";
+import type { SectionId } from "@/types/clinic";
 
-export function Dashboard() {
+export function Dashboard({ onAction, onNavigate }: { onAction: (action: "client" | "appointment" | "quote" | "payment") => void; onNavigate: (section: SectionId) => void }) {
+  const actions = [
+    ["Novo cliente", "client"], ["Novo atendimento", "appointment"], ["Novo orçamento", "quote"], ["Registrar pagamento", "payment"],
+  ] as const;
   return (
     <div className="space-y-5">
-      <div className="border-b border-[#ececf2] pb-5">
+      <div className="hp-page-enter border-b border-[#ececf2] pb-5">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-xs font-semibold text-[#8c8d9f]">Domingo, 20 de setembro</p>
@@ -24,16 +28,17 @@ export function Dashboard() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2 lg:max-w-[560px] lg:justify-end">
-            {["Novo cliente", "Novo atendimento", "Novo orçamento", "Registrar pagamento"].map(
-              (action) => (
+            {actions.map(
+              ([label, action]) => (
                 <Button
                   className="min-w-fit whitespace-nowrap"
                   key={action}
-                  variant={action === "Novo atendimento" ? "primary" : "secondary"}
+                  variant={action === "appointment" ? "primary" : "secondary"}
                   size="sm"
+                  onClick={() => onAction(action)}
                 >
                   <Plus className="h-4 w-4" />
-                  {action}
+                  {label}
                 </Button>
               ),
             )}
@@ -41,7 +46,7 @@ export function Dashboard() {
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <div className="hp-list-stagger grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         {stats.map((stat) => (
           <Card key={stat.label} className="p-4">
             <div className="flex items-center justify-between gap-2">
@@ -56,7 +61,7 @@ export function Dashboard() {
         ))}
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1.45fr_0.9fr]">
+      <div className="hp-list-stagger grid gap-5 xl:grid-cols-[1.45fr_0.9fr]">
         <Card>
           <CardHeader>
             <div>
@@ -72,7 +77,7 @@ export function Dashboard() {
               {revenueBars.map((bar, index) => (
                 <div className="flex h-full flex-1 flex-col items-center justify-end gap-2" key={index}>
                   <div
-                    className="min-h-2 w-full rounded-t-[3px] bg-[#5a50df] opacity-90"
+                    className="min-h-2 w-full rounded-t-[3px] bg-[#5a50df] opacity-90 transition-[height,opacity,transform] duration-700 ease-out hover:opacity-100 hover:scale-y-105"
                     style={{ height: `${bar}%` }}
                   />
                   <span className="text-[10px] font-bold text-[#7c86a2]">
@@ -89,11 +94,12 @@ export function Dashboard() {
             <CardTitle>Próximos atendimentos</CardTitle>
             <CalendarCheck className="h-5 w-5 text-[#1438ff]" />
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="hp-list-stagger space-y-4">
             {appointments.slice(0, 4).map((appointment) => (
               <div
-                className="flex items-center gap-3 border-b border-[#f0f0f4] pb-3 last:border-0 last:pb-0"
+                className="flex cursor-pointer items-center gap-3 border-b border-[#f0f0f4] pb-3 transition-[transform,background-color] duration-200 hover:translate-x-1 last:border-0 last:pb-0"
                 key={`${appointment.time}-${appointment.patient}`}
+                onClick={() => onNavigate("agenda")}
               >
                 <div className="grid h-9 w-12 place-items-center border-l-2 border-[#5147dc] bg-[#f7f6ff] text-xs font-bold text-[#5147dc]">
                   {appointment.time}
@@ -113,7 +119,7 @@ export function Dashboard() {
         </Card>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="hp-list-stagger grid gap-6 lg:grid-cols-3">
         <DetailCard title="Clientes recentes">
           <div className="space-y-4">
             {patients.slice(0, 3).map((patient) => (

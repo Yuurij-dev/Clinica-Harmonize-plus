@@ -13,6 +13,7 @@ import type {
   Appointment,
   NavItem,
   Patient,
+  PatientJourneyRecord,
   Payment,
   Procedure,
   Product,
@@ -44,6 +45,7 @@ export const patients: Patient[] = [
   {
     name: "Maria Silva",
     phone: "(11) 98842-2210",
+    age: 27,
     status: "Ativa",
     lastVisit: "18 set. 2026",
     nextReturn: "25 set. 2026",
@@ -52,6 +54,7 @@ export const patients: Patient[] = [
   {
     name: "Amanda Carvalho",
     phone: "(21) 99714-8831",
+    age: 31,
     status: "Retorno",
     lastVisit: "16 set. 2026",
     nextReturn: "22 set. 2026",
@@ -60,6 +63,7 @@ export const patients: Patient[] = [
   {
     name: "Beatriz Almeida",
     phone: "(31) 98440-7712",
+    age: 24,
     status: "Orçamento",
     lastVisit: "12 set. 2026",
     nextReturn: "A definir",
@@ -68,12 +72,97 @@ export const patients: Patient[] = [
   {
     name: "Rafael Costa",
     phone: "(41) 99908-4420",
+    age: 35,
     status: "Pendente",
     lastVisit: "09 set. 2026",
     nextReturn: "24 set. 2026",
     value: "R$ 900",
   },
 ];
+
+export const patientJourneyRecords: Record<string, PatientJourneyRecord> = {
+  "Maria Silva": {
+    events: {
+      leadAt: "2026-09-10",
+      evaluationCompletedAt: "2026-09-12",
+      quoteApprovedAt: "2026-09-13",
+      scheduledProcedureAt: "2026-09-22",
+      scheduledReturnAt: "2026-10-15",
+    },
+    details: {
+      lead: [
+        { label: "Origem", value: "Indicação de paciente" },
+        { label: "Primeiro contato", value: "WhatsApp" },
+      ],
+      evaluation: [
+        { label: "Status", value: "Concluída", tone: "positive" },
+        { label: "Profissional", value: "Dra. Ana" },
+        { label: "Objetivo", value: "Harmonização do terço inferior" },
+      ],
+      quote: [
+        { label: "Status", value: "Aprovado", tone: "positive" },
+        { label: "Valor", value: "R$ 2.100" },
+        { label: "Procedimentos", value: ["Preenchimento labial", "Botox"] },
+        { label: "Pagamento", value: ["R$ 1.000 pago", "R$ 1.100 pendente"], tone: "warning" },
+      ],
+      procedure: [
+        { label: "Data", value: "22/09/2026" },
+        { label: "Procedimento", value: "Preenchimento labial" },
+        { label: "Materiais utilizados", value: ["Ácido hialurônico — 1,2 ml", "Botox — 25 unidades"] },
+        { label: "Custo", value: "R$ 416" },
+        { label: "Valor cobrado", value: "R$ 1.200" },
+        { label: "Resultado", value: "R$ 784", tone: "positive" },
+      ],
+      return: [
+        { label: "Data agendada", value: "15/10/2026" },
+        { label: "Status", value: "Agendado" },
+        { label: "Observação", value: "Avaliação do resultado do procedimento." },
+      ],
+      aftercare: [
+        { label: "Status", value: "Aguardando procedimento" },
+        { label: "Próximo passo", value: "Enviar orientações e acompanhar evolução." },
+      ],
+    },
+  },
+  "Amanda Carvalho": {
+    events: {
+      leadAt: "2026-08-20",
+      evaluationCompletedAt: "2026-08-23",
+      quoteApprovedAt: "2026-08-25",
+      procedureCompletedAt: "2026-09-16",
+      scheduledReturnAt: "2026-09-22",
+    },
+    details: {
+      return: [
+        { label: "Data agendada", value: "22/09/2026" },
+        { label: "Status", value: "Agendado" },
+        { label: "Observação", value: "Revisão dos fios de sustentação." },
+      ],
+    },
+  },
+  "Beatriz Almeida": {
+    events: {
+      leadAt: "2026-09-05",
+      evaluationCompletedAt: "2026-09-12",
+    },
+    details: {
+      quote: [
+        { label: "Status", value: "Enviado" },
+        { label: "Valor", value: "R$ 4.600" },
+        { label: "Procedimentos", value: ["Preenchimento labial", "Botox", "Bioestimulador"] },
+      ],
+    },
+  },
+  "Rafael Costa": {
+    events: { leadAt: "2026-09-09" },
+    details: {
+      evaluation: [
+        { label: "Status", value: "Agendada" },
+        { label: "Data", value: "24/09/2026" },
+      ],
+    },
+  },
+};
 
 export const appointments: Appointment[] = [
   {
@@ -115,7 +204,7 @@ export const appointments: Appointment[] = [
     time: "18:00",
     patient: "Amanda Carvalho",
     procedure: "Consulta de retorno",
-    professional: "Dra. Ana",
+    professional: "Dra. Luana",
     status: "Agendado",
   },
 ];

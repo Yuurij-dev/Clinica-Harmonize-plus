@@ -8,13 +8,15 @@ export function SectionIntro({
   title,
   description,
   action,
+  onAction,
 }: {
   title: string;
   description: string;
   action?: string;
+  onAction?: () => void;
 }) {
   return (
-    <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <div className="hp-page-enter mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div>
         <h2 className="text-lg font-bold text-[#25263a]">{title}</h2>
         <p className="mt-1 max-w-2xl text-xs leading-5 text-[#8a8b9c]">
@@ -22,7 +24,7 @@ export function SectionIntro({
         </p>
       </div>
       {action ? (
-        <Button>
+        <Button onClick={onAction}>
           <Plus className="h-4 w-4" />
           {action}
         </Button>
@@ -31,17 +33,29 @@ export function SectionIntro({
   );
 }
 
-export function SearchFilterBar({ placeholder }: { placeholder: string }) {
+export function SearchFilterBar({
+  placeholder,
+  value,
+  onChange,
+  onFilter,
+}: {
+  placeholder: string;
+  value?: string;
+  onChange?: (value: string) => void;
+  onFilter?: () => void;
+}) {
   return (
-    <div className="mb-4 flex flex-col gap-3 sm:flex-row">
-      <label className="flex h-10 flex-1 items-center gap-3 rounded-[7px] border border-[#e5e5ec] bg-white px-4 text-xs text-[#8b8c9d]">
+    <div className="hp-page-enter mb-4 flex flex-col gap-3 sm:flex-row">
+      <label className="flex h-10 flex-1 items-center gap-3 rounded-[7px] border border-[#e5e5ec] bg-white px-4 text-xs text-[#8b8c9d] transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-[#5147dc] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(81,71,220,0.08)]">
         <Search className="h-4 w-4" />
         <input
           className="w-full bg-transparent outline-none placeholder:text-[#8b93aa]"
           placeholder={placeholder}
+          value={value}
+          onChange={(event) => onChange?.(event.target.value)}
         />
       </label>
-      <Button variant="secondary">
+      <Button variant="secondary" onClick={onFilter}>
         <Filter className="h-4 w-4" />
         Filtrar
       </Button>
@@ -77,7 +91,7 @@ export function MiniTable({
   rows: (string | React.ReactNode)[][];
 }) {
   return (
-    <div className="overflow-hidden rounded-[7px] border border-[#ebebf1] bg-white shadow-[0_4px_18px_rgba(36,37,58,0.025)]">
+    <div className="hp-panel-enter overflow-hidden rounded-[7px] border border-[#ebebf1] bg-white shadow-[0_4px_18px_rgba(36,37,58,0.025)]">
       <div
         className="grid min-w-[720px] border-b border-[#eeeeF3] bg-[#fbfbfd] text-[9px] font-bold uppercase text-[#a3a4b2]"
         style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}
@@ -89,10 +103,10 @@ export function MiniTable({
         ))}
       </div>
       <div className="overflow-x-auto">
-        <div className="min-w-[720px] divide-y divide-[#f0f0f4]">
+        <div className="hp-list-stagger min-w-[720px] divide-y divide-[#f0f0f4]">
           {rows.map((row, rowIndex) => (
             <div
-              className="grid min-h-14 items-center text-xs text-[#555668] transition hover:bg-[#fafaff]"
+              className="grid min-h-14 items-center text-xs text-[#555668] transition-[background-color,transform] duration-200 hover:-translate-y-0.5 hover:bg-[#fafaff]"
               key={rowIndex}
               style={{
                 gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))`,
@@ -119,7 +133,7 @@ export function EmptyState({
   description: string;
 }) {
   return (
-    <div className="rounded-[7px] border border-dashed border-[#d9d9e2] bg-[#fafafd] p-6 text-center">
+    <div className="hp-panel-enter rounded-[7px] border border-dashed border-[#d9d9e2] bg-[#fafafd] p-6 text-center">
       <p className="font-bold text-[#121733]">{title}</p>
       <p className="mt-1 text-sm text-[#65708b]">{description}</p>
     </div>
@@ -162,7 +176,10 @@ export function ProgressBar({
 
   return (
     <div className="h-2 overflow-hidden rounded-full bg-[#edf0f7]">
-      <div className={cn("h-full rounded-full", color)} style={{ width: `${value}%` }} />
+      <div
+        className={cn("h-full rounded-full transition-[width] duration-700 ease-out", color)}
+        style={{ width: `${value}%` }}
+      />
     </div>
   );
 }
