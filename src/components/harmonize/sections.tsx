@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useMemo, useState } from "react";
 import {
   ArrowRight,
   CalendarPlus,
@@ -154,10 +154,31 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   const [query, setQuery] = useState("");
   const [professional, setProfessional] = useState("Todos");
   const [status, setStatus] = useState("Todos");
+  const professionalOptions = useMemo(() => ["Todos", ...new Set(appointmentRows.map((item) => item.professional))], [appointmentRows]);
+  const statusOptions = useMemo(() => ["Todos", ...new Set(appointmentRows.map((item) => item.status))], [appointmentRows]);
+  const activeProfessional = professionalOptions.includes(professional) ? professional : "Todos";
+  const activeStatus = statusOptions.includes(status) ? status : "Todos";
   const filteredAppointments = appointmentRows.filter((appointment) => {
     const matchesQuery = `${appointment.patient} ${appointment.procedure}`.toLowerCase().includes(query.toLowerCase());
-    return matchesQuery && (professional === "Todos" || appointment.professional === professional) && (status === "Todos" || appointment.status === status);
+    return matchesQuery && (activeProfessional === "Todos" || appointment.professional === activeProfessional) && (activeStatus === "Todos" || appointment.status === activeStatus);
   });
+
+  function matchesAppointment(item: Appointment, target: Appointment) {
+    return item.time === target.time &&
+      item.patient === target.patient &&
+      item.procedure === target.procedure &&
+      item.professional === target.professional;
+  }
+
+  function syncAvailableFilters(nextRows: Appointment[]) {
+    if (professional !== "Todos" && !nextRows.some((item) => item.professional === professional)) {
+      setProfessional("Todos");
+    }
+
+    if (status !== "Todos" && !nextRows.some((item) => item.status === status)) {
+      setStatus("Todos");
+    }
+  }
 
   function saveAppointment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -173,21 +194,22 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
 
   function advanceAppointment(target: Appointment) {
     const nextStatus = target.status === "Em atendimento" ? "Atendido" : "Em atendimento";
-    setAppointmentRows((current) => current.map((item) => item === target ? { ...item, status: nextStatus } : item));
+    const nextRows = appointmentRows.map((item) => matchesAppointment(item, target) ? { ...item, status: nextStatus } : item);
+    setAppointmentRows(nextRows);
+    syncAvailableFilters(nextRows);
     onSaved?.(`${target.patient}: ${nextStatus}.`);
   }
 
   function markAppointmentAsMissed(target: Appointment) {
     const previousStatus = target.status;
-    const matchesTarget = (item: Appointment) =>
-      item.time === target.time &&
-      item.patient === target.patient &&
-      item.procedure === target.procedure &&
-      item.professional === target.professional;
 
-    setAppointmentRows((current) => current.map((item) => item === target ? { ...item, status: "Faltou" } : item));
+    const nextRows = appointmentRows.map((item) => matchesAppointment(item, target) ? { ...item, status: "Faltou" } : item);
+    setAppointmentRows(nextRows);
+    syncAvailableFilters(nextRows);
     onSaved?.(`${target.patient} foi marcado como faltou.`, () => {
-      setAppointmentRows((current) => current.map((item) => matchesTarget(item) ? { ...item, status: previousStatus } : item));
+      const restoredRows = nextRows.map((item) => matchesAppointment(item, target) ? { ...item, status: previousStatus } : item);
+      setAppointmentRows(restoredRows);
+      syncAvailableFilters(restoredRows);
     });
   }
 
@@ -224,11 +246,11 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
 
       <div className="hp-page-enter mb-6 flex flex-wrap items-center gap-x-8 gap-y-3 text-xs">
         <span className="flex items-center gap-2 font-bold text-[#5f6072]"><ListFilter className="h-3.5 w-3.5" /> Filtrar por</span>
-        <select className="min-w-[150px] border-b border-[#dedee7] bg-transparent px-1 py-2 font-semibold text-[#757688] outline-none" value={professional} onChange={(event) => setProfessional(event.target.value)}>
-          <option>Todos</option>{[...new Set(appointmentRows.map((item) => item.professional))].map((item) => <option key={item}>{item}</option>)}
+        <select className="min-w-[150px] border-b border-[#dedee7] bg-transparent px-1 py-2 font-semibold text-[#757688] outline-none" value={activeProfessional} onChange={(event) => setProfessional(event.target.value)}>
+          {professionalOptions.map((item) => <option key={item}>{item}</option>)}
         </select>
-        <select className="min-w-[150px] border-b border-[#dedee7] bg-transparent px-1 py-2 font-semibold text-[#757688] outline-none" value={status} onChange={(event) => setStatus(event.target.value)}>
-          <option>Todos</option>{[...new Set(appointmentRows.map((item) => item.status))].map((item) => <option key={item}>{item}</option>)}
+        <select className="min-w-[150px] border-b border-[#dedee7] bg-transparent px-1 py-2 font-semibold text-[#757688] outline-none" value={activeStatus} onChange={(event) => setStatus(event.target.value)}>
+          {statusOptions.map((item) => <option key={item}>{item}</option>)}
         </select>
         <span className="text-[#8a8b9c]">{filteredAppointments.length} atendimento(s) · visão {activeView.toLowerCase()}</span>
       </div>
