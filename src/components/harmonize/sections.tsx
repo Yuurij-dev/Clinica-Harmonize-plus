@@ -28,6 +28,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { MaskedInput } from "@/components/ui/masked-input";
 import {
   DetailCard,
   EmptyState,
@@ -40,6 +41,15 @@ import {
 import { CostCalculator } from "./cost-calculator";
 import { PatientDetail } from "./patient-detail";
 import { buildCustomerJourney } from "@/lib/customer-journey";
+import {
+  formatCurrency,
+  formatDate,
+  formatInteger,
+  formatPercent,
+  formatPhone,
+  parseCurrency,
+  parseInteger,
+} from "@/lib/input-masks";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
 import type { Appointment, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
 
@@ -71,7 +81,7 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
     setPatientRows((current) => [{
       name,
       phone: String(form.get("phone") || "Não informado"),
-      age: Number(form.get("age") || 0),
+      age: parseInteger(form.get("age")),
       status: "Ativa",
       lastVisit: "Primeiro contato",
       nextReturn: "A definir",
@@ -127,8 +137,8 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
       <Modal open={openCreate} onClose={onCreateClose} title="Novo cliente" description="Cadastre os dados essenciais. O perfil poderá ser completado depois.">
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={savePatient}>
           <div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div>
-          <FormField label="Telefone"><input className={fieldClassName} name="phone" placeholder="(00) 00000-0000" required /></FormField>
-          <FormField label="Idade"><input className={fieldClassName} name="age" min="0" type="number" required /></FormField>
+          <FormField label="Telefone"><MaskedInput className={fieldClassName} formatter={formatPhone} name="phone" inputMode="tel" maxLength={15} placeholder="(00) 00000-0000" required /></FormField>
+          <FormField label="Idade"><MaskedInput className={fieldClassName} formatter={(value) => formatInteger(value, 3)} name="age" inputMode="numeric" maxLength={3} placeholder="00" required /></FormField>
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button type="submit">Salvar cliente</Button></div>
         </form>
       </Modal>
@@ -249,7 +259,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name"));
-    setProcedureRows((current) => [...current, { name, category: String(form.get("category")), price: Number(form.get("price")), duration: `${form.get("duration")} min`, materials: String(form.get("materials")), margin: `${form.get("margin")}%` }]);
+    setProcedureRows((current) => [...current, { name, category: String(form.get("category")), price: parseCurrency(form.get("price")), duration: `${parseInteger(form.get("duration"))} min`, materials: String(form.get("materials")), margin: `${parseInteger(form.get("margin"))}%` }]);
     onCreateClose(); onSaved?.(`${name} foi adicionado aos procedimentos.`);
   }
 
@@ -257,7 +267,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name"));
-    setProductRows((current) => [...current, { name, category: String(form.get("category")), unit: String(form.get("unit")), cost: Number(form.get("cost")), supplier: String(form.get("supplier")) }]);
+    setProductRows((current) => [...current, { name, category: String(form.get("category")), unit: String(form.get("unit")), cost: parseCurrency(form.get("cost")), supplier: String(form.get("supplier")) }]);
     setMaterialOpen(false); onSaved?.(`${name} foi adicionado aos materiais.`);
   }
 
@@ -326,9 +336,9 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveProcedure}>
           <div className="sm:col-span-2"><FormField label="Nome"><input className={fieldClassName} name="name" required /></FormField></div>
           <FormField label="Categoria"><input className={fieldClassName} name="category" required /></FormField>
-          <FormField label="Valor sugerido"><input className={fieldClassName} name="price" min="0" step="0.01" type="number" required /></FormField>
-          <FormField label="Duração em minutos"><input className={fieldClassName} name="duration" min="1" type="number" required /></FormField>
-          <FormField label="Margem estimada (%)"><input className={fieldClassName} name="margin" min="0" max="100" type="number" required /></FormField>
+          <FormField label="Valor sugerido"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="price" inputMode="decimal" placeholder="R$ 0,00" required /></FormField>
+          <FormField label="Duração em minutos"><MaskedInput className={fieldClassName} formatter={(value) => formatInteger(value, 3)} name="duration" inputMode="numeric" placeholder="60" required /></FormField>
+          <FormField label="Margem estimada (%)"><MaskedInput className={fieldClassName} formatter={formatPercent} name="margin" inputMode="numeric" placeholder="40%" required /></FormField>
           <div className="sm:col-span-2"><FormField label="Materiais"><input className={fieldClassName} name="materials" required /></FormField></div>
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button type="submit">Salvar procedimento</Button></div>
         </form>
@@ -339,7 +349,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
           <FormField label="Categoria"><input className={fieldClassName} name="category" required /></FormField>
           <FormField label="Fornecedor"><input className={fieldClassName} name="supplier" required /></FormField>
           <FormField label="Unidade"><select className={fieldClassName} name="unit"><option>ml</option><option>unidade</option><option>frasco</option></select></FormField>
-          <FormField label="Custo unitário"><input className={fieldClassName} name="cost" min="0" step="0.01" type="number" required /></FormField>
+          <FormField label="Custo unitário"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="cost" inputMode="decimal" placeholder="R$ 0,00" required /></FormField>
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" onClick={() => setMaterialOpen(false)}>Cancelar</Button><Button type="submit">Salvar material</Button></div>
         </form>
       </Modal>
@@ -352,7 +362,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
 
   function saveQuote(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget); const patient = String(form.get("patient"));
-    const total = currency.format(Number(form.get("total")));
+    const total = currency.format(parseCurrency(form.get("total")));
     setQuoteRows((current) => [{ patient, items: String(form.get("items")), total, status: "Pendente", expires: String(form.get("expires")) }, ...current]);
     onCreateClose(); onSaved?.(`Orçamento de ${patient} foi criado.`);
   }
@@ -410,9 +420,9 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
       <Modal open={openCreate} onClose={onCreateClose} title="Novo orçamento" description="Crie uma proposta comercial para o cliente.">
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveQuote}>
           <FormField label="Paciente"><input className={fieldClassName} name="patient" required /></FormField>
-          <FormField label="Validade"><input className={fieldClassName} name="expires" placeholder="30 set. 2026" required /></FormField>
+          <FormField label="Validade"><MaskedInput className={fieldClassName} formatter={formatDate} name="expires" inputMode="numeric" maxLength={10} placeholder="30/09/2026" required /></FormField>
           <div className="sm:col-span-2"><FormField label="Procedimentos"><input className={fieldClassName} name="items" placeholder="Botox, preenchimento..." required /></FormField></div>
-          <div className="sm:col-span-2"><FormField label="Valor total"><input className={fieldClassName} name="total" min="0" step="0.01" type="number" required /></FormField></div>
+          <div className="sm:col-span-2"><FormField label="Valor total"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="total" inputMode="decimal" placeholder="R$ 0,00" required /></FormField></div>
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button type="submit">Salvar orçamento</Button></div>
         </form>
       </Modal>
@@ -427,7 +437,7 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
 
   function savePayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = new FormData(event.currentTarget); const patient = String(form.get("patient"));
-    setPaymentRows((current) => [{ patient, value: currency.format(Number(form.get("value"))), method: String(form.get("method")), date: "21 set. 2026", status: String(form.get("status")), installments: String(form.get("installments")) }, ...current]);
+    setPaymentRows((current) => [{ patient, value: currency.format(parseCurrency(form.get("value"))), method: String(form.get("method")), date: "21 set. 2026", status: String(form.get("status")), installments: String(form.get("installments")) }, ...current]);
     onCreateClose(); onSaved?.(`Pagamento de ${patient} foi registrado.`);
   }
 
@@ -462,7 +472,7 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
       <Modal open={openCreate} onClose={onCreateClose} title="Registrar pagamento" description="O lançamento aparecerá imediatamente no histórico financeiro.">
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={savePayment}>
           <div className="sm:col-span-2"><FormField label="Paciente"><input className={fieldClassName} name="patient" required /></FormField></div>
-          <FormField label="Valor"><input className={fieldClassName} name="value" min="0" step="0.01" type="number" required /></FormField>
+          <FormField label="Valor"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="value" inputMode="decimal" placeholder="R$ 0,00" required /></FormField>
           <FormField label="Forma"><select className={fieldClassName} name="method"><option>Pix</option><option>Cartão de crédito</option><option>Cartão de débito</option><option>Dinheiro</option></select></FormField>
           <FormField label="Status"><select className={fieldClassName} name="status"><option>Pago</option><option>Parcial</option><option>Pendente</option></select></FormField>
           <FormField label="Parcelamento"><input className={fieldClassName} name="installments" defaultValue="À vista" required /></FormField>
