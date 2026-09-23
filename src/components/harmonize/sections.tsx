@@ -130,6 +130,7 @@ function mapApiPatient(patient: ApiPatient): Patient {
     age: patient.age,
     status: patient.status,
     lastVisit: patient.lastVisit ? displayDate(patient.lastVisit) : "Primeiro contato",
+    lastVisitRaw: patient.lastVisit ?? undefined,
     nextReturn: patient.nextReturn ? displayDate(patient.nextReturn) : "A definir",
     value: currency.format(patient.totalValue),
   };
@@ -170,7 +171,7 @@ function MaterialsMultiSelect({ options, defaultValue = [] }: { options: string[
 }
 
 function journeyForPatient(patient: Patient) {
-  const leadAt = patient.lastVisit === "Primeiro contato" ? new Date().toISOString() : patient.lastVisit;
+  const leadAt = patient.lastVisitRaw ?? new Date().toISOString();
   return buildCustomerJourney({ events: { leadAt }, details: {} });
 }
 

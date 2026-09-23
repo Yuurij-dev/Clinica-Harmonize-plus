@@ -67,7 +67,10 @@ export function buildCustomerJourney(
 
 export function formatJourneyDate(date: string | null) {
   if (!date) return "A definir";
-  return new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(
-    new Date(`${date}T12:00:00Z`),
-  );
+  const normalizedDate = /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? `${date}T12:00:00Z`
+    : date;
+  const parsedDate = new Date(normalizedDate);
+  if (Number.isNaN(parsedDate.getTime())) return "A definir";
+  return new Intl.DateTimeFormat("pt-BR", { timeZone: "UTC" }).format(parsedDate);
 }

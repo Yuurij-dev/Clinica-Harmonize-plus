@@ -25,6 +25,7 @@ export type Patient = {
   age: number;
   status: string;
   lastVisit: string;
+  lastVisitRaw?: string;
   nextReturn: string;
   value: string;
 };
