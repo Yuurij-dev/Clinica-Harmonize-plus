@@ -1,5 +1,5 @@
 import { Menu, Plus } from "lucide-react";
-import { navItems } from "@/data/mock";
+import { navItems } from "@/data/navigation";
 import type { SectionId } from "@/types/clinic";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -10,6 +10,8 @@ type SidebarProps = {
   mobileOpen: boolean;
   onClose: () => void;
   onNewAppointment: () => void;
+  clinicName?: string;
+  isAdmin?: boolean;
 };
 
 export function Sidebar({
@@ -18,7 +20,10 @@ export function Sidebar({
   mobileOpen,
   onClose,
   onNewAppointment,
+  clinicName,
+  isAdmin = false,
 }: SidebarProps) {
+  const visibleNavItems = isAdmin ? navItems : navItems.filter((item) => ["agenda", "clientes", "orcamentos"].includes(item.id));
   const content = (
     <aside className="hp-sidebar-enter flex h-full w-[220px] flex-col border-r border-[#eeeef3] bg-white px-4 py-5 text-[#28293d]">
       <div className="mb-7 flex items-center justify-between gap-3 px-1">
@@ -48,7 +53,7 @@ export function Sidebar({
       </Button>
 
       <nav className="space-y-0.5">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const Icon = item.icon;
           const isActive = active === item.id;
 
@@ -77,7 +82,7 @@ export function Sidebar({
       </nav>
 
       <div className="mt-auto border-t border-[#eeeef3] px-2 pt-4">
-        <p className="text-[10px] font-semibold text-[#a0a1b1]">CLÍNICA AURA FACE</p>
+        <p className="text-[10px] font-semibold text-[#a0a1b1]">{clinicName ?? "Clínica"}</p>
         <p className="mt-1 text-xs font-bold text-[#424357]">Plano profissional</p>
       </div>
     </aside>

@@ -1,4 +1,4 @@
-import { Bell, ChevronDown, LogOut, Menu, Search, Settings2, Sparkles } from "lucide-react";
+import { Bell, ChevronDown, Loader2, LogOut, Menu, Search, Settings2, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { SectionId } from "@/types/clinic";
@@ -9,12 +9,14 @@ type TopbarProps = {
   onDashboard: () => void;
   onSettings: () => void;
   onNavigate: (section: SectionId) => void;
-  onLogout: () => void;
+  onLogout: () => Promise<void>;
+  user?: { name: string; role: string } | null;
 };
 
-export function Topbar({ title, onMenu, onDashboard, onSettings, onNavigate, onLogout }: TopbarProps) {
+export function Topbar({ title, onMenu, onDashboard, onSettings, onNavigate, onLogout, user }: TopbarProps) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   function search(value: string) {
     const normalized = value.toLowerCase();
@@ -24,6 +26,15 @@ export function Topbar({ title, onMenu, onDashboard, onSettings, onNavigate, onL
     else if (normalized.includes("pag") || normalized.includes("finance")) onNavigate("pagamentos");
     else if (normalized.includes("relat")) onNavigate("relatorios");
     else onNavigate("agenda");
+  }
+
+  const userName = user?.name ?? "Usuário";
+  const initials = userName.split(" ").map((part) => part[0]).slice(0, 2).join("").toUpperCase();
+  const roleLabel = user?.role === "ADMIN" ? "Administradora" : user?.role === "PROFESSIONAL" ? "Profissional" : "Equipe";
+
+  async function handleLogout() {
+    setIsLoggingOut(true);
+    await onLogout();
   }
 
   return (
@@ -53,15 +64,15 @@ export function Topbar({ title, onMenu, onDashboard, onSettings, onNavigate, onL
           />
         </label>
 
-        <Button className="hidden bg-[#5147dc] lg:inline-flex" size="sm" onClick={onDashboard}>
+        {user?.role === "ADMIN" ? <Button className="hidden bg-[#5147dc] lg:inline-flex" size="sm" onClick={onDashboard}>
           <Sparkles className="h-3.5 w-3.5" />
           Resumo do dia
-        </Button>
+        </Button> : null}
 
         <div className="relative"><Button variant="secondary" size="icon" aria-label="Notificações" onClick={() => setNotificationsOpen((open) => !open)}>
           <Bell className="h-5 w-5" />
         </Button>{notificationsOpen ? <div className="absolute right-0 top-12 w-72 rounded-[7px] border border-[#e5e5ee] bg-white p-4 shadow-xl"><p className="text-xs font-bold text-[#303144]">Notificações</p><p className="mt-3 rounded-[6px] bg-[#f7f6ff] p-3 text-[11px] leading-5 text-[#65667a]">3 retornos precisam ser confirmados hoje.</p><p className="mt-2 rounded-[6px] bg-[#fff8e7] p-3 text-[11px] leading-5 text-[#65667a]">Há 2 pagamentos pendentes.</p></div> : null}</div>
-        <Button
+        {user?.role === "ADMIN" ? <Button
           className="hidden sm:inline-flex"
           variant="secondary"
           size="icon"
@@ -69,17 +80,17 @@ export function Topbar({ title, onMenu, onDashboard, onSettings, onNavigate, onL
           onClick={onSettings}
         >
           <Settings2 className="h-5 w-5" />
-        </Button>
-        <button className="hp-pressable relative hidden items-center gap-2 border-l border-[#ececf2] pl-4 sm:flex" onClick={() => setProfileOpen((open) => !open)}>
+        </Button> : null}
+        <button className="hp-pressable relative hidden items-center gap-2 border-l border-[#ececf2] pl-4 sm:flex" disabled={isLoggingOut} onClick={() => setProfileOpen((open) => !open)}>
           <div className="grid h-8 w-8 place-items-center rounded-full bg-[#eeeaff] text-[11px] font-black text-[#5b4fd2]">
-            DA
+            {initials}
           </div>
           <div className="leading-tight">
-            <p className="text-xs font-bold text-[#2c2d41]">Dra. Ana</p>
-            <p className="text-[9px] text-[#9495a5]">Administradora</p>
+            <p className="text-xs font-bold text-[#2c2d41]">{userName}</p>
+            <p className="text-[9px] text-[#9495a5]">{roleLabel}</p>
           </div>
           <ChevronDown className="h-3.5 w-3.5 text-[#9293a4]" />
-          {profileOpen ? <div className="absolute right-0 top-11 w-48 rounded-[7px] border border-[#e5e5ee] bg-white p-2 text-left shadow-xl"><span className="block rounded-[5px] px-3 py-2 text-xs font-semibold text-[#555668] hover:bg-[#f5f4ff]" onClick={onSettings}>Meu perfil</span><span className="block rounded-[5px] px-3 py-2 text-xs font-semibold text-[#555668] hover:bg-[#f5f4ff]">Ajuda e suporte</span><span className="mt-1 flex items-center gap-2 rounded-[5px] border-t border-[#eeeef3] px-3 py-2 pt-3 text-xs font-bold text-[#b42318] hover:bg-[#fff5f5]" onClick={onLogout}><LogOut className="h-3.5 w-3.5" />Sair</span></div> : null}
+          {profileOpen ? <div className="absolute right-0 top-11 w-48 rounded-[7px] border border-[#e5e5ee] bg-white p-2 text-left shadow-xl"><span className="block rounded-[5px] px-3 py-2 text-xs font-semibold text-[#555668] hover:bg-[#f5f4ff]" onClick={onSettings}>Meu perfil</span><span className="block rounded-[5px] px-3 py-2 text-xs font-semibold text-[#555668] hover:bg-[#f5f4ff]">Ajuda e suporte</span><span className="mt-1 flex items-center gap-2 rounded-[5px] border-t border-[#eeeef3] px-3 py-2 pt-3 text-xs font-bold text-[#b42318] hover:bg-[#fff5f5]" onClick={handleLogout}>{isLoggingOut ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogOut className="h-3.5 w-3.5" />}{isLoggingOut ? "Saindo..." : "Sair"}</span></div> : null}
         </button>
       </div>
     </header>

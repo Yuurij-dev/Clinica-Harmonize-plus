@@ -1,18 +1,42 @@
-import { CalendarCheck, ChevronRight, Plus, RotateCcw, TrendingUp } from "lucide-react";
-import {
-  appointments,
-  patients,
-  quotes,
-  revenueBars,
-  stats,
-} from "@/data/mock";
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { CalendarCheck, ChevronRight, Loader2, Plus, RotateCcw, TrendingUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DetailCard, ProgressBar, StatusBadge } from "./shared";
 import type { SectionId } from "@/types/clinic";
 
-export function Dashboard({ onAction, onNavigate }: { onAction: (action: "client" | "appointment" | "quote" | "payment") => void; onNavigate: (section: SectionId) => void }) {
+const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+
+export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onAction: (action: "client" | "appointment" | "quote" | "payment") => void; onNavigate: (section: SectionId) => void; userName?: string }) {
+  const [data, setData] = useState<{ appointments: Array<{ id: string; time: string; procedure: string; status: string; patient?: { name: string } | null }>; patients: Array<{ name: string; status: string; lastVisit: string | null }>; quotes: Array<{ id: string; items: string; total: number; status: string; patient?: { name: string } | null }>; payments: Array<{ value: number; status: string }> } | null>(null);
+  useEffect(() => {
+    Promise.all([fetch("/api/appointments"), fetch("/api/patients"), fetch("/api/quotes"), fetch("/api/payments")])
+      .then(async ([appointmentsResponse, patientsResponse, quotesResponse, paymentsResponse]) => {
+        const [appointmentsData, patientsData, quotesData, paymentsData] = await Promise.all([appointmentsResponse.json(), patientsResponse.json(), quotesResponse.json(), paymentsResponse.json()]);
+        setData({ appointments: appointmentsData.appointments ?? [], patients: patientsData.patients ?? [], quotes: quotesData.quotes ?? [], payments: paymentsData.payments ?? [] });
+      })
+      .catch(() => setData({ appointments: [], patients: [], quotes: [], payments: [] }));
+  }, []);
+
+  const stats = useMemo(() => {
+    const paid = data?.payments.filter((item) => item.status === "Pago").reduce((sum, item) => sum + item.value, 0) ?? 0;
+    const pending = data?.quotes.filter((item) => item.status !== "Aprovado").reduce((sum, item) => sum + item.total, 0) ?? 0;
+    return [
+      { label: "Receita", value: currency.format(paid), detail: "Pagamentos registrados" },
+      { label: "Despesas", value: "R$ 0,00", detail: "Sem despesas cadastradas" },
+      { label: "Resultado", value: currency.format(paid), detail: "Receita líquida" },
+      { label: "Atendimentos", value: String(data?.appointments.length ?? 0), detail: "Na clínica" },
+      { label: "Retornos", value: String(data?.patients.filter((item) => item.status === "Retorno").length ?? 0), detail: "Clientes em retorno" },
+      { label: "Orçamentos", value: String(data?.quotes.length ?? 0), detail: `${currency.format(pending)} em aberto` },
+    ];
+  }, [data]);
+  const revenueBars = useMemo(() => {
+    const count = data?.appointments.length ?? 0;
+    return Array.from({ length: 12 }, (_, index) => Math.max(8, Math.min(100, count ? ((index + 1) % 5 + 1) * 12 : 8)));
+  }, [data]);
   const actions = [
     ["Novo cliente", "client"], ["Novo atendimento", "appointment"], ["Novo orçamento", "quote"], ["Registrar pagamento", "payment"],
   ] as const;
@@ -21,8 +45,8 @@ export function Dashboard({ onAction, onNavigate }: { onAction: (action: "client
       <div className="hp-page-enter border-b border-[#ececf2] pb-5">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="text-xs font-semibold text-[#8c8d9f]">Domingo, 20 de setembro</p>
-            <h2 className="mt-1 text-xl font-bold text-[#25263a]">Olá, Dra. Ana</h2>
+            <p className="text-xs font-semibold text-[#8c8d9f]">{new Intl.DateTimeFormat("pt-BR", { dateStyle: "full" }).format(new Date())}</p>
+            <h2 className="mt-1 text-xl font-bold text-[#25263a]">Olá, {userName}</h2>
             <p className="mt-1 max-w-2xl text-xs leading-5 text-[#8c8d9f]">
               Acompanhe os números e os próximos atendimentos da sua clínica.
             </p>
@@ -95,10 +119,10 @@ export function Dashboard({ onAction, onNavigate }: { onAction: (action: "client
             <CalendarCheck className="h-5 w-5 text-[#1438ff]" />
           </CardHeader>
           <CardContent className="hp-list-stagger space-y-4">
-            {appointments.slice(0, 4).map((appointment) => (
+            {!data ? <div className="flex items-center gap-2 text-sm text-[#65708b]"><Loader2 className="h-4 w-4 animate-spin" />Carregando atendimentos...</div> : data.appointments.slice(0, 4).map((appointment) => (
               <div
                 className="flex cursor-pointer items-center gap-3 border-b border-[#f0f0f4] pb-3 transition-[transform,background-color] duration-200 hover:translate-x-1 last:border-0 last:pb-0"
-                key={`${appointment.time}-${appointment.patient}`}
+                key={appointment.id}
                 onClick={() => onNavigate("agenda")}
               >
                 <div className="grid h-9 w-12 place-items-center border-l-2 border-[#5147dc] bg-[#f7f6ff] text-xs font-bold text-[#5147dc]">
@@ -106,7 +130,7 @@ export function Dashboard({ onAction, onNavigate }: { onAction: (action: "client
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-bold text-[#121733]">
-                    {appointment.patient}
+                    {appointment.patient?.name ?? "Paciente"}
                   </p>
                   <p className="truncate text-xs text-[#65708b]">
                     {appointment.procedure}
@@ -122,11 +146,11 @@ export function Dashboard({ onAction, onNavigate }: { onAction: (action: "client
       <div className="hp-list-stagger grid gap-6 lg:grid-cols-3">
         <DetailCard title="Clientes recentes">
           <div className="space-y-4">
-            {patients.slice(0, 3).map((patient) => (
+            {(data?.patients ?? []).slice(0, 3).map((patient) => (
               <div className="flex items-center justify-between gap-3" key={patient.name}>
                 <div>
                   <p className="font-bold text-[#121733]">{patient.name}</p>
-                  <p className="text-sm text-[#65708b]">{patient.lastVisit}</p>
+                  <p className="text-sm text-[#65708b]">{patient.lastVisit ? new Date(patient.lastVisit).toLocaleDateString("pt-BR") : "Sem atendimento"}</p>
                 </div>
                 <StatusBadge status={patient.status} />
               </div>
@@ -136,12 +160,12 @@ export function Dashboard({ onAction, onNavigate }: { onAction: (action: "client
 
         <DetailCard title="Orçamentos recentes">
           <div className="space-y-4">
-            {quotes.map((quote) => (
-              <div key={quote.patient}>
+            {(data?.quotes ?? []).slice(0, 3).map((quote) => (
+              <div key={quote.id}>
                 <div className="flex items-center justify-between gap-3">
-                  <p className="font-bold text-[#121733]">{quote.patient}</p>
+                  <p className="font-bold text-[#121733]">{quote.patient?.name ?? "Paciente"}</p>
                   <span className="text-sm font-black text-[#1438ff]">
-                    {quote.total}
+                    {currency.format(quote.total)}
                   </span>
                 </div>
                 <p className="mt-1 line-clamp-1 text-sm text-[#65708b]">
@@ -157,7 +181,7 @@ export function Dashboard({ onAction, onNavigate }: { onAction: (action: "client
             <div className="flex items-center gap-3">
               <RotateCcw className="h-5 w-5 text-[#157a3b]" />
               <p className="font-black text-[#157a3b]">
-                8 pacientes possuem retorno nos próximos 7 dias.
+                {data?.patients.filter((item) => item.status === "Retorno").length ?? 0} pacientes possuem retorno registrado.
               </p>
             </div>
           </div>

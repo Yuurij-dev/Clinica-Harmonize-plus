@@ -18,7 +18,9 @@ export type NavItem = {
 };
 
 export type Patient = {
+  id?: string;
   name: string;
+  cpf?: string;
   phone: string;
   age: number;
   status: string;
@@ -82,6 +84,7 @@ export type Appointment = {
 };
 
 export type Product = {
+  id?: string;
   name: string;
   category: string;
   unit: string;
@@ -90,6 +93,7 @@ export type Product = {
 };
 
 export type Procedure = {
+  id?: string;
   name: string;
   category: string;
   price: number;
@@ -99,6 +103,7 @@ export type Procedure = {
 };
 
 export type Quote = {
+  id?: string;
   patient: string;
   items: string;
   total: string;
@@ -107,6 +112,7 @@ export type Quote = {
 };
 
 export type Payment = {
+  id?: string;
   patient: string;
   value: string;
   method: string;

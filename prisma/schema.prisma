@@ -1,0 +1,192 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(ADMIN)
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+  memberships  ClinicMembership[]
+}
+
+model Clinic {
+  id           String             @id @default(cuid())
+  name         String
+  slug         String             @unique
+  createdAt    DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
+  memberships  ClinicMembership[]
+  patients     Patient[]
+  appointments Appointment[]
+  procedures   Procedure[]
+  evaluations  Evaluation[]
+  quotes       Quote[]
+  payments     Payment[]
+  products     Product[]
+}
+
+model ClinicMembership {
+  id       String   @id @default(cuid())
+  userId   String
+  clinicId String
+  role     UserRole @default(STAFF)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  clinic   Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([userId, clinicId])
+  @@index([clinicId])
+}
+
+model Patient {
+  id           String        @id @default(cuid())
+  clinicId     String?
+  name         String
+  cpf          String?
+  phone        String
+  age          Int
+  status       String        @default("Ativa")
+  lastVisit    DateTime?     @db.Timestamptz(6)
+  nextReturn   DateTime?     @db.Timestamptz(6)
+  totalValue   Int           @default(0)
+  createdAt    DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime      @default(now()) @updatedAt @db.Timestamptz(6)
+  appointments Appointment[]
+  evaluations  Evaluation[]
+  quotes       Quote[]
+  payments     Payment[]
+  clinic       Clinic?       @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([clinicId])
+  @@unique([clinicId, cpf])
+}
+
+model Appointment {
+  id           String   @id @default(cuid())
+  clinicId     String?
+  date         DateTime @db.Timestamptz(6)
+  time         String
+  patientId    String
+  procedure    String
+  professional String
+  status       String
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  clinic       Clinic?  @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([patientId, date])
+  @@index([clinicId])
+}
+
+model Procedure {
+  id              String   @id @default(cuid())
+  clinicId        String?
+  name            String
+  category        String
+  price           Int
+  durationMinutes Int
+  materials       String
+  margin          Float
+  createdAt       DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+  clinic          Clinic?  @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([clinicId])
+  @@unique([clinicId, name])
+}
+
+model Evaluation {
+  id        String            @id @default(cuid())
+  clinicId  String?
+  patientId String
+  createdAt DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime          @default(now()) @updatedAt @db.Timestamptz(6)
+  patient   Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  photos    EvaluationPhoto[]
+  clinic    Clinic?           @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([patientId])
+  @@index([clinicId])
+}
+
+model Product {
+  id        String   @id @default(cuid())
+  clinicId  String?
+  name      String
+  category  String
+  unit      String
+  cost      Int
+  supplier  String
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(6)
+  clinic    Clinic?  @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([clinicId])
+  @@unique([clinicId, name])
+}
+
+model Quote {
+  id        String    @id @default(cuid())
+  clinicId  String?
+  patientId String?
+  items     String
+  total     Int
+  status    String    @default("Pendente")
+  expires   DateTime? @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  clinic    Clinic?   @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  patient   Patient?  @relation(fields: [patientId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([clinicId])
+  @@index([patientId])
+}
+
+model Payment {
+  id           String    @id @default(cuid())
+  clinicId     String?
+  patientId    String?
+  value        Int
+  method       String
+  date         DateTime  @default(now()) @db.Timestamptz(6)
+  status       String    @default("Pago")
+  installments String
+  createdAt    DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  clinic       Clinic?   @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  patient      Patient?  @relation(fields: [patientId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([clinicId])
+  @@index([patientId])
+}
+
+model EvaluationPhoto {
+  id           String     @id @default(cuid())
+  evaluationId String
+  name         String
+  imageUrl     String
+  width        Int
+  height       Int
+  annotations  String     @default("[]")
+  createdAt    DateTime   @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime   @default(now()) @updatedAt @db.Timestamptz(6)
+  evaluation   Evaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([evaluationId])
+}
+
+enum UserRole {
+  ADMIN
+  PROFESSIONAL
+  STAFF
+}

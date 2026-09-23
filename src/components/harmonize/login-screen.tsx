@@ -16,31 +16,29 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 type LoginScreenProps = {
-  onLogin: () => void;
+  onLogin: (credentials: { login: string; password: string }) => Promise<boolean>;
 };
 
-const mockUser = {
-  login: "admin",
-  password: "admin",
-};
+const demoUser = { login: "admin", password: "admin" };
 
 export function LoginScreen({ onLogin }: LoginScreenProps) {
-  const [login, setLogin] = useState(mockUser.login);
-  const [password, setPassword] = useState(mockUser.password);
+  const [login, setLogin] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const normalizedLogin = login.trim().toLowerCase();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-    if (normalizedLogin === mockUser.login && password === mockUser.password) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSubmitting(true);
+    const success = await onLogin({ login: login.trim().toLowerCase(), password });
+    if (success) {
       setError("");
-      onLogin();
       return;
     }
-
-    setError("Usuario ou senha invalidos. Use admin / admin para acessar.");
+    setError("Usuário ou senha inválidos. Use admin / admin para acessar.");
+    setIsSubmitting(false);
   }
 
   return (
@@ -167,9 +165,10 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
 
               <Button
                 className="h-12 w-full bg-[#5947ee] text-sm shadow-[0_12px_26px_rgba(89,71,238,0.24)] hover:bg-[#4635d5]"
+                disabled={isSubmitting}
                 type="submit"
               >
-                Acessar painel
+                {isSubmitting ? "Validando acesso..." : "Acessar painel"}
                 <ArrowRight className="h-4 w-4" />
               </Button>
             </form>
@@ -183,8 +182,8 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <InfoPill icon={CheckCircle2} label="Usuario" value="admin" />
-              <InfoPill icon={LockKeyhole} label="Senha" value="admin" />
+              <InfoPill icon={CheckCircle2} label="Usuário" value={demoUser.login} />
+              <InfoPill icon={LockKeyhole} label="Senha" value={demoUser.password} />
             </div>
 
             <div className="mt-6 rounded-[8px] border border-[#e4edf7] bg-[#f8fbff] p-4">
@@ -193,7 +192,7 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
                 Proxima evolucao
               </p>
               <p className="mt-2 text-xs leading-5 text-[#6b7285]">
-                Quando o back estiver pronto, esta tela ja pode receber a chamada real de autenticacao.
+                Seu acesso agora é validado pelo servidor com sessão segura.
               </p>
             </div>
           </div>

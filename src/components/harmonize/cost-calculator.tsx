@@ -1,7 +1,7 @@
 "use client";
 
 import { Calculator, ReceiptText } from "lucide-react";
-import { costMaterials } from "@/data/mock";
+import type { Product } from "@/types/clinic";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -10,12 +10,8 @@ const currency = new Intl.NumberFormat("pt-BR", {
   currency: "BRL",
 });
 
-export function CostCalculator() {
-  const charged = 1500;
-  const totalCost = costMaterials.reduce(
-    (sum, material) => sum + material.qty * material.unitCost,
-    0,
-  );
+export function CostCalculator({ materials, charged = 0, patientName = "Atendimento", procedureName = "Procedimento" }: { materials: Product[]; charged?: number; patientName?: string; procedureName?: string }) {
+  const totalCost = materials.reduce((sum, material) => sum + material.cost, 0);
   const grossResult = charged - totalCost;
   const margin = (grossResult / charged) * 100;
 
@@ -24,17 +20,17 @@ export function CostCalculator() {
       <CardHeader className="bg-[#071338] text-white">
         <div>
           <Badge className="mb-3 bg-white/10 text-white">Calculadora de custo</Badge>
-          <CardTitle className="text-white">Atendimento de Maria Silva</CardTitle>
+          <CardTitle className="text-white">Atendimento de {patientName}</CardTitle>
           <p className="mt-1 text-sm text-[#c6d1f5]">
-            Procedimento: harmonização facial
+            Procedimento: {procedureName}
           </p>
         </div>
         <Calculator className="h-6 w-6 text-[#9fb1ff]" />
       </CardHeader>
       <CardContent className="pt-5">
         <div className="space-y-3">
-          {costMaterials.map((material) => {
-            const subtotal = material.qty * material.unitCost;
+          {materials.map((material) => {
+            const subtotal = material.cost;
 
             return (
               <div
@@ -45,8 +41,7 @@ export function CostCalculator() {
                   <div>
                     <p className="font-black text-[#121733]">{material.name}</p>
                     <p className="text-sm text-[#65708b]">
-                      {material.qty.toLocaleString("pt-BR")} {material.unit} ×{" "}
-                      {currency.format(material.unitCost)}
+                      1 {material.unit} × {currency.format(material.cost)}
                     </p>
                   </div>
                   <strong className="text-[#1438ff]">{currency.format(subtotal)}</strong>

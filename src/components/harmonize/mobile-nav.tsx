@@ -1,4 +1,4 @@
-import { CalendarDays, CreditCard, Home, Sparkles, Users } from "lucide-react";
+import { CalendarDays, CreditCard, FileText, Home, Sparkles, Users } from "lucide-react";
 import type { SectionId } from "@/types/clinic";
 import { cn } from "@/lib/utils";
 
@@ -6,6 +6,7 @@ const mobileItems: { id: SectionId; label: string; icon: typeof Home }[] = [
   { id: "dashboard", label: "Início", icon: Home },
   { id: "agenda", label: "Agenda", icon: CalendarDays },
   { id: "clientes", label: "Clientes", icon: Users },
+  { id: "orcamentos", label: "Orçamentos", icon: FileText },
   { id: "procedimentos", label: "Custos", icon: Sparkles },
   { id: "pagamentos", label: "Pagto.", icon: CreditCard },
 ];
@@ -13,13 +14,16 @@ const mobileItems: { id: SectionId; label: string; icon: typeof Home }[] = [
 export function MobileNav({
   active,
   onSelect,
+  isAdmin = false,
 }: {
   active: SectionId;
   onSelect: (section: SectionId) => void;
+  isAdmin?: boolean;
 }) {
+  const visibleItems = isAdmin ? mobileItems : mobileItems.filter((item) => ["agenda", "clientes", "orcamentos"].includes(item.id));
   return (
-    <nav className="hp-topbar-enter fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-[#dfe4f2] bg-white px-2 pb-3 pt-2 shadow-[0_-12px_35px_rgba(14,23,55,0.1)] lg:hidden">
-      {mobileItems.map((item) => {
+    <nav className={`hp-topbar-enter fixed inset-x-0 bottom-0 z-30 grid ${isAdmin ? "grid-cols-5" : "grid-cols-3"} border-t border-[#dfe4f2] bg-white px-2 pb-3 pt-2 shadow-[0_-12px_35px_rgba(14,23,55,0.1)] lg:hidden`}>
+      {visibleItems.map((item) => {
         const Icon = item.icon;
         const isActive = active === item.id;
 

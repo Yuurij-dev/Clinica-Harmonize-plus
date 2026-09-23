@@ -1,5 +1,34 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Banco de dados
+
+O projeto usa Prisma com PostgreSQL quando conectado ao Supabase.
+
+1. Crie um projeto no Supabase.
+2. Execute `database/schema.sql` no SQL Editor.
+3. Copie as URLs do Pooler e da conexão direta para o `.env`:
+
+```env
+DATABASE_URL="postgresql://...:6543/postgres?pgbouncer=true&connection_limit=1"
+DIRECT_URL="postgresql://...:5432/postgres?sslmode=require"
+AUTH_SECRET="uma-chave-secreta-longa"
+```
+
+`DATABASE_URL` é usada pela aplicação. `DIRECT_URL` é usada pelo Prisma em migrações.
+
+## Multi-clínica
+
+Cada usuário precisa estar vinculado a uma clínica por `ClinicMembership`. As entidades de negócio possuem `clinicId`, e as APIs filtram os registros pela clínica da sessão autenticada. Para aplicar o modelo no banco existente:
+
+```bash
+npx prisma db push --accept-data-loss
+npx prisma generate
+npm run db:seed
+npm run db:tenant-seed
+```
+
+O `db:tenant-seed` cria a clínica inicial, vincula os usuários existentes e associa os registros legados a ela. Para uma clínica nova, crie a clínica e um `ClinicMembership` para cada funcionário; o usuário só conseguirá acessar os dados da clínica à qual estiver vinculado.
+
 ## Getting Started
 
 First, run the development server:
