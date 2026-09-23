@@ -57,6 +57,7 @@ export function EditorToolbar({
   onClear,
   onSave,
   onExport,
+  isSaving,
 }: {
   tool: EditorTool;
   color: string;
@@ -74,18 +75,21 @@ export function EditorToolbar({
   onClear: () => void;
   onSave: () => void;
   onExport: () => void;
+  isSaving?: boolean;
 }) {
   return (
-    <div className="flex flex-col gap-3 rounded-[8px] border border-[#12315d] bg-[#071338] p-3 text-white shadow-[0_18px_40px_rgba(7,19,56,0.18)]">
-      <div className="grid grid-cols-7 gap-1 lg:grid-cols-1">
+    <div className="flex flex-col gap-4 rounded-[8px] border border-[#e3e5f0] bg-white p-3 text-[#303144] shadow-[0_8px_24px_rgba(38,39,58,0.05)] lg:w-[192px]">
+      <div>
+        <p className="mb-2 text-[11px] font-black text-[#303144]">Ferramentas de desenho</p>
+        <div className="grid grid-cols-2 gap-1.5">
         {tools.map(({ id, label, icon: Icon }) => (
           <button
             aria-label={label}
             className={cn(
-              "grid h-10 w-10 place-items-center rounded-[7px] border text-white transition",
+              "flex h-16 w-full flex-col items-center justify-center gap-1 rounded-[7px] border text-[9px] font-bold transition",
               tool === id
-                ? "border-[#6c4cff] bg-[#5147dc] shadow-[0_0_0_3px_rgba(108,76,255,0.18)]"
-                : "border-[#12315d] bg-[#0b1d42] hover:border-[#6c4cff]",
+                ? "border-[#5147dc] bg-[#5147dc] text-white shadow-[0_0_0_3px_rgba(81,71,220,0.14)]"
+                : "border-[#e0e2ed] bg-white text-[#606176] hover:border-[#5147dc] hover:bg-[#f7f6ff] hover:text-[#5147dc]",
             )}
             key={id}
             title={label}
@@ -93,17 +97,21 @@ export function EditorToolbar({
             onClick={() => onToolChange(id)}
           >
             <Icon className="h-4 w-4" />
+            <span>{label === "Círculo/elipse" ? "Forma" : label === "Desenho livre" ? "Pincel" : label}</span>
           </button>
         ))}
+        </div>
       </div>
 
-      <div className="flex flex-wrap gap-1 lg:grid lg:grid-cols-1">
+      <div className="border-t border-[#ececf3] pt-3">
+        <p className="mb-2 text-[11px] font-black text-[#303144]">Cores</p>
+        <div className="grid grid-cols-5 gap-1.5">
         {colors.map((item) => (
           <button
             aria-label={item.label}
             className={cn(
               "h-8 w-8 rounded-full border transition",
-              color === item.value ? "border-white ring-2 ring-[#6c4cff]" : "border-white/20",
+              color === item.value ? "border-white ring-2 ring-[#5147dc]" : "border-[#d7d9e5]",
             )}
             key={item.value}
             style={{ backgroundColor: item.value }}
@@ -112,29 +120,33 @@ export function EditorToolbar({
             onClick={() => onColorChange(item.value)}
           />
         ))}
+        </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-1 lg:grid-cols-1">
+      <div className="border-t border-[#ececf3] pt-3">
+        <p className="mb-2 text-[11px] font-black text-[#303144]">Ações</p>
+        <div className="grid grid-cols-3 gap-1">
         <ToolbarIcon disabled={!canUndo} label="Desfazer" onClick={onUndo} icon={Undo2} />
         <ToolbarIcon disabled={!canRedo} label="Refazer" onClick={onRedo} icon={Redo2} />
         <ToolbarIcon disabled={!hasSelection} label="Excluir seleção" onClick={onDeleteSelected} icon={Trash2} />
         <ToolbarIcon label="Zoom +" onClick={onZoomIn} icon={ZoomIn} />
         <ToolbarIcon label="Zoom -" onClick={onZoomOut} icon={ZoomOut} />
         <ToolbarIcon label="Resetar zoom" onClick={onZoomReset} icon={RotateCcw} />
+        </div>
       </div>
 
-      <div className="grid gap-2 lg:w-44">
-        <Button className="w-full justify-center" size="sm" onClick={onSave}>
-          <Save className="h-3.5 w-3.5" />
-          Salvar avaliação
+      <div className="grid min-w-0 gap-2 lg:w-full">
+        <Button className="w-full min-w-0 justify-center whitespace-normal px-2 leading-4" disabled={isSaving} size="sm" onClick={onSave}>
+          <Save className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 text-center">{isSaving ? "Salvando..." : "Salvar avaliação"}</span>
         </Button>
-        <Button className="w-full justify-center border-[#2e4a78] bg-[#0b1d42] text-white hover:border-[#6c4cff] hover:text-white" size="sm" variant="secondary" onClick={onExport}>
-          <Download className="h-3.5 w-3.5" />
-          Exportar imagem
+        <Button className="w-full min-w-0 justify-center whitespace-normal px-2 leading-4" size="sm" variant="secondary" onClick={onExport}>
+          <Download className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 text-center">Exportar imagem</span>
         </Button>
-        <Button className="w-full justify-center border-[#7f2c35] bg-[#1d1220] text-[#ffd7d7] hover:border-[#ff3b30] hover:text-white" size="sm" variant="secondary" onClick={onClear}>
-          <Trash2 className="h-3.5 w-3.5" />
-          Limpar
+        <Button className="w-full min-w-0 justify-center whitespace-normal px-2 leading-4 border-[#f2c8c3] text-[#b42318] hover:border-[#b42318] hover:text-[#b42318]" size="sm" variant="secondary" onClick={onClear}>
+          <Trash2 className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 text-center">Limpar</span>
         </Button>
       </div>
     </div>
@@ -155,13 +167,14 @@ function ToolbarIcon({
   return (
     <button
       aria-label={label}
-      className="grid h-9 w-9 place-items-center rounded-[7px] border border-[#12315d] bg-[#0b1d42] text-white transition hover:border-[#6c4cff] disabled:cursor-not-allowed disabled:opacity-40"
+      className="flex min-h-12 w-full flex-col items-center justify-center gap-1 rounded-[7px] border border-[#e0e2ed] bg-white px-1 text-[#606176] transition hover:border-[#5147dc] hover:bg-[#f7f6ff] hover:text-[#5147dc] disabled:cursor-not-allowed disabled:opacity-40"
       disabled={disabled}
       title={label}
       type="button"
       onClick={onClick}
     >
       <Icon className="h-4 w-4" />
+      <span className="truncate text-[8px] font-bold">{label === "Excluir seleção" ? "Excluir" : label === "Resetar zoom" ? "Resetar" : label}</span>
     </button>
   );
 }

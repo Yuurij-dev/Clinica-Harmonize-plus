@@ -1,11 +1,15 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
-import { Camera, FileJson, ImagePlus, Info } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertTriangle, Camera, FileJson, ImagePlus, Info } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
+import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { EditorToolbar } from "./editor-toolbar";
+import { EvaluationResult } from "./evaluation-result";
 import { PhotoGallery } from "./photo-gallery";
 import type { AnnotationSnapshot, EditorTool, EvaluationPhoto, PhotoAnnotation } from "./types";
 
@@ -14,16 +18,13 @@ const EditorCanvas = dynamic(
   { ssr: false },
 );
 
-type StoredEvaluation = {
-  photos: Array<Omit<EvaluationPhoto, "annotations">>;
-  annotationsByPhotoId: Record<string, PhotoAnnotation[]>;
-};
-
 type Notice = { tone: "success" | "info"; text: string } | null;
+type ConfirmAction = { type: "photo"; photoId: string; photoName: string } | { type: "clear" } | null;
 
-export function PhotoEditor({ patientName }: { patientName: string }) {
-  const storageKey = `harmonize:evaluation:${patientName}`;
-  const [photos, setPhotos] = useState<EvaluationPhoto[]>([]);
+export function PhotoEditor({ patientId, patientName }: { patientId: string; patientName: string }) {
+  const evaluationCacheKey = `/api/patients/${patientId}/evaluation`;
+  const cachedEvaluation = readClientCache<{ evaluation?: { photos?: EvaluationPhoto[] } | null }>(evaluationCacheKey);
+  const [photos, setPhotos] = useState<EvaluationPhoto[]>(cachedEvaluation?.evaluation?.photos ?? []);
   const [activePhotoId, setActivePhotoId] = useState<string | null>(null);
   const [tool, setTool] = useState<EditorTool>("select");
   const [color, setColor] = useState("#6c4cff");
@@ -32,6 +33,11 @@ export function PhotoEditor({ patientName }: { patientName: string }) {
   const [past, setPast] = useState<Record<string, AnnotationSnapshot[]>>({});
   const [future, setFuture] = useState<Record<string, AnnotationSnapshot[]>>({});
   const [notice, setNotice] = useState<Notice>(null);
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
+  const [isLoading, setIsLoading] = useState(!cachedEvaluation || Boolean(cachedEvaluation.evaluation?.photos?.length));
+  const [isSaving, setIsSaving] = useState(false);
+  const [showResult, setShowResult] = useState(false);
+  const [savedPreviews, setSavedPreviews] = useState<Array<{ photo: EvaluationPhoto; dataUrl: string }>>([]);
   const activePhoto = photos.find((photo) => photo.id === activePhotoId) ?? null;
   const fitScale = activePhoto
     ? Math.min(1, 980 / activePhoto.width, 540 / activePhoto.height)
@@ -41,36 +47,34 @@ export function PhotoEditor({ patientName }: { patientName: string }) {
   const canRedo = Boolean(activePhotoId && future[activePhotoId]?.length);
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      try {
-        const stored = window.localStorage.getItem(storageKey);
-        if (!stored) return;
-        const parsed = JSON.parse(stored) as StoredEvaluation;
-        const restored = parsed.photos.map((photo) => ({
-          ...photo,
-          annotations: parsed.annotationsByPhotoId?.[photo.id] ?? [],
-        }));
+    let active = true;
+    getCachedJson<{ evaluation?: { photos?: EvaluationPhoto[] } | null }>(evaluationCacheKey)
+      .then(async (data) => {
+        if (!active) return;
+        const restored = data.evaluation?.photos ?? [];
         setPhotos(restored);
         setActivePhotoId(restored[0]?.id ?? null);
-      } catch {
-        // Ignore invalid mock data and keep the empty editor available.
-      }
-    }, 0);
-    return () => window.clearTimeout(timeout);
-  }, [storageKey]);
+        if (restored.length) {
+          const previews = await Promise.all(restored.map(async (photo) => ({ photo, dataUrl: await renderExport(photo) })));
+          if (!active) return;
+          setSavedPreviews(previews);
+          setShowResult(true);
+        }
+      })
+      .catch(() => {
+        if (active) showNotice("Não foi possível carregar as fotos salvas.", "info");
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
+    return () => { active = false; };
+  }, [evaluationCacheKey]);
 
   useEffect(() => {
     if (!notice) return;
     const timeout = window.setTimeout(() => setNotice(null), 3200);
     return () => window.clearTimeout(timeout);
   }, [notice]);
-
-  const storedEvaluation = useMemo<StoredEvaluation>(() => ({
-    photos: photos.map((photo) => Object.fromEntries(
-      Object.entries(photo).filter(([key]) => key !== "annotations"),
-    ) as Omit<EvaluationPhoto, "annotations">),
-    annotationsByPhotoId: Object.fromEntries(photos.map((photo) => [photo.id, photo.annotations])),
-  }), [photos]);
 
   function showNotice(text: string, tone: NonNullable<Notice>["tone"] = "success") {
     setNotice({ text, tone });
@@ -136,7 +140,11 @@ export function PhotoEditor({ patientName }: { patientName: string }) {
 
   function removePhoto(photoId: string) {
     const photo = photos.find((item) => item.id === photoId);
-    if (!photo || !window.confirm(`Remover a foto "${photo.name}" da avaliação?`)) return;
+    if (!photo) return;
+    setConfirmAction({ type: "photo", photoId, photoName: photo.name });
+  }
+
+  function executeRemovePhoto(photoId: string) {
     const remaining = photos.filter((item) => item.id !== photoId);
     setPhotos(remaining);
     setPast((current) => omitKey(current, photoId));
@@ -148,11 +156,33 @@ export function PhotoEditor({ patientName }: { patientName: string }) {
   }
 
   function clearAnnotations() {
-    if (!activePhoto || !activePhoto.annotations.length) return;
-    if (!window.confirm("Limpar todas as marcações desta foto? A foto original continuará preservada.")) return;
+    if (!activePhoto) {
+      showNotice("Adicione uma foto antes de limpar as marcações.", "info");
+      return;
+    }
+    if (!activePhoto.annotations.length) {
+      showNotice("Não há marcações para limpar.", "info");
+      return;
+    }
+    setConfirmAction({ type: "clear" });
+  }
+
+  function executeClearAnnotations() {
+    if (!activePhoto) return;
     commitAnnotations([], activePhoto.annotations);
     setSelectedId(null);
     showNotice("Marcações removidas. Você ainda pode desfazer essa ação.");
+  }
+
+  function confirmPendingAction() {
+    if (!confirmAction) return;
+    if (confirmAction.type === "photo") {
+      executeRemovePhoto(confirmAction.photoId);
+      showNotice("Foto removida da avaliação.");
+    } else {
+      executeClearAnnotations();
+    }
+    setConfirmAction(null);
   }
 
   function deleteSelected() {
@@ -164,9 +194,29 @@ export function PhotoEditor({ patientName }: { patientName: string }) {
     setSelectedId(null);
   }
 
-  function saveEvaluation() {
-    window.localStorage.setItem(storageKey, JSON.stringify(storedEvaluation));
-    showNotice("Avaliação salva com as fotos originais e as marcações separadas.");
+  async function saveEvaluation() {
+    if (!photos.length) {
+      showNotice("Adicione pelo menos uma foto antes de salvar a avaliação.", "info");
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const response = await fetch(`/api/patients/${patientId}/evaluation`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ photos }),
+      });
+      if (!response.ok) throw new Error("Não foi possível salvar a avaliação.");
+      invalidateClientCache(evaluationCacheKey);
+      const previews = await Promise.all(photos.map(async (photo) => ({ photo, dataUrl: await renderExport(photo) })));
+      setSavedPreviews(previews);
+      setShowResult(true);
+      showNotice("Avaliação salva com as fotos originais e as marcações separadas.");
+    } catch {
+      showNotice("Não foi possível salvar as fotos da avaliação.", "info");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function exportImage() {
@@ -180,23 +230,24 @@ export function PhotoEditor({ patientName }: { patientName: string }) {
   }
 
   return (
-    <Card className="overflow-hidden border-[#102b52] bg-[#06152c] p-0 text-white shadow-[0_18px_45px_rgba(5,18,43,0.16)]">
-      <div className="flex flex-col gap-3 border-b border-[#12315d] px-5 py-4 md:flex-row md:items-center md:justify-between">
+    <Card className="overflow-hidden border-[#e3e5f0] bg-white p-0 text-[#25263a] shadow-[0_12px_34px_rgba(38,39,58,0.06)]">
+      <div className="flex flex-col gap-3 border-b border-[#ececf3] bg-white px-5 py-4 md:flex-row md:items-center md:justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <Camera className="h-4 w-4 text-[#8b78ff]" />
+            <Camera className="h-4 w-4 text-[#5147dc]" />
             <h3 className="text-sm font-bold">Fotos da avaliação</h3>
           </div>
-          <p className="mt-1 text-[11px] text-[#93a8ca]">Faça marcações sobre as fotos de {patientName} sem alterar os arquivos originais.</p>
+          <p className="mt-1 text-[11px] text-[#858696]">Faça marcações sobre as fotos de {patientName} sem alterar os arquivos originais.</p>
         </div>
-        <div className="flex items-center gap-2 text-[10px] text-[#93a8ca]">
-          <FileJson className="h-3.5 w-3.5 text-[#8b78ff]" />
+        <div className="flex items-center gap-2 text-[10px] text-[#858696]">
+          <FileJson className="h-3.5 w-3.5 text-[#5147dc]" />
           Marcações editáveis salvas em JSON
         </div>
       </div>
 
       <div className="grid gap-4 p-4 lg:grid-cols-[auto_minmax(0,1fr)]">
-        <EditorToolbar
+        {isLoading ? <div className="flex min-h-[420px] items-center justify-center rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] text-xs font-semibold text-[#858696] lg:col-span-2">Carregando avaliação salva...</div> : showResult ? <EvaluationResult onEdit={() => setShowResult(false)} previews={savedPreviews} /> : <>
+          <EditorToolbar
           canRedo={canRedo}
           canUndo={canUndo}
           color={color}
@@ -215,11 +266,14 @@ export function PhotoEditor({ patientName }: { patientName: string }) {
           onZoomIn={() => setZoom((value) => Math.min(2.25, value + 0.15))}
           onZoomOut={() => setZoom((value) => Math.max(0.55, value - 0.15))}
           onZoomReset={() => setZoom(1)}
+          isSaving={isSaving}
           tool={tool}
-        />
+          />
 
-        <div className="min-w-0">
-          {activePhoto ? (
+          <div className="min-w-0">
+          {isLoading ? (
+            <div className="flex min-h-[360px] items-center justify-center rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] text-xs font-semibold text-[#858696]">Carregando fotos salvas...</div>
+          ) : activePhoto ? (
             <EditorCanvas
               color={color}
               onCommitAnnotations={commitAnnotations}
@@ -231,34 +285,55 @@ export function PhotoEditor({ patientName }: { patientName: string }) {
               tool={tool}
             />
           ) : (
-            <label className="flex min-h-[360px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed border-[#31547e] bg-[#101724] px-5 text-center transition hover:border-[#6c4cff] hover:bg-[#0d1c36]">
-              <span className="grid h-12 w-12 place-items-center rounded-full bg-[#1b2b57] text-[#9d8eff]"><ImagePlus className="h-5 w-5" /></span>
+            <label className="flex min-h-[360px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed border-[#cfd3e4] bg-[#fbfbfe] px-5 text-center transition hover:border-[#5147dc] hover:bg-[#f8f7ff]">
+              <span className="grid h-12 w-12 place-items-center rounded-full bg-[#efedff] text-[#5147dc]"><ImagePlus className="h-5 w-5" /></span>
               <strong className="mt-4 text-sm">Adicione a primeira foto da avaliação</strong>
-              <span className="mt-1 max-w-sm text-[11px] leading-5 text-[#93a8ca]">JPG, PNG ou WEBP. A imagem original fica preservada e as marcações são armazenadas separadamente.</span>
+              <span className="mt-1 max-w-sm text-[11px] leading-5 text-[#858696]">JPG, PNG ou WEBP. A imagem original fica preservada e as marcações são armazenadas separadamente.</span>
               <span className="mt-4 inline-flex items-center rounded-[7px] bg-[#5147dc] px-4 py-2 text-xs font-bold text-white shadow-[0_8px_18px_rgba(81,71,220,0.28)] transition hover:bg-[#6357ef]">Escolher foto</span>
               <input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => uploadPhotos(event.target.files)} />
             </label>
           )}
 
-          <div className="mt-4 rounded-[8px] border border-[#12315d] bg-[#071338] p-3">
+          <div className="mt-4 rounded-[8px] border border-[#e3e5f0] bg-white p-3">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
-                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#8b9ec1]">Galeria da avaliação</p>
-                <p className="mt-1 text-[11px] text-[#93a8ca]">Cada foto possui seu próprio conjunto de marcações.</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#5147dc]">Galeria da avaliação</p>
+                <p className="mt-1 text-[11px] text-[#858696]">Cada foto possui seu próprio conjunto de marcações.</p>
               </div>
-              {!photos.length ? <span className="text-[10px] text-[#6f86ad]">Nenhuma foto adicionada</span> : null}
+              {!photos.length ? <span className="text-[10px] text-[#9a9bab]">Nenhuma foto adicionada</span> : null}
             </div>
             <PhotoGallery activePhotoId={activePhotoId} onRemove={removePhoto} onSelect={(photoId) => { setActivePhotoId(photoId); setSelectedId(null); setZoom(1); }} onUpload={uploadPhotos} photos={photos} />
           </div>
-        </div>
+          </div>
+        </>}
       </div>
 
       {notice ? (
-        <div className={cn("mx-4 mb-4 flex items-center gap-2 rounded-[7px] border px-3 py-2 text-[11px]", notice.tone === "success" ? "border-[#245f55] bg-[#0c2e2b] text-[#b7f5e4]" : "border-[#34527c] bg-[#0d2345] text-[#d2ddff]")}>
+        <div className={cn("mx-4 mb-4 flex items-center gap-2 rounded-[7px] border px-3 py-2 text-[11px]", notice.tone === "success" ? "border-[#b9e8d8] bg-[#effbf6] text-[#16805d]" : "border-[#d7d9ee] bg-[#f7f6ff] text-[#5147dc]")}>
           <Info className="h-3.5 w-3.5 shrink-0" />
           {notice.text}
         </div>
       ) : null}
+
+      <Modal
+        open={Boolean(confirmAction)}
+        onClose={() => setConfirmAction(null)}
+        title={confirmAction?.type === "clear" ? "Limpar marcações" : "Remover foto"}
+        description={confirmAction?.type === "clear" ? "A foto original continuará preservada." : `A foto "${confirmAction?.photoName ?? ""}" será removida da avaliação.`}
+      >
+        <div className="flex flex-col gap-5">
+          <div className="flex items-start gap-3 rounded-[8px] border border-[#f1dfb7] bg-[#fffbf1] p-4 text-xs leading-5 text-[#7a5b16]">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#c38b19]" />
+            <p>{confirmAction?.type === "clear" ? "Todas as marcações desta foto serão removidas. Essa ação poderá ser desfeita pelo botão Desfazer." : "Essa ação remove a foto e as marcações associadas a ela desta avaliação."}</p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setConfirmAction(null)}>Cancelar</Button>
+            <Button className="border-[#f2c8c3] text-[#b42318] hover:border-[#b42318] hover:bg-[#fff7f7] hover:text-[#b42318]" type="button" variant="secondary" onClick={confirmPendingAction}>
+              {confirmAction?.type === "clear" ? "Limpar marcações" : "Remover foto"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </Card>
   );
 }

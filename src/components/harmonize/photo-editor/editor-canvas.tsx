@@ -18,8 +18,11 @@ import type {
   EvaluationPhoto,
   PhotoAnnotation,
 } from "./types";
+import { Button } from "@/components/ui/button";
+import { Modal } from "@/components/ui/modal";
 
 const defaultStrokeWidth = 3;
+type TextDialog = { mode: "create"; x: number; y: number } | { mode: "edit"; annotationId: string } | null;
 
 export function EditorCanvas({
   photo,
@@ -46,6 +49,8 @@ export function EditorCanvas({
   const previousSnapshotRef = useRef<AnnotationSnapshot | null>(null);
   const drawingIdRef = useRef<string | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
+  const [textDialog, setTextDialog] = useState<TextDialog>(null);
+  const [textDraft, setTextDraft] = useState("");
   const width = Math.max(1, Math.round(photo.width * scale));
   const height = Math.max(1, Math.round(photo.height * scale));
 
@@ -94,22 +99,8 @@ export function EditorCanvas({
     }
 
     if (tool === "text") {
-      const text = window.prompt("Texto da marcação", "Observação");
-      if (!text) return;
-      const next: PhotoAnnotation[] = [
-        ...photo.annotations,
-        {
-          id: createAnnotationId(),
-          type: "text",
-          x: point.x,
-          y: point.y,
-          text,
-          color,
-          fontSize: 24,
-          strokeWidth: defaultStrokeWidth,
-        },
-      ];
-      onCommitAnnotations(next, photo.annotations);
+      setTextDraft("Observação");
+      setTextDialog({ mode: "create", x: point.x, y: point.y });
       return;
     }
 
@@ -193,8 +184,34 @@ export function EditorCanvas({
     onCommitAnnotations(photo.annotations.map((annotation) => annotation.id === id ? nextAnnotation : annotation), previous);
   }
 
+  function confirmText() {
+    const text = textDraft.trim();
+    if (!text || !textDialog) return;
+
+    if (textDialog.mode === "create") {
+      onCommitAnnotations([
+        ...photo.annotations,
+        {
+          id: createAnnotationId(),
+          type: "text",
+          x: textDialog.x,
+          y: textDialog.y,
+          text,
+          color,
+          fontSize: 24,
+          strokeWidth: defaultStrokeWidth,
+        },
+      ], photo.annotations);
+    } else {
+      const annotation = photo.annotations.find((item) => item.id === textDialog.annotationId);
+      if (annotation?.type === "text") updateAnnotation(annotation.id, { ...annotation, text }, photo.annotations);
+    }
+    setTextDialog(null);
+    setTextDraft("");
+  }
+
   return (
-    <div className="flex min-h-[360px] items-center justify-center overflow-auto rounded-[8px] border border-[#12315d] bg-[#101724] p-4">
+    <div className="flex min-h-[360px] items-center justify-center overflow-auto rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-4">
       <Stage
         className="shrink-0"
         height={height}
@@ -227,9 +244,9 @@ export function EditorCanvas({
               scale={scale}
               selected={selectedId === annotation.id}
               tool={tool}
-              onEditText={(text) => {
-                if (annotation.type !== "text") return;
-                updateAnnotation(annotation.id, { ...annotation, text }, photo.annotations);
+              onRequestTextEdit={(annotationId, text) => {
+                setTextDraft(text);
+                setTextDialog({ mode: "edit", annotationId });
               }}
               onErase={eraseAnnotation}
               onMove={(nextAnnotation, previous) => updateAnnotation(annotation.id, nextAnnotation, previous)}
@@ -238,7 +255,7 @@ export function EditorCanvas({
           ))}
           <Transformer
             anchorSize={8}
-            borderStroke="#6c4cff"
+            borderStroke="#5147dc"
             enabledAnchors={["top-left", "top-right", "bottom-left", "bottom-right"]}
             ignoreStroke
             ref={transformerRef}
@@ -246,6 +263,29 @@ export function EditorCanvas({
           />
         </Layer>
       </Stage>
+      <Modal
+        open={Boolean(textDialog)}
+        onClose={() => setTextDialog(null)}
+        title={textDialog?.mode === "edit" ? "Editar texto" : "Adicionar texto"}
+        description="Digite o texto que será exibido sobre a foto."
+      >
+        <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); confirmText(); }}>
+          <label className="text-xs font-bold text-[#555668]">
+            Texto da marcação
+            <input
+              autoFocus
+              className="mt-2 h-10 w-full rounded-[7px] border border-[#dddfea] bg-white px-3 text-sm text-[#303144] outline-none transition focus:border-[#5147dc] focus:ring-2 focus:ring-[#5147dc]/10"
+              value={textDraft}
+              onChange={(event) => setTextDraft(event.target.value)}
+              maxLength={120}
+            />
+          </label>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setTextDialog(null)}>Cancelar</Button>
+            <Button disabled={!textDraft.trim()} type="submit">{textDialog?.mode === "edit" ? "Salvar texto" : "Adicionar texto"}</Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }
@@ -259,7 +299,7 @@ function AnnotationNode({
   onSelect,
   onErase,
   onMove,
-  onEditText,
+  onRequestTextEdit,
 }: {
   annotation: PhotoAnnotation;
   annotationsSnapshot: AnnotationSnapshot;
@@ -269,7 +309,7 @@ function AnnotationNode({
   onSelect: (id: string | null) => void;
   onErase: (id: string) => void;
   onMove: (annotation: PhotoAnnotation, previous: AnnotationSnapshot) => void;
-  onEditText: (text: string) => void;
+  onRequestTextEdit: (annotationId: string, text: string) => void;
 }) {
   const previousSnapshotRef = useRef<AnnotationSnapshot | null>(null);
   const commonProps = {
@@ -349,12 +389,10 @@ function AnnotationNode({
         x={annotation.x * scale}
         y={annotation.y * scale}
         onDblClick={() => {
-          const text = window.prompt("Editar texto", annotation.text);
-          if (text) onEditText(text);
+          onRequestTextEdit(annotation.id, annotation.text);
         }}
         onDblTap={() => {
-          const text = window.prompt("Editar texto", annotation.text);
-          if (text) onEditText(text);
+          onRequestTextEdit(annotation.id, annotation.text);
         }}
         onDragStart={() => {
           previousSnapshotRef.current = annotationsSnapshot;

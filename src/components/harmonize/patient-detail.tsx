@@ -21,6 +21,8 @@ import { cn } from "@/lib/utils";
 import { CustomerJourney } from "./customer-journey";
 import { PatientExpenses } from "./patient-expenses";
 import { PhotoEditor } from "./photo-editor/photo-editor";
+import { EmptyState } from "./shared";
+import { getCachedJson } from "@/lib/client-cache";
 
 const tabs = ["Dados", "Avaliação", "Histórico", "Procedimentos", "Gastos", "Pagamentos", "Agendamentos", "Observações"];
 
@@ -72,8 +74,7 @@ export function PatientDetail({
 
   useEffect(() => {
     if (!patient.id) return;
-    fetch(`/api/patients/${patient.id}/history`)
-      .then((response) => response.json() as Promise<{ patient?: { appointments: Array<{ date: string; time: string; procedure: string; professional: string; status: string }>; payments: Array<{ value: number; method: string; status: string; installments: string }>; evaluations: unknown[] } }>)
+    getCachedJson<{ patient?: { appointments: Array<{ date: string; time: string; procedure: string; professional: string; status: string }>; payments: Array<{ value: number; method: string; status: string; installments: string }>; evaluations: unknown[] } }>(`/api/patients/${patient.id}/history`)
       .then((data) => {
         const appointments = data.patient?.appointments ?? [];
         const payments = data.patient?.payments ?? [];
@@ -160,7 +161,7 @@ export function PatientDetail({
 function PatientTabContent({ patient, activeTab, history }: { patient: Patient; activeTab: string; history?: PatientHistoryRecord }) {
 
   if (activeTab === "Avaliação") {
-    return <PhotoEditor patientName={patient.name} />;
+    return patient.id ? <PhotoEditor patientId={patient.id} patientName={patient.name} /> : <EmptyState title="Cliente ainda não foi salvo" description="Salve o cliente antes de adicionar fotos à avaliação." />;
   }
 
   if (activeTab === "Histórico") {
