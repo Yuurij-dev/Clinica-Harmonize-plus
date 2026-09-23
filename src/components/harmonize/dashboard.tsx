@@ -7,17 +7,17 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DetailCard, ProgressBar, StatusBadge } from "./shared";
 import type { SectionId } from "@/types/clinic";
+import { getCachedJson, readClientCache } from "@/lib/client-cache";
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
 export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onAction: (action: "client" | "appointment" | "quote" | "payment") => void; onNavigate: (section: SectionId) => void; userName?: string }) {
-  const [data, setData] = useState<{ appointments: Array<{ id: string; time: string; procedure: string; status: string; patient?: { name: string } | null }>; patients: Array<{ name: string; status: string; lastVisit: string | null }>; quotes: Array<{ id: string; items: string; total: number; status: string; patient?: { name: string } | null }>; payments: Array<{ value: number; status: string }> } | null>(null);
+  type DashboardData = { appointments: Array<{ id: string; time: string; procedure: string; status: string; patient?: { name: string } | null }>; patients: Array<{ name: string; status: string; lastVisit: string | null }>; quotes: Array<{ id: string; items: string; total: number; status: string; patient?: { name: string } | null }>; payments: Array<{ value: number; status: string }> };
+  const cachedDashboard = readClientCache<DashboardData>("/api/dashboard/bootstrap");
+  const [data, setData] = useState<DashboardData | null>(cachedDashboard ?? null);
   useEffect(() => {
-    Promise.all([fetch("/api/appointments"), fetch("/api/patients"), fetch("/api/quotes"), fetch("/api/payments")])
-      .then(async ([appointmentsResponse, patientsResponse, quotesResponse, paymentsResponse]) => {
-        const [appointmentsData, patientsData, quotesData, paymentsData] = await Promise.all([appointmentsResponse.json(), patientsResponse.json(), quotesResponse.json(), paymentsResponse.json()]);
-        setData({ appointments: appointmentsData.appointments ?? [], patients: patientsData.patients ?? [], quotes: quotesData.quotes ?? [], payments: paymentsData.payments ?? [] });
-      })
+    getCachedJson<DashboardData>("/api/dashboard/bootstrap")
+      .then((dashboardData) => setData({ appointments: dashboardData.appointments ?? [], patients: dashboardData.patients ?? [], quotes: dashboardData.quotes ?? [], payments: dashboardData.payments ?? [] }))
       .catch(() => setData({ appointments: [], patients: [], quotes: [], payments: [] }));
   }, []);
 

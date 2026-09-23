@@ -129,7 +129,9 @@ create table "EvaluationPhoto" (
 
 create index "Appointment_patientId_date_idx" on "Appointment" ("patientId", "date");
 create index "Patient_clinicId_idx" on "Patient" ("clinicId");
+create index "Patient_clinicId_name_idx" on "Patient" ("clinicId", "name");
 create index "Appointment_clinicId_idx" on "Appointment" ("clinicId");
+create index "Appointment_clinicId_date_time_idx" on "Appointment" ("clinicId", "date", "time");
 create index "Procedure_clinicId_idx" on "Procedure" ("clinicId");
 create index "Evaluation_clinicId_idx" on "Evaluation" ("clinicId");
 create index "ClinicMembership_clinicId_idx" on "ClinicMembership" ("clinicId");
@@ -138,8 +140,10 @@ create unique index "Procedure_clinicId_name_key" on "Procedure" ("clinicId", "n
 create index "Evaluation_patientId_idx" on "Evaluation" ("patientId");
 create index "EvaluationPhoto_evaluationId_idx" on "EvaluationPhoto" ("evaluationId");
 create index "Quote_clinicId_idx" on "Quote" ("clinicId");
+create index "Quote_clinicId_createdAt_idx" on "Quote" ("clinicId", "createdAt");
 create index "Quote_patientId_idx" on "Quote" ("patientId");
 create index "Payment_clinicId_idx" on "Payment" ("clinicId");
+create index "Payment_clinicId_date_idx" on "Payment" ("clinicId", "date");
 create index "Payment_patientId_idx" on "Payment" ("patientId");
 create index "Product_clinicId_idx" on "Product" ("clinicId");
 create unique index "Product_clinicId_name_key" on "Product" ("clinicId", "name");

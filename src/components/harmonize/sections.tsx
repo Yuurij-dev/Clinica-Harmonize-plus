@@ -7,6 +7,7 @@ import {
   Camera,
   CheckCircle2,
   CircleDollarSign,
+  ChevronDown,
   ListFilter,
   Loader2,
   PencilLine,
@@ -43,12 +44,41 @@ import {
   parseInteger,
 } from "@/lib/input-masks";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
+import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import type { Appointment, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
 
 const currency = new Intl.NumberFormat("pt-BR", {
   style: "currency",
   currency: "BRL",
 });
+
+const procedureCategories = [
+  "Preenchimento",
+  "Toxina botulínica",
+  "Bioestimulação",
+  "Fios de sustentação",
+  "Peeling",
+  "Microagulhamento",
+  "Limpeza de pele",
+  "Laser e tecnologias",
+  "Skinbooster e mesoterapia",
+  "Outro",
+];
+
+const materialOptions = [
+  "Ácido hialurônico",
+  "Toxina botulínica",
+  "Bioestimulador de colágeno",
+  "Fios de PDO",
+  "Peeling químico",
+  "Anestésico tópico",
+  "Microagulhas",
+  "Antisséptico",
+  "Luvas descartáveis",
+  "Gel condutor",
+  "Protetor solar",
+  "Outro",
+];
 
 type CreateProps = {
   openCreate?: boolean;
@@ -109,6 +139,36 @@ function displayDate(value: string) {
   return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value));
 }
 
+function MaterialsMultiSelect({ options, defaultValue = [] }: { options: string[]; defaultValue?: string[] }) {
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState(defaultValue);
+
+  function toggleMaterial(material: string) {
+    setSelected((current) => current.includes(material) ? current.filter((item) => item !== material) : [...current, material]);
+  }
+
+  return (
+    <div className="relative">
+      <button type="button" className={`${fieldClassName} flex min-h-11 w-full items-center justify-between gap-3 text-left`} onClick={() => setOpen((current) => !current)} aria-expanded={open}>
+        <span className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+          {selected.length ? selected.map((material) => <span className="rounded-full bg-[#f0efff] px-2 py-1 text-[10px] font-bold text-[#5147dc]" key={material}>{material}</span>) : <span className="text-[#858696]">Selecione os materiais</span>}
+        </span>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-[#858696] transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {selected.map((material) => <input key={material} type="hidden" name="materials" value={material} />)}
+      {open ? <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-60 overflow-auto rounded-[8px] border border-[#e2e5f0] bg-white p-1.5 shadow-[0_18px_40px_rgba(31,32,50,0.16)]">
+        {options.map((material) => {
+          const checked = selected.includes(material);
+          return <button type="button" key={material} className="flex w-full items-center gap-3 rounded-[6px] px-3 py-2.5 text-left text-xs font-semibold text-[#3f4054] transition hover:bg-[#f7f6ff]" onClick={() => toggleMaterial(material)}>
+            <span className={`grid h-4 w-4 shrink-0 place-items-center rounded-[4px] border ${checked ? "border-[#5147dc] bg-[#5147dc] text-white" : "border-[#cfd4e2] bg-white"}`}>{checked ? <CheckCircle2 className="h-3 w-3" /> : null}</span>
+            {material}
+          </button>;
+        })}
+      </div> : null}
+    </div>
+  );
+}
+
 function journeyForPatient(patient: Patient) {
   const leadAt = patient.lastVisit === "Primeiro contato" ? new Date().toISOString() : patient.lastVisit;
   return buildCustomerJourney({ events: { leadAt }, details: {} });
@@ -121,33 +181,28 @@ type FinancialData = {
 };
 
 function useFinancialData() {
-  const [data, setData] = useState<FinancialData | null>(null);
+  const cachedDashboard = readClientCache<FinancialData>("/api/dashboard/bootstrap");
+  const [data, setData] = useState<FinancialData | null>(cachedDashboard ?? null);
   useEffect(() => {
-    Promise.all([fetch("/api/payments"), fetch("/api/quotes"), fetch("/api/appointments")])
-      .then(async ([paymentsResponse, quotesResponse, appointmentsResponse]) => {
-        const [paymentsData, quotesData, appointmentsData] = await Promise.all([paymentsResponse.json(), quotesResponse.json(), appointmentsResponse.json()]);
-        setData({ payments: paymentsData.payments ?? [], quotes: quotesData.quotes ?? [], appointments: appointmentsData.appointments ?? [] });
-      })
+    getCachedJson<FinancialData>("/api/dashboard/bootstrap")
+      .then((dashboardData) => setData({ payments: dashboardData.payments ?? [], quotes: dashboardData.quotes ?? [], appointments: dashboardData.appointments ?? [] }))
       .catch(() => setData({ payments: [], quotes: [], appointments: [] }));
   }, []);
   return data;
 }
 
 export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
+  const cachedPatients = readClientCache<{ patients: ApiPatient[] }>("/api/patients");
   const [selectedPatientName, setSelectedPatientName] = useState<string | null>(null);
-  const [patientRows, setPatientRows] = useState<Patient[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [patientRows, setPatientRows] = useState<Patient[]>(() => cachedPatients?.patients.map(mapApiPatient) ?? []);
+  const [isLoading, setIsLoading] = useState(!cachedPatients);
   const [saveError, setSaveError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [query, setQuery] = useState("");
 
   useEffect(() => {
     let active = true;
-    fetch("/api/patients")
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Não foi possível carregar os pacientes.");
-        return response.json() as Promise<{ patients: ApiPatient[] }>;
-      })
+    getCachedJson<{ patients: ApiPatient[] }>("/api/patients")
       .then((data) => {
         if (active) setPatientRows(data.patients.map(mapApiPatient));
       })
@@ -191,6 +246,7 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
       const data = await response.json() as { patient: ApiPatient };
       const savedPatient = mapApiPatient(data.patient);
       setPatientRows((current) => [savedPatient, ...current]);
+      invalidateClientCache("/api/patients", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
       onCreateClose();
       onSaved?.(`${savedPatient.name} foi adicionado aos clientes.`);
     } catch {
@@ -260,15 +316,18 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
 }
 
 export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
+  const cachedAgenda = readClientCache<{ appointments: ApiAppointment[]; patients: ApiPatient[]; procedures: Array<{ name: string }>; members: Array<{ role: string; user: { name: string } }> }>("/api/agenda/bootstrap");
   const rowColors = ["#5147dc", "#6d5ce7", "#2f9c88", "#d86655", "#ddb63f"];
-  const [appointmentRows, setAppointmentRows] = useState<AppointmentRow[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [appointmentRows, setAppointmentRows] = useState<AppointmentRow[]>(() => cachedAgenda?.appointments.map(mapApiAppointment) ?? []);
+  const [isLoading, setIsLoading] = useState(!cachedAgenda);
   const [loadError, setLoadError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
-  const [patientOptions, setPatientOptions] = useState<ApiPatient[]>([]);
-  const [procedureOptions, setProcedureOptions] = useState<string[]>([]);
-  const [professionalChoices, setProfessionalChoices] = useState<string[]>([]);
+  const [patientOptions, setPatientOptions] = useState<ApiPatient[]>(cachedAgenda?.patients ?? []);
+  const [procedureOptions, setProcedureOptions] = useState<string[]>(cachedAgenda?.procedures.map((item) => item.name) ?? []);
+  const [professionalChoices, setProfessionalChoices] = useState<string[]>(cachedAgenda?.members.map((member) => member.user.name) ?? []);
+  const [procedureLoading, setProcedureLoading] = useState(!cachedAgenda);
+  const [professionalLoading, setProfessionalLoading] = useState(!cachedAgenda);
   const [patientQuery, setPatientQuery] = useState("");
   const [selectedPatientId, setSelectedPatientId] = useState("");
   const [activeView, setActiveView] = useState("Lista");
@@ -287,45 +346,24 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
 
   useEffect(() => {
     let active = true;
-    fetch("/api/appointments")
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Não foi possível carregar a agenda.");
-        return response.json() as Promise<{ appointments: ApiAppointment[] }>;
-      })
+    getCachedJson<{ appointments: ApiAppointment[]; patients: ApiPatient[]; procedures: Array<{ name: string }>; members: Array<{ role: string; user: { name: string } }> }>("/api/agenda/bootstrap")
       .then((data) => {
-        if (active) setAppointmentRows(data.appointments.map(mapApiAppointment));
+        if (!active) return;
+        setAppointmentRows(data.appointments.map(mapApiAppointment));
+        setPatientOptions(data.patients);
+        setProcedureOptions(data.procedures.map((item) => item.name));
+        setProfessionalChoices(data.members.map((member) => member.user.name));
       })
       .catch(() => {
-        if (active) setLoadError("Não foi possível carregar a agenda do servidor.");
+        if (active) setLoadError("Não foi possível carregar os dados da agenda.");
       })
       .finally(() => {
-        if (active) setIsLoading(false);
+        if (!active) return;
+        setIsLoading(false);
+        setProcedureLoading(false);
+        setProfessionalLoading(false);
       });
     return () => { active = false; };
-  }, []);
-
-  useEffect(() => {
-    fetch("/api/procedures")
-      .then((response) => response.json() as Promise<{ procedures?: Array<{ name: string }> }>)
-      .then((data) => setProcedureOptions((data.procedures ?? []).map((item) => item.name)))
-      .catch(() => setProcedureOptions([]));
-  }, []);
-
-  useEffect(() => {
-    fetch("/api/team")
-      .then((response) => response.json() as Promise<{ members?: Array<{ role: string; user: { name: string } }> }> )
-      .then((data) => setProfessionalChoices((data.members ?? []).filter((member) => ["ADMIN", "PROFESSIONAL"].includes(member.role)).map((member) => member.user.name)))
-      .catch(() => setProfessionalChoices([]));
-  }, []);
-
-  useEffect(() => {
-    fetch("/api/patients")
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Não foi possível carregar os pacientes.");
-        return response.json() as Promise<{ patients: ApiPatient[] }>;
-      })
-      .then((data) => setPatientOptions(data.patients))
-      .catch(() => setLoadError("Não foi possível carregar os pacientes para o agendamento."));
   }, []);
 
   const matchingPatients = patientOptions.filter((patient) =>
@@ -371,6 +409,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
       if (!response.ok) return;
       const data = await response.json() as { appointment: ApiAppointment };
       setAppointmentRows((current) => [...current, mapApiAppointment(data.appointment)].sort((a, b) => a.time.localeCompare(b.time)));
+      invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
       onCreateClose();
       setPatientQuery("");
       setSelectedPatientId("");
@@ -387,6 +426,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     if (!response.ok) { setUpdatingId(null); return; }
     const nextRows = appointmentRows.map((item) => matchesAppointment(item, target) ? { ...item, status: nextStatus } : item);
     setAppointmentRows(nextRows);
+    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     syncAvailableFilters(nextRows);
     setUpdatingId(null);
     onSaved?.(`${target.patient}: ${nextStatus}.`);
@@ -400,11 +440,13 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Faltou" }) });
     if (!response.ok) { setUpdatingId(null); return; }
     setAppointmentRows(nextRows);
+    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     syncAvailableFilters(nextRows);
     setUpdatingId(null);
     onSaved?.(`${target.patient} foi marcado como faltou.`, () => {
       const restoredRows = nextRows.map((item) => matchesAppointment(item, target) ? { ...item, status: previousStatus } : item);
       setAppointmentRows(restoredRows);
+      invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
       syncAvailableFilters(restoredRows);
     });
   }
@@ -524,9 +566,9 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
             {selectedPatientId ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {selectedPatient?.name}</p> : null}
           </div>
           <FormField label="Horário"><input className={fieldClassName} name="time" type="time" required /></FormField>
-          <FormField label="Profissional"><select className={fieldClassName} name="professional" required disabled={!professionalChoices.length}><option value="">{professionalChoices.length ? "Selecione o profissional" : "Nenhum profissional cadastrado"}</option>{professionalChoices.map((professional) => <option key={professional} value={professional}>{professional}</option>)}</select></FormField>
-          <div className="sm:col-span-2"><FormField label="Procedimento"><select className={fieldClassName} name="procedure" required>{procedureOptions.length ? procedureOptions.map((item) => <option key={item}>{item}</option>) : <option value="">Nenhum procedimento cadastrado</option>}</select></FormField></div>
-          <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || !selectedPatientId} type="submit">{isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : "Criar agendamento"}</Button></div>
+          <FormField label="Profissional"><div className="relative"><select className={fieldClassName} name="professional" required disabled={professionalLoading || !professionalChoices.length}><option value="">{professionalLoading ? "Carregando profissionais..." : professionalChoices.length ? "Selecione o profissional" : "Nenhum profissional cadastrado"}</option>{professionalChoices.map((professional) => <option key={professional} value={professional}>{professional}</option>)}</select>{professionalLoading ? <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#5147dc]" /> : null}</div></FormField>
+          <div className="sm:col-span-2"><FormField label="Procedimento"><div className="relative"><select className={fieldClassName} name="procedure" required disabled={procedureLoading || !procedureOptions.length}><option value="">{procedureLoading ? "Carregando procedimentos..." : procedureOptions.length ? "Selecione o procedimento" : "Nenhum procedimento cadastrado"}</option>{procedureOptions.map((item) => <option key={item}>{item}</option>)}</select>{procedureLoading ? <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#5147dc]" /> : null}</div></FormField></div>
+          <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || professionalLoading || procedureLoading || !professionalChoices.length || !procedureOptions.length || !selectedPatientId} type="submit">{isSaving || professionalLoading || procedureLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : professionalLoading || procedureLoading ? "Carregando dados..." : "Criar agendamento"}</Button></div>
         </form>
       </Modal>
     </div>
@@ -534,11 +576,13 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
 }
 
 export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
-  const [procedureRows, setProcedureRows] = useState<Procedure[]>([]);
-  const [productRows, setProductRows] = useState<Product[]>([]);
+  const cachedProcedures = readClientCache<{ procedures?: Array<{ id: string; name: string; category: string; price: number; durationMinutes: number; materials: string; margin: number }> }>("/api/procedures");
+  const cachedProducts = readClientCache<{ products?: Product[] }>("/api/products");
+  const [procedureRows, setProcedureRows] = useState<Procedure[]>(() => (cachedProcedures?.procedures ?? []).map((item) => ({ id: item.id, name: item.name, category: item.category, price: item.price, duration: `${item.durationMinutes} min`, materials: item.materials, margin: `${item.margin}%` })));
+  const [productRows, setProductRows] = useState<Product[]>(cachedProducts?.products ?? []);
   const [materialOpen, setMaterialOpen] = useState(false);
   const [editingProcedureIndex, setEditingProcedureIndex] = useState<number | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(!cachedProcedures);
   const [isSaving, setIsSaving] = useState(false);
   const editingProcedure = editingProcedureIndex === null ? null : procedureRows[editingProcedureIndex];
   const procedureModalOpen = openCreate || editingProcedureIndex !== null;
@@ -557,16 +601,15 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
 
   async function loadProcedures() {
     setIsLoading(true);
-    const response = await fetch("/api/procedures");
-    const data = await response.json() as { procedures?: Array<{ id: string; name: string; category: string; price: number; durationMinutes: number; materials: string; margin: number }> };
+    invalidateClientCache("/api/procedures", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+    const data = await getCachedJson<{ procedures?: Array<{ id: string; name: string; category: string; price: number; durationMinutes: number; materials: string; margin: number }> }>("/api/procedures");
     applyProcedureRows(data);
     setIsLoading(false);
   }
 
   useEffect(() => {
     let active = true;
-    fetch("/api/procedures")
-      .then((response) => response.json() as Promise<{ procedures?: Array<{ id: string; name: string; category: string; price: number; durationMinutes: number; materials: string; margin: number }> }>)
+    getCachedJson<{ procedures?: Array<{ id: string; name: string; category: string; price: number; durationMinutes: number; materials: string; margin: number }> }>("/api/procedures")
       .then((data) => {
         if (!active) return;
         applyProcedureRows(data);
@@ -579,8 +622,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   }, []);
 
   useEffect(() => {
-    fetch("/api/products")
-      .then((response) => response.json() as Promise<{ products?: Product[] }>)
+    getCachedJson<{ products?: Product[] }>("/api/products")
       .then((data) => setProductRows(data.products ?? []))
       .catch(() => setProductRows([]));
   }, []);
@@ -595,12 +637,13 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
     setIsSaving(true);
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name"));
+    const selectedMaterials = form.getAll("materials").map(String).filter(Boolean).join(", ");
     const nextProcedure = {
       name,
       category: String(form.get("category")),
       price: parseCurrency(form.get("price")),
       durationMinutes: parseInteger(form.get("duration")),
-      materials: String(form.get("materials")),
+      materials: selectedMaterials,
       margin: parseInteger(form.get("margin")),
     };
     const response = await fetch(editingProcedure?.id ? `/api/procedures/${editingProcedure.id}` : "/api/procedures", {
@@ -610,6 +653,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
     });
     setIsSaving(false);
     if (!response.ok) return;
+    invalidateClientCache("/api/procedures", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     await loadProcedures();
     onSaved?.(`${name} ${editingProcedure ? "foi atualizado" : "foi adicionado aos procedimentos"}.`);
     closeProcedureModal();
@@ -621,6 +665,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
     const name = String(form.get("name"));
     const response = await fetch("/api/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, category: String(form.get("category")), unit: String(form.get("unit")), cost: parseCurrency(form.get("cost")), supplier: String(form.get("supplier")) }) });
     if (!response.ok) return;
+    invalidateClientCache("/api/products", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     const data = await response.json() as { product: Product };
     setProductRows((current) => [...current, data.product]);
     setMaterialOpen(false); onSaved?.(`${name} foi adicionado aos materiais.`);
@@ -692,7 +737,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
         <CostCalculator materials={productRows} charged={procedureRows[0]?.price ?? 0} procedureName={procedureRows[0]?.name} />
       </div>
       <Modal
-        key={editingProcedure ? `edit-${editingProcedure.name}` : "new-procedure"}
+        key={editingProcedure ? `edit-${editingProcedure.name}` : `new-procedure-${openCreate ? "open" : "closed"}`}
         open={procedureModalOpen}
         onClose={closeProcedureModal}
         title={editingProcedure ? "Editar procedimento" : "Novo procedimento"}
@@ -700,18 +745,18 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
       >
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveProcedure}>
           <div className="sm:col-span-2"><FormField label="Nome"><input className={fieldClassName} name="name" defaultValue={editingProcedure?.name ?? ""} required /></FormField></div>
-          <FormField label="Categoria"><input className={fieldClassName} name="category" defaultValue={editingProcedure?.category ?? ""} required /></FormField>
+          <FormField label="Categoria"><select className={fieldClassName} name="category" defaultValue={editingProcedure?.category ?? ""} required><option value="">Selecione uma categoria</option>{procedureCategories.map((category) => <option key={category}>{category}</option>)}</select></FormField>
           <FormField label="Valor sugerido"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="price" inputMode="decimal" defaultValue={editingProcedure ? currency.format(editingProcedure.price) : ""} placeholder="R$ 0,00" required /></FormField>
           <FormField label="Duração em minutos"><MaskedInput className={fieldClassName} formatter={(value) => formatInteger(value, 3)} name="duration" inputMode="numeric" defaultValue={editingProcedure?.duration ?? ""} placeholder="60" required /></FormField>
           <FormField label="Margem estimada (%)"><MaskedInput className={fieldClassName} formatter={formatPercent} name="margin" inputMode="numeric" defaultValue={editingProcedure?.margin ?? ""} placeholder="40%" required /></FormField>
-          <div className="sm:col-span-2"><FormField label="Materiais"><input className={fieldClassName} name="materials" defaultValue={editingProcedure?.materials ?? ""} required /></FormField></div>
+          <div className="sm:col-span-2"><FormField label="Materiais utilizados"><MaterialsMultiSelect options={materialOptions} defaultValue={editingProcedure?.materials ? editingProcedure.materials.split(", ") : []} /><p className="mt-1 text-[10px] text-[#858696]">Selecione um ou mais materiais utilizados neste procedimento.</p></FormField></div>
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={closeProcedureModal}>Cancelar</Button><Button disabled={isSaving} type="submit">{isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : editingProcedure ? "Salvar alterações" : "Salvar procedimento"}</Button></div>
         </form>
       </Modal>
       <Modal open={materialOpen} onClose={() => setMaterialOpen(false)} title="Novo material">
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveMaterial}>
           <div className="sm:col-span-2"><FormField label="Nome"><input className={fieldClassName} name="name" required /></FormField></div>
-          <FormField label="Categoria"><input className={fieldClassName} name="category" required /></FormField>
+          <FormField label="Categoria"><select className={fieldClassName} name="category" required><option value="">Selecione uma categoria</option>{procedureCategories.map((category) => <option key={category}>{category}</option>)}</select></FormField>
           <FormField label="Fornecedor"><input className={fieldClassName} name="supplier" required /></FormField>
           <FormField label="Unidade"><select className={fieldClassName} name="unit"><option>ml</option><option>unidade</option><option>frasco</option></select></FormField>
           <FormField label="Custo unitário"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="cost" inputMode="decimal" placeholder="R$ 0,00" required /></FormField>
@@ -723,12 +768,14 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
 }
 
 export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
-  const [quoteRows, setQuoteRows] = useState<Quote[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null };
+  const cachedQuotes = readClientCache<{ quotes?: ApiQuote[] }>("/api/quotes");
+  const [quoteRows, setQuoteRows] = useState<Quote[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade" })));
+  const [isLoading, setIsLoading] = useState(!cachedQuotes);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    fetch("/api/quotes").then((response) => response.json()).then((data: { quotes?: Array<{ id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null }> }) => {
+    getCachedJson<{ quotes?: ApiQuote[] }>("/api/quotes").then((data) => {
       setQuoteRows((data.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade" })));
       setIsLoading(false);
     }).catch(() => setIsLoading(false));
@@ -741,6 +788,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     if (!response.ok) return;
     const data = await response.json() as { quote: { id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null } };
     const item = data.quote;
+    invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
     setQuoteRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade" }, ...current]);
     onCreateClose(); onSaved?.(`Orçamento de ${patient} foi criado.`);
   }
@@ -750,6 +798,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     if (!quote.id) return;
     await fetch(`/api/quotes/${quote.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Enviado" }) });
     setQuoteRows((current) => current.map((item, currentIndex) => currentIndex === index ? { ...item, status: "Enviado" } : item));
+    invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
     onSaved?.("Orçamento marcado como enviado.");
   }
 
@@ -786,14 +835,16 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
 }
 
 export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
-  const [paymentRows, setPaymentRows] = useState<Payment[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  type ApiPayment = { id: string; value: number; method: string; date: string; status: string; installments: string; patient?: { name: string } | null };
+  const cachedPayments = readClientCache<{ payments?: ApiPayment[] }>("/api/payments");
+  const [paymentRows, setPaymentRows] = useState<Payment[]>(() => (cachedPayments?.payments ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), status: item.status, installments: item.installments })));
+  const [isLoading, setIsLoading] = useState(!cachedPayments);
   const [isSaving, setIsSaving] = useState(false);
   const [methodFilter, setMethodFilter] = useState("Todos");
   const visiblePayments = methodFilter === "Todos" ? paymentRows : paymentRows.filter((item) => item.method === methodFilter);
 
   useEffect(() => {
-    fetch("/api/payments").then((response) => response.json()).then((data: { payments?: Array<{ id: string; value: number; method: string; date: string; status: string; installments: string; patient?: { name: string } | null }> }) => {
+    getCachedJson<{ payments?: ApiPayment[] }>("/api/payments").then((data) => {
       setPaymentRows((data.payments ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), status: item.status, installments: item.installments })));
       setIsLoading(false);
     }).catch(() => setIsLoading(false));
@@ -806,6 +857,7 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
     if (!response.ok) return;
     const data = await response.json() as { payment: { id: string; value: number; method: string; date: string; status: string; installments: string; patient?: { name: string } | null } };
     const item = data.payment;
+    invalidateClientCache("/api/payments", "/api/dashboard/bootstrap");
     setPaymentRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), status: item.status, installments: item.installments }, ...current]);
     onCreateClose(); onSaved?.(`Pagamento de ${patient} foi registrado.`);
   }
@@ -976,14 +1028,14 @@ type TeamMember = { id: string; role: string; user: { id: string; name: string; 
 export function SettingsSection({ isAdmin = false }: { isAdmin?: boolean }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [members, setMembers] = useState<TeamMember[]>([]);
-  const [teamLoading, setTeamLoading] = useState(true);
+  const cachedTeam = readClientCache<{ members?: TeamMember[] }>("/api/team");
+  const [members, setMembers] = useState<TeamMember[]>(cachedTeam?.members ?? []);
+  const [teamLoading, setTeamLoading] = useState(!cachedTeam);
   const [teamSaving, setTeamSaving] = useState(false);
   const [teamError, setTeamError] = useState("");
 
   useEffect(() => {
-    fetch("/api/team")
-      .then((response) => response.json() as Promise<{ members?: TeamMember[] }>)
+    getCachedJson<{ members?: TeamMember[] }>("/api/team")
       .then((data) => setMembers(data.members ?? []))
       .catch(() => setTeamError("Não foi possível carregar os colaboradores."))
       .finally(() => setTeamLoading(false));
@@ -1006,6 +1058,7 @@ export function SettingsSection({ isAdmin = false }: { isAdmin?: boolean }) {
       return;
     }
     setMembers((current) => [...current, data.member as TeamMember].sort((a, b) => a.user.name.localeCompare(b.user.name)));
+    invalidateClientCache("/api/team");
     setEditing(null);
     setTeamError("");
   }

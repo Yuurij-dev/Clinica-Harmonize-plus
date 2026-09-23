@@ -67,6 +67,7 @@ model Patient {
   clinic       Clinic?       @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([clinicId])
+  @@index([clinicId, name])
   @@unique([clinicId, cpf])
 }
 
@@ -86,6 +87,7 @@ model Appointment {
 
   @@index([patientId, date])
   @@index([clinicId])
+  @@index([clinicId, date, time])
 }
 
 model Procedure {
@@ -149,6 +151,7 @@ model Quote {
   patient   Patient?  @relation(fields: [patientId], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@index([clinicId])
+  @@index([clinicId, createdAt])
   @@index([patientId])
 }
 
@@ -167,6 +170,7 @@ model Payment {
   patient      Patient?  @relation(fields: [patientId], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@index([clinicId])
+  @@index([clinicId, date])
   @@index([patientId])
 }
 
