@@ -143,6 +143,99 @@ input {
   }
 }
 
+@keyframes clinic-entry-logo {
+  0% {
+    opacity: 0;
+    transform: translateY(18px) scale(0.72) rotate(-8deg);
+  }
+  65% {
+    opacity: 1;
+    transform: translateY(-4px) scale(1.04) rotate(1deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0);
+  }
+}
+
+@keyframes clinic-entry-check {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes clinic-entry-copy {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes clinic-entry-progress {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes clinic-entry-glow {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.08); }
+}
+
+.clinic-entry-logo {
+  animation: clinic-entry-logo 680ms cubic-bezier(0.2, 0.85, 0.25, 1) both;
+}
+
+.clinic-entry-logo-shine {
+  background: linear-gradient(110deg, transparent 25%, rgba(255,255,255,0.28) 48%, transparent 70%);
+  animation: clinic-entry-copy 900ms ease 260ms both;
+}
+
+.clinic-entry-check {
+  animation: clinic-entry-check 380ms cubic-bezier(0.2, 0.8, 0.2, 1) 420ms both;
+}
+
+.clinic-entry-title,
+.clinic-entry-subtitle,
+.clinic-entry-progress {
+  animation: clinic-entry-copy 520ms cubic-bezier(0.2, 0.8, 0.2, 1) 560ms both;
+}
+
+.clinic-entry-progress span {
+  animation: clinic-entry-progress 1.35s linear both;
+}
+
+.clinic-entry-glow {
+  position: absolute;
+  width: 24rem;
+  height: 24rem;
+  border-radius: 999px;
+  filter: blur(60px);
+  pointer-events: none;
+  animation: clinic-entry-glow 3.2s ease-in-out infinite;
+}
+
+.clinic-entry-glow-left {
+  left: -12rem;
+  top: 8%;
+  background: rgba(85, 220, 244, 0.2);
+}
+
+.clinic-entry-glow-right {
+  right: -12rem;
+  bottom: 4%;
+  background: rgba(89, 71, 238, 0.16);
+  animation-delay: 600ms;
+}
+
 .hp-page-enter {
   animation: hp-fade-up 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }

@@ -52,10 +52,18 @@ export function HarmonizeApp() {
 
   useEffect(() => {
     fetch("/api/auth/me")
-      .then((response) => response.ok ? response.json() as Promise<{ user: CurrentUser }> : null)
+      .then(async (response) => {
+        if (!response.ok) {
+          router.replace("/login");
+          return null;
+        }
+        return response.json() as Promise<{ user: CurrentUser }>;
+      })
       .then((data) => setCurrentUser(data?.user ?? null))
-      .catch(() => setCurrentUser(null));
-  }, []);
+      .catch(() => {
+        router.replace("/login");
+      });
+  }, [router]);
 
   useEffect(() => {
     if (!notice) return;
