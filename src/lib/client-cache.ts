@@ -13,17 +13,17 @@ export async function getCachedJson<T>(key: string, url = key) {
   const current = cache.get(key);
   if (current?.data) return current.data as T;
   if (current?.promise) return current.promise as Promise<T>;
-  const promise = fetch(url)
+  const promise = fetch(url, { cache: "no-store" })
     .then(async (response) => {
       if (!response.ok) throw new Error(`Não foi possível carregar ${url}.`);
       return response.json() as Promise<T>;
     })
     .then((data) => {
-      cache.set(key, { data });
+      if (cache.get(key)?.promise === promise) cache.set(key, { data });
       return data;
     })
     .catch((error) => {
-      cache.delete(key);
+      if (cache.get(key)?.promise === promise) cache.delete(key);
       throw error;
     });
   cache.set(key, { promise });

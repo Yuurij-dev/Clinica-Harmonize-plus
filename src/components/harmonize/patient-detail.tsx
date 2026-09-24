@@ -77,7 +77,7 @@ export function PatientDetail({
 }) {
   const [activeTab, setActiveTab] = useState("Avaliação");
   const [history, setHistory] = useState<PatientHistoryRecord>();
-  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyLoadedKey, setHistoryLoadedKey] = useState("");
   const [evaluationCompleted, setEvaluationCompleted] = useState(false);
   const [quoteCompleted, setQuoteCompleted] = useState(false);
   const [procedurePhotos, setProcedurePhotos] = useState({ before: false, after: false });
@@ -101,8 +101,11 @@ export function PatientDetail({
 
   useEffect(() => {
     if (!patient.id) return;
+    const historyLoadKey = `${patient.id}:${activeTab}`;
+    let cancelled = false;
     getCachedJson<{ patient?: { appointments: Array<{ date: string; time: string; procedure: string; professional: string; status: string }>; payments: Array<{ id: string; value: number; method: string; status: string; installments: string }>; quotes: Array<{ items: string; status: string }>; procedureRecords: Array<{ id: string; name: string; professional: string; performedAt: string; notes: string; beforePhoto: string | null; afterPhoto: string | null }>; evaluations: Array<{ photos: unknown[] }> } }>(`/api/patients/${patient.id}/history`)
       .then((data) => {
+        if (cancelled) return;
         const appointments = data.patient?.appointments ?? [];
         const payments = data.patient?.payments ?? [];
         const latestQuoteItems = data.patient?.quotes?.[0]?.items;
@@ -117,12 +120,13 @@ export function PatientDetail({
           observations: [],
         });
       })
-      .catch(() => setHistory(undefined))
-      .finally(() => setHistoryLoading(false));
+      .catch(() => { if (!cancelled) setHistory(undefined); })
+      .finally(() => { if (!cancelled) setHistoryLoadedKey(historyLoadKey); });
     getCachedJson<{ quotes?: Array<{ status: string }> }>(`/api/quotes?patientId=${encodeURIComponent(patient.id)}`)
-      .then((data) => setQuoteCompleted(data.quotes?.some((quote) => ["Pago", "Aprovado"].includes(quote.status)) ?? false))
-      .catch(() => setQuoteCompleted(false));
-  }, [patient.id]);
+      .then((data) => { if (!cancelled) setQuoteCompleted(data.quotes?.some((quote) => ["Pago", "Aprovado"].includes(quote.status)) ?? false); })
+      .catch(() => { if (!cancelled) setQuoteCompleted(false); });
+    return () => { cancelled = true; };
+  }, [patient.id, activeTab]);
 
   return (
     <div className="mx-auto max-w-[1400px] space-y-4">
@@ -188,13 +192,13 @@ export function PatientDetail({
       {activeTab === "Orçamento" ? (
         <PatientExpenses patientId={patient.id ?? ""} onPaid={() => setQuoteCompleted(true)} />
       ) : (
-        <PatientTabContent patient={patient} activeTab={activeTab} history={history} historyLoading={historyLoading} onEvaluationSaved={() => setEvaluationCompleted(true)} onProcedurePhotosChange={(before, after) => setProcedurePhotos({ before, after })} />
+        <PatientTabContent patient={patient} activeTab={activeTab} history={history} historyLoading={historyLoadedKey !== `${patient.id}:${activeTab}`} onEvaluationSaved={() => setEvaluationCompleted(true)} onProcedurePhotosChange={(before, after) => setProcedurePhotos({ before, after })} onProcedurePhotoUpdated={(procedureId, photo) => setHistory((current) => current ? { ...current, procedures: current.procedures.map((item) => item.id === procedureId ? { ...item, beforePhoto: photo.beforePhoto ?? "", afterPhoto: photo.afterPhoto ?? "", status: procedurePhotoStatus(photo.beforePhoto, photo.afterPhoto) } : item) } : current)} />
       )}
     </div>
   );
 }
 
-function PatientTabContent({ patient, activeTab, history, historyLoading, onEvaluationSaved, onProcedurePhotosChange }: { patient: Patient; activeTab: string; history?: PatientHistoryRecord; historyLoading: boolean; onEvaluationSaved: () => void; onProcedurePhotosChange: (before: boolean, after: boolean) => void }) {
+function PatientTabContent({ patient, activeTab, history, historyLoading, onEvaluationSaved, onProcedurePhotosChange, onProcedurePhotoUpdated }: { patient: Patient; activeTab: string; history?: PatientHistoryRecord; historyLoading: boolean; onEvaluationSaved: () => void; onProcedurePhotosChange: (before: boolean, after: boolean) => void; onProcedurePhotoUpdated: (procedureId: string, photo: { beforePhoto: string | null; afterPhoto: string | null }) => void }) {
 
   if (activeTab === "Avaliação") {
     return patient.id ? <PhotoEditor patientId={patient.id} patientName={patient.name} onSaved={onEvaluationSaved} /> : <EmptyState title="Cliente ainda não foi salvo" description="Salve o cliente antes de adicionar fotos à avaliação." />;
@@ -205,7 +209,7 @@ function PatientTabContent({ patient, activeTab, history, historyLoading, onEval
   }
 
   if (activeTab === "Procedimentos") {
-    return <ProceduresTab patientId={patient.id ?? ""} history={history} loading={historyLoading} onProcedurePhotosChange={onProcedurePhotosChange} />;
+    return <ProceduresTab patientId={patient.id ?? ""} history={history} loading={historyLoading} onProcedurePhotosChange={onProcedurePhotosChange} onProcedurePhotoUpdated={onProcedurePhotoUpdated} />;
   }
 
   if (activeTab === "Agendamentos") {
@@ -291,7 +295,7 @@ function HistoryTab({ patient, history }: { patient: Patient; history?: PatientH
   );
 }
 
-function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange }: { patientId: string; history?: PatientHistoryRecord; loading: boolean; onProcedurePhotosChange: (before: boolean, after: boolean) => void }) {
+function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange, onProcedurePhotoUpdated }: { patientId: string; history?: PatientHistoryRecord; loading: boolean; onProcedurePhotosChange: (before: boolean, after: boolean) => void; onProcedurePhotoUpdated: (procedureId: string, photo: { beforePhoto: string | null; afterPhoto: string | null }) => void }) {
   const [procedures, setProcedures] = useState<PatientProcedureRecord[]>(history?.procedures ?? []);
   const [photoOperations, setPhotoOperations] = useState<Record<string, "upload" | "remove">>({});
   const [error, setError] = useState("");
@@ -313,6 +317,7 @@ function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange }:
       if (!response.ok || !data.procedure) throw new Error(data.message ?? "Não foi possível atualizar a foto.");
       setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, beforePhoto: data.procedure?.beforePhoto ?? "", afterPhoto: data.procedure?.afterPhoto ?? "", status: procedurePhotoStatus(data.procedure?.beforePhoto ?? null, data.procedure?.afterPhoto ?? null) } : item));
       onProcedurePhotosChange(Boolean(data.procedure.beforePhoto), Boolean(data.procedure.afterPhoto));
+      onProcedurePhotoUpdated(procedureId, data.procedure);
       invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`);
     } catch (photoError) {
       setError(photoError instanceof Error ? photoError.message : "Não foi possível atualizar a foto.");
