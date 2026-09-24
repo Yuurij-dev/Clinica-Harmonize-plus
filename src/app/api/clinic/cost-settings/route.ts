@@ -11,7 +11,21 @@ export async function GET() {
       where: { id: user.clinicId },
       select: { laborCost: true, facilityCost: true, medicationCost: true },
     });
-    return NextResponse.json({ settings: clinic ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 } });
+    let appointmentToleranceMinutes = 15;
+    let openingTime = "08:00";
+    let closingTime = "19:00";
+    try {
+      const tolerance = await prisma.clinic.findUnique({
+        where: { id: user.clinicId },
+        select: { appointmentToleranceMinutes: true, openingTime: true, closingTime: true },
+      });
+      appointmentToleranceMinutes = tolerance?.appointmentToleranceMinutes ?? 15;
+      openingTime = tolerance?.openingTime ?? openingTime;
+      closingTime = tolerance?.closingTime ?? closingTime;
+    } catch {
+      // Keep the default until the tolerance column is applied to the database.
+    }
+    return NextResponse.json({ settings: { ...(clinic ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 }), appointmentToleranceMinutes, openingTime, closingTime } });
   } catch {
     return NextResponse.json({ message: "As colunas de custos ainda não foram criadas no banco da clínica." }, { status: 500 });
   }
@@ -26,8 +40,13 @@ export async function PATCH(request: Request) {
   const laborCost = Number(body?.laborCost);
   const facilityCost = Number(body?.facilityCost);
   const medicationCost = Number(body?.medicationCost);
-  if (![laborCost, facilityCost, medicationCost].every((value) => Number.isFinite(value) && value >= 0)) {
-    return NextResponse.json({ message: "Informe valores válidos para os custos." }, { status: 400 });
+  const appointmentToleranceMinutes = Number(body?.appointmentToleranceMinutes);
+  const openingTime = String(body?.openingTime ?? "08:00");
+  const closingTime = String(body?.closingTime ?? "19:00");
+  const openingMinutes = parseClockMinutes(openingTime);
+  const closingMinutes = parseClockMinutes(closingTime);
+  if (![laborCost, facilityCost, medicationCost, appointmentToleranceMinutes].every((value) => Number.isFinite(value) && value >= 0) || !Number.isInteger(appointmentToleranceMinutes) || appointmentToleranceMinutes > 180 || openingMinutes === null || closingMinutes === null || closingMinutes <= openingMinutes) {
+    return NextResponse.json({ message: "Informe valores válidos para os custos e a tolerância." }, { status: 400 });
   }
 
   try {
@@ -36,8 +55,31 @@ export async function PATCH(request: Request) {
       data: { laborCost: Math.round(laborCost), facilityCost: Math.round(facilityCost), medicationCost: Math.round(medicationCost) },
       select: { laborCost: true, facilityCost: true, medicationCost: true },
     });
-    return NextResponse.json({ settings });
+    let savedTolerance = 15;
+    let savedOpeningTime = "08:00";
+    let savedClosingTime = "19:00";
+    try {
+      const tolerance = await prisma.clinic.update({
+        where: { id: user.clinicId },
+        data: { appointmentToleranceMinutes, openingTime, closingTime },
+        select: { appointmentToleranceMinutes: true, openingTime: true, closingTime: true },
+      });
+      savedTolerance = tolerance.appointmentToleranceMinutes;
+      savedOpeningTime = tolerance.openingTime;
+      savedClosingTime = tolerance.closingTime;
+    } catch {
+      // Costs can still be saved while the tolerance migration is pending.
+    }
+    return NextResponse.json({ settings: { ...settings, appointmentToleranceMinutes: savedTolerance, openingTime: savedOpeningTime, closingTime: savedClosingTime } });
   } catch {
     return NextResponse.json({ message: "As colunas de custos ainda não foram criadas no banco da clínica." }, { status: 500 });
   }
+}
+
+function parseClockMinutes(value: string) {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  return hours <= 23 && minutes <= 59 ? hours * 60 + minutes : null;
 }

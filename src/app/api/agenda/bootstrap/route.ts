@@ -29,5 +29,21 @@ export async function GET() {
     }),
   ]);
 
-  return NextResponse.json({ appointments, patients, procedures, members });
+  // Keep the agenda usable while an older database is waiting for the tolerance migration.
+  let appointmentToleranceMinutes = 15;
+  let openingTime = "08:00";
+  let closingTime = "19:00";
+  try {
+    const clinic = await prisma.clinic.findUnique({
+      where: { id: user.clinicId },
+      select: { appointmentToleranceMinutes: true, openingTime: true, closingTime: true },
+    });
+    appointmentToleranceMinutes = clinic?.appointmentToleranceMinutes ?? 15;
+    openingTime = clinic?.openingTime ?? openingTime;
+    closingTime = clinic?.closingTime ?? closingTime;
+  } catch {
+    // The default keeps existing clinics working until the new column is applied.
+  }
+
+  return NextResponse.json({ appointments, patients, procedures, members, settings: { appointmentToleranceMinutes, openingTime, closingTime } });
 }

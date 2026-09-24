@@ -1,6 +1,5 @@
 import { Bell, ChevronDown, Loader2, LogOut, Menu, Search, Settings2, Sparkles } from "lucide-react";
-import { useState } from "react";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { SectionId } from "@/types/clinic";
 
@@ -31,9 +30,37 @@ function appointmentMinutesFromTime(time: string) {
 
 export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, user }: TopbarProps) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [appointmentAlerts, setAppointmentAlerts] = useState<string[]>([]);
+  const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
   const [profileOpen, setProfileOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const previousAlertIdsRef = useRef<string[] | null>(null);
+
+  function primeNotificationAudio() {
+    if (!audioContextRef.current) audioContextRef.current = new AudioContext();
+    if (audioContextRef.current.state === "suspended") void audioContextRef.current.resume();
+  }
+
+  function playNotificationSound() {
+    const context = audioContextRef.current;
+    if (!context) return;
+    const play = () => {
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(880, context.currentTime);
+      oscillator.frequency.setValueAtTime(1174, context.currentTime + 0.12);
+      gain.gain.setValueAtTime(0.0001, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.12, context.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.32);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.34);
+    };
+    if (context.state === "suspended") void context.resume().then(play);
+    else play();
+  }
 
   function search(value: string) {
     const normalized = value.toLowerCase();
@@ -48,6 +75,12 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
   const userName = user?.name ?? "Usuário";
   const initials = userName.split(" ").map((part) => part[0]).slice(0, 2).join("").toUpperCase();
   const roleLabel = user?.role === "ADMIN" ? "Administradora" : user?.role === "PROFESSIONAL" ? "Profissional" : "Equipe";
+
+  useEffect(() => {
+    const primeOnInteraction = () => primeNotificationAudio();
+    window.addEventListener("pointerdown", primeOnInteraction, { once: true });
+    return () => window.removeEventListener("pointerdown", primeOnInteraction);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -68,9 +101,13 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
             && currentMinutes >= appointmentMinutes
             && currentMinutes < appointmentMinutes + 60
             && appointment.status !== "Atendido"
-            && appointment.status !== "Faltou";
+            && appointment.status !== "Faltou"
+            && appointment.status !== "Cancelado";
         })
-        .map((appointment) => `É hora do atendimento de ${appointment.patient?.name ?? "um cliente"}.`);
+        .map((appointment) => ({ id: appointment.id, message: `É hora do atendimento de ${appointment.patient?.name ?? "um cliente"}.` }));
+      const previousAlertIds = previousAlertIdsRef.current;
+      if (previousAlertIds && alerts.some((alert) => !previousAlertIds.includes(alert.id))) playNotificationSound();
+      previousAlertIdsRef.current = alerts.map((alert) => alert.id);
       setAppointmentAlerts(alerts);
     }
 
@@ -112,10 +149,10 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
           Resumo do dia
         </Button> : null}
 
-        <div className="relative"><Button variant="secondary" size="icon" aria-label="Notificações" onClick={() => setNotificationsOpen((open) => !open)}>
+        <div className="relative"><Button variant="secondary" size="icon" aria-label="Notificações" onClick={() => { primeNotificationAudio(); setNotificationsOpen((open) => !open); }}>
           <Bell className="h-5 w-5" />
           {appointmentAlerts.length ? <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#e0647d] px-1 text-[9px] font-black text-white ring-2 ring-white">{appointmentAlerts.length}</span> : null}
-        </Button>{notificationsOpen ? <div className="absolute right-0 top-12 z-40 w-80 rounded-[7px] border border-[#e5e5ee] bg-white p-4 shadow-xl"><p className="text-xs font-bold text-[#303144]">Notificações</p>{appointmentAlerts.length ? appointmentAlerts.map((alert, index) => <p className="mt-3 rounded-[6px] bg-[#f7f6ff] p-3 text-[11px] leading-5 text-[#5147dc]" key={`${alert}-${index}`}>{alert}</p>) : <><p className="mt-3 rounded-[6px] bg-[#f7f6ff] p-3 text-[11px] leading-5 text-[#65667a]">Nenhum atendimento no horário neste momento.</p><p className="mt-2 rounded-[6px] bg-[#fff8e7] p-3 text-[11px] leading-5 text-[#65667a]">As notificações dos próximos atendimentos aparecerão aqui.</p></>}</div> : null}</div>
+        </Button>{notificationsOpen ? <div className="absolute right-0 top-12 z-40 w-80 rounded-[7px] border border-[#e5e5ee] bg-white p-4 shadow-xl"><p className="text-xs font-bold text-[#303144]">Notificações</p>{appointmentAlerts.length ? appointmentAlerts.map((alert) => <p className="mt-3 rounded-[6px] bg-[#f7f6ff] p-3 text-[11px] leading-5 text-[#5147dc]" key={alert.id}>{alert.message}</p>) : <><p className="mt-3 rounded-[6px] bg-[#f7f6ff] p-3 text-[11px] leading-5 text-[#65667a]">Nenhum atendimento no horário neste momento.</p><p className="mt-2 rounded-[6px] bg-[#fff8e7] p-3 text-[11px] leading-5 text-[#65667a]">As notificações dos próximos atendimentos aparecerão aqui.</p></>}</div> : null}</div>
         {user?.role === "ADMIN" ? <Button
           className="hidden sm:inline-flex"
           variant="secondary"
