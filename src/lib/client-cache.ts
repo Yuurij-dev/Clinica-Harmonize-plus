@@ -31,5 +31,9 @@ export async function getCachedJson<T>(key: string, url = key) {
 }
 
 export function invalidateClientCache(...keys: string[]) {
-  keys.forEach((key) => cache.delete(key));
+  for (const cachedKey of cache.keys()) {
+    if (keys.some((key) => cachedKey === key || cachedKey.startsWith(`${key}?`))) {
+      cache.delete(cachedKey);
+    }
+  }
 }

@@ -70,14 +70,23 @@ export function PatientDetail({
 }) {
   const [activeTab, setActiveTab] = useState("Avaliação");
   const [history, setHistory] = useState<PatientHistoryRecord>();
+  const [evaluationCompleted, setEvaluationCompleted] = useState(false);
+  const [quoteCompleted, setQuoteCompleted] = useState(false);
   const initials = patient.name.split(" ").map((part) => part[0]).slice(0, 2).join("");
+  const visibleJourney = journey.map((stage) => {
+    if (stage.id === "evaluation" && evaluationCompleted) return { ...stage, status: "completed" as const };
+    if (stage.id === "quote" && quoteCompleted) return { ...stage, status: "completed" as const };
+    if (stage.id === "procedure" && quoteCompleted && stage.status === "pending") return { ...stage, status: "current" as const };
+    return stage;
+  });
 
   useEffect(() => {
     if (!patient.id) return;
-    getCachedJson<{ patient?: { appointments: Array<{ date: string; time: string; procedure: string; professional: string; status: string }>; payments: Array<{ value: number; method: string; status: string; installments: string }>; evaluations: unknown[] } }>(`/api/patients/${patient.id}/history`)
+    getCachedJson<{ patient?: { appointments: Array<{ date: string; time: string; procedure: string; professional: string; status: string }>; payments: Array<{ value: number; method: string; status: string; installments: string }>; evaluations: Array<{ photos: unknown[] }> } }>(`/api/patients/${patient.id}/history`)
       .then((data) => {
         const appointments = data.patient?.appointments ?? [];
         const payments = data.patient?.payments ?? [];
+        setEvaluationCompleted(data.patient?.evaluations?.some((evaluation) => evaluation.photos?.length > 0) ?? false);
         setHistory({
           appointments: appointments.map((item) => ({ date: new Date(item.date).toLocaleDateString("pt-BR"), time: item.time, procedure: item.procedure, professional: item.professional, status: item.status })),
           procedures: appointments.filter((item) => ["Atendido", "Finalizado"].includes(item.status)).map((item) => ({ name: item.procedure, date: new Date(item.date).toLocaleDateString("pt-BR"), professional: item.professional, status: item.status, beforePhoto: "", afterPhoto: "" })),
@@ -86,6 +95,9 @@ export function PatientDetail({
         });
       })
       .catch(() => setHistory(undefined));
+    getCachedJson<{ quotes?: Array<{ status: string }> }>(`/api/quotes?patientId=${encodeURIComponent(patient.id)}`)
+      .then((data) => setQuoteCompleted(data.quotes?.some((quote) => ["Pago", "Aprovado"].includes(quote.status)) ?? false))
+      .catch(() => setQuoteCompleted(false));
   }, [patient.id]);
 
   return (
@@ -114,7 +126,7 @@ export function PatientDetail({
         <div className="min-w-0 p-4">
           <CustomerJourney
             compact
-            journey={journey}
+            journey={visibleJourney}
             onOpenStage={(stageId) => {
               const stageTabs = {
                 lead: "Histórico",
@@ -150,18 +162,18 @@ export function PatientDetail({
       </Card>
 
       {activeTab === "Gastos" ? (
-        <PatientExpenses />
+        <PatientExpenses patientId={patient.id ?? ""} onPaid={() => setQuoteCompleted(true)} />
       ) : (
-        <PatientTabContent patient={patient} activeTab={activeTab} history={history} />
+        <PatientTabContent patient={patient} activeTab={activeTab} history={history} onEvaluationSaved={() => setEvaluationCompleted(true)} />
       )}
     </div>
   );
 }
 
-function PatientTabContent({ patient, activeTab, history }: { patient: Patient; activeTab: string; history?: PatientHistoryRecord }) {
+function PatientTabContent({ patient, activeTab, history, onEvaluationSaved }: { patient: Patient; activeTab: string; history?: PatientHistoryRecord; onEvaluationSaved: () => void }) {
 
   if (activeTab === "Avaliação") {
-    return patient.id ? <PhotoEditor patientId={patient.id} patientName={patient.name} /> : <EmptyState title="Cliente ainda não foi salvo" description="Salve o cliente antes de adicionar fotos à avaliação." />;
+    return patient.id ? <PhotoEditor patientId={patient.id} patientName={patient.name} onSaved={onEvaluationSaved} /> : <EmptyState title="Cliente ainda não foi salvo" description="Salve o cliente antes de adicionar fotos à avaliação." />;
   }
 
   if (activeTab === "Histórico") {

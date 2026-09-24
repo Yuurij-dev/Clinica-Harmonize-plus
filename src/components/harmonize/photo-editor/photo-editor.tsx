@@ -21,7 +21,7 @@ const EditorCanvas = dynamic(
 type Notice = { tone: "success" | "info"; text: string } | null;
 type ConfirmAction = { type: "photo"; photoId: string; photoName: string } | { type: "clear" } | null;
 
-export function PhotoEditor({ patientId, patientName }: { patientId: string; patientName: string }) {
+export function PhotoEditor({ patientId, patientName, onSaved }: { patientId: string; patientName: string; onSaved?: () => void }) {
   const evaluationCacheKey = `/api/patients/${patientId}/evaluation`;
   const cachedEvaluation = readClientCache<{ evaluation?: { photos?: EvaluationPhoto[] } | null }>(evaluationCacheKey);
   const [photos, setPhotos] = useState<EvaluationPhoto[]>(cachedEvaluation?.evaluation?.photos ?? []);
@@ -207,10 +207,11 @@ export function PhotoEditor({ patientId, patientName }: { patientId: string; pat
         body: JSON.stringify({ photos }),
       });
       if (!response.ok) throw new Error("Não foi possível salvar a avaliação.");
-      invalidateClientCache(evaluationCacheKey);
+      invalidateClientCache(evaluationCacheKey, `/api/patients/${patientId}/history`);
       const previews = await Promise.all(photos.map(async (photo) => ({ photo, dataUrl: await renderExport(photo) })));
       setSavedPreviews(previews);
       setShowResult(true);
+      onSaved?.();
       showNotice("Avaliação salva com as fotos originais e as marcações separadas.");
     } catch {
       showNotice("Não foi possível salvar as fotos da avaliação.", "info");

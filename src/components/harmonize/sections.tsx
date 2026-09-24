@@ -247,7 +247,7 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
       const data = await response.json() as { patient: ApiPatient };
       const savedPatient = mapApiPatient(data.patient);
       setPatientRows((current) => [savedPatient, ...current]);
-      invalidateClientCache("/api/patients", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+      invalidateClientCache("/api/patients", "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
       onCreateClose();
       onSaved?.(`${savedPatient.name} foi adicionado aos clientes.`);
     } catch {
@@ -602,7 +602,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
 
   async function loadProcedures() {
     setIsLoading(true);
-    invalidateClientCache("/api/procedures", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+    invalidateClientCache("/api/procedures", "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     const data = await getCachedJson<{ procedures?: Array<{ id: string; name: string; category: string; price: number; durationMinutes: number; materials: string; margin: number }> }>("/api/procedures");
     applyProcedureRows(data);
     setIsLoading(false);
@@ -654,7 +654,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
     });
     setIsSaving(false);
     if (!response.ok) return;
-    invalidateClientCache("/api/procedures", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+    invalidateClientCache("/api/procedures", "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     await loadProcedures();
     onSaved?.(`${name} ${editingProcedure ? "foi atualizado" : "foi adicionado aos procedimentos"}.`);
     closeProcedureModal();
@@ -770,10 +770,18 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
 
 export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
   type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null };
+  type QuoteOptions = { patients?: Array<{ id: string; name: string; cpf: string | null }>; procedures?: Array<{ id: string; name: string; price: number }> };
   const cachedQuotes = readClientCache<{ quotes?: ApiQuote[] }>("/api/quotes");
+  const cachedQuoteOptions = readClientCache<QuoteOptions>("/api/quotes/options");
   const [quoteRows, setQuoteRows] = useState<Quote[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade" })));
   const [isLoading, setIsLoading] = useState(!cachedQuotes);
   const [isSaving, setIsSaving] = useState(false);
+  const [quotePatients, setQuotePatients] = useState(cachedQuoteOptions?.patients ?? []);
+  const [quoteProcedures, setQuoteProcedures] = useState(cachedQuoteOptions?.procedures ?? []);
+  const [optionsLoading, setOptionsLoading] = useState(!cachedQuoteOptions);
+  const [patientQuery, setPatientQuery] = useState("");
+  const [selectedPatientId, setSelectedPatientId] = useState("");
+  const [selectedProcedureNames, setSelectedProcedureNames] = useState<string[]>([]);
 
   useEffect(() => {
     getCachedJson<{ quotes?: ApiQuote[] }>("/api/quotes").then((data) => {
@@ -782,15 +790,27 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     }).catch(() => setIsLoading(false));
   }, []);
 
+  useEffect(() => {
+    getCachedJson<QuoteOptions>("/api/quotes/options").then((data) => {
+      setQuotePatients(data.patients ?? []);
+      setQuoteProcedures(data.procedures ?? []);
+      setOptionsLoading(false);
+    }).catch(() => setOptionsLoading(false));
+  }, []);
+
+  const matchingQuotePatients = quotePatients.filter((patient) => `${patient.name} ${patient.cpf ?? ""}`.toLowerCase().includes(patientQuery.toLowerCase()));
+  const suggestedTotal = selectedProcedureNames.reduce((total, name) => total + (quoteProcedures.find((procedure) => procedure.name === name)?.price ?? 0), 0);
+
   async function saveQuote(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patient = String(form.get("patient"));
-    const response = await fetch("/api/quotes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patient, items: String(form.get("items")), total: parseCurrency(form.get("total")), expires: String(form.get("expires")) }) });
+    event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patient = quotePatients.find((item) => item.id === selectedPatientId)?.name ?? "Paciente";
+    const response = await fetch("/api/quotes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId: selectedPatientId, items: String(form.get("items")), total: parseCurrency(form.get("total")), expires: String(form.get("expires")) }) });
     setIsSaving(false);
     if (!response.ok) return;
     const data = await response.json() as { quote: { id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null } };
     const item = data.quote;
     invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
     setQuoteRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade" }, ...current]);
+    setPatientQuery(""); setSelectedPatientId(""); setSelectedProcedureNames([]);
     onCreateClose(); onSaved?.(`Orçamento de ${patient} foi criado.`);
   }
 
@@ -824,11 +844,19 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
       />}
       <Modal open={openCreate} onClose={onCreateClose} title="Novo orçamento" description="Crie uma proposta comercial para o cliente.">
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveQuote}>
-          <FormField label="Paciente"><input className={fieldClassName} name="patient" required /></FormField>
+          <div className="relative sm:col-span-2">
+            <FormField label="Paciente">
+              <input className={fieldClassName} name="patientSearch" placeholder={optionsLoading ? "Carregando pacientes..." : "Pesquise por nome ou CPF"} required value={patientQuery} disabled={optionsLoading} onChange={(event) => { setPatientQuery(event.target.value); setSelectedPatientId(""); }} />
+            </FormField>
+            {patientQuery && !selectedPatientId ? <div className="absolute left-0 right-0 top-[68px] z-20 max-h-44 overflow-auto rounded-[7px] border border-[#e5e5ee] bg-white p-1 shadow-xl">
+              {matchingQuotePatients.length ? matchingQuotePatients.map((patient) => <button className="flex w-full items-center justify-between rounded-[5px] px-3 py-2 text-left text-xs transition hover:bg-[#f5f4ff]" key={patient.id} type="button" onClick={() => { setSelectedPatientId(patient.id); setPatientQuery(`${patient.name}${patient.cpf ? ` · ${patient.cpf}` : ""}`); }}><span className="font-bold text-[#303144]">{patient.name}</span><span className="text-[10px] text-[#858696]">{patient.cpf || "CPF não informado"}</span></button>) : <p className="px-3 py-2 text-xs text-[#858696]">Nenhum paciente encontrado.</p>}
+            </div> : null}
+            {selectedPatientId ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {quotePatients.find((patient) => patient.id === selectedPatientId)?.name}</p> : null}
+          </div>
           <FormField label="Validade"><MaskedInput className={fieldClassName} formatter={formatDate} name="expires" inputMode="numeric" maxLength={10} placeholder="30/09/2026" required /></FormField>
-          <div className="sm:col-span-2"><FormField label="Procedimentos"><input className={fieldClassName} name="items" placeholder="Botox, preenchimento..." required /></FormField></div>
-          <div className="sm:col-span-2"><FormField label="Valor total"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="total" inputMode="decimal" placeholder="R$ 0,00" required /></FormField></div>
-          <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving} type="submit">{isSaving ? "Salvando..." : "Salvar orçamento"}</Button></div>
+          <div className="sm:col-span-2"><FormField label="Procedimentos"><div className="flex min-h-10 flex-wrap gap-1.5 rounded-[7px] border border-[#dddfea] bg-white p-2">{selectedProcedureNames.map((name) => <span className="flex items-center gap-1 rounded-full bg-[#f0efff] px-2 py-1 text-[10px] font-bold text-[#5147dc]" key={name}>{name}<button className="text-[#5147dc] hover:text-[#b42318]" type="button" onClick={() => setSelectedProcedureNames((current) => current.filter((item) => item !== name))}>×</button></span>)}<select className="min-w-[150px] flex-1 bg-transparent text-xs font-semibold text-[#858696] outline-none" value="" disabled={optionsLoading || !quoteProcedures.length} onChange={(event) => { if (event.target.value) setSelectedProcedureNames((current) => current.includes(event.target.value) ? current : [...current, event.target.value]); }}><option value="">{optionsLoading ? "Carregando procedimentos..." : quoteProcedures.length ? "Adicionar procedimento" : "Nenhum procedimento cadastrado"}</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name} · {currency.format(procedure.price)}</option>)}</select></div><input className="sr-only" name="items" value={selectedProcedureNames.join(", ")} readOnly required /></FormField></div>
+          <div className="sm:col-span-2"><FormField label="Valor total"><MaskedInput key={selectedProcedureNames.join("|")} className={fieldClassName} formatter={formatCurrency} name="total" inputMode="decimal" defaultValue={suggestedTotal ? currency.format(suggestedTotal) : ""} placeholder="R$ 0,00" required /></FormField></div>
+          <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || optionsLoading || !selectedPatientId || !selectedProcedureNames.length} type="submit">{isSaving ? "Salvando..." : "Salvar orçamento"}</Button></div>
         </form>
       </Modal>
     </div>
@@ -1034,6 +1062,11 @@ export function SettingsSection({ isAdmin = false }: { isAdmin?: boolean }) {
   const [teamLoading, setTeamLoading] = useState(!cachedTeam);
   const [teamSaving, setTeamSaving] = useState(false);
   const [teamError, setTeamError] = useState("");
+  const cachedCostSettings = readClientCache<{ settings?: { laborCost: number; facilityCost: number; medicationCost: number } }>("/api/clinic/cost-settings");
+  const [costSettings, setCostSettings] = useState(cachedCostSettings?.settings ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
+  const [costSettingsLoading, setCostSettingsLoading] = useState(!cachedCostSettings);
+  const [costSettingsSaving, setCostSettingsSaving] = useState(false);
+  const [costSettingsError, setCostSettingsError] = useState("");
 
   useEffect(() => {
     getCachedJson<{ members?: TeamMember[] }>("/api/team")
@@ -1041,6 +1074,43 @@ export function SettingsSection({ isAdmin = false }: { isAdmin?: boolean }) {
       .catch(() => setTeamError("Não foi possível carregar os colaboradores."))
       .finally(() => setTeamLoading(false));
   }, []);
+
+  useEffect(() => {
+    getCachedJson<{ settings?: { laborCost: number; facilityCost: number; medicationCost: number } }>("/api/clinic/cost-settings")
+      .then((data) => setCostSettings(data.settings ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 }))
+      .catch(() => setCostSettingsError("Não foi possível carregar os custos da clínica."))
+      .finally(() => setCostSettingsLoading(false));
+  }, []);
+
+  async function saveCostSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCostSettingsSaving(true);
+    setCostSettingsError("");
+    const form = new FormData(event.currentTarget);
+    const nextSettings = {
+      laborCost: parseCurrency(form.get("laborCost")),
+      facilityCost: parseCurrency(form.get("facilityCost")),
+      medicationCost: parseCurrency(form.get("medicationCost")),
+    };
+    const response = await fetch("/api/clinic/cost-settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(nextSettings) });
+    const responseText = await response.text();
+    let data: { settings?: typeof nextSettings; message?: string } = {};
+    if (responseText) {
+      try {
+        data = JSON.parse(responseText) as typeof data;
+      } catch {
+        data = { message: "O servidor retornou uma resposta inválida." };
+      }
+    }
+    setCostSettingsSaving(false);
+    if (!response.ok || !data.settings) {
+      setCostSettingsError(data.message ?? "Não foi possível salvar os custos da clínica.");
+      return;
+    }
+    setCostSettings(data.settings);
+    invalidateClientCache("/api/clinic/cost-settings", "/api/quotes/options");
+    setSaved(true);
+  }
 
   async function saveCollaborator(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1094,7 +1164,7 @@ export function SettingsSection({ isAdmin = false }: { isAdmin?: boolean }) {
         </div>
       </Card>
       <Modal open={Boolean(editing)} onClose={() => setEditing(null)} title={`Configurar ${editing ?? ""}`} description="Essas preferências ficam salvas durante esta sessão.">
-        {editing === "Novo colaborador" ? <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveCollaborator}><div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div><FormField label="E-mail de acesso"><input className={fieldClassName} name="email" type="email" required /></FormField><FormField label="Senha inicial"><input className={fieldClassName} name="password" type="password" minLength={6} required /></FormField><FormField label="Perfil"><select className={fieldClassName} name="role"><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Equipe</option><option value="ADMIN">Administrador</option></select></FormField>{teamError ? <p className="sm:col-span-2 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{teamError}</p> : null}<div className="flex justify-end gap-2 sm:col-span-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div></form> : saved ? <div className="rounded-[7px] bg-[#eaf8ef] p-5 text-sm font-bold text-[#157a3b]">Configurações salvas com sucesso.</div> : <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); setSaved(true); }}>
+        {editing === "Novo colaborador" ? <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveCollaborator}><div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div><FormField label="E-mail de acesso"><input className={fieldClassName} name="email" type="email" required /></FormField><FormField label="Senha inicial"><input className={fieldClassName} name="password" type="password" minLength={6} required /></FormField><FormField label="Perfil"><select className={fieldClassName} name="role"><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Equipe</option><option value="ADMIN">Administrador</option></select></FormField>{teamError ? <p className="sm:col-span-2 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{teamError}</p> : null}<div className="flex justify-end gap-2 sm:col-span-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div></form> : editing === "Cálculo de custos" ? <form className="grid gap-4" onSubmit={saveCostSettings}><p className="text-xs leading-5 text-[#65708b]">Defina os valores padrão que serão adicionados automaticamente aos orçamentos desta clínica.</p>{costSettingsLoading ? <p className="text-xs font-semibold text-[#77788a]">Carregando valores...</p> : <><FormField label="Mão de obra / Honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField><FormField label="Sala / Estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField><FormField label="Anestésico / Medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField></>}{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div></form> : saved ? <div className="rounded-[7px] bg-[#eaf8ef] p-5 text-sm font-bold text-[#157a3b]">Configurações salvas com sucesso.</div> : <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); setSaved(true); }}>
           <FormField label="Nome de exibição"><input className={fieldClassName} defaultValue={editing ?? "Harmonize+"} /></FormField>
           <FormField label="Preferência principal"><select className={fieldClassName}><option>Padrão da clínica</option><option>Personalizado</option><option>Somente administradores</option></select></FormField>
           <label className="flex items-center gap-3 rounded-[7px] border border-[#e5e5ee] p-4 text-xs font-semibold text-[#555668]"><input type="checkbox" defaultChecked /> Ativar esta configuração</label>

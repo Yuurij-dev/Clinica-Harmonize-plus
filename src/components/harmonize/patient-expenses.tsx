@@ -1,216 +1,280 @@
 "use client";
 
-import { useState } from "react";
-import {
-  Check,
-  ChevronDown,
-  CirclePlus,
-  CreditCard,
-  Eye,
-  FileDown,
-  Info,
-  Pencil,
-  Save,
-  WalletCards,
-} from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { Check, ChevronDown, CirclePlus, FileDown, Info, LoaderCircle, Save, WalletCards } from "lucide-react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Modal } from "@/components/ui/modal";
+import { getCachedJson, readClientCache, invalidateClientCache } from "@/lib/client-cache";
 import { cn } from "@/lib/utils";
 
-const expenseItems = [
-  { name: "Preenchimento labial", material: "Ácido hialurônico", defaultQuantity: 1, unitPrice: 1200, options: [[0.5, "0,5 ml"], [1, "1,0 ml"], [1.5, "1,5 ml"], [2, "2,0 ml"]], color: "#356fd6" },
-  { name: "Botox", material: "Toxina botulínica", defaultQuantity: 25, unitPrice: 36, options: [[10, "10 un"], [15, "15 un"], [20, "20 un"], [25, "25 un"], [30, "30 un"], [40, "40 un"]], color: "#7655cf" },
-  { name: "Bioestimulador de colágeno", material: "Ácido poli-L-láctico", defaultQuantity: 1, unitPrice: 2500, options: [[0.5, "0,5 ml"], [1, "1,0 ml"], [1.5, "1,5 ml"], [2, "2,0 ml"]], color: "#ca4f8d" },
-  { name: "Preenchimento de olheiras", material: "Ácido hialurônico", defaultQuantity: 0.5, unitPrice: 1800, options: [[0.3, "0,3 ml"], [0.5, "0,5 ml"], [0.8, "0,8 ml"], [1, "1,0 ml"]], color: "#356fd6" },
-  { name: "Fios de sustentação", material: "Fios de PDO", defaultQuantity: 2, unitPrice: 3200, options: [[1, "1 un"], [2, "2 un"], [4, "4 un"], [6, "6 un"]], color: "#2f9b7b" },
-  { name: "Toxina botulínica (outra área)", material: "Toxina botulínica", defaultQuantity: 25, unitPrice: 36, options: [[10, "10 un"], [15, "15 un"], [20, "20 un"], [25, "25 un"], [30, "30 un"]], color: "#7655cf" },
-];
+type ProcedureOption = {
+  id: string;
+  name: string;
+  category: string;
+  materials?: string;
+  price: number;
+};
 
-const extraCosts = [
-  ["Mão de obra / Honorários", 1200],
-  ["Sala / Estrutura", 300],
-  ["Anestésico / Medicamentos", 150],
-] as const;
+type ProductOption = { name: string; unit: string };
+type CostSettings = { laborCost: number; facilityCost: number; medicationCost: number };
+type QuoteOptionsResponse = { procedures: ProcedureOption[]; products: ProductOption[]; costs: CostSettings };
+type SelectedProcedure = ProcedureOption & { quantity: number; unit: string };
 
-const currency = new Intl.NumberFormat("pt-BR", {
-  style: "currency",
-  currency: "BRL",
-});
+const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
-export function PatientExpenses() {
-  const [selected, setSelected] = useState(() => new Set([0, 1, 2]));
-  const [quantities, setQuantities] = useState(() => expenseItems.map((item) => item.defaultQuantity));
+export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPaid?: () => void }) {
+  const cached = readClientCache<QuoteOptionsResponse>("/api/quotes/options");
+  const cachedCostSettings = readClientCache<{ settings?: CostSettings }>("/api/clinic/cost-settings");
+  const [procedures, setProcedures] = useState<ProcedureOption[]>(cached?.procedures ?? []);
+  const [products, setProducts] = useState<ProductOption[]>(cached?.products ?? []);
+  const [costs, setCosts] = useState<CostSettings>(cachedCostSettings?.settings ?? cached?.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
+  const [selected, setSelected] = useState<Record<string, number>>({});
+  const [loading, setLoading] = useState(!cached);
+  const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const calculatedItems = expenseItems.map((item, index) => ({
-    ...item,
-    quantity: quantities[index],
-    quantityLabel: item.options.find(([value]) => value === quantities[index])?.[1] ?? String(quantities[index]),
-    subtotal: quantities[index] * item.unitPrice,
-  }));
-  const selectedItems = calculatedItems.filter((_, index) => selected.has(index));
-  const materialsSubtotal = selectedItems.reduce((total, item) => total + item.subtotal, 0);
-  const extrasSubtotal = extraCosts.reduce((total, [, value]) => total + value, 0);
-  const total = materialsSubtotal + extrasSubtotal;
+  const [saveError, setSaveError] = useState(false);
+  const [saveShake, setSaveShake] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState("Cartão de crédito");
+  const [confirmPayment, setConfirmPayment] = useState(false);
+  const [paymentSaving, setPaymentSaving] = useState(false);
+  const [paymentNotice, setPaymentNotice] = useState(false);
+  const [paymentNoticeLeaving, setPaymentNoticeLeaving] = useState(false);
+  const [createdPaymentId, setCreatedPaymentId] = useState<string | null>(null);
+  const [latestQuoteId, setLatestQuoteId] = useState<string | null>(null);
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false);
 
-  const materialGroups = selectedItems.slice(0, 4);
+  useEffect(() => {
+    if (cached) return;
+    getCachedJson<QuoteOptionsResponse>("/api/quotes/options")
+      .then((data) => {
+        setProcedures(data.procedures ?? []);
+        setProducts(data.products ?? []);
+        setCosts(data.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
+      })
+      .catch(() => setNotice("Não foi possível carregar os procedimentos cadastrados."))
+      .finally(() => setLoading(false));
+  }, [cached]);
 
-  function toggleItem(index: number) {
+  useEffect(() => {
+    if (cachedCostSettings?.settings) return;
+    getCachedJson<{ settings?: CostSettings }>("/api/clinic/cost-settings")
+      .then((data) => setCosts(data.settings ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 }))
+      .catch(() => undefined);
+  }, [cachedCostSettings]);
+
+  useEffect(() => {
+    if (!patientId) return;
+    getCachedJson<{ quotes?: Array<{ id: string; status: string }> }>(`/api/quotes?patientId=${encodeURIComponent(patientId)}`)
+      .then((data) => setLatestQuoteId(data.quotes?.[0]?.id ?? null))
+      .catch(() => setLatestQuoteId(null));
+  }, [patientId]);
+
+  const selectedItems = useMemo<SelectedProcedure[]>(
+    () => procedures.filter((procedure) => selected[procedure.id]).map((procedure) => ({ ...procedure, quantity: selected[procedure.id], unit: procedureUnit(procedure, products) })),
+    [procedures, products, selected],
+  );
+  const materialsTotal = selectedItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+  const extraCosts = costs.laborCost + costs.facilityCost + costs.medicationCost;
+  const total = materialsTotal + extraCosts;
+
+  function toggleProcedure(id: string) {
     setSelected((current) => {
-      const next = new Set(current);
-      if (next.has(index)) next.delete(index);
-      else next.add(index);
+      const next = { ...current };
+      if (next[id]) delete next[id];
+      else next[id] = 1;
       return next;
     });
+    setSaveError(false);
     setNotice(null);
   }
 
-  function updateQuantity(index: number, quantity: number) {
-    setQuantities((current) => current.map((value, itemIndex) => itemIndex === index ? quantity : value));
+  function updateQuantity(id: string, quantity: number) {
+    setSelected((current) => ({ ...current, [id]: quantity }));
+    setSaveError(false);
     setNotice(null);
+  }
+
+  async function saveQuote() {
+    if (!patientId || selectedItems.length === 0) {
+      setSaveError(true);
+      setSaveShake(true);
+      setNotice("Selecione pelo menos um procedimento para salvar o orçamento.");
+      window.setTimeout(() => setSaveShake(false), 450);
+      return;
+    }
+    setSaving(true);
+    setSaveError(false);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/quotes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ patientId, items: selectedItems.map((item) => `${item.name} (${item.quantity}x)`).join(", "), total, paymentMethod }),
+      });
+      const data = await response.json() as { quote?: { id: string }; message?: string };
+      if (!response.ok) throw new Error(data.message ?? "Não foi possível salvar o orçamento.");
+      invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
+      setLatestQuoteId(data.quote?.id ?? null);
+      setNotice("Orçamento salvo com sucesso.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Não foi possível salvar o orçamento.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function registerPayment() {
+    if (!patientId || selectedItems.length === 0) {
+      setSaveError(true);
+      setSaveShake(true);
+      setNotice("Selecione pelo menos um procedimento antes de registrar o pagamento.");
+      window.setTimeout(() => setSaveShake(false), 450);
+      return;
+    }
+    if (!latestQuoteId) {
+      setSaveError(true);
+      setNotice("Salve o orçamento antes de registrar o pagamento.");
+      return;
+    }
+    setPaymentSaving(true);
+    try {
+      const response = await fetch("/api/payments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, value: total, method: paymentMethod, status: "Pago", installments: "A vista" }) });
+      const data = await response.json() as { payment?: { id: string }; message?: string };
+      if (!response.ok || !data.payment) throw new Error(data.message ?? "Não foi possível registrar o pagamento.");
+      const quoteResponse = await fetch(`/api/quotes/${latestQuoteId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Aprovado" }) });
+      if (!quoteResponse.ok) throw new Error("Pagamento registrado, mas não foi possível concluir o orçamento.");
+      invalidateClientCache("/api/payments", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
+      invalidateClientCache("/api/quotes");
+      setPaymentConfirmed(true);
+      onPaid?.();
+      setCreatedPaymentId(data.payment.id);
+      setConfirmPayment(false);
+      setPaymentNoticeLeaving(false);
+      setPaymentNotice(true);
+      window.setTimeout(() => setPaymentNoticeLeaving(true), 6260);
+      window.setTimeout(() => { setPaymentNotice(false); setPaymentNoticeLeaving(false); setCreatedPaymentId(null); }, 6500);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Não foi possível registrar o pagamento.");
+      setSaveError(true);
+    } finally {
+      setPaymentSaving(false);
+    }
+  }
+
+  function openPaymentConfirmation() {
+    if (!patientId || selectedItems.length === 0) {
+      setSaveError(true);
+      setSaveShake(true);
+      setNotice("Selecione pelo menos um procedimento antes de registrar o pagamento.");
+      window.setTimeout(() => setSaveShake(false), 450);
+      return;
+    }
+    if (!latestQuoteId) {
+      setSaveError(true);
+      setNotice("Salve o orçamento antes de registrar o pagamento.");
+      return;
+    }
+    setSaveError(false);
+    setNotice(null);
+    setConfirmPayment(true);
+  }
+
+  async function undoPayment() {
+    if (!createdPaymentId) return;
+    const response = await fetch(`/api/payments/${createdPaymentId}`, { method: "DELETE" });
+    if (response.ok) {
+      invalidateClientCache("/api/payments", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
+      setPaymentNotice(false);
+      setPaymentNoticeLeaving(false);
+      setCreatedPaymentId(null);
+      setPaymentConfirmed(false);
+    }
   }
 
   return (
     <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-      <div className="space-y-4">
-        <Card className="overflow-hidden">
-          <div className="border-b border-[#ececf2] px-4 py-4">
-            <h3 className="text-sm font-bold text-[#27283b]">Calculadora de gastos do procedimento</h3>
-            <p className="mt-1 text-[10px] leading-4 text-[#858696]">
-              Selecione os procedimentos e a quantidade utilizada para calcular o custo deste atendimento.
-            </p>
-          </div>
-
+      <Card className="overflow-hidden">
+        <div className="border-b border-[#ececf2] px-4 py-4">
+          <h3 className="text-sm font-bold text-[#27283b]">Calculadora de orçamento do procedimento</h3>
+          <p className="mt-1 text-[10px] leading-4 text-[#858696]">Selecione os procedimentos cadastrados e informe a quantidade para calcular o valor.</p>
+        </div>
+        {loading ? (
+          <div className="flex min-h-48 items-center justify-center gap-2 text-xs font-semibold text-[#77788a]"><LoaderCircle className="h-4 w-4 animate-spin text-[#5147dc]" />Carregando procedimentos...</div>
+        ) : procedures.length === 0 ? (
+          <div className="p-6 text-center text-xs text-[#77788a]">Nenhum procedimento cadastrado para esta clínica.</div>
+        ) : (
           <div className="overflow-x-auto p-3">
-            <div className="min-w-[720px] overflow-hidden rounded-[6px] border border-[#e9e9ef]">
-              <div className="grid grid-cols-[1.55fr_0.72fr_0.68fr_0.68fr] bg-[#fafafd] px-3 py-2.5 text-[9px] font-bold text-[#77798d]">
-                <span>Procedimento / Material</span><span>Qtd. / ml</span><span>Valor unitário</span><span>Subtotal</span>
-              </div>
-              {calculatedItems.map((item, index) => {
-                const checked = selected.has(index);
+            <div className="min-w-[680px] overflow-hidden rounded-[6px] border border-[#e9e9ef]">
+              <div className="grid grid-cols-[1.55fr_0.7fr_0.8fr_0.75fr] bg-[#fafafd] px-3 py-2.5 text-[9px] font-bold text-[#77798d]"><span>Procedimento / Material</span><span>Qtd. / medida</span><span>Valor unitário</span><span>Subtotal</span></div>
+              {procedures.map((procedure) => {
+                const quantity = selected[procedure.id] ?? 0;
+                const checked = quantity > 0;
                 return (
-                  <div className="grid min-h-14 grid-cols-[1.55fr_0.72fr_0.68fr_0.68fr] items-center border-t border-[#eeeeF3] px-3 text-[10px]" key={item.name}>
-                    <button className="flex min-w-0 items-center gap-3 text-left" onClick={() => toggleItem(index)}>
-                      <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-[4px] border", checked ? "border-[#5147dc] bg-[#5147dc] text-white" : "border-[#cfd0da] bg-white text-transparent")}>
-                        <Check className="h-3 w-3" />
-                      </span>
-                      <span className="min-w-0">
-                        <strong className="block truncate text-[#3f4053]">{item.name}</strong>
-                        <span className="mt-0.5 block truncate text-[8px] text-[#999aaa]">{item.material}</span>
-                      </span>
+                  <div className="grid min-h-14 grid-cols-[1.55fr_0.7fr_0.8fr_0.75fr] items-center border-t border-[#eeeeF3] px-3 text-[10px]" key={procedure.id}>
+                    <button className="flex min-w-0 items-center gap-3 text-left disabled:cursor-not-allowed disabled:opacity-70" disabled={paymentConfirmed} onClick={() => toggleProcedure(procedure.id)}>
+                      <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-[4px] border", checked ? "border-[#5147dc] bg-[#5147dc] text-white" : "border-[#cfd0da] bg-white text-transparent")}><Check className="h-3 w-3" /></span>
+                        <span className="min-w-0"><strong className="block truncate text-[#3f4053]">{procedure.name}</strong><span className="mt-0.5 block truncate text-[8px] text-[#999aaa]">{procedure.materials || procedure.category}</span></span>
                     </button>
-                    <label className="relative block w-[94px]">
-                      <select
-                        aria-label={`Quantidade de ${item.name}`}
-                        className="h-8 w-full appearance-none rounded-[5px] border border-[#dddde6] bg-white px-2 pr-7 text-[10px] font-semibold text-[#555668] outline-none transition focus:border-[#5147dc] focus:ring-2 focus:ring-[#5147dc]/10"
-                        value={item.quantity}
-                        onChange={(event) => updateQuantity(index, Number(event.target.value))}
-                      >
-                        {item.options.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                      </select>
-                      <ChevronDown className="pointer-events-none absolute right-2 top-2.5 h-3 w-3 text-[#77788a]" />
+                    <label className="relative block w-[82px]">
+                      <select aria-label={`Quantidade de ${procedure.name}`} disabled={paymentConfirmed} className="h-8 w-full appearance-none rounded-[5px] border border-[#dddde6] bg-white px-2 pr-6 text-[10px] font-semibold text-[#555668] outline-none focus:border-[#5147dc] disabled:cursor-not-allowed disabled:bg-[#f4f4f8] focus:border-[#5147dc]" value={quantity || 1} onChange={(event) => updateQuantity(procedure.id, Number(event.target.value))}>
+                        {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{formatQuantity(value, procedureUnit(procedure, products))}</option>)}
+                      </select><ChevronDown className="pointer-events-none absolute right-2 top-2.5 h-3 w-3 text-[#77788a]" />
                     </label>
-                    <span className="font-semibold text-[#555668]">{currency.format(item.unitPrice)}</span>
-                    <span className={cn("font-bold", checked ? "text-[#353648]" : "text-[#a2a3b0]")}>{currency.format(item.subtotal)}</span>
+                    <span className="font-semibold text-[#555668]">{currency.format(procedure.price)}</span>
+                    <span className={cn("font-bold", checked ? "text-[#353648]" : "text-[#a2a3b0]")}>{currency.format(procedure.price * (checked ? quantity : 1))}</span>
                   </div>
                 );
               })}
-              <div className="border-t border-[#eeeeF3] p-3">
-                <Button variant="secondary" size="sm"><CirclePlus className="h-3.5 w-3.5" />Adicionar procedimento / material</Button>
-              </div>
             </div>
+            <Button className="mt-3" variant="secondary" size="sm" type="button" disabled={paymentConfirmed}><CirclePlus className="h-3.5 w-3.5" />Adicionar procedimento / material</Button>
           </div>
+        )}
+        {!loading && selectedItems.length > 0 ? <div className="border-t border-[#ececf2] bg-[#fbfbfd] px-4 py-4"><p className="mb-3 text-[9px] font-bold uppercase text-[#8c8d9d]">Resumo dos materiais</p><div className="grid gap-2 sm:grid-cols-2">{selectedItems.map((item) => <div className="flex items-center gap-2 rounded-[6px] border border-[#e8e8ef] bg-white p-2.5" key={item.id}><span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#5147dc] text-white"><WalletCards className="h-3.5 w-3.5" /></span><span className="min-w-0"><strong className="block truncate text-[9px] text-[#4b4c5f]">{item.materials || item.name}</strong><span className="block text-[8px] text-[#999aaa]">{formatQuantity(item.quantity, item.unit)}</span><span className="mt-0.5 block text-[9px] font-bold text-[#353648]">{currency.format(item.price * item.quantity)}</span></span></div>)}</div></div> : null}
+      </Card>
 
-          <div className="border-t border-[#ececf2] bg-[#fbfbfd] px-4 py-4">
-            <p className="mb-3 text-[9px] font-bold uppercase text-[#8c8d9d]">Resumo dos materiais</p>
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-              {materialGroups.map((item) => (
-                <div className="flex items-center gap-2 rounded-[6px] border border-[#e8e8ef] bg-white p-2.5" key={item.name}>
-                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white" style={{ backgroundColor: item.color }}><WalletCards className="h-3.5 w-3.5" /></span>
-                  <span className="min-w-0">
-                    <strong className="block truncate text-[9px] text-[#4b4c5f]">{item.material}</strong>
-                    <span className="block text-[8px] text-[#999aaa]">{item.quantityLabel}</span>
-                    <span className="mt-0.5 block text-[9px] font-bold text-[#353648]">{currency.format(item.subtotal)}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </Card>
-
-        <Card className="overflow-hidden">
-          <div className="border-b border-[#ececf2] px-4 py-3">
-            <h3 className="text-xs font-bold text-[#303144]">Histórico de gastos deste atendimento</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <div className="grid min-w-[660px] grid-cols-[0.65fr_1.3fr_0.7fr_0.65fr_32px] bg-[#fafafd] px-4 py-2 text-[8px] font-bold uppercase text-[#9697a6]">
-              <span>Data</span><span>Procedimento / Material</span><span>Qtd. / ml</span><span>Valor</span><span />
-            </div>
-            {selectedItems.slice(0, 3).map((item) => (
-              <div className="grid min-w-[660px] grid-cols-[0.65fr_1.3fr_0.7fr_0.65fr_32px] items-center border-t border-[#eeeeF3] px-4 py-3 text-[10px] text-[#5d5e70]" key={item.name}>
-                <span>17/09/2026</span><strong>{item.name}</strong><span>{item.quantityLabel}</span><span>{currency.format(item.subtotal)}</span><Eye className="h-3.5 w-3.5 text-[#5147dc]" />
-              </div>
-            ))}
-          </div>
-        </Card>
-      </div>
-
-      <aside className="space-y-4 xl:sticky xl:top-24">
+      <aside className="xl:sticky xl:top-24">
         <Card className="p-4">
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-sm font-bold text-[#292a3d]">Resumo do orçamento</h3>
-            <Button variant="secondary" size="sm"><Pencil className="h-3.5 w-3.5" />Editar</Button>
-          </div>
-
+          <div className="flex items-center justify-between gap-3"><h3 className="text-sm font-bold text-[#292a3d]">Resumo do orçamento</h3><WalletCards className="h-4 w-4 text-[#5147dc]" /></div>
           <div className="mt-4 space-y-2.5">
-            {selectedItems.map((item) => (
-              <div className="flex justify-between gap-3 text-[10px]" key={item.name}>
-                <span className="text-[#5f6072]">{item.name} ({item.quantityLabel})</span>
-                <strong className="whitespace-nowrap text-[#424355]">{currency.format(item.subtotal)}</strong>
-              </div>
-            ))}
+            {selectedItems.map((item) => <div className="flex justify-between gap-3 text-[10px]" key={item.id}><span className="text-[#5f6072]">{item.name} ({item.quantity}x)</span><strong className="whitespace-nowrap text-[#424355]">{currency.format(item.price * item.quantity)}</strong></div>)}
+            {selectedItems.length === 0 ? <p className="text-[10px] text-[#858696]">Nenhum procedimento selecionado.</p> : null}
           </div>
-
-          <SummaryLine className="mt-4 border-t pt-3" label="Subtotal dos materiais" value={currency.format(materialsSubtotal)} />
-          <p className="mt-4 text-[10px] font-bold text-[#4a4b5d]">Outros custos</p>
-          <div className="mt-2 space-y-2">
-            {extraCosts.map(([label, value]) => <SummaryLine key={label} label={label} value={currency.format(value)} />)}
-          </div>
-          <SummaryLine className="mt-4 border-t pt-3" label="Subtotal geral" value={currency.format(total)} strong />
-
-          <div className="mt-3 flex items-center gap-3 rounded-[7px] bg-[#5147dc] p-3 text-white shadow-[0_10px_24px_rgba(81,71,220,0.2)]">
-            <span className="grid h-9 w-9 place-items-center rounded-[6px] bg-white/15"><WalletCards className="h-4 w-4" /></span>
-            <div><p className="text-[9px] text-white/75">Total do atendimento</p><p className="text-lg font-bold">{currency.format(total)}</p></div>
-          </div>
-
-          <div className="mt-4">
-            <p className="text-[9px] font-bold uppercase text-[#8f90a0]">Forma de pagamento</p>
-            <button className="mt-2 flex h-10 w-full items-center justify-between rounded-[6px] border border-[#dfdfe7] px-3 text-xs font-semibold text-[#505164]">
-              <span className="flex items-center gap-2"><CreditCard className="h-4 w-4 text-[#5147dc]" />Cartão de crédito</span><ChevronDown className="h-3.5 w-3.5" />
-            </button>
-          </div>
-
-          <div className="mt-4 flex items-center justify-between">
-            <span className="text-[9px] font-bold uppercase text-[#8f90a0]">Status do pagamento</span>
-            <Badge variant="amber">Pendente</Badge>
-          </div>
-
-          <div className="mt-4 space-y-2">
-            <Button className="w-full" onClick={() => setNotice("Orçamento salvo como rascunho.")}><Save className="h-4 w-4" />Salvar orçamento</Button>
-            <Button className="w-full" variant="secondary" onClick={() => setNotice("Documento preparado para geração em PDF.")}><FileDown className="h-4 w-4" />Gerar PDF</Button>
-          </div>
-          {notice ? <p className="mt-3 rounded-[6px] bg-[#eef8f2] px-3 py-2 text-[10px] font-semibold text-[#287a50]">{notice}</p> : null}
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-center justify-between"><p className="flex items-center gap-2 text-xs font-bold text-[#454659]"><Info className="h-3.5 w-3.5 text-[#5147dc]" />Observações</p><Pencil className="h-3.5 w-3.5 text-[#8c8d9d]" /></div>
-          <p className="mt-3 text-[10px] leading-5 text-[#727386]">Cliente realizou preenchimento labial e botox. Retorno agendado para 15/10/2026.</p>
+          <div className="mt-4 border-t border-[#ececf2] pt-3"><div className="flex items-center justify-between text-xs"><span className="font-bold text-[#393a4d]">Subtotal dos materiais</span><strong className="text-[#424355]">{currency.format(materialsTotal)}</strong></div><p className="mt-4 text-[10px] font-bold text-[#4a4b5d]">Outros custos</p><div className="mt-2 space-y-2 text-[10px] text-[#68697b]"><SummaryLine label="Mão de obra / Honorários" value={currency.format(costs.laborCost)} /><SummaryLine label="Sala / Estrutura" value={currency.format(costs.facilityCost)} /><SummaryLine label="Anestésico / Medicamentos" value={currency.format(costs.medicationCost)} /></div><div className="mt-4 flex items-center justify-between border-t border-[#ececf2] pt-3 text-xs"><span className="font-bold text-[#393a4d]">Total do orçamento</span><strong className="text-base text-[#5147dc]">{currency.format(total)}</strong></div></div>
+          <div className="mt-4"><p className="text-[9px] font-bold uppercase text-[#8f90a0]">Forma de pagamento</p><div className="relative mt-2"><select disabled={paymentConfirmed} className="h-10 w-full appearance-none rounded-[6px] border border-[#dfdfe7] bg-white px-3 pr-9 text-xs font-semibold text-[#505164] outline-none transition focus:border-[#5147dc] focus:ring-2 focus:ring-[#5147dc]/10 disabled:cursor-not-allowed disabled:bg-[#f4f4f8]" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option>Cartão de crédito</option><option>Cartão de débito</option><option>Pix</option></select><ChevronDown className="pointer-events-none absolute right-3 top-3 h-3.5 w-3.5 text-[#77788a]" /></div></div>
+          <Button className={cn("mt-4 w-full transition-colors", paymentConfirmed && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:bg-[#eaf8ef] hover:text-[#16805d]", !paymentConfirmed && saveError && "bg-[#d92d20] hover:bg-[#b42318]", !paymentConfirmed && saveShake && "animate-[hp-shake_0.42s_ease-in-out]")} disabled={saving || loading || paymentConfirmed} onClick={saveQuote}><Save className="h-4 w-4" />{paymentConfirmed ? "Pagamento confirmado" : saving ? "Salvando..." : "Salvar orçamento"}</Button>
+          <Button className={cn("mt-2 w-full transition-colors", paymentConfirmed && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:bg-[#eaf8ef] hover:text-[#16805d]", !paymentConfirmed && saveError && "border-[#d92d20] text-[#b42318]", !paymentConfirmed && saveShake && "animate-[hp-shake_0.42s_ease-in-out]")} variant="secondary" type="button" disabled={paymentSaving || loading || paymentConfirmed} onClick={openPaymentConfirmation}><WalletCards className="h-4 w-4" />{paymentConfirmed ? "Pagamento confirmado" : "Registrar pagamento"}</Button>
+          <Button className="mt-2 w-full" variant="secondary" type="button"><FileDown className="h-4 w-4" />Gerar PDF</Button>
+          {notice ? <p className={cn("mt-3 rounded-[6px] px-3 py-2 text-[10px] font-semibold", saveError ? "bg-[#fff1f0] text-[#b42318]" : "bg-[#eef8f2] text-[#287a50]")}>{notice}</p> : null}
+          <div className="mt-4 rounded-[6px] border border-[#e8e8ef] bg-[#fafafd] p-3"><p className="flex items-center gap-2 text-[10px] font-bold text-[#454659]"><Info className="h-3.5 w-3.5 text-[#5147dc]" />Observações</p><p className="mt-2 text-[10px] leading-4 text-[#77788a]">Os valores são carregados dos procedimentos cadastrados pela clínica.</p></div>
         </Card>
       </aside>
+      <Modal open={confirmPayment} onClose={() => setConfirmPayment(false)} title="Confirmar pagamento" description="Confira os dados antes de registrar este pagamento.">
+        <div className="space-y-4">
+          <div className="rounded-[7px] border border-[#e5e5ee] bg-[#fafafd] p-4"><p className="text-xs text-[#77788a]">Valor a registrar</p><p className="mt-1 text-xl font-black text-[#5147dc]">{currency.format(total)}</p><p className="mt-2 text-xs text-[#555668]">Forma: <strong>{paymentMethod}</strong></p></div>
+          <p className="text-xs leading-5 text-[#65708b]">Tem certeza que deseja registrar este pagamento como pago?</p>
+          <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setConfirmPayment(false)}>Cancelar</Button><Button disabled={paymentSaving} type="button" onClick={registerPayment}>{paymentSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}{paymentSaving ? "Registrando..." : "Confirmar pagamento"}</Button></div>
+        </div>
+      </Modal>
+      {paymentNotice ? <div className={`${paymentNoticeLeaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-6 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] bg-[#25263a] px-4 py-3 text-xs font-bold text-white shadow-[0_18px_45px_rgba(31,32,50,0.24)]`}><div className="flex items-center gap-3"><span className="min-w-0 flex-1">Pagamento registrado com sucesso.</span><button className="shrink-0 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-black transition hover:bg-white/20" onClick={undoPayment}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-[#7cffb2]" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
     </div>
   );
 }
 
-function SummaryLine({ label, value, strong, className }: { label: string; value: string; strong?: boolean; className?: string }) {
-  return <div className={cn("flex items-center justify-between gap-3 border-[#ececf2] text-[10px]", className, strong && "text-xs")}><span className={strong ? "font-bold text-[#393a4d]" : "text-[#68697b]"}>{label}</span><strong className="whitespace-nowrap text-[#3e3f52]">{value}</strong></div>;
+function procedureUnit(procedure: ProcedureOption, products: ProductOption[]) {
+  const materialNames = (procedure.materials ?? "").toLocaleLowerCase("pt-BR");
+  const matchedProduct = products.find((product) => materialNames.includes(product.name.toLocaleLowerCase("pt-BR")));
+  const matchedUnit = (matchedProduct?.unit ?? "").toLocaleLowerCase("pt-BR");
+  if (matchedUnit.includes("ml")) return "ml";
+  if (matchedUnit.includes("frasco")) return "frasco";
+  if (materialNames.includes("ácido hialurônico") || materialNames.includes("poli-l-láctico") || materialNames.includes("hidroxiapatita")) return "ml";
+  return "unidade";
+}
+
+function formatQuantity(quantity: number, unit: string) {
+  return `${quantity.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} ${unit}`;
+}
+
+function SummaryLine({ label, value }: { label: string; value: string }) {
+  return <div className="flex items-center justify-between gap-3"><span>{label}</span><strong className="whitespace-nowrap text-[#424355]">{value}</strong></div>;
 }

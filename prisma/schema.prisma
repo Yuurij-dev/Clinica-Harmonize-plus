@@ -23,6 +23,9 @@ model Clinic {
   id           String             @id @default(cuid())
   name         String
   slug         String             @unique
+  laborCost    Int                @default(0)
+  facilityCost Int                @default(0)
+  medicationCost Int              @default(0)
   createdAt    DateTime           @default(now()) @db.Timestamptz(6)
   updatedAt    DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
   memberships  ClinicMembership[]
@@ -143,6 +146,7 @@ model Quote {
   patientId String?
   items     String
   total     Int
+  paymentMethod String  @default("Cartão de crédito")
   status    String    @default("Pendente")
   expires   DateTime? @db.Timestamptz(6)
   createdAt DateTime  @default(now()) @db.Timestamptz(6)
