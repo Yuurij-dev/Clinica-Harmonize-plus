@@ -20,7 +20,7 @@ export async function GET() {
     prisma.procedure.findMany({
       where: { clinicId: user.clinicId },
       orderBy: { name: "asc" },
-      select: { name: true },
+      select: { name: true, category: true, durationMinutes: true },
     }),
     prisma.clinicMembership.findMany({
       where: { clinicId: user.clinicId, role: { in: ["ADMIN", "PROFESSIONAL"] } },

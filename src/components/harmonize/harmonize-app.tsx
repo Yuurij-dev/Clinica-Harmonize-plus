@@ -1,7 +1,7 @@
 "use client";
 
 import type { CSSProperties } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Dashboard } from "./dashboard";
@@ -18,7 +18,6 @@ import {
   ScheduleSection,
   SettingsSection,
 } from "./sections";
-import { navItems } from "@/data/navigation";
 import type { SectionId } from "@/types/clinic";
 
 type Notice = {
@@ -84,11 +83,6 @@ export function HarmonizeApp() {
     setMobileOpen(false);
   }
 
-  const title = useMemo(
-    () => navItems.find((item) => item.id === active)?.label ?? "Dashboard",
-    [active],
-  );
-
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
     setActive("agenda");
@@ -125,8 +119,8 @@ export function HarmonizeApp() {
         isAdmin={isAdmin}
       />
       <div className="lg:pl-[220px]">
-        <Topbar title={title} user={currentUser} onMenu={() => setMobileOpen(true)} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onLogout={logout} />
-        <main className="hp-page-enter mx-auto w-full max-w-[1500px] px-4 pb-28 pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7">
+        <Topbar user={currentUser} onMenu={() => setMobileOpen(true)} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onLogout={logout} />
+        <main className={`hp-page-enter mx-auto w-full ${active === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-28 pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
           {active === "dashboard" && isAdmin ? <Dashboard userName={currentUser?.name} onAction={(action) => {
             const target = { client: ["clientes", "client"], appointment: ["agenda", "appointment"], quote: ["orcamentos", "quote"], payment: ["pagamentos", "payment"] }[action] as [SectionId, NonNullable<typeof createDialog>];
             openCreate(target[0], target[1]);

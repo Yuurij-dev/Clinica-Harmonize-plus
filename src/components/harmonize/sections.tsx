@@ -1,19 +1,20 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
+  CalendarDays,
   CalendarPlus,
   Camera,
   CheckCircle2,
   CircleDollarSign,
   ChevronDown,
-  ListFilter,
+  ChevronLeft,
+  ChevronRight,
   Loader2,
+  MoreVertical,
   PencilLine,
   Plus,
-  Printer,
-  Search,
   Sparkles,
   UserPlus,
 } from "lucide-react";
@@ -47,6 +48,7 @@ import {
 } from "@/lib/input-masks";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
+import { cn } from "@/lib/utils";
 import type { Appointment, JourneyStageId, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
 
 const currency = new Intl.NumberFormat("pt-BR", {
@@ -102,7 +104,8 @@ type ApiPatient = {
   currentStage?: JourneyStageId;
 };
 
-type AppointmentRow = Appointment & { id: string };
+type AppointmentRow = Appointment & { id: string; date: string; durationMinutes: number; category: string };
+type ApiProcedureOption = { name: string; category: string; durationMinutes: number };
 type ApiAppointment = {
   id: string;
   date: string;
@@ -113,14 +116,18 @@ type ApiAppointment = {
   patient: { name: string };
 };
 
-function mapApiAppointment(appointment: ApiAppointment): AppointmentRow {
+function mapApiAppointment(appointment: ApiAppointment, procedures: ApiProcedureOption[] = []): AppointmentRow {
+  const procedure = procedures.find((item) => item.name === appointment.procedure);
   return {
     id: appointment.id,
+    date: appointment.date,
     time: appointment.time,
     patient: appointment.patient.name,
     procedure: appointment.procedure,
     professional: appointment.professional,
     status: appointment.status,
+    durationMinutes: procedure?.durationMinutes ?? 60,
+    category: procedure?.category ?? appointment.procedure,
   };
 }
 
@@ -327,41 +334,38 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
 }
 
 export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
-  const cachedAgenda = readClientCache<{ appointments: ApiAppointment[]; patients: ApiPatient[]; procedures: Array<{ name: string }>; members: Array<{ role: string; user: { name: string } }> }>("/api/agenda/bootstrap");
+  const cachedAgenda = readClientCache<{ appointments: ApiAppointment[]; patients: ApiPatient[]; procedures: ApiProcedureOption[]; members: Array<{ role: string; user: { name: string } }> }>("/api/agenda/bootstrap");
   const rowColors = ["#5147dc", "#6d5ce7", "#2f9c88", "#d86655", "#ddb63f"];
-  const [appointmentRows, setAppointmentRows] = useState<AppointmentRow[]>(() => cachedAgenda?.appointments.map(mapApiAppointment) ?? []);
+  const [appointmentRows, setAppointmentRows] = useState<AppointmentRow[]>(() => cachedAgenda?.appointments.map((item) => mapApiAppointment(item, cachedAgenda.procedures)) ?? []);
   const [isLoading, setIsLoading] = useState(!cachedAgenda);
   const [loadError, setLoadError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [patientOptions, setPatientOptions] = useState<ApiPatient[]>(cachedAgenda?.patients ?? []);
+  const [procedureCatalog, setProcedureCatalog] = useState<ApiProcedureOption[]>(cachedAgenda?.procedures ?? []);
   const [procedureOptions, setProcedureOptions] = useState<string[]>(cachedAgenda?.procedures.map((item) => item.name) ?? []);
   const [professionalChoices, setProfessionalChoices] = useState<string[]>(cachedAgenda?.members.map((member) => member.user.name) ?? []);
   const [procedureLoading, setProcedureLoading] = useState(!cachedAgenda);
   const [professionalLoading, setProfessionalLoading] = useState(!cachedAgenda);
   const [patientQuery, setPatientQuery] = useState("");
   const [selectedPatientId, setSelectedPatientId] = useState("");
-  const [activeView, setActiveView] = useState("Lista");
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [query, setQuery] = useState("");
+  const [activeView, setActiveView] = useState<"Dia" | "Semana" | "Mês">("Semana");
+  const [calendarDate, setCalendarDate] = useState(() => clinicNow());
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [professional, setProfessional] = useState("Todos");
-  const [status, setStatus] = useState("Todos");
+  const autoMissedIds = useRef(new Set<string>());
   const professionalOptions = useMemo(() => ["Todos", ...new Set(appointmentRows.map((item) => item.professional))], [appointmentRows]);
-  const statusOptions = useMemo(() => ["Todos", ...new Set(appointmentRows.map((item) => item.status))], [appointmentRows]);
   const activeProfessional = professionalOptions.includes(professional) ? professional : "Todos";
-  const activeStatus = statusOptions.includes(status) ? status : "Todos";
-  const filteredAppointments = appointmentRows.filter((appointment) => {
-    const matchesQuery = `${appointment.patient} ${appointment.procedure}`.toLowerCase().includes(query.toLowerCase());
-    return matchesQuery && (activeProfessional === "Todos" || appointment.professional === activeProfessional) && (activeStatus === "Todos" || appointment.status === activeStatus);
-  });
+  const filteredAppointments = appointmentRows.filter((appointment) => activeProfessional === "Todos" || appointment.professional === activeProfessional);
 
   useEffect(() => {
     let active = true;
-    getCachedJson<{ appointments: ApiAppointment[]; patients: ApiPatient[]; procedures: Array<{ name: string }>; members: Array<{ role: string; user: { name: string } }> }>("/api/agenda/bootstrap")
+    getCachedJson<{ appointments: ApiAppointment[]; patients: ApiPatient[]; procedures: ApiProcedureOption[]; members: Array<{ role: string; user: { name: string } }> }>("/api/agenda/bootstrap")
       .then((data) => {
         if (!active) return;
-        setAppointmentRows(data.appointments.map(mapApiAppointment));
+        setAppointmentRows(data.appointments.map((item) => mapApiAppointment(item, data.procedures)));
         setPatientOptions(data.patients);
+        setProcedureCatalog(data.procedures);
         setProcedureOptions(data.procedures.map((item) => item.name));
         setProfessionalChoices(data.members.map((member) => member.user.name));
       })
@@ -377,27 +381,42 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    if (isLoading) return;
+
+    async function markExpiredAppointments() {
+      const now = clinicNow();
+      const expired = appointmentRows.filter((appointment) => (
+        appointment.status === "Agendado"
+        && appointmentHasPassed(appointment, now)
+        && !autoMissedIds.current.has(appointment.id)
+      ));
+      if (!expired.length) return;
+
+      expired.forEach((appointment) => autoMissedIds.current.add(appointment.id));
+      const results = await Promise.all(expired.map(async (appointment) => {
+        const response = await fetch(`/api/appointments/${appointment.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "Faltou" }),
+        });
+        return response.ok ? appointment.id : null;
+      }));
+      const updatedIds = new Set(results.filter((id): id is string => Boolean(id)));
+      if (!updatedIds.size) return;
+      setAppointmentRows((current) => current.map((appointment) => updatedIds.has(appointment.id) ? { ...appointment, status: "Faltou" } : appointment));
+      invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+    }
+
+    void markExpiredAppointments();
+    const timer = window.setInterval(() => { void markExpiredAppointments(); }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [appointmentRows, isLoading]);
+
   const matchingPatients = patientOptions.filter((patient) =>
     `${patient.name} ${patient.cpf ?? ""}`.toLowerCase().includes(patientQuery.toLowerCase()),
   );
   const selectedPatient = patientOptions.find((patient) => patient.id === selectedPatientId);
-
-  function matchesAppointment(item: Appointment, target: Appointment) {
-    return item.time === target.time &&
-      item.patient === target.patient &&
-      item.procedure === target.procedure &&
-      item.professional === target.professional;
-  }
-
-  function syncAvailableFilters(nextRows: Appointment[]) {
-    if (professional !== "Todos" && !nextRows.some((item) => item.professional === professional)) {
-      setProfessional("Todos");
-    }
-
-    if (status !== "Todos" && !nextRows.some((item) => item.status === status)) {
-      setStatus("Todos");
-    }
-  }
 
   async function saveAppointment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -414,12 +433,12 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
           time: String(form.get("time")),
           procedure: String(form.get("procedure")),
           professional: String(form.get("professional")),
-          date: new Date().toISOString(),
+          date: `${String(form.get("date"))}T00:00:00`,
         }),
       });
       if (!response.ok) return;
       const data = await response.json() as { appointment: ApiAppointment };
-      setAppointmentRows((current) => [...current, mapApiAppointment(data.appointment)].sort((a, b) => a.time.localeCompare(b.time)));
+      setAppointmentRows((current) => [...current, mapApiAppointment(data.appointment, procedureCatalog)].sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`)));
       invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
       onCreateClose();
       setPatientQuery("");
@@ -435,10 +454,9 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     setUpdatingId(target.id);
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: nextStatus }) });
     if (!response.ok) { setUpdatingId(null); return; }
-    const nextRows = appointmentRows.map((item) => matchesAppointment(item, target) ? { ...item, status: nextStatus } : item);
+    const nextRows = appointmentRows.map((item) => item.id === target.id ? { ...item, status: nextStatus } : item);
     setAppointmentRows(nextRows);
     invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
-    syncAvailableFilters(nextRows);
     setUpdatingId(null);
     onSaved?.(`${target.patient}: ${nextStatus}.`);
   }
@@ -446,65 +464,77 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   async function markAppointmentAsMissed(target: AppointmentRow) {
     const previousStatus = target.status;
 
-    const nextRows = appointmentRows.map((item) => matchesAppointment(item, target) ? { ...item, status: "Faltou" } : item);
+    const nextRows = appointmentRows.map((item) => item.id === target.id ? { ...item, status: "Faltou" } : item);
     setUpdatingId(target.id);
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Faltou" }) });
     if (!response.ok) { setUpdatingId(null); return; }
     setAppointmentRows(nextRows);
     invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
-    syncAvailableFilters(nextRows);
     setUpdatingId(null);
     onSaved?.(`${target.patient} foi marcado como faltou.`, () => {
-      const restoredRows = nextRows.map((item) => matchesAppointment(item, target) ? { ...item, status: previousStatus } : item);
+      const restoredRows = nextRows.map((item) => item.id === target.id ? { ...item, status: previousStatus } : item);
       setAppointmentRows(restoredRows);
       invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
-      syncAvailableFilters(restoredRows);
     });
   }
 
   return (
-    <div className="mx-auto max-w-[1260px]">
-      <div className="hp-page-enter mb-5 flex flex-col gap-4 border-b border-[#ececf2] pb-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <div>
-          <p className="text-[10px] font-bold uppercase text-[#9a9bab]">Agenda clínica</p>
-          <h2 className="mt-1 text-lg font-bold text-[#25263a]">Atendimentos de hoje</h2>
+    <div className="w-full">
+      <div className="hp-page-enter mb-5 flex flex-col gap-4 border-b border-[#ececf2] pb-5 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-[#3026a8]">Agenda Clínica</h2>
+          <p className="mt-1 text-xs text-[#858696]">Visualize e gerencie seus atendimentos de forma prática.</p>
+        </div>
+        <Button size="sm" onClick={onCreateOpen}><Plus className="h-4 w-4" /> Agendar</Button>
+      </div>
+
+      <div className="mb-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-[10px] font-semibold text-[#77798c]" aria-label="Legenda dos tipos de atendimento">
+        <span className="font-bold text-[#555668]">Legenda</span>
+        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#6257e8]" />Consulta / retorno</span>
+        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#3d9be9]" />Avaliação</span>
+        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#35ae78]" />Procedimento</span>
+        <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#e0647d]" />Outros</span>
+      </div>
+
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" size="icon" aria-label="Período anterior" onClick={() => setCalendarDate((current) => shiftCalendarDate(current, activeView, -1))}><ChevronLeft className="h-4 w-4" /></Button>
+          <Button variant="secondary" size="sm" onClick={() => setCalendarDate(clinicNow())}>Hoje</Button>
+          <Button variant="secondary" size="icon" aria-label="Próximo período" onClick={() => setCalendarDate((current) => shiftCalendarDate(current, activeView, 1))}><ChevronRight className="h-4 w-4" /></Button>
+          <h3 className="ml-2 text-base font-bold capitalize text-[#303144]">{calendarPeriodLabel(calendarDate, activeView)}</h3>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center rounded-[7px] border border-[#e1e2ec] bg-white p-0.5">
+            {["Semana", "Dia", "Mês"].map((view) => (
+              <button
+                className={cn("hp-pressable rounded-[5px] px-4 py-2 text-xs font-semibold transition-colors", activeView === view ? "bg-[#5147dc] text-white shadow-sm" : "text-[#77798c] hover:text-[#5147dc]")}
+                key={view}
+                onClick={() => setActiveView(view as "Dia" | "Semana" | "Mês")}
+              >
+                {view}
+              </button>
+            ))}
           </div>
-          <Button size="sm" onClick={onCreateOpen}><Plus className="h-4 w-4" /> Agendar</Button>
-        </div>
-        <div className="flex items-center gap-1">
-          {["Lista", "Dia", "Semana"].map((view) => (
-            <button
-              className={activeView === view
-                ? "hp-pressable border-b-2 border-[#5147dc] px-5 py-2 text-xs font-bold text-[#5147dc]"
-                : "hp-pressable border-b-2 border-transparent px-5 py-2 text-xs font-semibold text-[#8a8b9c] hover:text-[#5147dc]"}
-              key={view}
-              onClick={() => setActiveView(view)}
-            >
-              {view}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" aria-label="Buscar" onClick={() => setSearchOpen((open) => !open)}><Search className="h-4 w-4" /></Button>
-          <Button variant="ghost" size="icon" aria-label="Imprimir" onClick={() => window.print()}><Printer className="h-4 w-4" /></Button>
+          <Button variant="secondary" size="icon" aria-label="Selecionar data" title="Selecionar data"><CalendarDays className="h-4 w-4" /></Button>
+          <select className="min-w-[170px] rounded-[7px] border border-[#dddfea] bg-white px-3 py-2 text-xs font-semibold text-[#555668] outline-none focus:border-[#5147dc]" value={activeProfessional} onChange={(event) => setProfessional(event.target.value)} aria-label="Filtrar por profissional">
+            {professionalOptions.map((item) => <option key={item}>{item}</option>)}
+          </select>
         </div>
       </div>
 
-      {searchOpen ? <SearchFilterBar placeholder="Buscar paciente ou procedimento" value={query} onChange={setQuery} /> : null}
+      <ScheduleCalendar
+        appointments={filteredAppointments}
+        date={calendarDate}
+        view={activeView}
+        loading={isLoading}
+        openMenuId={openMenuId}
+        onMenuToggle={(id) => setOpenMenuId((current) => current === id ? null : id)}
+        onAdvance={advanceAppointment}
+        onMissed={markAppointmentAsMissed}
+        updatingId={updatingId}
+      />
 
-      <div className="hp-page-enter mb-6 flex flex-wrap items-center gap-x-8 gap-y-3 text-xs">
-        <span className="flex items-center gap-2 font-bold text-[#5f6072]"><ListFilter className="h-3.5 w-3.5" /> Filtrar por</span>
-        <select className="min-w-[150px] border-b border-[#dedee7] bg-transparent px-1 py-2 font-semibold text-[#757688] outline-none" value={activeProfessional} onChange={(event) => setProfessional(event.target.value)}>
-          {professionalOptions.map((item) => <option key={item}>{item}</option>)}
-        </select>
-        <select className="min-w-[150px] border-b border-[#dedee7] bg-transparent px-1 py-2 font-semibold text-[#757688] outline-none" value={activeStatus} onChange={(event) => setStatus(event.target.value)}>
-          {statusOptions.map((item) => <option key={item}>{item}</option>)}
-        </select>
-        <span className="text-[#8a8b9c]">{isLoading ? <LoadingSkeleton className="inline-block h-3 w-36 align-middle" /> : `${filteredAppointments.length} atendimento(s) · visão ${activeView.toLowerCase()}`}</span>
-      </div>
-
-      <div className="hp-panel-enter overflow-x-auto rounded-[7px] bg-white px-3 shadow-[0_8px_28px_rgba(38,39,58,0.035)] sm:px-5">
+      <div className="hidden hp-panel-enter overflow-x-auto rounded-[7px] bg-white px-3 shadow-[0_8px_28px_rgba(38,39,58,0.035)] sm:px-5">
         <div className="grid min-w-[1040px] grid-cols-[84px_1.1fr_1fr_1.05fr_1.15fr_210px] border-b border-[#eeeef3] px-3 py-3 text-[9px] font-bold uppercase text-[#adaeba]">
           <span>Horário</span><span>Atendimento</span><span>Status</span><span>Profissional</span><span>Paciente</span><span></span>
         </div>
@@ -522,7 +552,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
           const primaryLabel = appointment.status === "Em atendimento" ? "Finalizar" : isCompleted ? "Concluído" : isMissed ? "Faltou" : "Atender";
 
           return (
-            <div className="relative grid min-w-[1040px] grid-cols-[84px_1.1fr_1fr_1.05fr_1.15fr_210px] items-center border-b border-[#f0f0f4] px-3 py-4 text-[11px] transition-[background-color,transform] duration-200 last:border-0 hover:-translate-y-0.5 hover:bg-[#fbfbfe]" key={`${appointment.time}-${appointment.patient}`}>
+            <div className="relative grid min-w-[1040px] grid-cols-[84px_1.1fr_1fr_1.05fr_1.15fr_210px] items-center border-b border-[#f0f0f4] px-3 py-4 text-[11px] transition-[background-color,transform] duration-200 last:border-0 hover:-translate-y-0.5 hover:bg-[#fbfbfe]" key={appointment.id}>
               <span className="absolute bottom-2 left-0 top-2 w-[3px] rounded-full" style={{ backgroundColor: rowColors[index % rowColors.length] }} />
               <strong className="text-[#5147dc]">{appointment.time}</strong>
               <div><strong className="block text-[#3d3e51]">{appointment.procedure}</strong><span className="mt-1 block text-[9px] text-[#aaaab7]">Consulta clínica</span></div>
@@ -576,6 +606,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
             ) : null}
             {selectedPatientId ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {selectedPatient?.name}</p> : null}
           </div>
+          <FormField label="Data"><input className={fieldClassName} name="date" type="date" defaultValue={calendarDateKey(calendarDate)} required /></FormField>
           <FormField label="Horário"><input className={fieldClassName} name="time" type="time" required /></FormField>
           <FormField label="Profissional"><div className="relative"><select className={fieldClassName} name="professional" required disabled={professionalLoading || !professionalChoices.length}><option value="">{professionalLoading ? "..." : professionalChoices.length ? "Selecione o profissional" : "Nenhum profissional cadastrado"}</option>{professionalChoices.map((professional) => <option key={professional} value={professional}>{professional}</option>)}</select>{professionalLoading ? <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#5147dc]" /> : null}</div></FormField>
           <div className="sm:col-span-2"><FormField label="Procedimento"><div className="relative"><select className={fieldClassName} name="procedure" required disabled={procedureLoading || !procedureOptions.length}><option value="">{procedureLoading ? "..." : procedureOptions.length ? "Selecione o procedimento" : "Nenhum procedimento cadastrado"}</option>{procedureOptions.map((item) => <option key={item}>{item}</option>)}</select>{procedureLoading ? <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#5147dc]" /> : null}</div></FormField></div>
@@ -584,6 +615,166 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
       </Modal>
     </div>
   );
+}
+
+type CalendarView = "Dia" | "Semana" | "Mês";
+
+function ScheduleCalendar({ appointments, date, view, loading, openMenuId, onMenuToggle, onAdvance, onMissed, updatingId }: { appointments: AppointmentRow[]; date: Date; view: CalendarView; loading: boolean; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; updatingId: string | null }) {
+  const [now, setNow] = useState(() => clinicNow());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(clinicNow()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const days = view === "Dia" ? [date] : getWeekDays(date);
+  const firstHour = 8;
+  const lastHour = Math.max(19, now.getHours());
+  const hours = Array.from({ length: lastHour - firstHour + 1 }, (_, index) => index + firstHour);
+  const hourHeight = 72;
+  const calendarHeight = hours.length * hourHeight;
+  const calendarRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const nowMinutes = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+    const currentTimeTop = ((nowMinutes - firstHour * 60) / 60) * hourHeight;
+    const element = calendarRef.current;
+    if (element && currentTimeTop >= 0 && currentTimeTop <= calendarHeight) {
+      element.scrollTo({ top: Math.max(0, currentTimeTop - 180), behavior: "smooth" });
+    }
+  }, [calendarHeight, firstHour, loading, now, view]);
+
+  if (loading) return <CalendarSkeleton />;
+  if (view === "Mês") return <MonthCalendar date={date} appointments={appointments} />;
+
+  return (
+    <div ref={calendarRef} className="max-h-[720px] overflow-auto rounded-[8px] border border-[#e7e9f2] bg-white shadow-[0_8px_28px_rgba(38,39,58,0.035)]">
+      <div className="min-w-[760px]">
+        <div className={cn("grid border-b border-[#ececf3] bg-[#fbfbfe]", view === "Dia" ? "grid-cols-[64px_minmax(300px,1fr)]" : "grid-cols-[64px_repeat(6,minmax(130px,1fr))]")}>
+          <div className="border-r border-[#ececf3]" />
+          {days.map((day) => <CalendarDayHeader key={calendarDateKey(day)} date={day} />)}
+          {view === "Dia" ? <div className="hidden" /> : null}
+        </div>
+        <div className={cn("grid", view === "Dia" ? "grid-cols-[64px_minmax(300px,1fr)]" : "grid-cols-[64px_repeat(6,minmax(130px,1fr))]")}>
+          <div className="relative border-r border-[#ececf3] bg-[#fcfcfe]" style={{ height: calendarHeight }}>
+            {hours.map((hour) => <span className="absolute right-2 -translate-y-1/2 text-[10px] font-semibold text-[#9a9baa]" style={{ top: (hour - 8) * hourHeight }} key={hour}>{String(hour).padStart(2, "0")}:00</span>)}
+          </div>
+          {days.map((day) => {
+            const dayKey = calendarDateKey(day);
+            const dayAppointments = appointments.filter((appointment) => calendarDateKey(appointment.date) === dayKey);
+            return <CalendarDayColumn key={dayKey} date={day} now={now} appointments={dayAppointments} height={calendarHeight} hourHeight={hourHeight} hourCount={hours.length} openMenuId={openMenuId} onMenuToggle={onMenuToggle} onAdvance={onAdvance} onMissed={onMissed} updatingId={updatingId} />;
+          })}
+          {view === "Dia" ? Array.from({ length: 5 }).map((_, index) => <div className="hidden" key={index} />) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CalendarDayHeader({ date }: { date: Date }) {
+  const isToday = calendarDateKey(date) === calendarDateKey(clinicNow());
+  const weekday = new Intl.DateTimeFormat("pt-BR", { weekday: "short" }).format(date).replace(".", "");
+  return <div className="border-r border-[#ececf3] px-2 py-3 text-center last:border-r-0"><span className="block text-[10px] font-bold uppercase text-[#858696]">{weekday}</span><span className={cn("mx-auto mt-1 grid h-8 w-8 place-items-center rounded-full text-sm font-black", isToday ? "bg-[#5147dc] text-white shadow-[0_4px_10px_rgba(81,71,220,0.25)]" : "text-[#303144]")}>{date.getDate()}</span></div>;
+}
+
+function CalendarDayColumn({ date, now, appointments, height, hourHeight, hourCount, openMenuId, onMenuToggle, onAdvance, onMissed, updatingId }: { date: Date; now: Date; appointments: AppointmentRow[]; height: number; hourHeight: number; hourCount: number; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; updatingId: string | null }) {
+  const isToday = calendarDateKey(date) === calendarDateKey(now);
+  const isPastDay = calendarDateKey(date) < calendarDateKey(now);
+  const nowMinutes = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+  const currentTimeTop = ((nowMinutes - 8 * 60) / 60) * hourHeight;
+  const showCurrentTime = (isPastDay || isToday) && currentTimeTop >= 0 && currentTimeTop <= height;
+
+  return <div className="relative border-r border-[#ececf3] last:border-r-0" style={{ height }}>
+    {Array.from({ length: hourCount }, (_, index) => <span className="pointer-events-none absolute inset-x-0 border-t border-[#f0f0f5]" style={{ top: index * hourHeight }} key={index} />)}
+    <span className="pointer-events-none absolute inset-x-0 bottom-0 border-t border-[#f0f0f5]" />
+    {showCurrentTime ? <div className="pointer-events-none absolute inset-x-0 z-20 h-0" style={{ top: currentTimeTop }} aria-label={`Horário atual: ${now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`}>
+      <span className={cn("absolute inset-x-0 top-0 border-t-2 border-[#5147dc]", isToday ? "border-solid" : "border-dotted")} />
+      {isToday ? <span className="absolute -left-1.5 -top-1.5 h-3 w-3 rounded-full border-2 border-white bg-[#5147dc] shadow-[0_1px_4px_rgba(81,71,220,0.3)]" /> : null}
+    </div> : null}
+    {appointments.map((appointment) => {
+      const start = appointmentMinutes(appointment.time);
+      const top = Math.max(2, ((start - 8 * 60) / 60) * hourHeight);
+      const cardHeight = Math.max(92, (appointment.durationMinutes / 60) * hourHeight - 8);
+      return <CalendarAppointmentCard key={appointment.id} appointment={appointment} top={top} height={cardHeight} open={openMenuId === appointment.id} onMenuToggle={onMenuToggle} onAdvance={onAdvance} onMissed={onMissed} updating={updatingId === appointment.id} />;
+    })}
+  </div>;
+}
+
+function CalendarAppointmentCard({ appointment, top, height, open, onMenuToggle, onAdvance, onMissed, updating }: { appointment: AppointmentRow; top: number; height: number; open: boolean; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; updating: boolean }) {
+  const tone = appointmentTone(appointment);
+  const past = appointmentHasPassed(appointment);
+  const isCompleted = appointment.status === "Atendido";
+  const isMissed = appointment.status === "Faltou";
+  const primaryLabel = appointment.status === "Em atendimento" ? "Finalizar" : isCompleted ? "Concluído" : isMissed ? "Faltou" : "Atender";
+  return <div className={cn("absolute inset-x-1 z-10 overflow-visible rounded-[7px] border-l-[3px] p-2 text-[10px] shadow-[0_4px_12px_rgba(38,39,58,0.06)]", tone.card, past && "brightness-[0.84] saturate-[0.78]")} style={{ top, height }}>
+    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><p className="mt-1 truncate text-[11px] font-black">{appointment.procedure}</p><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0"><button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={() => onMenuToggle(appointment.id)}><MoreVertical className="h-3.5 w-3.5" /></button>{open ? <div className="absolute right-0 top-7 z-30 w-32 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl"><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || updating} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button>{!isCompleted && !isMissed ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button> : null}</div> : null}</div></div>
+    <span className={cn("mt-1 inline-flex rounded-full px-2 py-0.5 text-[9px] font-bold", tone.pill)}>{appointment.category || "Atendimento"}</span>
+  </div>;
+}
+
+function MonthCalendar({ date, appointments }: { date: Date; appointments: AppointmentRow[] }) {
+  const first = new Date(date.getFullYear(), date.getMonth(), 1);
+  const startOffset = (first.getDay() + 6) % 7;
+  const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  const cells = Array.from({ length: Math.ceil((startOffset + daysInMonth) / 7) * 7 }, (_, index) => index - startOffset + 1);
+  return <div className="overflow-hidden rounded-[8px] border border-[#e7e9f2] bg-white shadow-[0_8px_28px_rgba(38,39,58,0.035)]"><div className="grid grid-cols-7 border-b border-[#ececf3] bg-[#fbfbfe]">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((label) => <span className="px-2 py-3 text-center text-[10px] font-bold uppercase text-[#858696]" key={label}>{label}</span>)}</div><div className="grid grid-cols-7">{cells.map((day) => { const valid = day > 0 && day <= daysInMonth; const cellDate = valid ? new Date(date.getFullYear(), date.getMonth(), day) : null; const dayAppointments = cellDate ? appointments.filter((item) => calendarDateKey(item.date) === calendarDateKey(cellDate)) : []; return <div className={cn("min-h-28 border-b border-r border-[#f0f0f5] p-2", !valid && "bg-[#fbfbfd]")} key={`${date.getFullYear()}-${date.getMonth()}-${day}`}><span className={cn("grid h-6 w-6 place-items-center rounded-full text-[10px] font-bold", cellDate && calendarDateKey(cellDate) === calendarDateKey(clinicNow()) && "bg-[#5147dc] text-white")}>{valid ? day : ""}</span><div className="mt-1 space-y-1">{dayAppointments.slice(0, 3).map((item) => <div className={cn("truncate rounded-[4px] border-l-2 px-1.5 py-1 text-[9px] font-bold", appointmentTone(item).card)} key={item.id}>{item.time} · {item.patient}</div>)}{dayAppointments.length > 3 ? <span className="text-[9px] font-semibold text-[#858696]">+{dayAppointments.length - 3} atendimentos</span> : null}</div></div>; })}</div></div>;
+}
+
+function CalendarSkeleton() {
+  return <div className="grid animate-pulse grid-cols-7 gap-px overflow-hidden rounded-[8px] border border-[#e7e9f2] bg-[#ececf3]"><div className="col-span-7 h-14 bg-white" />{Array.from({ length: 42 }, (_, index) => <div className="h-24 bg-white" key={index} />)}</div>;
+}
+
+function clinicNow() {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return new Date(Number(values.year), Number(values.month) - 1, Number(values.day), Number(values.hour), Number(values.minute), Number(values.second));
+}
+
+function getWeekDays(date: Date) {
+  const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate() - ((date.getDay() + 6) % 7));
+  return Array.from({ length: 6 }, (_, index) => new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + index));
+}
+
+function calendarDateKey(date: Date | string) {
+  if (typeof date === "string") return date.slice(0, 10);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function shiftCalendarDate(date: Date, view: CalendarView, amount: number) {
+  const days = view === "Dia" ? 1 : view === "Semana" ? 7 : 30;
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + amount * days);
+}
+
+function calendarPeriodLabel(date: Date, view: CalendarView) {
+  if (view === "Dia") return new Intl.DateTimeFormat("pt-BR", { dateStyle: "long" }).format(date);
+  if (view === "Semana") { const days = getWeekDays(date); return `${new Intl.DateTimeFormat("pt-BR", { month: "long" }).format(days[0])} de ${days[0].getFullYear()}`; }
+  return new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(date);
+}
+
+function appointmentMinutes(time: string) {
+  const [hours, minutes] = time.split(":").map(Number);
+  return (hours || 0) * 60 + (minutes || 0);
+}
+
+function appointmentHasPassed(appointment: AppointmentRow, now = clinicNow()) {
+  const appointmentDate = calendarDateKey(appointment.date);
+  const today = calendarDateKey(now);
+  if (appointmentDate < today) return true;
+  if (appointmentDate > today) return false;
+  return appointmentMinutes(appointment.time) < now.getHours() * 60 + now.getMinutes();
+}
+
+function formatEndTime(time: string, durationMinutes: number) {
+  const end = appointmentMinutes(time) + durationMinutes;
+  return `${String(Math.floor(end / 60) % 24).padStart(2, "0")}:${String(end % 60).padStart(2, "0")}`;
+}
+
+function appointmentTone(appointment: AppointmentRow) {
+  const value = `${appointment.procedure} ${appointment.category}`.toLocaleLowerCase("pt-BR");
+  if (value.includes("avalia")) return { card: "border-[#3d9be9] bg-[#eaf5ff] text-[#175b91]", pill: "bg-[#d7edff] text-[#2672ad]" };
+  if (value.includes("consulta") || value.includes("retorno")) return { card: "border-[#6257e8] bg-[#f0eeff] text-[#3f36a9]", pill: "bg-[#e3dfff] text-[#5147dc]" };
+  if (["preenchimento", "toxina", "bioestimul", "fio", "peeling", "microagul", "laser", "skin", "limpeza"].some((term) => value.includes(term))) return { card: "border-[#35ae78] bg-[#eaf8ef] text-[#247750]", pill: "bg-[#d7f1df] text-[#287a50]" };
+  return { card: "border-[#e0647d] bg-[#fff0f2] text-[#9b3a4f]", pill: "bg-[#ffe0e5] text-[#a8465b]" };
 }
 
 export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {

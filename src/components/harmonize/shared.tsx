@@ -18,7 +18,7 @@ export function SectionIntro({
   return (
     <div className="hp-page-enter mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div>
-        <h2 className="text-lg font-bold text-[#25263a]">{title}</h2>
+        <h2 className="text-lg font-bold text-[#3026a8]">{title}</h2>
         <p className="mt-1 max-w-2xl text-xs leading-5 text-[#8a8b9c]">
           {description}
         </p>
