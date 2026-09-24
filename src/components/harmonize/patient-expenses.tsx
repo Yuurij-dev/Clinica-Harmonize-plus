@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { getCachedJson, readClientCache, invalidateClientCache } from "@/lib/client-cache";
 import { cn } from "@/lib/utils";
+import { LoadingSkeleton } from "./shared";
 
 type ProcedureOption = {
   id: string;
@@ -19,6 +20,7 @@ type ProcedureOption = {
 type ProductOption = { name: string; unit: string };
 type CostSettings = { laborCost: number; facilityCost: number; medicationCost: number };
 type QuoteOptionsResponse = { procedures: ProcedureOption[]; products: ProductOption[]; costs: CostSettings };
+type PatientQuote = { id: string; items: string; total: number; status: string; paymentMethod?: string | null };
 type SelectedProcedure = ProcedureOption & { quantity: number; unit: string };
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
@@ -31,6 +33,7 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
   const [costs, setCosts] = useState<CostSettings>(cachedCostSettings?.settings ?? cached?.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
   const [selected, setSelected] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(!cached);
+  const [quoteLoading, setQuoteLoading] = useState(Boolean(patientId));
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [saveError, setSaveError] = useState(false);
@@ -65,10 +68,33 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
 
   useEffect(() => {
     if (!patientId) return;
-    getCachedJson<{ quotes?: Array<{ id: string; status: string }> }>(`/api/quotes?patientId=${encodeURIComponent(patientId)}`)
-      .then((data) => setLatestQuoteId(data.quotes?.[0]?.id ?? null))
-      .catch(() => setLatestQuoteId(null));
-  }, [patientId]);
+    getCachedJson<{ quotes?: PatientQuote[] }>(`/api/quotes?patientId=${encodeURIComponent(patientId)}`)
+      .then((data) => {
+        const quote = data.quotes?.[0];
+        if (!quote) {
+          setLatestQuoteId(null);
+          return;
+        }
+
+        const restoredSelection = procedures.reduce<Record<string, number>>((selection, procedure) => {
+          const item = quote.items.split(", ").find((entry) => entry.startsWith(`${procedure.name} (`));
+          const quantity = item?.match(/\((\d+)x\)/)?.[1];
+          if (quantity) selection[procedure.id] = Number(quantity);
+          return selection;
+        }, {});
+
+        setLatestQuoteId(quote.id);
+        setSelected(restoredSelection);
+        if (quote.paymentMethod) setPaymentMethod(quote.paymentMethod);
+        setPaymentConfirmed(["Aprovado", "Pago"].includes(quote.status));
+      })
+      .catch(() => {
+        setLatestQuoteId(null);
+        setSelected({});
+        setPaymentConfirmed(false);
+      })
+      .finally(() => setQuoteLoading(false));
+  }, [patientId, procedures]);
 
   const selectedItems = useMemo<SelectedProcedure[]>(
     () => procedures.filter((procedure) => selected[procedure.id]).map((procedure) => ({ ...procedure, quantity: selected[procedure.id], unit: procedureUnit(procedure, products) })),
@@ -112,12 +138,22 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ patientId, items: selectedItems.map((item) => `${item.name} (${item.quantity}x)`).join(", "), total, paymentMethod }),
       });
-      const data = await response.json() as { quote?: { id: string }; message?: string };
-      if (!response.ok) throw new Error(data.message ?? "Não foi possível salvar o orçamento.");
+      const responseText = await response.text();
+      let data: { quote?: { id: string }; message?: string } = {};
+      if (responseText.trim()) {
+        try {
+          data = JSON.parse(responseText) as { quote?: { id: string }; message?: string };
+        } catch {
+          throw new Error("O servidor retornou uma resposta inválida ao salvar o orçamento.");
+        }
+      }
+      if (!response.ok) throw new Error(data.message ?? `Não foi possível salvar o orçamento (${response.status}).`);
+      if (!data.quote?.id) throw new Error("O orçamento foi processado, mas não retornou um identificador válido.");
       invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
-      setLatestQuoteId(data.quote?.id ?? null);
+      setLatestQuoteId(data.quote.id);
       setNotice("Orçamento salvo com sucesso.");
     } catch (error) {
+      setSaveError(true);
       setNotice(error instanceof Error ? error.message : "Não foi possível salvar o orçamento.");
     } finally {
       setSaving(false);
@@ -200,7 +236,7 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
           <p className="mt-1 text-[10px] leading-4 text-[#858696]">Selecione os procedimentos cadastrados e informe a quantidade para calcular o valor.</p>
         </div>
         {loading ? (
-          <div className="flex min-h-48 items-center justify-center gap-2 text-xs font-semibold text-[#77788a]"><LoaderCircle className="h-4 w-4 animate-spin text-[#5147dc]" />Carregando procedimentos...</div>
+          <div className="min-h-48 space-y-4 p-5"><LoadingSkeleton className="h-8 w-1/3" /><LoadingSkeleton className="h-12 w-full" /><LoadingSkeleton className="h-12 w-full" /><LoadingSkeleton className="h-12 w-full" /></div>
         ) : procedures.length === 0 ? (
           <div className="p-6 text-center text-xs text-[#77788a]">Nenhum procedimento cadastrado para esta clínica.</div>
         ) : (
@@ -242,8 +278,8 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
           </div>
           <div className="mt-4 border-t border-[#ececf2] pt-3"><div className="flex items-center justify-between text-xs"><span className="font-bold text-[#393a4d]">Subtotal dos materiais</span><strong className="text-[#424355]">{currency.format(materialsTotal)}</strong></div><p className="mt-4 text-[10px] font-bold text-[#4a4b5d]">Outros custos</p><div className="mt-2 space-y-2 text-[10px] text-[#68697b]"><SummaryLine label="Mão de obra / Honorários" value={currency.format(costs.laborCost)} /><SummaryLine label="Sala / Estrutura" value={currency.format(costs.facilityCost)} /><SummaryLine label="Anestésico / Medicamentos" value={currency.format(costs.medicationCost)} /></div><div className="mt-4 flex items-center justify-between border-t border-[#ececf2] pt-3 text-xs"><span className="font-bold text-[#393a4d]">Total do orçamento</span><strong className="text-base text-[#5147dc]">{currency.format(total)}</strong></div></div>
           <div className="mt-4"><p className="text-[9px] font-bold uppercase text-[#8f90a0]">Forma de pagamento</p><div className="relative mt-2"><select disabled={paymentConfirmed} className="h-10 w-full appearance-none rounded-[6px] border border-[#dfdfe7] bg-white px-3 pr-9 text-xs font-semibold text-[#505164] outline-none transition focus:border-[#5147dc] focus:ring-2 focus:ring-[#5147dc]/10 disabled:cursor-not-allowed disabled:bg-[#f4f4f8]" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option>Cartão de crédito</option><option>Cartão de débito</option><option>Pix</option></select><ChevronDown className="pointer-events-none absolute right-3 top-3 h-3.5 w-3.5 text-[#77788a]" /></div></div>
-          <Button className={cn("mt-4 w-full transition-colors", paymentConfirmed && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:bg-[#eaf8ef] hover:text-[#16805d]", !paymentConfirmed && saveError && "bg-[#d92d20] hover:bg-[#b42318]", !paymentConfirmed && saveShake && "animate-[hp-shake_0.42s_ease-in-out]")} disabled={saving || loading || paymentConfirmed} onClick={saveQuote}><Save className="h-4 w-4" />{paymentConfirmed ? "Pagamento confirmado" : saving ? "Salvando..." : "Salvar orçamento"}</Button>
-          <Button className={cn("mt-2 w-full transition-colors", paymentConfirmed && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:bg-[#eaf8ef] hover:text-[#16805d]", !paymentConfirmed && saveError && "border-[#d92d20] text-[#b42318]", !paymentConfirmed && saveShake && "animate-[hp-shake_0.42s_ease-in-out]")} variant="secondary" type="button" disabled={paymentSaving || loading || paymentConfirmed} onClick={openPaymentConfirmation}><WalletCards className="h-4 w-4" />{paymentConfirmed ? "Pagamento confirmado" : "Registrar pagamento"}</Button>
+          <Button className={cn("mt-4 w-full transition-colors", paymentConfirmed && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:bg-[#eaf8ef] hover:text-[#16805d]", !paymentConfirmed && saveError && "bg-[#d92d20] hover:bg-[#b42318]", !paymentConfirmed && saveShake && "animate-[hp-shake_0.42s_ease-in-out]")} disabled={saving || loading || quoteLoading || paymentConfirmed} onClick={saveQuote}><Save className="h-4 w-4" />{paymentConfirmed ? "Pagamento confirmado" : saving ? "Salvando..." : "Salvar orçamento"}</Button>
+          <Button className={cn("mt-2 w-full transition-colors", paymentConfirmed && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:bg-[#eaf8ef] hover:text-[#16805d]", !paymentConfirmed && saveError && "border-[#d92d20] text-[#b42318]", !paymentConfirmed && saveShake && "animate-[hp-shake_0.42s_ease-in-out]")} variant="secondary" type="button" disabled={paymentSaving || loading || quoteLoading || paymentConfirmed} onClick={openPaymentConfirmation}><WalletCards className="h-4 w-4" />{paymentConfirmed ? "Pagamento confirmado" : "Registrar pagamento"}</Button>
           <Button className="mt-2 w-full" variant="secondary" type="button"><FileDown className="h-4 w-4" />Gerar PDF</Button>
           {notice ? <p className={cn("mt-3 rounded-[6px] px-3 py-2 text-[10px] font-semibold", saveError ? "bg-[#fff1f0] text-[#b42318]" : "bg-[#eef8f2] text-[#287a50]")}>{notice}</p> : null}
           <div className="mt-4 rounded-[6px] border border-[#e8e8ef] bg-[#fafafd] p-3"><p className="flex items-center gap-2 text-[10px] font-bold text-[#454659]"><Info className="h-3.5 w-3.5 text-[#5147dc]" />Observações</p><p className="mt-2 text-[10px] leading-4 text-[#77788a]">Os valores são carregados dos procedimentos cadastrados pela clínica.</p></div>

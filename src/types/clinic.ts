@@ -28,6 +28,7 @@ export type Patient = {
   lastVisitRaw?: string;
   nextReturn: string;
   value: string;
+  currentStage?: JourneyStageId;
 };
 
 export type JourneyStageId =
@@ -41,6 +42,7 @@ export type JourneyStageId =
 export type JourneyStageStatus =
   | "completed"
   | "current"
+  | "in_progress"
   | "pending"
   | "cancelled";
 

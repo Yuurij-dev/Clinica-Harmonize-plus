@@ -140,6 +140,23 @@ export function EmptyState({
   );
 }
 
+export function LoadingSkeleton({ className = "" }: { className?: string }) {
+  return <div aria-hidden="true" className={cn("animate-pulse rounded-[6px] bg-[#ececf3]", className)} />;
+}
+
+export function LoadingTable({ columns = 6, rows = 4 }: { columns?: number; rows?: number }) {
+  return (
+    <div aria-label="Carregando" className="overflow-hidden rounded-[7px] border border-[#ebebf1] bg-white">
+      <div className="flex gap-4 border-b border-[#eeeeF3] bg-[#fbfbfd] px-4 py-4">
+        {Array.from({ length: columns }).map((_, index) => <LoadingSkeleton className="h-2.5 flex-1" key={index} />)}
+      </div>
+      <div className="divide-y divide-[#f0f0f4]">
+        {Array.from({ length: rows }).map((_, row) => <div className="flex min-h-14 items-center gap-4 px-4" key={row}>{Array.from({ length: columns }).map((__, column) => <LoadingSkeleton className={cn("h-3 flex-1", column === 0 && "max-w-32")} key={column} />)}</div>)}
+      </div>
+    </div>
+  );
+}
+
 export function DetailCard({
   title,
   children,

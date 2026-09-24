@@ -24,6 +24,8 @@ import { MaskedInput } from "@/components/ui/masked-input";
 import {
   DetailCard,
   EmptyState,
+  LoadingSkeleton,
+  LoadingTable,
   MiniTable,
   ProgressBar,
   SearchFilterBar,
@@ -45,7 +47,7 @@ import {
 } from "@/lib/input-masks";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
-import type { Appointment, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
+import type { Appointment, JourneyStageId, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
 
 const currency = new Intl.NumberFormat("pt-BR", {
   style: "currency",
@@ -97,6 +99,7 @@ type ApiPatient = {
   lastVisit: string | null;
   nextReturn: string | null;
   totalValue: number;
+  currentStage?: JourneyStageId;
 };
 
 type AppointmentRow = Appointment & { id: string };
@@ -133,6 +136,7 @@ function mapApiPatient(patient: ApiPatient): Patient {
     lastVisitRaw: patient.lastVisit ?? undefined,
     nextReturn: patient.nextReturn ? displayDate(patient.nextReturn) : "A definir",
     value: currency.format(patient.totalValue),
+    currentStage: patient.currentStage,
   };
 }
 
@@ -172,7 +176,13 @@ function MaterialsMultiSelect({ options, defaultValue = [] }: { options: string[
 
 function journeyForPatient(patient: Patient) {
   const leadAt = patient.lastVisitRaw ?? new Date().toISOString();
-  return buildCustomerJourney({ events: { leadAt }, details: {} });
+  const journey = buildCustomerJourney({ events: { leadAt }, details: {} });
+  if (!patient.currentStage) return journey;
+  const currentIndex = journey.findIndex((stage) => stage.id === patient.currentStage);
+  return journey.map((stage, index) => ({
+    ...stage,
+    status: index < currentIndex ? "completed" as const : index === currentIndex ? "current" as const : "pending" as const,
+  }));
 }
 
 type FinancialData = {
@@ -277,7 +287,7 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
         onAction={onCreateOpen}
       />
       <SearchFilterBar placeholder="Buscar por nome, telefone ou status" value={query} onChange={setQuery} />
-      {isLoading ? <EmptyState title="Carregando clientes..." description="Buscando os registros salvos no banco de dados." /> : null}
+      {isLoading ? <LoadingTable columns={6} /> : null}
       {!isLoading && !filteredPatients.length ? <EmptyState title="Nenhum cliente encontrado" description="Cadastre um cliente para começar o prontuário da clínica." /> : null}
       {!isLoading && filteredPatients.length ? <MiniTable
         columns={["Nome", "Telefone", "Status", "Etapa atual", "Próximo retorno", "Ação"]}
@@ -491,7 +501,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         <select className="min-w-[150px] border-b border-[#dedee7] bg-transparent px-1 py-2 font-semibold text-[#757688] outline-none" value={activeStatus} onChange={(event) => setStatus(event.target.value)}>
           {statusOptions.map((item) => <option key={item}>{item}</option>)}
         </select>
-        <span className="text-[#8a8b9c]">{isLoading ? "Carregando agenda..." : `${filteredAppointments.length} atendimento(s) · visão ${activeView.toLowerCase()}`}</span>
+        <span className="text-[#8a8b9c]">{isLoading ? <LoadingSkeleton className="inline-block h-3 w-36 align-middle" /> : `${filteredAppointments.length} atendimento(s) · visão ${activeView.toLowerCase()}`}</span>
       </div>
 
       <div className="hp-panel-enter overflow-x-auto rounded-[7px] bg-white px-3 shadow-[0_8px_28px_rgba(38,39,58,0.035)] sm:px-5">
@@ -567,8 +577,8 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
             {selectedPatientId ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {selectedPatient?.name}</p> : null}
           </div>
           <FormField label="Horário"><input className={fieldClassName} name="time" type="time" required /></FormField>
-          <FormField label="Profissional"><div className="relative"><select className={fieldClassName} name="professional" required disabled={professionalLoading || !professionalChoices.length}><option value="">{professionalLoading ? "Carregando profissionais..." : professionalChoices.length ? "Selecione o profissional" : "Nenhum profissional cadastrado"}</option>{professionalChoices.map((professional) => <option key={professional} value={professional}>{professional}</option>)}</select>{professionalLoading ? <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#5147dc]" /> : null}</div></FormField>
-          <div className="sm:col-span-2"><FormField label="Procedimento"><div className="relative"><select className={fieldClassName} name="procedure" required disabled={procedureLoading || !procedureOptions.length}><option value="">{procedureLoading ? "Carregando procedimentos..." : procedureOptions.length ? "Selecione o procedimento" : "Nenhum procedimento cadastrado"}</option>{procedureOptions.map((item) => <option key={item}>{item}</option>)}</select>{procedureLoading ? <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#5147dc]" /> : null}</div></FormField></div>
+          <FormField label="Profissional"><div className="relative"><select className={fieldClassName} name="professional" required disabled={professionalLoading || !professionalChoices.length}><option value="">{professionalLoading ? "..." : professionalChoices.length ? "Selecione o profissional" : "Nenhum profissional cadastrado"}</option>{professionalChoices.map((professional) => <option key={professional} value={professional}>{professional}</option>)}</select>{professionalLoading ? <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#5147dc]" /> : null}</div></FormField>
+          <div className="sm:col-span-2"><FormField label="Procedimento"><div className="relative"><select className={fieldClassName} name="procedure" required disabled={procedureLoading || !procedureOptions.length}><option value="">{procedureLoading ? "..." : procedureOptions.length ? "Selecione o procedimento" : "Nenhum procedimento cadastrado"}</option>{procedureOptions.map((item) => <option key={item}>{item}</option>)}</select>{procedureLoading ? <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#5147dc]" /> : null}</div></FormField></div>
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || professionalLoading || procedureLoading || !professionalChoices.length || !procedureOptions.length || !selectedPatientId} type="submit">{isSaving || professionalLoading || procedureLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : professionalLoading || procedureLoading ? "Carregando dados..." : "Criar agendamento"}</Button></div>
         </form>
       </Modal>
@@ -681,7 +691,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
           action="Novo procedimento"
           onAction={onCreateOpen}
         />
-        {isLoading ? <Card><CardContent className="flex items-center gap-2 py-10 text-sm text-[#65708b]"><Loader2 className="h-4 w-4 animate-spin" />Carregando procedimentos...</CardContent></Card> : <MiniTable
+        {isLoading ? <LoadingTable columns={7} /> : <MiniTable
           columns={["Nome", "Categoria", "Valor sugerido", "Tempo", "Materiais", "Margem", "Ação"]}
           rows={procedureRows.map((procedure, index) => [
             <strong className="text-[#121733]" key={procedure.name}>{procedure.name}</strong>,
@@ -831,7 +841,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
         action="Novo orçamento"
         onAction={onCreateOpen}
       />
-      {isLoading ? <Card><CardContent className="py-10 text-sm text-[#65708b]">Carregando orçamentos...</CardContent></Card> : <MiniTable
+      {isLoading ? <LoadingTable columns={6} /> : <MiniTable
         columns={["Paciente", "Itens", "Total", "Status", "Validade", "Ação"]}
         rows={quoteRows.map((quote, index) => [
           <strong className="text-[#121733]" key={quote.patient}>{quote.patient}</strong>,
@@ -899,7 +909,7 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
         action="Registrar pagamento"
         onAction={onCreateOpen}
       />
-      {isLoading ? <Card><CardContent className="py-10 text-sm text-[#65708b]">Carregando pagamentos...</CardContent></Card> : <MiniTable
+      {isLoading ? <LoadingTable columns={6} /> : <MiniTable
         columns={["Paciente", "Valor", "Forma", "Data", "Status", "Parcelamento"]}
         rows={visiblePayments.map((payment) => [
           <strong className="text-[#121733]" key={payment.patient}>{payment.patient}</strong>,
@@ -1160,11 +1170,11 @@ export function SettingsSection({ isAdmin = false }: { isAdmin?: boolean }) {
         </div>
         {teamError && !editing ? <p className="mt-4 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{teamError}</p> : null}
         <div className="mt-4 divide-y divide-[#ececf2]">
-          {teamLoading ? <p className="py-5 text-sm text-[#65708b]">Carregando colaboradores...</p> : members.length ? members.map((member) => <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between" key={member.id}><div><p className="text-sm font-bold text-[#303144]">{member.user.name}</p><p className="text-xs text-[#858696]">{member.user.email}</p></div><Badge variant={member.role === "ADMIN" ? "purple" : "green"}>{member.role === "PROFESSIONAL" ? "Profissional" : member.role === "STAFF" ? "Equipe" : "Administrador"}</Badge></div>) : <p className="py-5 text-sm text-[#65708b]">Nenhum colaborador cadastrado.</p>}
+          {teamLoading ? <div className="space-y-3 py-3">{[0, 1, 2].map((item) => <div className="flex items-center justify-between gap-4" key={item}><div className="flex-1 space-y-2"><LoadingSkeleton className="h-3 w-40" /><LoadingSkeleton className="h-2.5 w-56" /></div><LoadingSkeleton className="h-6 w-20 rounded-full" /></div>)}</div> : members.length ? members.map((member) => <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between" key={member.id}><div><p className="text-sm font-bold text-[#303144]">{member.user.name}</p><p className="text-xs text-[#858696]">{member.user.email}</p></div><Badge variant={member.role === "ADMIN" ? "purple" : "green"}>{member.role === "PROFESSIONAL" ? "Profissional" : member.role === "STAFF" ? "Equipe" : "Administrador"}</Badge></div>) : <p className="py-5 text-sm text-[#65708b]">Nenhum colaborador cadastrado.</p>}
         </div>
       </Card>
       <Modal open={Boolean(editing)} onClose={() => setEditing(null)} title={`Configurar ${editing ?? ""}`} description="Essas preferências ficam salvas durante esta sessão.">
-        {editing === "Novo colaborador" ? <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveCollaborator}><div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div><FormField label="E-mail de acesso"><input className={fieldClassName} name="email" type="email" required /></FormField><FormField label="Senha inicial"><input className={fieldClassName} name="password" type="password" minLength={6} required /></FormField><FormField label="Perfil"><select className={fieldClassName} name="role"><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Equipe</option><option value="ADMIN">Administrador</option></select></FormField>{teamError ? <p className="sm:col-span-2 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{teamError}</p> : null}<div className="flex justify-end gap-2 sm:col-span-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div></form> : editing === "Cálculo de custos" ? <form className="grid gap-4" onSubmit={saveCostSettings}><p className="text-xs leading-5 text-[#65708b]">Defina os valores padrão que serão adicionados automaticamente aos orçamentos desta clínica.</p>{costSettingsLoading ? <p className="text-xs font-semibold text-[#77788a]">Carregando valores...</p> : <><FormField label="Mão de obra / Honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField><FormField label="Sala / Estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField><FormField label="Anestésico / Medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField></>}{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div></form> : saved ? <div className="rounded-[7px] bg-[#eaf8ef] p-5 text-sm font-bold text-[#157a3b]">Configurações salvas com sucesso.</div> : <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); setSaved(true); }}>
+        {editing === "Novo colaborador" ? <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveCollaborator}><div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div><FormField label="E-mail de acesso"><input className={fieldClassName} name="email" type="email" required /></FormField><FormField label="Senha inicial"><input className={fieldClassName} name="password" type="password" minLength={6} required /></FormField><FormField label="Perfil"><select className={fieldClassName} name="role"><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Equipe</option><option value="ADMIN">Administrador</option></select></FormField>{teamError ? <p className="sm:col-span-2 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{teamError}</p> : null}<div className="flex justify-end gap-2 sm:col-span-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div></form> : editing === "Cálculo de custos" ? <form className="grid gap-4" onSubmit={saveCostSettings}><p className="text-xs leading-5 text-[#65708b]">Defina os valores padrão que serão adicionados automaticamente aos orçamentos desta clínica.</p>{costSettingsLoading ? <div className="space-y-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : <><FormField label="Mão de obra / Honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField><FormField label="Sala / Estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField><FormField label="Anestésico / Medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField></>}{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div></form> : saved ? <div className="rounded-[7px] bg-[#eaf8ef] p-5 text-sm font-bold text-[#157a3b]">Configurações salvas com sucesso.</div> : <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); setSaved(true); }}>
           <FormField label="Nome de exibição"><input className={fieldClassName} defaultValue={editing ?? "Harmonize+"} /></FormField>
           <FormField label="Preferência principal"><select className={fieldClassName}><option>Padrão da clínica</option><option>Personalizado</option><option>Somente administradores</option></select></FormField>
           <label className="flex items-center gap-3 rounded-[7px] border border-[#e5e5ee] p-4 text-xs font-semibold text-[#555668]"><input type="checkbox" defaultChecked /> Ativar esta configuração</label>

@@ -36,6 +36,7 @@ model Clinic {
   quotes       Quote[]
   payments     Payment[]
   products     Product[]
+  patientProcedures PatientProcedure[]
 }
 
 model ClinicMembership {
@@ -67,6 +68,7 @@ model Patient {
   evaluations  Evaluation[]
   quotes       Quote[]
   payments     Payment[]
+  procedureRecords PatientProcedure[]
   clinic       Clinic?       @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([clinicId])
@@ -108,6 +110,25 @@ model Procedure {
 
   @@index([clinicId])
   @@unique([clinicId, name])
+}
+
+model PatientProcedure {
+  id           String   @id @default(cuid())
+  clinicId     String?
+  patientId    String
+  name         String
+  professional String
+  performedAt  DateTime @db.Timestamptz(6)
+  notes        String   @default("")
+  beforePhoto  String?
+  afterPhoto   String?
+  createdAt    DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(6)
+  clinic       Clinic?  @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([clinicId])
+  @@index([patientId, performedAt])
 }
 
 model Evaluation {

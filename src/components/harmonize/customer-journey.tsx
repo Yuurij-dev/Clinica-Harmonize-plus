@@ -32,6 +32,7 @@ const stageIcons = {
 const statusLabels: Record<JourneyStageStatus, string> = {
   completed: "Concluído",
   current: "Etapa atual",
+  in_progress: "Em procedimento",
   pending: "Pendente",
   cancelled: "Cancelado",
 };
@@ -51,6 +52,7 @@ export function CustomerJourney({
   const SelectedIcon = stageIcons[selected.id];
 
   function selectStage(stageId: JourneyStageId) {
+    if (["return", "aftercare"].includes(stageId) && journey.find((stage) => stage.id === stageId)?.status === "pending") return;
     setSelectedId(stageId);
     onOpenStage?.(stageId);
   }
@@ -277,6 +279,7 @@ function stageCircle(status: JourneyStageStatus) {
   return {
     completed: "border-[#2f9b67] bg-[#2f9b67] text-white",
     current: "border-[#5147dc] text-[#5147dc] shadow-[0_0_0_5px_rgba(81,71,220,0.09)]",
+    in_progress: "border-[#d99a28] text-[#b36c16] shadow-[0_0_0_5px_rgba(217,154,40,0.12)]",
     pending: "border-[#d6d6df] text-[#a4a5b2]",
     cancelled: "border-[#d95d4f] bg-[#fff3f1] text-[#d95d4f]",
   }[status];
@@ -286,6 +289,7 @@ function statusColor(status: JourneyStageStatus) {
   return {
     completed: "text-[#2f8f61]",
     current: "text-[#5147dc]",
+    in_progress: "text-[#b36c16]",
     pending: "text-[#9a9baa]",
     cancelled: "text-[#cf5548]",
   }[status];

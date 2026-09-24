@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CalendarCheck, ChevronRight, Loader2, Plus, RotateCcw, TrendingUp } from "lucide-react";
+import { CalendarCheck, ChevronRight, Plus, RotateCcw, TrendingUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { DetailCard, ProgressBar, StatusBadge } from "./shared";
+import { DetailCard, LoadingSkeleton, ProgressBar, StatusBadge } from "./shared";
 import type { SectionId } from "@/types/clinic";
 import { getCachedJson, readClientCache } from "@/lib/client-cache";
 
@@ -119,7 +119,7 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
             <CalendarCheck className="h-5 w-5 text-[#1438ff]" />
           </CardHeader>
           <CardContent className="hp-list-stagger space-y-4">
-            {!data ? <div className="flex items-center gap-2 text-sm text-[#65708b]"><Loader2 className="h-4 w-4 animate-spin" />Carregando atendimentos...</div> : data.appointments.slice(0, 4).map((appointment) => (
+            {!data ? <div className="space-y-4">{[0, 1, 2, 3].map((item) => <div className="flex items-center gap-3" key={item}><LoadingSkeleton className="h-9 w-12" /><div className="flex-1 space-y-2"><LoadingSkeleton className="h-3 w-2/3" /><LoadingSkeleton className="h-2.5 w-1/2" /></div></div>)}</div> : data.appointments.slice(0, 4).map((appointment) => (
               <div
                 className="flex cursor-pointer items-center gap-3 border-b border-[#f0f0f4] pb-3 transition-[transform,background-color] duration-200 hover:translate-x-1 last:border-0 last:pb-0"
                 key={appointment.id}

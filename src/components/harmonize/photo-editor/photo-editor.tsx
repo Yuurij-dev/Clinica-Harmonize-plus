@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
+import { LoadingSkeleton } from "../shared";
 import { EditorToolbar } from "./editor-toolbar";
 import { EvaluationResult } from "./evaluation-result";
 import { PhotoGallery } from "./photo-gallery";
@@ -247,7 +248,7 @@ export function PhotoEditor({ patientId, patientName, onSaved }: { patientId: st
       </div>
 
       <div className="grid gap-4 p-4 lg:grid-cols-[auto_minmax(0,1fr)]">
-        {isLoading ? <div className="flex min-h-[420px] items-center justify-center rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] text-xs font-semibold text-[#858696] lg:col-span-2">Carregando avaliação salva...</div> : showResult ? <EvaluationResult onEdit={() => setShowResult(false)} previews={savedPreviews} /> : <>
+        {isLoading ? <div className="grid min-h-[420px] gap-4 rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-5 lg:col-span-2"><LoadingSkeleton className="h-7 w-52" /><LoadingSkeleton className="h-3 w-80" /><div className="grid min-h-[300px] place-items-center rounded-[7px] border border-[#e4e6ef] bg-white"><div className="w-full max-w-md space-y-3 px-8"><LoadingSkeleton className="h-56 w-full" /><LoadingSkeleton className="mx-auto h-3 w-40" /><LoadingSkeleton className="mx-auto h-2.5 w-56" /></div></div></div> : showResult ? <EvaluationResult onEdit={() => setShowResult(false)} previews={savedPreviews} /> : <>
           <EditorToolbar
           canRedo={canRedo}
           canUndo={canUndo}
@@ -273,7 +274,7 @@ export function PhotoEditor({ patientId, patientName, onSaved }: { patientId: st
 
           <div className="min-w-0">
           {isLoading ? (
-            <div className="flex min-h-[360px] items-center justify-center rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] text-xs font-semibold text-[#858696]">Carregando fotos salvas...</div>
+            <div className="min-h-[360px] space-y-4 rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-5"><LoadingSkeleton className="h-5 w-40" /><LoadingSkeleton className="h-[300px] w-full" /></div>
           ) : activePhoto ? (
             <EditorCanvas
               color={color}

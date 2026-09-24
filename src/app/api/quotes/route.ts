@@ -23,6 +23,9 @@ export async function POST(request: Request) {
   if (!patient || !body?.items?.trim() || !Number.isFinite(total)) return NextResponse.json({ message: "Selecione um paciente e preencha o orçamento." }, { status: 400 });
   const paymentMethod = ["Cartão de crédito", "Cartão de débito", "Pix"].includes(body?.paymentMethod ?? "") ? body?.paymentMethod : "Cartão de crédito";
   const quote = await prisma.quote.create({ data: { clinicId: user.clinicId, patientId: patient.id, items: body.items.trim(), total: Math.max(0, Math.round(total)), paymentMethod, expires: parseDate(body.expires) }, include: { patient: { select: { name: true } } } });
+  await prisma.patientProcedure.create({
+    data: { clinicId: user.clinicId, patientId: patient.id, name: quote.items, professional: user.name, performedAt: new Date(), notes: `__quote:${quote.id}` },
+  });
   return NextResponse.json({ quote }, { status: 201 });
 }
 

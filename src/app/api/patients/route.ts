@@ -9,9 +9,24 @@ export async function GET() {
   const patients = await prisma.patient.findMany({
     where: { clinicId: user.clinicId },
     orderBy: { name: "asc" },
-    include: { _count: { select: { appointments: true, evaluations: true } } },
+    include: {
+      _count: { select: { appointments: true, evaluations: true } },
+      evaluations: { select: { photos: { select: { id: true } } } },
+      quotes: { orderBy: { createdAt: "desc" }, select: { status: true } },
+      appointments: { select: { status: true } },
+      procedureRecords: { orderBy: { performedAt: "desc" }, take: 1, select: { beforePhoto: true, afterPhoto: true } },
+    },
   });
-  return NextResponse.json({ patients });
+  return NextResponse.json({ patients: patients.map((patient) => ({ ...patient, currentStage: resolveCurrentStage(patient) })) });
+}
+
+function resolveCurrentStage(patient: { evaluations: Array<{ photos: Array<{ id: string }> }>; quotes: Array<{ status: string }>; appointments: Array<{ status: string }>; procedureRecords: Array<{ beforePhoto: string | null; afterPhoto: string | null }> }) {
+  const procedure = patient.procedureRecords[0];
+  if (procedure?.afterPhoto) return "return";
+  if (procedure?.beforePhoto || patient.quotes.some((quote) => ["Aprovado", "Pago"].includes(quote.status))) return "procedure";
+  if (patient.appointments.some((appointment) => ["Atendido", "Finalizado"].includes(appointment.status))) return "return";
+  if (patient.quotes.length || patient.evaluations.some((evaluation) => evaluation.photos.length > 0)) return "quote";
+  return "evaluation";
 }
 
 export async function POST(request: Request) {
