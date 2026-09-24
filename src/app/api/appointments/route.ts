@@ -25,6 +25,7 @@ export async function POST(request: Request) {
     professional?: string;
     time?: string;
     date?: string;
+    notes?: string;
   } | null;
   const patientName = body?.patient?.trim();
   if ((!body?.patientId && !patientName) || !body?.procedure || !body.professional || !body.time) {
@@ -53,6 +54,7 @@ export async function POST(request: Request) {
       patientId: patient.id,
       procedure: body.procedure,
       professional: body.professional,
+      notes: body.notes?.trim() ?? "",
       status: "Agendado",
       clinicId: user.clinicId,
     },

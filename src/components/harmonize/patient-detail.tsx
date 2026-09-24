@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useEffect, useState } from "react";
 import {
   ArrowLeft,
+  CalendarPlus,
   CalendarDays,
   Camera,
   Clock3,
@@ -19,6 +20,7 @@ import {
 } from "lucide-react";
 import type { CustomerJourneyStage, Patient } from "@/types/clinic";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
@@ -27,6 +29,7 @@ import { PatientExpenses } from "./patient-expenses";
 import { PhotoEditor } from "./photo-editor/photo-editor";
 import { EmptyState } from "./shared";
 import { getCachedJson, invalidateClientCache } from "@/lib/client-cache";
+import { FormField, fieldClassName } from "@/components/ui/modal";
 
 const tabs = ["Dados", "Avaliação", "Orçamento", "Procedimentos", "Agendamentos", "Observações", "Histórico", "Pagamentos"];
 
@@ -42,11 +45,13 @@ type PatientProcedureRecord = {
 };
 
 type PatientAppointmentRecord = {
+  id?: string;
   date: string;
   time: string;
   procedure: string;
   professional: string;
   status: string;
+  notes?: string;
 };
 
 type PatientPaymentRecord = {
@@ -66,6 +71,8 @@ type PatientHistoryRecord = {
   payments: PatientPaymentRecord[];
 };
 
+type ReturnAppointmentTarget = Pick<PatientProcedureRecord, "name" | "professional">;
+
 export function PatientDetail({
   patient,
   journey,
@@ -78,6 +85,7 @@ export function PatientDetail({
   const [activeTab, setActiveTab] = useState("Avaliação");
   const [history, setHistory] = useState<PatientHistoryRecord>();
   const [historyLoadedKey, setHistoryLoadedKey] = useState("");
+  const [returnAppointmentTarget, setReturnAppointmentTarget] = useState<ReturnAppointmentTarget | null>(null);
   const [evaluationCompleted, setEvaluationCompleted] = useState(false);
   const [quoteCompleted, setQuoteCompleted] = useState(false);
   const [procedurePhotos, setProcedurePhotos] = useState({ before: false, after: false });
@@ -103,7 +111,7 @@ export function PatientDetail({
     if (!patient.id) return;
     const historyLoadKey = `${patient.id}:${activeTab}`;
     let cancelled = false;
-    getCachedJson<{ patient?: { appointments: Array<{ date: string; time: string; procedure: string; professional: string; status: string }>; payments: Array<{ id: string; value: number; method: string; status: string; installments: string }>; quotes: Array<{ items: string; status: string }>; procedureRecords: Array<{ id: string; name: string; professional: string; performedAt: string; notes: string; beforePhoto: string | null; afterPhoto: string | null }>; evaluations: Array<{ photos: unknown[] }> } }>(`/api/patients/${patient.id}/history`)
+    getCachedJson<{ patient?: { appointments: Array<{ id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string }>; payments: Array<{ id: string; value: number; method: string; status: string; installments: string }>; quotes: Array<{ items: string; status: string }>; procedureRecords: Array<{ id: string; name: string; professional: string; performedAt: string; notes: string; beforePhoto: string | null; afterPhoto: string | null }>; evaluations: Array<{ photos: unknown[] }> } }>(`/api/patients/${patient.id}/history`)
       .then((data) => {
         if (cancelled) return;
         const appointments = data.patient?.appointments ?? [];
@@ -114,7 +122,7 @@ export function PatientDetail({
         const latestProcedure = data.patient?.procedureRecords?.[0];
         setProcedurePhotos({ before: Boolean(latestProcedure?.beforePhoto), after: Boolean(latestProcedure?.afterPhoto) });
         setHistory({
-          appointments: appointments.map((item) => ({ date: new Date(item.date).toLocaleDateString("pt-BR"), time: item.time, procedure: item.procedure, professional: item.professional, status: item.status })),
+          appointments: appointments.map((item) => ({ id: item.id, date: new Date(item.date).toLocaleDateString("pt-BR"), time: item.time, procedure: item.procedure, professional: item.professional, status: item.status, notes: item.notes })),
           procedures: data.patient?.procedureRecords?.length ? data.patient.procedureRecords.map((item) => ({ id: item.id, name: useQuoteTitle ? latestQuoteItems ?? item.name : item.name, date: new Date(item.performedAt).toLocaleDateString("pt-BR"), professional: item.professional, status: procedurePhotoStatus(item.beforePhoto, item.afterPhoto), beforePhoto: item.beforePhoto ?? "", afterPhoto: item.afterPhoto ?? "", notes: item.notes.startsWith("__quote:") ? "" : item.notes })) : appointments.filter((item) => ["Atendido", "Finalizado"].includes(item.status)).map((item) => ({ name: item.procedure, date: new Date(item.date).toLocaleDateString("pt-BR"), professional: item.professional, status: item.status, beforePhoto: "", afterPhoto: "" })),
           payments: payments.map((item) => ({ id: item.id, procedure: "Atendimento", value: new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(item.value), method: item.method, status: item.status, disabled: item.status === "Pago", disabledReason: item.status === "Pago" ? "Pagamento já finalizado" : undefined })),
           observations: [],
@@ -192,13 +200,13 @@ export function PatientDetail({
       {activeTab === "Orçamento" ? (
         <PatientExpenses patientId={patient.id ?? ""} onPaid={() => setQuoteCompleted(true)} />
       ) : (
-        <PatientTabContent patient={patient} activeTab={activeTab} history={history} historyLoading={historyLoadedKey !== `${patient.id}:${activeTab}`} onEvaluationSaved={() => setEvaluationCompleted(true)} onProcedurePhotosChange={(before, after) => setProcedurePhotos({ before, after })} onProcedurePhotoUpdated={(procedureId, photo) => setHistory((current) => current ? { ...current, procedures: current.procedures.map((item) => item.id === procedureId ? { ...item, beforePhoto: photo.beforePhoto ?? "", afterPhoto: photo.afterPhoto ?? "", status: procedurePhotoStatus(photo.beforePhoto, photo.afterPhoto) } : item) } : current)} />
+        <PatientTabContent patient={patient} activeTab={activeTab} history={history} historyLoading={historyLoadedKey !== `${patient.id}:${activeTab}`} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={() => setReturnAppointmentTarget(null)} onEvaluationSaved={() => setEvaluationCompleted(true)} onProcedurePhotosChange={(before, after) => setProcedurePhotos({ before, after })} onProcedurePhotoUpdated={(procedureId, photo) => setHistory((current) => current ? { ...current, procedures: current.procedures.map((item) => item.id === procedureId ? { ...item, beforePhoto: photo.beforePhoto ?? "", afterPhoto: photo.afterPhoto ?? "", status: procedurePhotoStatus(photo.beforePhoto, photo.afterPhoto) } : item) } : current)} onScheduleReturn={(procedure) => { setReturnAppointmentTarget(procedure); setActiveTab("Agendamentos"); }} />
       )}
     </div>
   );
 }
 
-function PatientTabContent({ patient, activeTab, history, historyLoading, onEvaluationSaved, onProcedurePhotosChange, onProcedurePhotoUpdated }: { patient: Patient; activeTab: string; history?: PatientHistoryRecord; historyLoading: boolean; onEvaluationSaved: () => void; onProcedurePhotosChange: (before: boolean, after: boolean) => void; onProcedurePhotoUpdated: (procedureId: string, photo: { beforePhoto: string | null; afterPhoto: string | null }) => void }) {
+function PatientTabContent({ patient, activeTab, history, historyLoading, returnAppointmentTarget, onReturnAppointmentClose, onEvaluationSaved, onProcedurePhotosChange, onProcedurePhotoUpdated, onScheduleReturn }: { patient: Patient; activeTab: string; history?: PatientHistoryRecord; historyLoading: boolean; returnAppointmentTarget: ReturnAppointmentTarget | null; onReturnAppointmentClose: () => void; onEvaluationSaved: () => void; onProcedurePhotosChange: (before: boolean, after: boolean) => void; onProcedurePhotoUpdated: (procedureId: string, photo: { beforePhoto: string | null; afterPhoto: string | null }) => void; onScheduleReturn: (procedure: ReturnAppointmentTarget) => void }) {
 
   if (activeTab === "Avaliação") {
     return patient.id ? <PhotoEditor patientId={patient.id} patientName={patient.name} onSaved={onEvaluationSaved} /> : <EmptyState title="Cliente ainda não foi salvo" description="Salve o cliente antes de adicionar fotos à avaliação." />;
@@ -209,11 +217,11 @@ function PatientTabContent({ patient, activeTab, history, historyLoading, onEval
   }
 
   if (activeTab === "Procedimentos") {
-    return <ProceduresTab patientId={patient.id ?? ""} history={history} loading={historyLoading} onProcedurePhotosChange={onProcedurePhotosChange} onProcedurePhotoUpdated={onProcedurePhotoUpdated} />;
+    return <ProceduresTab patientId={patient.id ?? ""} history={history} loading={historyLoading} onProcedurePhotosChange={onProcedurePhotosChange} onProcedurePhotoUpdated={onProcedurePhotoUpdated} onScheduleReturn={onScheduleReturn} />;
   }
 
   if (activeTab === "Agendamentos") {
-    return <AppointmentsTab history={history} />;
+    return <AppointmentsTab patientId={patient.id ?? ""} history={history} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={onReturnAppointmentClose} />;
   }
 
   if (activeTab === "Observações") {
@@ -295,7 +303,7 @@ function HistoryTab({ patient, history }: { patient: Patient; history?: PatientH
   );
 }
 
-function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange, onProcedurePhotoUpdated }: { patientId: string; history?: PatientHistoryRecord; loading: boolean; onProcedurePhotosChange: (before: boolean, after: boolean) => void; onProcedurePhotoUpdated: (procedureId: string, photo: { beforePhoto: string | null; afterPhoto: string | null }) => void }) {
+function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange, onProcedurePhotoUpdated, onScheduleReturn }: { patientId: string; history?: PatientHistoryRecord; loading: boolean; onProcedurePhotosChange: (before: boolean, after: boolean) => void; onProcedurePhotoUpdated: (procedureId: string, photo: { beforePhoto: string | null; afterPhoto: string | null }) => void; onScheduleReturn: (procedure: ReturnAppointmentTarget) => void }) {
   const [procedures, setProcedures] = useState<PatientProcedureRecord[]>(history?.procedures ?? []);
   const [photoOperations, setPhotoOperations] = useState<Record<string, "upload" | "remove">>({});
   const [error, setError] = useState("");
@@ -345,7 +353,7 @@ function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange, o
       {loading ? <ProcedureCardsSkeleton /> : !visibleProcedures.length ? <EmptyPatientState message="Este cliente ainda não possui procedimentos realizados." /> : <div className="grid gap-4 xl:grid-cols-2">{visibleProcedures.map((procedure) => {
         const beforeKey = `${procedure.id}-beforePhoto`;
         const afterKey = `${procedure.id}-afterPhoto`;
-        return <ProcedureHistoryCard key={procedure.id ?? `${procedure.name}-${procedure.date}`} procedure={procedure} editable beforePhotoSaving={Boolean(photoOperations[beforeKey])} afterPhotoSaving={Boolean(photoOperations[afterKey])} beforePhotoOperation={photoOperations[beforeKey]} afterPhotoOperation={photoOperations[afterKey]} onPhotoChange={saveProcedurePhoto} onPhotoRemove={(procedureId, photoType) => updateProcedurePhoto(procedureId, photoType, null, "remove")} />;
+        return <ProcedureHistoryCard key={procedure.id ?? `${procedure.name}-${procedure.date}`} procedure={procedure} editable returnScheduled={Boolean(history?.appointments.some((appointment) => appointment.procedure.toLocaleLowerCase("pt-BR").includes("retorno")))} beforePhotoSaving={Boolean(photoOperations[beforeKey])} afterPhotoSaving={Boolean(photoOperations[afterKey])} beforePhotoOperation={photoOperations[beforeKey]} afterPhotoOperation={photoOperations[afterKey]} onPhotoChange={saveProcedurePhoto} onPhotoRemove={(procedureId, photoType) => updateProcedurePhoto(procedureId, photoType, null, "remove")} onScheduleReturn={onScheduleReturn} />;
       })}</div>}
       {error ? <p className="rounded-[7px] bg-[#fff1f0] px-3 py-2 text-xs font-semibold text-[#b42318]">{error}</p> : null}
     </div>
@@ -382,7 +390,7 @@ function procedurePhotoStatus(beforePhoto: string | null, afterPhoto: string | n
   return "Aguardando foto";
 }
 
-function ProcedureHistoryCard({ procedure, editable, beforePhotoSaving, afterPhotoSaving, beforePhotoOperation, afterPhotoOperation, onPhotoChange, onPhotoRemove }: { procedure: PatientProcedureRecord; editable?: boolean; beforePhotoSaving?: boolean; afterPhotoSaving?: boolean; beforePhotoOperation?: "upload" | "remove"; afterPhotoOperation?: "upload" | "remove"; onPhotoChange?: (procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", file: File) => void; onPhotoRemove?: (procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto") => void }) {
+function ProcedureHistoryCard({ procedure, editable, returnScheduled, beforePhotoSaving, afterPhotoSaving, beforePhotoOperation, afterPhotoOperation, onPhotoChange, onPhotoRemove, onScheduleReturn }: { procedure: PatientProcedureRecord; editable?: boolean; returnScheduled?: boolean; beforePhotoSaving?: boolean; afterPhotoSaving?: boolean; beforePhotoOperation?: "upload" | "remove"; afterPhotoOperation?: "upload" | "remove"; onPhotoChange?: (procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", file: File) => void; onPhotoRemove?: (procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto") => void; onScheduleReturn?: (procedure: PatientProcedureRecord) => void }) {
   const [expandedPhoto, setExpandedPhoto] = useState<{ label: string; src: string } | null>(null);
 
   return (
@@ -398,6 +406,7 @@ function ProcedureHistoryCard({ procedure, editable, beforePhotoSaving, afterPho
         <BeforeAfterPhoto label="Antes" src={procedure.beforePhoto} editable={editable && Boolean(procedure.id)} saving={beforePhotoSaving} operation={beforePhotoOperation} onPhotoChange={(file) => onPhotoChange?.(procedure.id, "beforePhoto", file)} onPhotoRemove={() => onPhotoRemove?.(procedure.id, "beforePhoto")} onPreview={(src) => setExpandedPhoto({ label: "Antes", src })} />
         <BeforeAfterPhoto label="Depois" src={procedure.afterPhoto} editable={editable && Boolean(procedure.id)} saving={afterPhotoSaving} operation={afterPhotoOperation} onPhotoChange={(file) => onPhotoChange?.(procedure.id, "afterPhoto", file)} onPhotoRemove={() => onPhotoRemove?.(procedure.id, "afterPhoto")} onPreview={(src) => setExpandedPhoto({ label: "Depois", src })} />
       </div>
+      {procedure.status === "Realizado" && procedure.id ? <div className="border-t border-[#ededf3] px-4 pb-4"><Button className={cn("w-full", returnScheduled && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:border-[#b9e8d8] hover:bg-[#eaf8ef] hover:text-[#16805d]")} type="button" variant="secondary" disabled={returnScheduled} onClick={() => onScheduleReturn?.(procedure)}><CalendarPlus className="h-3.5 w-3.5" />{returnScheduled ? "Retorno marcado" : "Marcar retorno"}</Button></div> : null}
       {procedure.notes ? <div className="border-t border-[#ededf3] px-4 py-3 text-xs leading-5 text-[#656678]"><strong className="text-[#3f4053]">Observações: </strong>{procedure.notes}</div> : null}
       <Modal open={Boolean(expandedPhoto)} onClose={() => setExpandedPhoto(null)} title={`Foto de ${expandedPhoto?.label.toLowerCase() ?? "procedimento"}`} description="Visualização ampliada da foto do procedimento.">
         {expandedPhoto ? <div className="relative h-[min(70vh,620px)] w-full overflow-hidden rounded-[7px] bg-[#f7f8fc]"><Image className="object-contain" src={expandedPhoto.src} alt={`Foto ampliada de ${expandedPhoto.label.toLowerCase()}`} fill sizes="(max-width: 640px) 90vw, 560px" /></div> : null}
@@ -440,24 +449,74 @@ function PhotoInput({ icon: Icon, label, busyLabel, capture, disabled, onChange 
   );
 }
 
-function AppointmentsTab({ history }: { history?: PatientHistoryRecord }) {
-  if (!history?.appointments.length) return <EmptyPatientState message="Este cliente ainda não possui agendamentos registrados." />;
+function AppointmentsTab({ patientId, history, returnAppointmentTarget, onReturnAppointmentClose }: { patientId: string; history?: PatientHistoryRecord; returnAppointmentTarget: ReturnAppointmentTarget | null; onReturnAppointmentClose: () => void }) {
+  const [returnDate, setReturnDate] = useState(() => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+  const [returnTime, setReturnTime] = useState("09:00");
+  const [returnReason, setReturnReason] = useState(() => returnAppointmentTarget ? `Retorno - ${returnAppointmentTarget.name}` : "");
+  const [returnNotes, setReturnNotes] = useState("");
+  const [returnSaving, setReturnSaving] = useState(false);
+  const [returnError, setReturnError] = useState("");
+
+  async function saveReturnAppointment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!returnAppointmentTarget || !returnDate || !returnTime || !returnReason.trim()) return;
+    setReturnSaving(true);
+    setReturnError("");
+    try {
+      const response = await fetch("/api/appointments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          patientId,
+          procedure: returnReason.trim(),
+          professional: returnAppointmentTarget.professional,
+          date: `${returnDate}T${returnTime}:00`,
+          time: returnTime,
+          notes: returnNotes.trim(),
+        }),
+      });
+      const data = await response.json().catch(() => null) as { message?: string } | null;
+      if (!response.ok) throw new Error(data?.message ?? "Não foi possível marcar o retorno.");
+      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/appointments", "/api/patients", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+      onReturnAppointmentClose();
+    } catch (scheduleError) {
+      setReturnError(scheduleError instanceof Error ? scheduleError.message : "Não foi possível marcar o retorno.");
+    } finally {
+      setReturnSaving(false);
+    }
+  }
 
   return (
-    <Card className="p-5">
-      <h3 className="text-sm font-bold text-[#303144]">Agendamentos do cliente</h3>
-      <div className="mt-4 space-y-3">
-        {history.appointments.map((appointment) => (
-          <div className="flex flex-col gap-3 rounded-[7px] border border-[#ececf3] p-4 sm:flex-row sm:items-center sm:justify-between" key={`${appointment.date}-${appointment.time}`}>
-            <div>
-              <p className="text-sm font-bold text-[#303144]">{appointment.procedure}</p>
-              <p className="mt-1 text-xs text-[#858696]">{appointment.date} às {appointment.time} · {appointment.professional}</p>
-            </div>
-            <Badge variant={appointment.status === "Atendido" ? "green" : "purple"}>{appointment.status}</Badge>
+    <div className="space-y-4">
+      {!history?.appointments.length ? <EmptyPatientState message="Este cliente ainda não possui agendamentos registrados." /> : (
+        <Card className="p-5">
+          <h3 className="text-sm font-bold text-[#303144]">Agendamentos do cliente</h3>
+          <div className="mt-4 space-y-3">
+            {history.appointments.map((appointment, index) => (
+              <div className="flex flex-col gap-3 rounded-[7px] border border-[#ececf3] p-4 sm:flex-row sm:items-center sm:justify-between" key={appointment.id ?? `${appointment.date}-${appointment.time}-${appointment.procedure}-${index}`}>
+                <div>
+                  <p className="text-sm font-bold text-[#303144]">{appointment.procedure}</p>
+                  <p className="mt-1 text-xs text-[#858696]">{appointment.date} às {appointment.time} · {appointment.professional}</p>
+                  {appointment.notes ? <p className="mt-2 text-xs text-[#656678]">{appointment.notes}</p> : null}
+                </div>
+                <Badge variant={appointment.status === "Atendido" ? "green" : "purple"}>{appointment.status}</Badge>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-    </Card>
+        </Card>
+      )}
+      <Modal open={Boolean(returnAppointmentTarget)} onClose={() => { if (!returnSaving) onReturnAppointmentClose(); }} title="Marcar retorno" description="O retorno será incluído na lista de agendamentos da clínica.">
+        <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveReturnAppointment}>
+          <div className="sm:col-span-2 rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3 text-xs text-[#555668]">Procedimento: <strong className="text-[#303144]">{returnAppointmentTarget?.name}</strong></div>
+          <FormField label="Data"><input className={fieldClassName} type="date" value={returnDate} required onChange={(event) => setReturnDate(event.target.value)} /></FormField>
+          <FormField label="Horário"><input className={fieldClassName} type="time" value={returnTime} required onChange={(event) => setReturnTime(event.target.value)} /></FormField>
+          <div className="sm:col-span-2"><FormField label="Motivo do retorno"><input className={fieldClassName} value={returnReason} required placeholder="Ex.: avaliação do resultado" onChange={(event) => setReturnReason(event.target.value)} /></FormField></div>
+          <div className="sm:col-span-2"><FormField label="Observações"><textarea className={`${fieldClassName} h-24 resize-none py-2`} value={returnNotes} placeholder="Adicione informações importantes para o atendimento" onChange={(event) => setReturnNotes(event.target.value)} /></FormField></div>
+          {returnError ? <p className="rounded-[7px] bg-[#fff1f0] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{returnError}</p> : null}
+          <div className="flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" disabled={returnSaving} onClick={onReturnAppointmentClose}>Cancelar</Button><Button type="submit" disabled={returnSaving}>{returnSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CalendarPlus className="h-3.5 w-3.5" />}{returnSaving ? "Marcando..." : "Confirmar retorno"}</Button></div>
+        </form>
+      </Modal>
+    </div>
   );
 }
 

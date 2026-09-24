@@ -84,6 +84,7 @@ model Appointment {
   patientId    String
   procedure    String
   professional String
+  notes        String   @default("")
   status       String
   createdAt    DateTime @default(now()) @db.Timestamptz(6)
   updatedAt    DateTime @default(now()) @updatedAt @db.Timestamptz(6)
