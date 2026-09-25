@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Dashboard } from "./dashboard";
-import { MobileNav } from "./mobile-nav";
 import { Sidebar } from "./sidebar";
 import { Topbar } from "./topbar";
 import {
@@ -120,7 +119,7 @@ export function HarmonizeApp() {
       />
       <div className="lg:pl-[220px]">
         <Topbar user={currentUser} onMenu={() => setMobileOpen(true)} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onLogout={logout} />
-        <main className={`hp-page-enter mx-auto w-full ${active === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-28 pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
+        <main className={`hp-page-enter mx-auto w-full ${active === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-10 pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
           {active === "dashboard" && isAdmin ? <Dashboard userName={currentUser?.name} onAction={(action) => {
             const target = { client: ["clientes", "client"], appointment: ["agenda", "appointment"], quote: ["orcamentos", "quote"], payment: ["pagamentos", "payment"] }[action] as [SectionId, NonNullable<typeof createDialog>];
             openCreate(target[0], target[1]);
@@ -132,10 +131,9 @@ export function HarmonizeApp() {
           {active === "pagamentos" && isAdmin ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => setCreateDialog("payment")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
           {active === "financeiro" && isAdmin ? <FinanceSection /> : null}
           {active === "relatorios" && isAdmin ? <ReportsSection /> : null}
-          {active === "configuracoes" && isAdmin ? <SettingsSection isAdmin /> : null}
+          {active === "configuracoes" && isAdmin ? <SettingsSection isAdmin clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
         </main>
       </div>
-      <MobileNav active={active} onSelect={selectSection} isAdmin={isAdmin} />
       {notice ? (
         <div
           className={`${noticeLeaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-24 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] bg-[#25263a] text-xs font-bold text-white shadow-[0_18px_45px_rgba(31,32,50,0.24)] lg:bottom-6`}

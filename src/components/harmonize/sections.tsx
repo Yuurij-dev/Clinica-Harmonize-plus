@@ -364,8 +364,10 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   const [openingTime, setOpeningTime] = useState(cachedAgenda?.settings?.openingTime ?? "08:00");
   const [closingTime, setClosingTime] = useState(cachedAgenda?.settings?.closingTime ?? "19:00");
   const [deleteTarget, setDeleteTarget] = useState<AppointmentRow | null>(null);
+  const [selectedAppointment, setSelectedAppointment] = useState<AppointmentRow | null>(null);
   const [deleteSaving, setDeleteSaving] = useState(false);
   const autoMissedIds = useRef(new Set<string>());
+  const autoCompletedIds = useRef(new Set<string>());
   const professionalOptions = useMemo(() => ["Todos", ...new Set(appointmentRows.map((item) => item.professional))], [appointmentRows]);
   const activeProfessional = professionalOptions.includes(professional) ? professional : "Todos";
   const filteredAppointments = appointmentRows.filter((appointment) => activeProfessional === "Todos" || appointment.professional === activeProfessional);
@@ -399,25 +401,32 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
 
     async function markExpiredAppointments() {
       const now = clinicNow();
-      const expired = appointmentRows.filter((appointment) => (
+      const missed = appointmentRows.filter((appointment) => (
         appointment.status === "Agendado"
         && appointmentHasPassed(appointment, now, appointmentToleranceMinutes)
         && !autoMissedIds.current.has(appointment.id)
       ));
-      if (!expired.length) return;
+      const completed = appointmentRows.filter((appointment) => (
+        appointment.status === "Em atendimento"
+        && appointmentHasPassed(appointment, now, appointment.durationMinutes)
+        && !autoCompletedIds.current.has(appointment.id)
+      ));
+      const transitions = [...missed.map((appointment) => ({ appointment, status: "Faltou" })), ...completed.map((appointment) => ({ appointment, status: "Atendido" }))];
+      if (!transitions.length) return;
 
-      expired.forEach((appointment) => autoMissedIds.current.add(appointment.id));
-      const results = await Promise.all(expired.map(async (appointment) => {
+      missed.forEach((appointment) => autoMissedIds.current.add(appointment.id));
+      completed.forEach((appointment) => autoCompletedIds.current.add(appointment.id));
+      const results = await Promise.all(transitions.map(async ({ appointment, status }) => {
         const response = await fetch(`/api/appointments/${appointment.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: "Faltou" }),
+          body: JSON.stringify({ status }),
         });
-        return response.ok ? appointment.id : null;
+        return response.ok ? { id: appointment.id, status } : null;
       }));
-      const updatedIds = new Set(results.filter((id): id is string => Boolean(id)));
-      if (!updatedIds.size) return;
-      setAppointmentRows((current) => current.map((appointment) => updatedIds.has(appointment.id) ? { ...appointment, status: "Faltou" } : appointment));
+      const updated = new Map(results.filter((result): result is { id: string; status: string } => Boolean(result)).map((result) => [result.id, result.status]));
+      if (!updated.size) return;
+      setAppointmentRows((current) => current.map((appointment) => updated.has(appointment.id) ? { ...appointment, status: updated.get(appointment.id) ?? appointment.status } : appointment));
       invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     }
 
@@ -576,18 +585,18 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-full bg-[#e0647d]" />Outros</span>
       </div>
 
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 items-center gap-2">
           <Button variant="secondary" size="icon" aria-label="Período anterior" onClick={() => setCalendarDate((current) => shiftCalendarDate(current, activeView, -1))}><ChevronLeft className="h-4 w-4" /></Button>
           <Button variant="secondary" size="sm" onClick={() => setCalendarDate(clinicNow())}>Hoje</Button>
           <Button variant="secondary" size="icon" aria-label="Próximo período" onClick={() => setCalendarDate((current) => shiftCalendarDate(current, activeView, 1))}><ChevronRight className="h-4 w-4" /></Button>
-          <h3 className="ml-2 text-base font-bold capitalize text-[#303144]">{calendarPeriodLabel(calendarDate, activeView)}</h3>
+          <h3 className="ml-2 truncate text-base font-bold capitalize text-[#303144]">{calendarPeriodLabel(calendarDate, activeView)}</h3>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center rounded-[7px] border border-[#e1e2ec] bg-white p-0.5">
+        <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
+          <div className="flex min-w-0 flex-1 items-center rounded-[7px] border border-[#e1e2ec] bg-white p-0.5 sm:flex-none">
             {["Semana", "Dia", "Mês"].map((view) => (
               <button
-                className={cn("hp-pressable rounded-[5px] px-4 py-2 text-xs font-semibold transition-colors", activeView === view ? "bg-[#5147dc] text-white shadow-sm" : "text-[#77798c] hover:text-[#5147dc]")}
+                className={cn("hp-pressable min-w-0 flex-1 rounded-[5px] px-3 py-2 text-xs font-semibold transition-colors sm:flex-none sm:px-4", activeView === view ? "bg-[#5147dc] text-white shadow-sm" : "text-[#77798c] hover:text-[#5147dc]")}
                 key={view}
                 onClick={() => setActiveView(view as "Dia" | "Semana" | "Mês")}
               >
@@ -596,7 +605,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
             ))}
           </div>
           <Button variant="secondary" size="icon" aria-label="Selecionar data" title="Selecionar data"><CalendarDays className="h-4 w-4" /></Button>
-          <select className="min-w-[170px] rounded-[7px] border border-[#dddfea] bg-white px-3 py-2 text-xs font-semibold text-[#555668] outline-none focus:border-[#5147dc]" value={activeProfessional} onChange={(event) => setProfessional(event.target.value)} aria-label="Filtrar por profissional">
+          <select className="min-w-0 flex-1 rounded-[7px] border border-[#dddfea] bg-white px-3 py-2 text-xs font-semibold text-[#555668] outline-none focus:border-[#5147dc] sm:min-w-[170px] sm:flex-none" value={activeProfessional} onChange={(event) => setProfessional(event.target.value)} aria-label="Filtrar por profissional">
             {professionalOptions.map((item) => <option key={item}>{item}</option>)}
           </select>
         </div>
@@ -615,8 +624,17 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         onMissed={markAppointmentAsMissed}
         onCancel={cancelAppointment}
         onDelete={(appointment) => setDeleteTarget(appointment)}
+        onSelect={(appointment) => setSelectedAppointment(appointment)}
         updatingId={updatingId}
       />
+
+      <Modal open={Boolean(selectedAppointment)} onClose={() => setSelectedAppointment(null)} title="Detalhes do agendamento" description="Informações completas do atendimento selecionado.">
+        {selectedAppointment ? <div className="space-y-4">
+          <div className={cn("rounded-[8px] border-l-4 p-4", appointmentTone(selectedAppointment).card)}><p className="text-xs font-bold text-[#77788a]">{selectedAppointment.time} - {formatEndTime(selectedAppointment.time, selectedAppointment.durationMinutes)}</p><h3 className="mt-1 text-lg font-black text-[#303144]">{selectedAppointment.procedure}</h3><p className="mt-1 text-sm text-[#656678]">{selectedAppointment.patient}</p></div>
+          <div className="grid gap-3 sm:grid-cols-2">{[["Data", formatDate(selectedAppointment.date)], ["Profissional", selectedAppointment.professional], ["Tipo", selectedAppointment.category || "Atendimento"], ["Status", selectedAppointment.status]].map(([label, value]) => <div className="rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3" key={label}><p className="text-[9px] font-bold uppercase text-[#9697a7]">{label}</p><p className="mt-1 text-xs font-semibold text-[#4f5062]">{value}</p></div>)}</div>
+          <div className="flex justify-end"><Button type="button" onClick={() => setSelectedAppointment(null)}>Fechar</Button></div>
+        </div> : null}
+      </Modal>
 
       <div className="hidden hp-panel-enter overflow-x-auto rounded-[7px] bg-white px-3 shadow-[0_8px_28px_rgba(38,39,58,0.035)] sm:px-5">
         <div className="grid min-w-[1040px] grid-cols-[84px_1.1fr_1fr_1.05fr_1.15fr_210px] border-b border-[#eeeef3] px-3 py-3 text-[9px] font-bold uppercase text-[#adaeba]">
@@ -741,7 +759,7 @@ function getAllowedMinutes(openingTime: string, closingTime: string, hour: numbe
   return Array.from({ length: 60 }, (_, minute) => minute).filter((minute) => hour * 60 + minute >= opening && hour * 60 + minute < closing);
 }
 
-function ScheduleCalendar({ appointments, date, view, openingTime, closingTime, loading, openMenuId, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, updatingId }: { appointments: AppointmentRow[]; date: Date; view: CalendarView; openingTime: string; closingTime: string; loading: boolean; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; updatingId: string | null }) {
+function ScheduleCalendar({ appointments, date, view, openingTime, closingTime, loading, openMenuId, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, updatingId }: { appointments: AppointmentRow[]; date: Date; view: CalendarView; openingTime: string; closingTime: string; loading: boolean; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; updatingId: string | null }) {
   const [now, setNow] = useState(() => clinicNow());
 
   useEffect(() => {
@@ -767,7 +785,7 @@ function ScheduleCalendar({ appointments, date, view, openingTime, closingTime, 
   }, [calendarHeight, firstHour, loading, now, view]);
 
   if (loading) return <CalendarSkeleton />;
-  if (view === "Mês") return <MonthCalendar date={date} appointments={appointments} />;
+  if (view === "Mês") return <MonthCalendar date={date} appointments={appointments} onSelect={onSelect} />;
 
   return (
     <div ref={calendarRef} className="max-h-[720px] overflow-auto rounded-[8px] border border-[#e7e9f2] bg-white shadow-[0_8px_28px_rgba(38,39,58,0.035)]">
@@ -784,7 +802,7 @@ function ScheduleCalendar({ appointments, date, view, openingTime, closingTime, 
           {days.map((day) => {
             const dayKey = calendarDateKey(day);
             const dayAppointments = appointments.filter((appointment) => calendarDateKey(appointment.date) === dayKey);
-            return <CalendarDayColumn key={dayKey} date={day} now={now} appointments={dayAppointments} firstHour={firstHour} height={calendarHeight} hourHeight={hourHeight} hourCount={hours.length} openMenuId={openMenuId} onMenuToggle={onMenuToggle} onAdvance={onAdvance} onMissed={onMissed} onCancel={onCancel} onDelete={onDelete} updatingId={updatingId} />;
+            return <CalendarDayColumn key={dayKey} date={day} now={now} appointments={dayAppointments} firstHour={firstHour} height={calendarHeight} hourHeight={hourHeight} hourCount={hours.length} openMenuId={openMenuId} onMenuToggle={onMenuToggle} onAdvance={onAdvance} onMissed={onMissed} onCancel={onCancel} onDelete={onDelete} onSelect={onSelect} updatingId={updatingId} />;
           })}
           {view === "Dia" ? Array.from({ length: 5 }).map((_, index) => <div className="hidden" key={index} />) : null}
         </div>
@@ -799,7 +817,7 @@ function CalendarDayHeader({ date }: { date: Date }) {
   return <div className="border-r border-[#ececf3] px-2 py-3 text-center last:border-r-0"><span className="block text-[10px] font-bold uppercase text-[#858696]">{weekday}</span><span className={cn("mx-auto mt-1 grid h-8 w-8 place-items-center rounded-full text-sm font-black", isToday ? "bg-[#5147dc] text-white shadow-[0_4px_10px_rgba(81,71,220,0.25)]" : "text-[#303144]")}>{date.getDate()}</span></div>;
 }
 
-function CalendarDayColumn({ date, now, appointments, firstHour, height, hourHeight, hourCount, openMenuId, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, updatingId }: { date: Date; now: Date; appointments: AppointmentRow[]; firstHour: number; height: number; hourHeight: number; hourCount: number; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; updatingId: string | null }) {
+function CalendarDayColumn({ date, now, appointments, firstHour, height, hourHeight, hourCount, openMenuId, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, updatingId }: { date: Date; now: Date; appointments: AppointmentRow[]; firstHour: number; height: number; hourHeight: number; hourCount: number; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; updatingId: string | null }) {
   const isToday = calendarDateKey(date) === calendarDateKey(now);
   const isPastDay = calendarDateKey(date) < calendarDateKey(now);
   const nowMinutes = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
@@ -817,7 +835,7 @@ function CalendarDayColumn({ date, now, appointments, firstHour, height, hourHei
       const start = appointmentMinutes(appointment.time);
       const top = Math.max(2, ((start - firstHour * 60) / 60) * hourHeight);
       const cardHeight = Math.max(92, (appointment.durationMinutes / 60) * hourHeight - 8);
-      return <CalendarAppointmentCard key={appointment.id} appointment={appointment} top={top} height={cardHeight} column={column} columns={columns} open={openMenuId === appointment.id} onMenuToggle={onMenuToggle} onAdvance={onAdvance} onMissed={onMissed} onCancel={onCancel} onDelete={onDelete} updating={updatingId === appointment.id} />;
+      return <CalendarAppointmentCard key={appointment.id} appointment={appointment} top={top} height={cardHeight} column={column} columns={columns} open={openMenuId === appointment.id} onMenuToggle={onMenuToggle} onAdvance={onAdvance} onMissed={onMissed} onCancel={onCancel} onDelete={onDelete} onSelect={onSelect} updating={updatingId === appointment.id} />;
     })}
   </div>;
 }
@@ -856,26 +874,26 @@ function getCalendarAppointmentLayouts(appointments: AppointmentRow[]) {
   });
 }
 
-function CalendarAppointmentCard({ appointment, top, height, column, columns, open, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, updating }: { appointment: AppointmentRow; top: number; height: number; column: number; columns: number; open: boolean; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; updating: boolean }) {
+function CalendarAppointmentCard({ appointment, top, height, column, columns, open, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, updating }: { appointment: AppointmentRow; top: number; height: number; column: number; columns: number; open: boolean; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; updating: boolean }) {
   const tone = appointmentTone(appointment);
   const past = appointmentHasPassed(appointment);
   const isCompleted = appointment.status === "Atendido";
   const isMissed = appointment.status === "Faltou";
   const isCancelled = appointment.status === "Cancelado";
   const primaryLabel = appointment.status === "Em atendimento" ? "Finalizar" : isCompleted ? "Concluído" : isMissed ? "Faltou" : "Atender";
-  return <div className={cn("group absolute z-10 overflow-visible rounded-[7px] border-l-[3px] p-2 text-[10px] shadow-[0_4px_12px_rgba(38,39,58,0.06)]", tone.card, past && "brightness-[0.84] saturate-[0.78]")} style={{ top, height, left: `calc(${column} * 100% / ${columns} + 4px)`, width: `calc(100% / ${columns} - 8px)` }} aria-label={`${appointment.procedure} - status: ${appointment.status}`}>
+  return <div className={cn("group absolute z-10 cursor-pointer overflow-hidden rounded-[7px] border-l-[3px] p-2 text-[10px] shadow-[0_4px_12px_rgba(38,39,58,0.06)]", tone.card, past && "brightness-[0.84] saturate-[0.78]")} style={{ top, height, left: `calc(${column} * 100% / ${columns} + 4px)`, width: `calc(100% / ${columns} - 8px)` }} aria-label={`${appointment.procedure} - status: ${appointment.status}`} onClick={() => onSelect(appointment)}>
     <span className="pointer-events-none absolute -top-7 left-2 z-40 hidden whitespace-nowrap rounded-[5px] bg-[#303144] px-2 py-1 text-[10px] font-bold text-white shadow-lg group-hover:block">Status: {appointment.status}</span>
-    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><p className="mt-1 truncate text-[11px] font-black">{appointment.procedure}</p><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0"><button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={() => onMenuToggle(appointment.id)}><MoreVertical className="h-3.5 w-3.5" /></button>{open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl"><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button>{!isCompleted && !isMissed && !isCancelled ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button></> : null}</div> : null}</div></div>
+    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><p className="mt-1 truncate text-[11px] font-black">{appointment.procedure}</p><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0"><button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button>{open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button>{!isCompleted && !isMissed && !isCancelled ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button></> : null}</div> : null}</div></div>
     <span className={cn("mt-1 inline-flex rounded-full px-2 py-0.5 text-[9px] font-bold", tone.pill)}>{appointment.category || "Atendimento"}</span>
   </div>;
 }
 
-function MonthCalendar({ date, appointments }: { date: Date; appointments: AppointmentRow[] }) {
+function MonthCalendar({ date, appointments, onSelect }: { date: Date; appointments: AppointmentRow[]; onSelect: (appointment: AppointmentRow) => void }) {
   const first = new Date(date.getFullYear(), date.getMonth(), 1);
   const startOffset = (first.getDay() + 6) % 7;
   const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
   const cells = Array.from({ length: Math.ceil((startOffset + daysInMonth) / 7) * 7 }, (_, index) => index - startOffset + 1);
-  return <div className="overflow-hidden rounded-[8px] border border-[#e7e9f2] bg-white shadow-[0_8px_28px_rgba(38,39,58,0.035)]"><div className="grid grid-cols-7 border-b border-[#ececf3] bg-[#fbfbfe]">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((label) => <span className="px-2 py-3 text-center text-[10px] font-bold uppercase text-[#858696]" key={label}>{label}</span>)}</div><div className="grid grid-cols-7">{cells.map((day) => { const valid = day > 0 && day <= daysInMonth; const cellDate = valid ? new Date(date.getFullYear(), date.getMonth(), day) : null; const dayAppointments = cellDate ? appointments.filter((item) => calendarDateKey(item.date) === calendarDateKey(cellDate)) : []; return <div className={cn("min-h-28 border-b border-r border-[#f0f0f5] p-2", !valid && "bg-[#fbfbfd]")} key={`${date.getFullYear()}-${date.getMonth()}-${day}`}><span className={cn("grid h-6 w-6 place-items-center rounded-full text-[10px] font-bold", cellDate && calendarDateKey(cellDate) === calendarDateKey(clinicNow()) && "bg-[#5147dc] text-white")}>{valid ? day : ""}</span><div className="mt-1 space-y-1">{dayAppointments.slice(0, 3).map((item) => <div className={cn("truncate rounded-[4px] border-l-2 px-1.5 py-1 text-[9px] font-bold", appointmentTone(item).card)} key={item.id}>{item.time} · {item.patient}</div>)}{dayAppointments.length > 3 ? <span className="text-[9px] font-semibold text-[#858696]">+{dayAppointments.length - 3} atendimentos</span> : null}</div></div>; })}</div></div>;
+  return <div className="overflow-x-auto rounded-[8px] border border-[#e7e9f2] bg-white shadow-[0_8px_28px_rgba(38,39,58,0.035)]"><div className="min-w-[700px]"><div className="grid grid-cols-7 border-b border-[#ececf3] bg-[#fbfbfe]">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((label) => <span className="px-2 py-3 text-center text-[10px] font-bold uppercase text-[#858696]" key={label}>{label}</span>)}</div><div className="grid grid-cols-7">{cells.map((day) => { const valid = day > 0 && day <= daysInMonth; const cellDate = valid ? new Date(date.getFullYear(), date.getMonth(), day) : null; const dayAppointments = cellDate ? appointments.filter((item) => calendarDateKey(item.date) === calendarDateKey(cellDate)) : []; return <div className={cn("min-h-28 border-b border-r border-[#f0f0f5] p-2", !valid && "bg-[#fbfbfd]")} key={`${date.getFullYear()}-${date.getMonth()}-${day}`}><span className={cn("grid h-6 w-6 place-items-center rounded-full text-[10px] font-bold", cellDate && calendarDateKey(cellDate) === calendarDateKey(clinicNow()) && "bg-[#5147dc] text-white")}>{valid ? day : ""}</span><div className="mt-1 space-y-1">{dayAppointments.slice(0, 3).map((item) => <button type="button" className={cn("block w-full truncate rounded-[4px] border-l-2 px-1.5 py-1 text-left text-[9px] font-bold", appointmentTone(item).card)} key={item.id} onClick={() => onSelect(item)}>{item.time} · {item.patient}</button>)}{dayAppointments.length > 3 ? <span className="text-[9px] font-semibold text-[#858696]">+{dayAppointments.length - 3} atendimentos</span> : null}</div></div>; })}</div></div></div>;
 }
 
 function CalendarSkeleton() {
@@ -1413,15 +1431,14 @@ export function ReportsSection() {
 
 type TeamMember = { id: string; role: string; user: { id: string; name: string; email: string; createdAt: string } };
 
-export function SettingsSection({ isAdmin = false }: { isAdmin?: boolean }) {
+export function SettingsSection({ isAdmin = false, clinicName, onClinicNameChange }: { isAdmin?: boolean; clinicName?: string; onClinicNameChange?: (name: string) => void }) {
   const [editing, setEditing] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const cachedTeam = readClientCache<{ members?: TeamMember[] }>("/api/team");
   const [members, setMembers] = useState<TeamMember[]>(cachedTeam?.members ?? []);
   const [teamLoading, setTeamLoading] = useState(!cachedTeam);
   const [teamSaving, setTeamSaving] = useState(false);
   const [teamError, setTeamError] = useState("");
-  const cachedCostSettings = readClientCache<{ settings?: { laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string } }>("/api/clinic/cost-settings");
+  const cachedCostSettings = readClientCache<{ settings?: { name?: string; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string } }>("/api/clinic/cost-settings");
   const [costSettings, setCostSettings] = useState(() => ({
     laborCost: cachedCostSettings?.settings?.laborCost ?? 0,
     facilityCost: cachedCostSettings?.settings?.facilityCost ?? 0,
@@ -1436,6 +1453,7 @@ export function SettingsSection({ isAdmin = false }: { isAdmin?: boolean }) {
   const [appointmentToleranceInput, setAppointmentToleranceInput] = useState(String(costSettings.appointmentToleranceMinutes ?? 15));
   const [openingTimeInput, setOpeningTimeInput] = useState(costSettings.openingTime ?? "08:00");
   const [closingTimeInput, setClosingTimeInput] = useState(costSettings.closingTime ?? "19:00");
+  const [clinicNameInput, setClinicNameInput] = useState(cachedCostSettings?.settings?.name ?? clinicName ?? "Harmonize+");
 
   useEffect(() => {
     getCachedJson<{ members?: TeamMember[] }>("/api/team")
@@ -1445,10 +1463,11 @@ export function SettingsSection({ isAdmin = false }: { isAdmin?: boolean }) {
   }, []);
 
   useEffect(() => {
-    getCachedJson<{ settings?: { laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string } }>("/api/clinic/cost-settings")
+    getCachedJson<{ settings?: { name?: string; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string } }>("/api/clinic/cost-settings")
       .then((data) => {
         const settings = data.settings ?? { laborCost: 0, facilityCost: 0, medicationCost: 0, appointmentToleranceMinutes: 15, openingTime: "08:00", closingTime: "19:00" };
         setCostSettings(settings);
+        if (settings.name) setClinicNameInput(settings.name);
         setAppointmentToleranceInput(String(settings.appointmentToleranceMinutes));
         setOpeningTimeInput(settings.openingTime ?? "08:00");
         setClosingTimeInput(settings.closingTime ?? "19:00");
@@ -1469,6 +1488,7 @@ export function SettingsSection({ isAdmin = false }: { isAdmin?: boolean }) {
       appointmentToleranceMinutes: parseInteger(appointmentToleranceInput),
       openingTime: openingTimeInput,
       closingTime: closingTimeInput,
+      ...(editing === "Clínica" ? { name: clinicNameInput.trim() } : {}),
     };
     const response = await fetch("/api/clinic/cost-settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(nextSettings) });
     const responseText = await response.text();
@@ -1486,8 +1506,11 @@ export function SettingsSection({ isAdmin = false }: { isAdmin?: boolean }) {
       return;
     }
     setCostSettings(data.settings);
+    if (data.settings.name) {
+      setClinicNameInput(data.settings.name);
+      onClinicNameChange?.(data.settings.name);
+    }
     invalidateClientCache("/api/clinic/cost-settings", "/api/quotes/options");
-    setSaved(true);
   }
 
   async function saveCollaborator(event: FormEvent<HTMLFormElement>) {
@@ -1524,7 +1547,7 @@ export function SettingsSection({ isAdmin = false }: { isAdmin?: boolean }) {
           ["Profissionais", "Perfis, agenda, permissões e assinatura visual."],
           ["Cálculo de custos", "Unidades, arredondamentos e regras de margem."],
         ].map(([title, description]) => (
-          <button className="text-left" key={title} onClick={() => { if (title === "Profissionais" && !isAdmin) return; setEditing(title); setSaved(false); }}><Card className={`h-full p-5 transition ${title === "Profissionais" && !isAdmin ? "cursor-not-allowed opacity-60" : "hover:border-[#5147dc]"}`}>
+          <button className="text-left" key={title} onClick={() => { if (title === "Profissionais" && !isAdmin) return; setEditing(title); }}><Card className={`h-full p-5 transition ${title === "Profissionais" && !isAdmin ? "cursor-not-allowed opacity-60" : "hover:border-[#5147dc]"}`}>
             <Sparkles className="mb-4 h-5 w-5 text-[#1438ff]" />
             <p className="font-black text-[#121733]">{title}</p>
             <p className="mt-2 text-sm leading-6 text-[#65708b]">{description}</p>
@@ -1542,13 +1565,8 @@ export function SettingsSection({ isAdmin = false }: { isAdmin?: boolean }) {
         </div>
       </Card>
       <Modal open={Boolean(editing)} onClose={() => setEditing(null)} title={`Configurar ${editing ?? ""}`} description="Essas preferências ficam salvas durante esta sessão.">
-        {editing === "Clínica" ? <form className="grid gap-4" onSubmit={saveCostSettings}><p className="text-xs leading-5 text-[#65708b]">Configure o horário em que a clínica está aberta para novos atendimentos.</p><div className="grid gap-4 sm:grid-cols-2"><FormField label="Início do funcionamento"><input className={fieldClassName} name="openingTime" type="time" value={openingTimeInput} onChange={(event) => setOpeningTimeInput(event.target.value)} required /></FormField><FormField label="Fim do funcionamento"><input className={fieldClassName} name="closingTime" type="time" value={closingTimeInput} onChange={(event) => setClosingTimeInput(event.target.value)} required /></FormField></div>{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar horário"}</Button></div></form> : null}
-        {editing === "Novo colaborador" ? <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveCollaborator}><div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div><FormField label="E-mail de acesso"><input className={fieldClassName} name="email" type="email" required /></FormField><FormField label="Senha inicial"><input className={fieldClassName} name="password" type="password" minLength={6} required /></FormField><FormField label="Perfil"><select className={fieldClassName} name="role"><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Equipe</option><option value="ADMIN">Administrador</option></select></FormField>{teamError ? <p className="sm:col-span-2 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{teamError}</p> : null}<div className="flex justify-end gap-2 sm:col-span-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div></form> : editing === "Cálculo de custos" ? <form className="grid gap-4" onSubmit={saveCostSettings}><div className="sm:col-span-2"><FormField label="Tolerância para marcar falta (minutos)"><input className={fieldClassName} name="appointmentToleranceMinutes" type="number" min="0" max="180" value={appointmentToleranceInput} onChange={(event) => setAppointmentToleranceInput(event.target.value)} required /></FormField><p className="mt-1 text-[10px] text-[#858696]">O atendimento só será marcado como faltou depois desse período.</p></div><p className="text-xs leading-5 text-[#65708b]">Defina os valores padrão que serão adicionados automaticamente aos orçamentos desta clínica.</p>{costSettingsLoading ? <div className="space-y-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : <><FormField label="Mão de obra / Honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField><FormField label="Sala / Estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField><FormField label="Anestésico / Medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField></>}{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div></form> : saved ? <div className="rounded-[7px] bg-[#eaf8ef] p-5 text-sm font-bold text-[#157a3b]">Configurações salvas com sucesso.</div> : <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); setSaved(true); }}>
-          <FormField label="Nome de exibição"><input className={fieldClassName} defaultValue={editing ?? "Harmonize+"} /></FormField>
-          <FormField label="Preferência principal"><select className={fieldClassName}><option>Padrão da clínica</option><option>Personalizado</option><option>Somente administradores</option></select></FormField>
-          <label className="flex items-center gap-3 rounded-[7px] border border-[#e5e5ee] p-4 text-xs font-semibold text-[#555668]"><input type="checkbox" defaultChecked /> Ativar esta configuração</label>
-          <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button type="submit">Salvar alterações</Button></div>
-        </form>}
+        {editing === "Clínica" ? <form className="grid gap-4" onSubmit={saveCostSettings}><p className="text-xs leading-5 text-[#65708b]">Configure o nome e o horário em que a clínica está aberta para novos atendimentos.</p><FormField label="Nome de exibição"><input className={fieldClassName} name="name" value={clinicNameInput} onChange={(event) => setClinicNameInput(event.target.value)} required /></FormField><div className="grid gap-4 sm:grid-cols-2"><FormField label="Início do funcionamento"><input className={fieldClassName} name="openingTime" type="time" value={openingTimeInput} onChange={(event) => setOpeningTimeInput(event.target.value)} required /></FormField><FormField label="Fim do funcionamento"><input className={fieldClassName} name="closingTime" type="time" value={closingTimeInput} onChange={(event) => setClosingTimeInput(event.target.value)} required /></FormField></div>{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar alterações"}</Button></div></form> : null}
+        {editing === "Novo colaborador" ? <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveCollaborator}><div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div><FormField label="E-mail de acesso"><input className={fieldClassName} name="email" type="email" required /></FormField><FormField label="Senha inicial"><input className={fieldClassName} name="password" type="password" minLength={6} required /></FormField><FormField label="Perfil"><select className={fieldClassName} name="role"><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Equipe</option><option value="ADMIN">Administrador</option></select></FormField>{teamError ? <p className="sm:col-span-2 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{teamError}</p> : null}<div className="flex justify-end gap-2 sm:col-span-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div></form> : editing === "Cálculo de custos" ? <form className="grid gap-4" onSubmit={saveCostSettings}><div className="sm:col-span-2"><FormField label="Tolerância para marcar falta (minutos)"><input className={fieldClassName} name="appointmentToleranceMinutes" type="number" min="0" max="180" value={appointmentToleranceInput} onChange={(event) => setAppointmentToleranceInput(event.target.value)} required /></FormField><p className="mt-1 text-[10px] text-[#858696]">O atendimento só será marcado como faltou depois desse período.</p></div><p className="text-xs leading-5 text-[#65708b]">Defina os valores padrão que serão adicionados automaticamente aos orçamentos desta clínica.</p>{costSettingsLoading ? <div className="space-y-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : <><FormField label="Mão de obra / Honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField><FormField label="Sala / Estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField><FormField label="Anestésico / Medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField></>}{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div></form> : null}
       </Modal>
     </div>
   );

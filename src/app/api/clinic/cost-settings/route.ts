@@ -9,7 +9,7 @@ export async function GET() {
   try {
     const clinic = await prisma.clinic.findUnique({
       where: { id: user.clinicId },
-      select: { laborCost: true, facilityCost: true, medicationCost: true },
+      select: { name: true, laborCost: true, facilityCost: true, medicationCost: true },
     });
     let appointmentToleranceMinutes = 15;
     let openingTime = "08:00";
@@ -25,7 +25,7 @@ export async function GET() {
     } catch {
       // Keep the default until the tolerance column is applied to the database.
     }
-    return NextResponse.json({ settings: { ...(clinic ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 }), appointmentToleranceMinutes, openingTime, closingTime } });
+    return NextResponse.json({ settings: { ...(clinic ?? { name: "Harmonize+", laborCost: 0, facilityCost: 0, medicationCost: 0 }), appointmentToleranceMinutes, openingTime, closingTime } });
   } catch {
     return NextResponse.json({ message: "As colunas de custos ainda não foram criadas no banco da clínica." }, { status: 500 });
   }
@@ -43,17 +43,18 @@ export async function PATCH(request: Request) {
   const appointmentToleranceMinutes = Number(body?.appointmentToleranceMinutes);
   const openingTime = String(body?.openingTime ?? "08:00");
   const closingTime = String(body?.closingTime ?? "19:00");
+  const name = typeof body?.name === "string" ? body.name.trim() : "";
   const openingMinutes = parseClockMinutes(openingTime);
   const closingMinutes = parseClockMinutes(closingTime);
-  if (![laborCost, facilityCost, medicationCost, appointmentToleranceMinutes].every((value) => Number.isFinite(value) && value >= 0) || !Number.isInteger(appointmentToleranceMinutes) || appointmentToleranceMinutes > 180 || openingMinutes === null || closingMinutes === null || closingMinutes <= openingMinutes) {
+  if ((body?.name !== undefined && (name.length < 2 || name.length > 120)) || ![laborCost, facilityCost, medicationCost, appointmentToleranceMinutes].every((value) => Number.isFinite(value) && value >= 0) || !Number.isInteger(appointmentToleranceMinutes) || appointmentToleranceMinutes > 180 || openingMinutes === null || closingMinutes === null || closingMinutes <= openingMinutes) {
     return NextResponse.json({ message: "Informe valores válidos para os custos e a tolerância." }, { status: 400 });
   }
 
   try {
     const settings = await prisma.clinic.update({
       where: { id: user.clinicId },
-      data: { laborCost: Math.round(laborCost), facilityCost: Math.round(facilityCost), medicationCost: Math.round(medicationCost) },
-      select: { laborCost: true, facilityCost: true, medicationCost: true },
+      data: { ...(body?.name !== undefined ? { name } : {}), laborCost: Math.round(laborCost), facilityCost: Math.round(facilityCost), medicationCost: Math.round(medicationCost) },
+      select: { name: true, laborCost: true, facilityCost: true, medicationCost: true },
     });
     let savedTolerance = 15;
     let savedOpeningTime = "08:00";

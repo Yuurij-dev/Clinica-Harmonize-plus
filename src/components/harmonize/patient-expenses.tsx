@@ -45,6 +45,7 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
   const [paymentNoticeLeaving, setPaymentNoticeLeaving] = useState(false);
   const [createdPaymentId, setCreatedPaymentId] = useState<string | null>(null);
   const [latestQuoteId, setLatestQuoteId] = useState<string | null>(null);
+  const [savedQuoteSignature, setSavedQuoteSignature] = useState<string | null>(null);
   const [paymentConfirmed, setPaymentConfirmed] = useState(false);
 
   useEffect(() => {
@@ -86,10 +87,12 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
         setLatestQuoteId(quote.id);
         setSelected(restoredSelection);
         if (quote.paymentMethod) setPaymentMethod(quote.paymentMethod);
+        setSavedQuoteSignature(`${quote.items}|${quote.total}|${quote.paymentMethod ?? "Cartão de crédito"}`);
         setPaymentConfirmed(["Aprovado", "Pago"].includes(quote.status));
       })
       .catch(() => {
         setLatestQuoteId(null);
+        setSavedQuoteSignature(null);
         setSelected({});
         setPaymentConfirmed(false);
       })
@@ -103,6 +106,8 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
   const materialsTotal = selectedItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const extraCosts = costs.laborCost + costs.facilityCost + costs.medicationCost;
   const total = materialsTotal + extraCosts;
+  const currentQuoteSignature = `${selectedItems.map((item) => `${item.name} (${item.quantity}x)`).join(", ")}|${total}|${paymentMethod}`;
+  const quoteSaved = Boolean(latestQuoteId && savedQuoteSignature === currentQuoteSignature);
 
   function toggleProcedure(id: string) {
     setSelected((current) => {
@@ -133,8 +138,8 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
     setSaveError(false);
     setNotice(null);
     try {
-      const response = await fetch("/api/quotes", {
-        method: "POST",
+      const response = await fetch(latestQuoteId ? `/api/quotes/${latestQuoteId}` : "/api/quotes", {
+        method: latestQuoteId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ patientId, items: selectedItems.map((item) => `${item.name} (${item.quantity}x)`).join(", "), total, paymentMethod }),
       });
@@ -151,6 +156,7 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
       if (!data.quote?.id) throw new Error("O orçamento foi processado, mas não retornou um identificador válido.");
       invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
       setLatestQuoteId(data.quote.id);
+      setSavedQuoteSignature(currentQuoteSignature);
       setNotice("Orçamento salvo com sucesso.");
     } catch (error) {
       setSaveError(true);
@@ -278,7 +284,7 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
           </div>
           <div className="mt-4 border-t border-[#ececf2] pt-3"><div className="flex items-center justify-between text-xs"><span className="font-bold text-[#393a4d]">Subtotal dos materiais</span><strong className="text-[#424355]">{currency.format(materialsTotal)}</strong></div><p className="mt-4 text-[10px] font-bold text-[#4a4b5d]">Outros custos</p><div className="mt-2 space-y-2 text-[10px] text-[#68697b]"><SummaryLine label="Mão de obra / Honorários" value={currency.format(costs.laborCost)} /><SummaryLine label="Sala / Estrutura" value={currency.format(costs.facilityCost)} /><SummaryLine label="Anestésico / Medicamentos" value={currency.format(costs.medicationCost)} /></div><div className="mt-4 flex items-center justify-between border-t border-[#ececf2] pt-3 text-xs"><span className="font-bold text-[#393a4d]">Total do orçamento</span><strong className="text-base text-[#5147dc]">{currency.format(total)}</strong></div></div>
           <div className="mt-4"><p className="text-[9px] font-bold uppercase text-[#8f90a0]">Forma de pagamento</p><div className="relative mt-2"><select disabled={paymentConfirmed} className="h-10 w-full appearance-none rounded-[6px] border border-[#dfdfe7] bg-white px-3 pr-9 text-xs font-semibold text-[#505164] outline-none transition focus:border-[#5147dc] focus:ring-2 focus:ring-[#5147dc]/10 disabled:cursor-not-allowed disabled:bg-[#f4f4f8]" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option>Cartão de crédito</option><option>Cartão de débito</option><option>Pix</option></select><ChevronDown className="pointer-events-none absolute right-3 top-3 h-3.5 w-3.5 text-[#77788a]" /></div></div>
-          <Button className={cn("mt-4 w-full transition-colors", paymentConfirmed && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:bg-[#eaf8ef] hover:text-[#16805d]", !paymentConfirmed && saveError && "bg-[#d92d20] hover:bg-[#b42318]", !paymentConfirmed && saveShake && "animate-[hp-shake_0.42s_ease-in-out]")} disabled={saving || loading || quoteLoading || paymentConfirmed} onClick={saveQuote}><Save className="h-4 w-4" />{paymentConfirmed ? "Pagamento confirmado" : saving ? "Salvando..." : "Salvar orçamento"}</Button>
+          <Button className={cn("mt-4 w-full transition-colors", (paymentConfirmed || quoteSaved) && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:bg-[#eaf8ef] hover:text-[#16805d]", !paymentConfirmed && !quoteSaved && saveError && "bg-[#d92d20] hover:bg-[#b42318]", !paymentConfirmed && !quoteSaved && saveShake && "animate-[hp-shake_0.42s_ease-in-out]")} disabled={saving || loading || quoteLoading || paymentConfirmed || quoteSaved} onClick={saveQuote}><Save className="h-4 w-4" />{paymentConfirmed ? "Pagamento confirmado" : saving ? "Salvando..." : quoteSaved ? "Orçamento salvo" : "Salvar orçamento"}</Button>
           <Button className={cn("mt-2 w-full transition-colors", paymentConfirmed && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:bg-[#eaf8ef] hover:text-[#16805d]", !paymentConfirmed && saveError && "border-[#d92d20] text-[#b42318]", !paymentConfirmed && saveShake && "animate-[hp-shake_0.42s_ease-in-out]")} variant="secondary" type="button" disabled={paymentSaving || loading || quoteLoading || paymentConfirmed} onClick={openPaymentConfirmation}><WalletCards className="h-4 w-4" />{paymentConfirmed ? "Pagamento confirmado" : "Registrar pagamento"}</Button>
           <Button className="mt-2 w-full" variant="secondary" type="button"><FileDown className="h-4 w-4" />Gerar PDF</Button>
           {notice ? <p className={cn("mt-3 rounded-[6px] px-3 py-2 text-[10px] font-semibold", saveError ? "bg-[#fff1f0] text-[#b42318]" : "bg-[#eef8f2] text-[#287a50]")}>{notice}</p> : null}

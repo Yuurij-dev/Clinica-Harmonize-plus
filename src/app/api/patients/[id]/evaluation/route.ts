@@ -54,6 +54,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
 
   const validPhotos = photos.filter((photo) => (
     photo && typeof photo.name === "string" && typeof photo.imageUrl === "string" &&
+    /^data:image\/(jpeg|png|webp);base64,/i.test(photo.imageUrl) &&
     Number.isInteger(photo.width) && Number.isInteger(photo.height)
   ));
 

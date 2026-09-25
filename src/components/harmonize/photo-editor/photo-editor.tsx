@@ -128,7 +128,9 @@ export function PhotoEditor({ patientId, patientName, onSaved }: { patientId: st
 
   async function uploadPhotos(files: FileList | null) {
     if (!files?.length) return;
-    const accepted = Array.from(files).filter((file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type));
+    const selectedFiles = Array.from(files);
+    const accepted = selectedFiles.filter((file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type));
+    if (accepted.length !== selectedFiles.length) showNotice("Envie apenas imagens JPG, PNG ou WEBP.", "info");
     const loaded = await Promise.all(accepted.map(readPhoto));
     if (!loaded.length) {
       showNotice("Escolha uma imagem JPG, PNG ou WEBP.", "info");
@@ -341,14 +343,38 @@ export function PhotoEditor({ patientId, patientName, onSaved }: { patientId: st
 }
 
 async function readPhoto(file: File): Promise<EvaluationPhoto> {
-  const imageUrl = await new Promise<string>((resolve, reject) => {
+  const originalUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
-  const { width, height } = await getImageSize(imageUrl);
+  const { width: originalWidth, height: originalHeight } = await getImageSize(originalUrl);
+  const scale = Math.min(1, 1800 / originalWidth, 1800 / originalHeight);
+  const width = Math.max(1, Math.round(originalWidth * scale));
+  const height = Math.max(1, Math.round(originalHeight * scale));
+  const imageUrl = scale === 1 ? originalUrl : await resizeImage(originalUrl, width, height);
   return { id: `photo-${crypto.randomUUID()}`, name: file.name, imageUrl, width, height, annotations: [] };
+}
+
+function resizeImage(src: string, width: number, height: number) {
+  return new Promise<string>((resolve, reject) => {
+    const image = new window.Image();
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) {
+        reject(new Error("Não foi possível preparar a imagem."));
+        return;
+      }
+      context.drawImage(image, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", 0.86));
+    };
+    image.onerror = () => reject(new Error("Não foi possível ler a imagem."));
+    image.src = src;
+  });
 }
 
 function getImageSize(src: string) {
