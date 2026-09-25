@@ -625,6 +625,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         onCancel={cancelAppointment}
         onDelete={(appointment) => setDeleteTarget(appointment)}
         onSelect={(appointment) => setSelectedAppointment(appointment)}
+        appointmentToleranceMinutes={appointmentToleranceMinutes}
         updatingId={updatingId}
       />
 
@@ -654,7 +655,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
           const primaryLabel = appointment.status === "Em atendimento" ? "Finalizar" : isCompleted ? "Concluído" : isMissed ? "Faltou" : "Atender";
 
           return (
-            <div className="relative grid min-w-[1040px] grid-cols-[84px_1.1fr_1fr_1.05fr_1.15fr_210px] items-center border-b border-[#f0f0f4] px-3 py-4 text-[11px] transition-[background-color,transform] duration-200 last:border-0 hover:-translate-y-0.5 hover:bg-[#fbfbfe]" key={appointment.id}>
+            <div className="relative grid min-w-[1040px] grid-cols-[84px_1.1fr_1fr_1.05fr_1.15fr_210px] items-center border-b border-[#f0f0f4] px-3 py-4 text-[11px] transition-colors duration-200 last:border-0 hover:bg-[#fbfbfe]" key={appointment.id}>
               <span className="absolute bottom-2 left-0 top-2 w-[3px] rounded-full" style={{ backgroundColor: rowColors[index % rowColors.length] }} />
               <strong className="text-[#5147dc]">{appointment.time}</strong>
               <div><strong className="block text-[#3d3e51]">{appointment.procedure}</strong><span className="mt-1 block text-[9px] text-[#aaaab7]">Consulta clínica</span></div>
@@ -759,7 +760,7 @@ function getAllowedMinutes(openingTime: string, closingTime: string, hour: numbe
   return Array.from({ length: 60 }, (_, minute) => minute).filter((minute) => hour * 60 + minute >= opening && hour * 60 + minute < closing);
 }
 
-function ScheduleCalendar({ appointments, date, view, openingTime, closingTime, loading, openMenuId, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, updatingId }: { appointments: AppointmentRow[]; date: Date; view: CalendarView; openingTime: string; closingTime: string; loading: boolean; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; updatingId: string | null }) {
+function ScheduleCalendar({ appointments, date, view, openingTime, closingTime, loading, openMenuId, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, appointmentToleranceMinutes, updatingId }: { appointments: AppointmentRow[]; date: Date; view: CalendarView; openingTime: string; closingTime: string; loading: boolean; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; appointmentToleranceMinutes: number; updatingId: string | null }) {
   const [now, setNow] = useState(() => clinicNow());
 
   useEffect(() => {
@@ -802,7 +803,7 @@ function ScheduleCalendar({ appointments, date, view, openingTime, closingTime, 
           {days.map((day) => {
             const dayKey = calendarDateKey(day);
             const dayAppointments = appointments.filter((appointment) => calendarDateKey(appointment.date) === dayKey);
-            return <CalendarDayColumn key={dayKey} date={day} now={now} appointments={dayAppointments} firstHour={firstHour} height={calendarHeight} hourHeight={hourHeight} hourCount={hours.length} openMenuId={openMenuId} onMenuToggle={onMenuToggle} onAdvance={onAdvance} onMissed={onMissed} onCancel={onCancel} onDelete={onDelete} onSelect={onSelect} updatingId={updatingId} />;
+            return <CalendarDayColumn key={dayKey} date={day} now={now} appointments={dayAppointments} firstHour={firstHour} height={calendarHeight} hourHeight={hourHeight} hourCount={hours.length} openMenuId={openMenuId} onMenuToggle={onMenuToggle} onAdvance={onAdvance} onMissed={onMissed} onCancel={onCancel} onDelete={onDelete} onSelect={onSelect} appointmentToleranceMinutes={appointmentToleranceMinutes} updatingId={updatingId} />;
           })}
           {view === "Dia" ? Array.from({ length: 5 }).map((_, index) => <div className="hidden" key={index} />) : null}
         </div>
@@ -817,7 +818,7 @@ function CalendarDayHeader({ date }: { date: Date }) {
   return <div className="border-r border-[#ececf3] px-2 py-3 text-center last:border-r-0"><span className="block text-[10px] font-bold uppercase text-[#858696]">{weekday}</span><span className={cn("mx-auto mt-1 grid h-8 w-8 place-items-center rounded-full text-sm font-black", isToday ? "bg-[#5147dc] text-white shadow-[0_4px_10px_rgba(81,71,220,0.25)]" : "text-[#303144]")}>{date.getDate()}</span></div>;
 }
 
-function CalendarDayColumn({ date, now, appointments, firstHour, height, hourHeight, hourCount, openMenuId, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, updatingId }: { date: Date; now: Date; appointments: AppointmentRow[]; firstHour: number; height: number; hourHeight: number; hourCount: number; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; updatingId: string | null }) {
+function CalendarDayColumn({ date, now, appointments, firstHour, height, hourHeight, hourCount, openMenuId, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, appointmentToleranceMinutes, updatingId }: { date: Date; now: Date; appointments: AppointmentRow[]; firstHour: number; height: number; hourHeight: number; hourCount: number; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; appointmentToleranceMinutes: number; updatingId: string | null }) {
   const isToday = calendarDateKey(date) === calendarDateKey(now);
   const isPastDay = calendarDateKey(date) < calendarDateKey(now);
   const nowMinutes = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
@@ -835,7 +836,7 @@ function CalendarDayColumn({ date, now, appointments, firstHour, height, hourHei
       const start = appointmentMinutes(appointment.time);
       const top = Math.max(2, ((start - firstHour * 60) / 60) * hourHeight);
       const cardHeight = Math.max(92, (appointment.durationMinutes / 60) * hourHeight - 8);
-      return <CalendarAppointmentCard key={appointment.id} appointment={appointment} top={top} height={cardHeight} column={column} columns={columns} open={openMenuId === appointment.id} onMenuToggle={onMenuToggle} onAdvance={onAdvance} onMissed={onMissed} onCancel={onCancel} onDelete={onDelete} onSelect={onSelect} updating={updatingId === appointment.id} />;
+      return <CalendarAppointmentCard key={appointment.id} appointment={appointment} top={top} height={cardHeight} column={column} columns={columns} open={openMenuId === appointment.id} onMenuToggle={onMenuToggle} onAdvance={onAdvance} onMissed={onMissed} onCancel={onCancel} onDelete={onDelete} onSelect={onSelect} appointmentToleranceMinutes={appointmentToleranceMinutes} updating={updatingId === appointment.id} />;
     })}
   </div>;
 }
@@ -874,16 +875,17 @@ function getCalendarAppointmentLayouts(appointments: AppointmentRow[]) {
   });
 }
 
-function CalendarAppointmentCard({ appointment, top, height, column, columns, open, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, updating }: { appointment: AppointmentRow; top: number; height: number; column: number; columns: number; open: boolean; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; updating: boolean }) {
+function CalendarAppointmentCard({ appointment, top, height, column, columns, open, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, appointmentToleranceMinutes, updating }: { appointment: AppointmentRow; top: number; height: number; column: number; columns: number; open: boolean; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; appointmentToleranceMinutes: number; updating: boolean }) {
   const tone = appointmentTone(appointment);
   const past = appointmentHasPassed(appointment);
   const isCompleted = appointment.status === "Atendido";
   const isMissed = appointment.status === "Faltou";
   const isCancelled = appointment.status === "Cancelado";
+  const canStart = appointment.status !== "Agendado" || appointmentCanStart(appointment, appointmentToleranceMinutes);
   const primaryLabel = appointment.status === "Em atendimento" ? "Finalizar" : isCompleted ? "Concluído" : isMissed ? "Faltou" : "Atender";
   return <div className={cn("group absolute z-10 cursor-pointer overflow-hidden rounded-[7px] border-l-[3px] p-2 text-[10px] shadow-[0_4px_12px_rgba(38,39,58,0.06)]", tone.card, past && "brightness-[0.84] saturate-[0.78]")} style={{ top, height, left: `calc(${column} * 100% / ${columns} + 4px)`, width: `calc(100% / ${columns} - 8px)` }} aria-label={`${appointment.procedure} - status: ${appointment.status}`} onClick={() => onSelect(appointment)}>
     <span className="pointer-events-none absolute -top-7 left-2 z-40 hidden whitespace-nowrap rounded-[5px] bg-[#303144] px-2 py-1 text-[10px] font-bold text-white shadow-lg group-hover:block">Status: {appointment.status}</span>
-    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><p className="mt-1 truncate text-[11px] font-black">{appointment.procedure}</p><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0"><button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button>{open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button>{!isCompleted && !isMissed && !isCancelled ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button></> : null}</div> : null}</div></div>
+    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><p className="mt-1 truncate text-[11px] font-black">{appointment.procedure}</p><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0"><button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button>{open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button>{!isCompleted && !isMissed && !isCancelled ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button></> : null}</div> : null}</div></div>
     <span className={cn("mt-1 inline-flex rounded-full px-2 py-0.5 text-[9px] font-bold", tone.pill)}>{appointment.category || "Atendimento"}</span>
   </div>;
 }
@@ -938,6 +940,15 @@ function appointmentHasPassed(appointment: AppointmentRow, now = clinicNow(), to
   if (appointmentDate < today) return true;
   if (appointmentDate > today) return false;
   return appointmentMinutes(appointment.time) + toleranceMinutes <= now.getHours() * 60 + now.getMinutes();
+}
+
+function appointmentCanStart(appointment: AppointmentRow, toleranceMinutes: number, now = clinicNow()) {
+  const appointmentDate = calendarDateKey(appointment.date);
+  const today = calendarDateKey(now);
+  if (appointmentDate !== today) return false;
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const startMinutes = appointmentMinutes(appointment.time);
+  return currentMinutes >= startMinutes && currentMinutes < startMinutes + toleranceMinutes;
 }
 
 function formatEndTime(time: string, durationMinutes: number) {
@@ -1093,7 +1104,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
           <CardContent className="hp-list-stagger space-y-3">
             {productRows.map((product) => (
               <div
-                className="rounded-[8px] border border-[#e5e9f4] p-4 transition-[transform,border-color,box-shadow] duration-200 hover:-translate-y-1 hover:border-[#dce5ff] hover:shadow-[0_12px_24px_rgba(38,39,58,0.06)]"
+                className="rounded-[8px] border border-[#e5e9f4] p-4 transition-colors duration-200 hover:border-[#dce5ff]"
                 key={product.name}
               >
                 <div className="flex items-start justify-between gap-3">

@@ -106,7 +106,7 @@ export function MiniTable({
         <div className="hp-list-stagger min-w-[720px] divide-y divide-[#f0f0f4]">
           {rows.map((row, rowIndex) => (
             <div
-              className="grid min-h-14 items-center text-xs text-[#555668] transition-[background-color,transform] duration-200 hover:-translate-y-0.5 hover:bg-[#fafaff]"
+              className="grid min-h-14 items-center text-xs text-[#555668] transition-colors duration-200 hover:bg-[#fafaff]"
               key={rowIndex}
               style={{
                 gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))`,

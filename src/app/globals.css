@@ -269,20 +269,6 @@ input {
   animation: hp-gradient-flow 13s ease-in-out infinite;
 }
 
-.hp-card-motion {
-  transition:
-    transform 220ms ease,
-    box-shadow 220ms ease,
-    border-color 220ms ease,
-    background-color 220ms ease;
-}
-
-.hp-card-motion:hover {
-  transform: translateY(-3px);
-  border-color: #dce5ff;
-  box-shadow: 0 16px 36px rgba(38, 39, 58, 0.08);
-}
-
 .hp-list-stagger > * {
   animation: hp-fade-up 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }

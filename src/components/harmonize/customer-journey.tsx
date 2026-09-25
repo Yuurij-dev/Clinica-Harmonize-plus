@@ -48,11 +48,16 @@ export function CustomerJourney({
 }) {
   const initial = journey.find((stage) => stage.status === "current") ?? journey[0];
   const [selectedId, setSelectedId] = useState<JourneyStageId>(initial.id);
+  const [shakeId, setShakeId] = useState<JourneyStageId | null>(null);
   const selected = journey.find((stage) => stage.id === selectedId) ?? initial;
   const SelectedIcon = stageIcons[selected.id];
 
   function selectStage(stageId: JourneyStageId) {
-    if (["return", "aftercare"].includes(stageId) && journey.find((stage) => stage.id === stageId)?.status === "pending") return;
+    if (["return", "aftercare"].includes(stageId) && journey.find((stage) => stage.id === stageId)?.status === "pending") {
+      setShakeId(stageId);
+      window.setTimeout(() => setShakeId(null), 450);
+      return;
+    }
     setSelectedId(stageId);
     onOpenStage?.(stageId);
   }
@@ -75,6 +80,7 @@ export function CustomerJourney({
               selected={stage.id === selectedId}
               first={index === 0}
               connectorComplete={index > 0 && journey[index - 1].status === "completed"}
+              shake={stage.id === shakeId}
               onSelect={() => selectStage(stage.id)}
             />
           ))}
@@ -87,6 +93,7 @@ export function CustomerJourney({
               selected={stage.id === selectedId}
               last={index === journey.length - 1}
               connectorComplete={stage.status === "completed"}
+              shake={stage.id === shakeId}
               onSelect={() => selectStage(stage.id)}
             />
           ))}
@@ -119,6 +126,7 @@ export function CustomerJourney({
               selected={stage.id === selectedId}
               first={index === 0}
               connectorComplete={index > 0 && journey[index - 1].status === "completed"}
+              shake={stage.id === shakeId}
               onSelect={() => selectStage(stage.id)}
             />
           ))}
@@ -132,6 +140,7 @@ export function CustomerJourney({
               selected={stage.id === selectedId}
               last={index === journey.length - 1}
               connectorComplete={stage.status === "completed"}
+              shake={stage.id === shakeId}
               onSelect={() => selectStage(stage.id)}
             />
           ))}
@@ -194,18 +203,20 @@ function CompactJourneyStep({
   selected,
   first,
   connectorComplete,
+  shake,
   onSelect,
 }: {
   stage: CustomerJourneyStage;
   selected: boolean;
   first: boolean;
   connectorComplete: boolean;
+  shake: boolean;
   onSelect: () => void;
 }) {
   const Icon = stageIcons[stage.id];
 
   return (
-    <button className="relative flex min-w-0 flex-col items-center px-1 text-center" onClick={onSelect}>
+    <button className={cn("relative flex min-w-0 cursor-pointer flex-col items-center rounded-[7px] px-1 text-center", isJourneyStageClickable(stage) && "hover:bg-[#faf9ff]", shake && "animate-[hp-shake_0.42s_ease-in-out]")} onClick={onSelect}>
       {!first ? <span className={cn("absolute right-1/2 top-4 h-px w-full", connectorComplete ? "bg-[#54ad7b]" : "bg-[#dcdce5]")} /> : null}
       <span className={cn("relative z-10 grid h-8 w-8 place-items-center rounded-full border bg-white transition", stageCircle(stage.status), selected && "ring-4 ring-[#5147dc]/10")}>
         {stage.status === "completed" ? <Check className="h-3.5 w-3.5" /> : stage.status === "cancelled" ? <Ban className="h-3.5 w-3.5" /> : <Icon className="h-3.5 w-3.5" />}
@@ -220,18 +231,20 @@ function JourneyStep({
   selected,
   first,
   connectorComplete,
+  shake,
   onSelect,
 }: {
   stage: CustomerJourneyStage;
   selected: boolean;
   first: boolean;
   connectorComplete: boolean;
+  shake: boolean;
   onSelect: () => void;
 }) {
   const Icon = stageIcons[stage.id];
 
   return (
-    <button className="group relative flex min-w-0 flex-col items-center px-1 text-center" onClick={onSelect}>
+    <button className={cn("group relative flex min-w-0 cursor-pointer flex-col items-center rounded-[7px] px-1 text-center", isJourneyStageClickable(stage) && "hover:bg-[#faf9ff]", shake && "animate-[hp-shake_0.42s_ease-in-out]")} onClick={onSelect}>
       {!first ? (
         <span className={cn("absolute right-1/2 top-[19px] h-[2px] w-full", connectorComplete ? "bg-[#54ad7b]" : "bg-[#dedee7]")} />
       ) : null}
@@ -250,18 +263,20 @@ function MobileJourneyStep({
   selected,
   last,
   connectorComplete,
+  shake,
   onSelect,
 }: {
   stage: CustomerJourneyStage;
   selected: boolean;
   last: boolean;
   connectorComplete: boolean;
+  shake: boolean;
   onSelect: () => void;
 }) {
   const Icon = stageIcons[stage.id];
 
   return (
-    <button className={cn("relative flex w-full items-center gap-3 pb-5 text-left", last && "pb-0")} onClick={onSelect}>
+    <button className={cn("relative flex w-full cursor-pointer items-center gap-3 rounded-[7px] pb-5 text-left", last && "pb-0", isJourneyStageClickable(stage) && "hover:bg-[#faf9ff]", shake && "animate-[hp-shake_0.42s_ease-in-out]")} onClick={onSelect}>
       {!last ? <span className={cn("absolute bottom-0 left-[19px] top-10 w-[2px]", connectorComplete ? "bg-[#54ad7b]" : "bg-[#dedee7]")} /> : null}
       <span className={cn("relative z-10 grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 bg-white", stageCircle(stage.status), selected && "ring-4 ring-[#5147dc]/10")}>
         {stage.status === "completed" ? <Check className="h-4 w-4" /> : stage.status === "cancelled" ? <Ban className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
@@ -283,6 +298,10 @@ function stageCircle(status: JourneyStageStatus) {
     pending: "border-[#d6d6df] text-[#a4a5b2]",
     cancelled: "border-[#d95d4f] bg-[#fff3f1] text-[#d95d4f]",
   }[status];
+}
+
+function isJourneyStageClickable(stage: CustomerJourneyStage) {
+  return !(stage.status === "pending" && ["return", "aftercare"].includes(stage.id));
 }
 
 function statusColor(status: JourneyStageStatus) {

@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   CalendarPlus,
   CalendarDays,
+  CheckCircle2,
   Camera,
   Clock3,
   CreditCard,
@@ -28,7 +29,7 @@ import { cn } from "@/lib/utils";
 import { CustomerJourney } from "./customer-journey";
 import { PatientExpenses } from "./patient-expenses";
 import { PhotoEditor } from "./photo-editor/photo-editor";
-import { EmptyState } from "./shared";
+import { EmptyState, LoadingSkeleton } from "./shared";
 import { getCachedJson, invalidateClientCache } from "@/lib/client-cache";
 import { FormField, fieldClassName } from "@/components/ui/modal";
 import { formatCpf, formatInteger, formatPhone } from "@/lib/input-masks";
@@ -69,6 +70,7 @@ type PatientPaymentRecord = {
 type PatientHistoryRecord = {
   procedures: PatientProcedureRecord[];
   appointments: PatientAppointmentRecord[];
+  appointmentToleranceMinutes?: number;
   observations: string[];
   payments: PatientPaymentRecord[];
 };
@@ -114,7 +116,7 @@ export function PatientDetail({
     if (!patient.id) return;
     const historyLoadKey = `${patient.id}:${activeTab}`;
     let cancelled = false;
-    getCachedJson<{ patient?: { appointments: Array<{ id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string }>; payments: Array<{ id: string; value: number; method: string; status: string; installments: string }>; quotes: Array<{ items: string; status: string }>; procedureRecords: Array<{ id: string; name: string; professional: string; performedAt: string; notes: string; beforePhoto: string | null; afterPhoto: string | null }>; evaluations: Array<{ photos: unknown[] }> } }>(`/api/patients/${patient.id}/history`)
+    getCachedJson<{ patient?: { appointmentToleranceMinutes?: number; appointments: Array<{ id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string }>; payments: Array<{ id: string; value: number; method: string; status: string; installments: string }>; quotes: Array<{ items: string; status: string }>; procedureRecords: Array<{ id: string; name: string; professional: string; performedAt: string; notes: string; beforePhoto: string | null; afterPhoto: string | null }>; evaluations: Array<{ photos: unknown[] }> } }>(`/api/patients/${patient.id}/history`)
       .then((data) => {
         if (cancelled) return;
         const appointments = data.patient?.appointments ?? [];
@@ -126,6 +128,7 @@ export function PatientDetail({
         setProcedurePhotos({ before: Boolean(latestProcedure?.beforePhoto), after: Boolean(latestProcedure?.afterPhoto) });
         setHistory({
           appointments: appointments.map((item) => ({ id: item.id, date: new Date(item.date).toLocaleDateString("pt-BR"), time: item.time, procedure: item.procedure, professional: item.professional, status: item.status, notes: item.notes })),
+          appointmentToleranceMinutes: data.patient?.appointmentToleranceMinutes ?? 15,
           procedures: data.patient?.procedureRecords?.length ? data.patient.procedureRecords.map((item) => ({ id: item.id, name: useQuoteTitle ? latestQuoteItems ?? item.name : item.name, date: new Date(item.performedAt).toLocaleDateString("pt-BR"), professional: item.professional, status: procedurePhotoStatus(item.beforePhoto, item.afterPhoto), beforePhoto: item.beforePhoto ?? "", afterPhoto: item.afterPhoto ?? "", notes: item.notes.startsWith("__quote:") ? "" : item.notes })) : appointments.filter((item) => ["Atendido", "Finalizado"].includes(item.status)).map((item) => ({ name: item.procedure, date: new Date(item.date).toLocaleDateString("pt-BR"), professional: item.professional, status: item.status, beforePhoto: "", afterPhoto: "" })),
           payments: payments.map((item) => ({ id: item.id, procedure: "Atendimento", value: new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(item.value), method: item.method, status: item.status, disabled: item.status === "Pago", disabledReason: item.status === "Pago" ? "Pagamento já finalizado" : undefined })),
           observations: [],
@@ -186,10 +189,10 @@ export function PatientDetail({
           {tabs.map((tab) => (
             <button
               className={cn(
-                "border-b-2 px-5 py-3 text-[10px] font-semibold transition",
+                "border-b-2 px-5 py-3 text-[10px] font-semibold transition-colors",
                 activeTab === tab
                   ? "border-[#5147dc] bg-[#faf9ff] text-[#5147dc]"
-                  : "border-transparent text-[#77788a] hover:text-[#4f5062]",
+                  : "border-transparent text-[#77788a] hover:bg-[#faf9ff] hover:text-[#5147dc]",
               )}
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -224,7 +227,7 @@ function PatientTabContent({ patient, activeTab, history, historyLoading, return
   }
 
   if (activeTab === "Agendamentos") {
-    return <AppointmentsTab patientId={patient.id ?? ""} history={history} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={onReturnAppointmentClose} onScheduleReturn={onScheduleReturn} />;
+    return <AppointmentsTab patientId={patient.id ?? ""} history={history} loading={historyLoading} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={onReturnAppointmentClose} onScheduleReturn={onScheduleReturn} />;
   }
 
   if (activeTab === "Observações") {
@@ -448,6 +451,39 @@ function procedurePhotoStatus(beforePhoto: string | null, afterPhoto: string | n
   return "Aguardando foto";
 }
 
+function formatAppointmentDisplayDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("pt-BR");
+}
+
+function clinicNowForForm() {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return { date: `${values.year}-${values.month}-${values.day}`, time: `${values.hour}:${values.minute}` };
+}
+
+function appointmentCanStart(appointment: PatientAppointmentRecord, toleranceMinutes: number, now: { date: string; time: string }) {
+  const [day, month, year] = appointment.date.split("/");
+  const appointmentDate = `${year}-${month}-${day}`;
+  if (appointmentDate !== now.date) return false;
+  const [hours, minutes] = appointment.time.split(":").map(Number);
+  const startMinutes = hours * 60 + minutes;
+  const nowMinutes = Number(now.time.slice(0, 2)) * 60 + Number(now.time.slice(3));
+  return nowMinutes >= startMinutes && nowMinutes < startMinutes + toleranceMinutes;
+}
+
+function comparePatientAppointments(left: PatientAppointmentRecord, right: PatientAppointmentRecord) {
+  const statusPriority = (status: string) => status === "Em atendimento" ? 0 : 1;
+  const priorityDifference = statusPriority(left.status) - statusPriority(right.status);
+  if (priorityDifference) return priorityDifference;
+  return patientAppointmentSortValue(left).localeCompare(patientAppointmentSortValue(right));
+}
+
+function patientAppointmentSortValue(appointment: PatientAppointmentRecord) {
+  const [day, month, year] = appointment.date.split("/");
+  return `${year}-${month}-${day}T${appointment.time}`;
+}
+
 function ProcedureHistoryCard({ procedure, editable, beforePhotoSaving, afterPhotoSaving, beforePhotoOperation, afterPhotoOperation, onPhotoChange, onPhotoRemove }: { procedure: PatientProcedureRecord; editable?: boolean; beforePhotoSaving?: boolean; afterPhotoSaving?: boolean; beforePhotoOperation?: "upload" | "remove"; afterPhotoOperation?: "upload" | "remove"; onPhotoChange?: (procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", file: File) => void; onPhotoRemove?: (procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto") => void }) {
   const [expandedPhoto, setExpandedPhoto] = useState<{ label: string; src: string } | null>(null);
 
@@ -506,37 +542,89 @@ function PhotoInput({ icon: Icon, label, busyLabel, capture, disabled, onChange 
   );
 }
 
-function AppointmentsTab({ patientId, history, returnAppointmentTarget, onReturnAppointmentClose, onScheduleReturn }: { patientId: string; history?: PatientHistoryRecord; returnAppointmentTarget: ReturnAppointmentTarget | null; onReturnAppointmentClose: () => void; onScheduleReturn: (procedure: ReturnAppointmentTarget) => void }) {
+function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget, onReturnAppointmentClose, onScheduleReturn }: { patientId: string; history?: PatientHistoryRecord; loading: boolean; returnAppointmentTarget: ReturnAppointmentTarget | null; onReturnAppointmentClose: () => void; onScheduleReturn: (procedure: ReturnAppointmentTarget) => void }) {
   const [returnDate, setReturnDate] = useState(() => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
   const [returnTime, setReturnTime] = useState("09:00");
   const [returnReason, setReturnReason] = useState(() => returnAppointmentTarget ? `Retorno - ${returnAppointmentTarget.name}` : "");
   const [returnNotes, setReturnNotes] = useState("");
   const [returnSaving, setReturnSaving] = useState(false);
   const [returnError, setReturnError] = useState("");
+  const [invalidReturnFields, setInvalidReturnFields] = useState<Set<string>>(new Set());
+  const [editingAppointment, setEditingAppointment] = useState<PatientAppointmentRecord | null>(null);
+  const [editedAppointments, setEditedAppointments] = useState<Record<string, PatientAppointmentRecord>>({});
+  const [updatingAppointmentId, setUpdatingAppointmentId] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(() => clinicNowForForm());
   const primaryProcedure = history?.procedures[0];
   const returnScheduled = Boolean(history?.appointments.some((appointment) => appointment.procedure.toLocaleLowerCase("pt-BR").includes("retorno")));
+  const appointments = (history?.appointments.map((appointment) => appointment.id && editedAppointments[appointment.id] ? editedAppointments[appointment.id] : appointment) ?? []).sort(comparePatientAppointments);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setCurrentTime(clinicNowForForm()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  async function updateAppointmentStatus(appointment: PatientAppointmentRecord, status: "Em atendimento" | "Atendido") {
+    if (!appointment.id) return;
+    setUpdatingAppointmentId(appointment.id);
+    try {
+      const response = await fetch(`/api/appointments/${appointment.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
+      const data = await response.json().catch(() => null) as { message?: string } | null;
+      if (!response.ok) throw new Error(data?.message ?? "Não foi possível atualizar o atendimento.");
+      setEditedAppointments((current) => ({ ...current, [appointment.id as string]: { ...appointment, status } }));
+      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/appointments", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+    } catch (statusError) {
+      setReturnError(statusError instanceof Error ? statusError.message : "Não foi possível atualizar o atendimento.");
+    } finally {
+      setUpdatingAppointmentId(null);
+    }
+  }
+
+  function openEditAppointment(appointment: PatientAppointmentRecord) {
+    setEditingAppointment(appointment);
+    const [day, month, year] = appointment.date.split("/");
+    setReturnDate(year && month && day ? `${year}-${month}-${day}` : appointment.date.slice(0, 10));
+    setReturnTime(appointment.time);
+    setReturnReason(appointment.procedure);
+    setReturnNotes(appointment.notes ?? "");
+    setReturnError("");
+  }
 
   async function saveReturnAppointment(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!returnAppointmentTarget || !returnDate || !returnTime || !returnReason.trim()) return;
+    if ((!returnAppointmentTarget && !editingAppointment) || !returnDate || !returnTime || !returnReason.trim()) return;
+    const now = clinicNowForForm();
+    const invalidFields = new Set<string>();
+    if (returnDate < now.date) invalidFields.add("date");
+    if (returnDate === now.date && returnTime <= now.time) invalidFields.add("time");
+    if (invalidFields.size) {
+      setInvalidReturnFields(invalidFields);
+      setReturnError("Não é possível agendar um retorno em uma data ou horário que já passou.");
+      window.setTimeout(() => setInvalidReturnFields(new Set()), 450);
+      return;
+    }
     setReturnSaving(true);
     setReturnError("");
     try {
-      const response = await fetch("/api/appointments", {
-        method: "POST",
+      const response = await fetch(editingAppointment?.id ? `/api/appointments/${editingAppointment.id}` : "/api/appointments", {
+        method: editingAppointment?.id ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          patientId,
+          ...(editingAppointment?.id ? {} : { patientId }),
           procedure: returnReason.trim(),
-          professional: returnAppointmentTarget.professional,
+          professional: editingAppointment?.professional ?? returnAppointmentTarget?.professional,
           date: `${returnDate}T${returnTime}:00`,
           time: returnTime,
           notes: returnNotes.trim(),
         }),
       });
-      const data = await response.json().catch(() => null) as { message?: string } | null;
-      if (!response.ok) throw new Error(data?.message ?? "Não foi possível marcar o retorno.");
+      const data = await response.json().catch(() => null) as { appointment?: { id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string }; message?: string } | null;
+      const updatedAppointment = data?.appointment;
+      if (!response.ok || (editingAppointment?.id && !updatedAppointment)) throw new Error(data?.message ?? "Não foi possível salvar o retorno.");
+      if (editingAppointment?.id && updatedAppointment) {
+        setEditedAppointments((current) => ({ ...current, [editingAppointment.id as string]: { ...editingAppointment, date: formatAppointmentDisplayDate(updatedAppointment.date), time: updatedAppointment.time, procedure: updatedAppointment.procedure, professional: updatedAppointment.professional, status: updatedAppointment.status, notes: updatedAppointment.notes } }));
+      }
       invalidateClientCache(`/api/patients/${patientId}/history`, "/api/appointments", "/api/patients", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+      setEditingAppointment(null);
       onReturnAppointmentClose();
     } catch (scheduleError) {
       setReturnError(scheduleError instanceof Error ? scheduleError.message : "Não foi possível marcar o retorno.");
@@ -548,36 +636,40 @@ function AppointmentsTab({ patientId, history, returnAppointmentTarget, onReturn
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4"><div><h3 className="text-sm font-bold text-[#303144]">Agendamentos do cliente</h3><p className="mt-1 text-[10px] text-[#858696]">Acompanhe os atendimentos e agende o próximo retorno.</p></div><Button className={cn("shrink-0", returnScheduled && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:border-[#b9e8d8] hover:bg-[#eaf8ef] hover:text-[#16805d]")} type="button" variant="secondary" disabled={!primaryProcedure || primaryProcedure.status !== "Realizado" || returnScheduled} onClick={() => { if (primaryProcedure) onScheduleReturn(primaryProcedure); }}><CalendarPlus className="h-3.5 w-3.5" />{returnScheduled ? "Retorno marcado" : "Marcar retorno"}</Button></div>
-      {!history?.appointments.length ? <EmptyPatientState message="Este cliente ainda não possui agendamentos registrados." /> : (
+      {loading ? <AppointmentListSkeleton /> : !appointments.length ? <EmptyPatientState message="Este cliente ainda não possui agendamentos registrados." /> : (
         <Card className="p-5">
           <h3 className="text-sm font-bold text-[#303144]">Agendamentos do cliente</h3>
           <div className="mt-4 space-y-3">
-            {history.appointments.map((appointment, index) => (
+            {appointments.map((appointment, index) => (
               <div className="flex flex-col gap-3 rounded-[7px] border border-[#ececf3] p-4 sm:flex-row sm:items-center sm:justify-between" key={appointment.id ?? `${appointment.date}-${appointment.time}-${appointment.procedure}-${index}`}>
                 <div>
                   <p className="text-sm font-bold text-[#303144]">{appointment.procedure}</p>
                   <p className="mt-1 text-xs text-[#858696]">{appointment.date} às {appointment.time} · {appointment.professional}</p>
                   {appointment.notes ? <p className="mt-2 text-xs text-[#656678]">{appointment.notes}</p> : null}
                 </div>
-                <Badge variant={appointment.status === "Atendido" ? "green" : "purple"}>{appointment.status}</Badge>
+                <div className="flex flex-wrap items-center justify-end gap-2"><Badge variant={appointment.status === "Atendido" ? "green" : appointment.status === "Em atendimento" ? "amber" : "purple"}>{appointment.status}</Badge>{appointment.status === "Agendado" && appointment.id ? <><Button className="h-8 px-2" type="button" variant="secondary" disabled={!appointmentCanStart(appointment, history?.appointmentToleranceMinutes ?? 15, currentTime)} onClick={() => void updateAppointmentStatus(appointment, "Em atendimento")} title={appointmentCanStart(appointment, history?.appointmentToleranceMinutes ?? 15, currentTime) ? "Iniciar atendimento" : "Aguarde o horário do atendimento"}>{updatingAppointmentId === appointment.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock3 className="h-3.5 w-3.5" />}{updatingAppointmentId === appointment.id ? "Atualizando..." : "Iniciar atendimento"}</Button><Button className="h-8 px-2" type="button" variant="secondary" aria-label="Editar retorno" title="Editar retorno" onClick={() => openEditAppointment(appointment)}><PencilLine className="h-3.5 w-3.5" /></Button></> : null}{appointment.status === "Em atendimento" && appointment.id ? <Button className="h-8 px-2" type="button" onClick={() => void updateAppointmentStatus(appointment, "Atendido")}><CheckCircle2 className="h-3.5 w-3.5" />{updatingAppointmentId === appointment.id ? "Atualizando..." : "Finalizar atendimento"}</Button> : null}</div>
               </div>
             ))}
           </div>
         </Card>
       )}
-      <Modal open={Boolean(returnAppointmentTarget)} onClose={() => { if (!returnSaving) onReturnAppointmentClose(); }} title="Marcar retorno" description="O retorno será incluído na lista de agendamentos da clínica.">
+      <Modal open={Boolean(returnAppointmentTarget || editingAppointment)} onClose={() => { if (!returnSaving) { setEditingAppointment(null); onReturnAppointmentClose(); } }} title={editingAppointment ? "Editar retorno" : "Marcar retorno"} description={editingAppointment ? "Atualize os dados do retorno agendado." : "O retorno será incluído na lista de agendamentos da clínica."}>
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveReturnAppointment}>
-          <div className="sm:col-span-2 rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3 text-xs text-[#555668]">Procedimento: <strong className="text-[#303144]">{returnAppointmentTarget?.name}</strong></div>
-          <FormField label="Data"><input className={fieldClassName} type="date" value={returnDate} required onChange={(event) => setReturnDate(event.target.value)} /></FormField>
-          <FormField label="Horário"><input className={fieldClassName} type="time" value={returnTime} required onChange={(event) => setReturnTime(event.target.value)} /></FormField>
+          <div className="sm:col-span-2 rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3 text-xs text-[#555668]">Procedimento: <strong className="text-[#303144]">{editingAppointment?.procedure ?? returnAppointmentTarget?.name}</strong></div>
+          <FormField label="Data"><input className={cn(fieldClassName, invalidReturnFields.has("date") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} type="date" value={returnDate} required onChange={(event) => { setReturnDate(event.target.value); setInvalidReturnFields((current) => { const next = new Set(current); next.delete("date"); return next; }); setReturnError(""); }} /></FormField>
+          <FormField label="Horário"><input className={cn(fieldClassName, invalidReturnFields.has("time") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} type="time" value={returnTime} required onChange={(event) => { setReturnTime(event.target.value); setInvalidReturnFields((current) => { const next = new Set(current); next.delete("time"); return next; }); setReturnError(""); }} /></FormField>
           <div className="sm:col-span-2"><FormField label="Motivo do retorno"><input className={fieldClassName} value={returnReason} required placeholder="Ex.: avaliação do resultado" onChange={(event) => setReturnReason(event.target.value)} /></FormField></div>
           <div className="sm:col-span-2"><FormField label="Observações"><textarea className={`${fieldClassName} h-24 resize-none py-2`} value={returnNotes} placeholder="Adicione informações importantes para o atendimento" onChange={(event) => setReturnNotes(event.target.value)} /></FormField></div>
           {returnError ? <p className="rounded-[7px] bg-[#fff1f0] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{returnError}</p> : null}
-          <div className="flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" disabled={returnSaving} onClick={onReturnAppointmentClose}>Cancelar</Button><Button type="submit" disabled={returnSaving}>{returnSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CalendarPlus className="h-3.5 w-3.5" />}{returnSaving ? "Marcando..." : "Confirmar retorno"}</Button></div>
+          <div className="flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" disabled={returnSaving} onClick={() => { setEditingAppointment(null); onReturnAppointmentClose(); }}>Cancelar</Button><Button type="submit" disabled={returnSaving}>{returnSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : editingAppointment ? <PencilLine className="h-3.5 w-3.5" /> : <CalendarPlus className="h-3.5 w-3.5" />}{returnSaving ? "Salvando..." : editingAppointment ? "Salvar alterações" : "Confirmar retorno"}</Button></div>
         </form>
       </Modal>
     </div>
   );
+}
+
+function AppointmentListSkeleton() {
+  return <Card className="space-y-3 p-5"><LoadingSkeleton className="h-4 w-44" />{[0, 1, 2].map((item) => <div className="flex items-center justify-between gap-4 rounded-[7px] border border-[#ececf3] p-4" key={item}><div className="flex-1 space-y-2"><LoadingSkeleton className="h-3 w-44" /><LoadingSkeleton className="h-2.5 w-64 max-w-full" /></div><LoadingSkeleton className="h-6 w-20 rounded-full" /></div>)}</Card>;
 }
 
 function ObservationsTab({ history }: { history?: PatientHistoryRecord }) {
