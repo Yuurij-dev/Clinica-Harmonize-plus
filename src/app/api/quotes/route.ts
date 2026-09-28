@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { ensurePatientJourney } from "@/lib/patient-journey";
 
 export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const patientId = new URL(request.url).searchParams.get("patientId");
+  const searchParams = new URL(request.url).searchParams;
+  const patientId = searchParams.get("patientId");
+  const journeyId = searchParams.get("journeyId");
   const quotes = await prisma.quote.findMany({
-    where: { clinicId: user.clinicId, ...(patientId ? { patientId } : {}) },
+    where: { clinicId: user.clinicId, ...(patientId ? { patientId } : {}), ...(journeyId ? { journeyId } : {}) },
     orderBy: { createdAt: "desc" },
     include: { patient: { select: { name: true } } },
   });
@@ -17,12 +20,13 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const body = await request.json().catch(() => null) as { patient?: string; patientId?: string; items?: string; total?: number; expires?: string; paymentMethod?: string } | null;
+  const body = await request.json().catch(() => null) as { patient?: string; patientId?: string; journeyId?: string; items?: string; total?: number; expires?: string; paymentMethod?: string } | null;
   const patient = body?.patientId ? await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId } }) : body?.patient ? await prisma.patient.findFirst({ where: { name: body.patient, clinicId: user.clinicId } }) : null;
   const total = Number(body?.total);
   if (!patient || !body?.items?.trim() || !Number.isFinite(total)) return NextResponse.json({ message: "Selecione um paciente e preencha o orçamento." }, { status: 400 });
+  const journey = await ensurePatientJourney(patient.id, user.clinicId, body.journeyId);
   const paymentMethod = ["Cartão de crédito", "Cartão de débito", "Pix"].includes(body?.paymentMethod ?? "") ? body?.paymentMethod : "Cartão de crédito";
-  const quote = await prisma.quote.create({ data: { clinicId: user.clinicId, patientId: patient.id, items: body.items.trim(), total: Math.max(0, Math.round(total)), paymentMethod, expires: parseDate(body.expires) }, include: { patient: { select: { name: true } } } });
+  const quote = await prisma.quote.create({ data: { clinicId: user.clinicId, patientId: patient.id, journeyId: journey.id, items: body.items.trim(), total: Math.max(0, Math.round(total)), paymentMethod, expires: parseDate(body.expires) }, include: { patient: { select: { name: true } } } });
   return NextResponse.json({ quote }, { status: 201 });
 }
 

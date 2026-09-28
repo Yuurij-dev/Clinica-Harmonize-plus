@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { ensurePatientJourney } from "@/lib/patient-journey";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -21,6 +22,7 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as {
     patient?: string;
     patientId?: string;
+    journeyId?: string;
     procedure?: string;
     professional?: string;
     time?: string;
@@ -43,6 +45,7 @@ export async function POST(request: Request) {
       data: { name: patientName ?? "Paciente", phone: "Não informado", age: 0, clinicId: user.clinicId },
     });
   }
+  const journey = await ensurePatientJourney(patient.id, user.clinicId, body.journeyId);
 
   const date = body.date ? new Date(body.date) : new Date();
   if (Number.isNaN(date.getTime())) return NextResponse.json({ message: "Data inválida." }, { status: 400 });
@@ -79,6 +82,7 @@ export async function POST(request: Request) {
       date,
       time: body.time,
       patientId: patient.id,
+      journeyId: journey.id,
       procedure: body.procedure,
       professional: body.professional,
       notes: body.notes?.trim() ?? "",

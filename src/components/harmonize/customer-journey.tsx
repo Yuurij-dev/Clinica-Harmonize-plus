@@ -53,7 +53,7 @@ export function CustomerJourney({
   const SelectedIcon = stageIcons[selected.id];
 
   function selectStage(stageId: JourneyStageId) {
-    if (["return", "aftercare"].includes(stageId) && journey.find((stage) => stage.id === stageId)?.status === "pending") {
+    if (["procedure", "return", "aftercare"].includes(stageId) && journey.find((stage) => stage.id === stageId)?.status === "pending") {
       setShakeId(stageId);
       window.setTimeout(() => setShakeId(null), 450);
       return;
@@ -301,7 +301,7 @@ function stageCircle(status: JourneyStageStatus) {
 }
 
 function isJourneyStageClickable(stage: CustomerJourneyStage) {
-  return !(stage.status === "pending" && ["return", "aftercare"].includes(stage.id));
+  return !(stage.status === "pending" && ["procedure", "return", "aftercare"].includes(stage.id));
 }
 
 function statusColor(status: JourneyStageStatus) {
