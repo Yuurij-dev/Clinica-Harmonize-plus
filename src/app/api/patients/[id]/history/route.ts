@@ -2,31 +2,49 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
-export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const requestedTab = new URL(request.url).searchParams.get("tab");
+  const requestedJourneyId = new URL(request.url).searchParams.get("journeyId");
+  const patientId = (await params).id;
+  const journeyId = requestedTab === "Histórico" ? undefined : requestedJourneyId || undefined;
+  const includeAppointments = ["Procedimentos", "Agendamentos", "Histórico"].includes(requestedTab ?? "");
+  const includePayments = ["Pagamentos", "Histórico"].includes(requestedTab ?? "");
+  const includeQuotes = ["Procedimentos", "Agendamentos"].includes(requestedTab ?? "");
+  const includeProcedureRecords = ["Procedimentos", "Agendamentos", "Histórico"].includes(requestedTab ?? "");
+  const includeProcedurePhotos = requestedTab === "Procedimentos" || requestedTab === "Histórico";
   const patient = await prisma.patient.findFirst({
-    where: { id: (await params).id, clinicId: user.clinicId },
-    include: {
-      appointments: { orderBy: [{ date: "desc" }, { time: "desc" }] },
-      payments: { orderBy: { date: "desc" } },
-      quotes: { orderBy: { createdAt: "desc" }, select: { id: true, items: true, status: true, createdAt: true } },
-      procedureRecords: { orderBy: { performedAt: "desc" } },
-      evaluations: { include: { photos: true }, orderBy: { createdAt: "desc" } },
-    },
+    where: { id: patientId, clinicId: user.clinicId },
+    select: { id: true },
   });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
+  if (journeyId && !await prisma.patientJourney.findFirst({ where: { id: journeyId, patientId, clinicId: user.clinicId }, select: { id: true } })) {
+    return NextResponse.json({ message: "Jornada não encontrada." }, { status: 404 });
+  }
 
-  const clinic = await prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { appointmentToleranceMinutes: true } });
+  const [appointments, payments, quotes, procedureRecords, clinic] = await Promise.all([
+    includeAppointments ? prisma.appointment.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: [{ date: "desc" }, { time: "desc" }] }) : Promise.resolve([]),
+    includePayments ? prisma.payment.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { date: "desc" } }) : Promise.resolve([]),
+    includeQuotes ? prisma.quote.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { createdAt: "desc" }, select: { id: true, items: true, status: true, createdAt: true } }) : Promise.resolve([]),
+    includeProcedureRecords ? prisma.patientProcedure.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { performedAt: "desc" }, select: { id: true, name: true, professional: true, performedAt: true, notes: true, beforePhoto: true, afterPhoto: true } }) : Promise.resolve([]),
+    prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { appointmentToleranceMinutes: true } }),
+  ]);
   const now = clinicNow();
   const toleranceMinutes = clinic?.appointmentToleranceMinutes ?? 15;
-  const overdue = patient.appointments.filter((appointment) => appointment.status === "Agendado" && appointmentHasPassed(appointment.date, appointment.time, now, toleranceMinutes));
+  const overdue = appointments.filter((appointment) => appointment.status === "Agendado" && appointmentHasPassed(appointment.date, appointment.time, now, toleranceMinutes));
   if (overdue.length) {
-    await prisma.appointment.updateMany({ where: { clinicId: user.clinicId, id: { in: overdue.map((appointment) => appointment.id) } }, data: { status: "Faltou" } });
+    await prisma.appointment.updateMany({ where: { clinicId: user.clinicId, id: { in: overdue.map((appointment) => appointment.id) }, ...(journeyId ? { journeyId } : {}) }, data: { status: "Faltou" } });
   }
-  const appointments = patient.appointments.map((appointment) => overdue.some((item) => item.id === appointment.id) ? { ...appointment, status: "Faltou" } : appointment);
+  const updatedAppointments = appointments.map((appointment) => overdue.some((item) => item.id === appointment.id) ? { ...appointment, status: "Faltou" } : appointment);
 
-  return NextResponse.json({ patient: { ...patient, appointments, appointmentToleranceMinutes: toleranceMinutes } });
+  const responseProcedureRecords = procedureRecords.map((procedure) => ({
+    ...procedure,
+    beforePhoto: includeProcedurePhotos ? procedure.beforePhoto : procedure.beforePhoto ? "__photo__" : null,
+    afterPhoto: includeProcedurePhotos ? procedure.afterPhoto : procedure.afterPhoto ? "__photo__" : null,
+  }));
+
+  return NextResponse.json({ patient: { id: patient.id, appointments: updatedAppointments, payments, quotes, procedureRecords: responseProcedureRecords, appointmentToleranceMinutes: toleranceMinutes } });
 }
 
 function clinicNow() {

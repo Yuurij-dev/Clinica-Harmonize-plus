@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { ensurePatientJourney } from "@/lib/patient-journey";
 
 type EvaluationPhotoPayload = {
   id?: string;
@@ -11,16 +12,18 @@ type EvaluationPhotoPayload = {
   annotations?: unknown[];
 };
 
-export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
 
   const patientId = (await params).id;
+  const journeyId = new URL(request.url).searchParams.get("journeyId");
   const patient = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true } });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
+  const journey = await ensurePatientJourney(patientId, user.clinicId, journeyId);
 
   const evaluation = await prisma.evaluation.findFirst({
-    where: { patientId, clinicId: user.clinicId },
+    where: { patientId, clinicId: user.clinicId, journeyId: journey.id },
     orderBy: { updatedAt: "desc" },
     include: { photos: { orderBy: { createdAt: "asc" } } },
   });
@@ -48,9 +51,10 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const patient = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true } });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
 
-  const body = await request.json().catch(() => null) as { photos?: EvaluationPhotoPayload[] } | null;
+  const body = await request.json().catch(() => null) as { journeyId?: string; photos?: EvaluationPhotoPayload[] } | null;
   const photos = body?.photos;
   if (!Array.isArray(photos)) return NextResponse.json({ message: "Envie as fotos da avaliação." }, { status: 400 });
+  const journey = await ensurePatientJourney(patientId, user.clinicId, body?.journeyId);
 
   const validPhotos = photos.filter((photo) => (
     photo && typeof photo.name === "string" && typeof photo.imageUrl === "string" &&
@@ -59,10 +63,10 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   ));
 
   const savedEvaluation = await prisma.$transaction(async (transaction) => {
-    const current = await transaction.evaluation.findFirst({ where: { patientId, clinicId: user.clinicId }, select: { id: true } });
+    const current = await transaction.evaluation.findFirst({ where: { patientId, clinicId: user.clinicId, journeyId: journey.id }, select: { id: true } });
     const evaluation = current
       ? await transaction.evaluation.update({ where: { id: current.id }, data: {} })
-      : await transaction.evaluation.create({ data: { patientId, clinicId: user.clinicId } });
+      : await transaction.evaluation.create({ data: { patientId, clinicId: user.clinicId, journeyId: journey.id } });
 
     await transaction.evaluationPhoto.deleteMany({ where: { evaluationId: evaluation.id } });
     if (validPhotos.length) {

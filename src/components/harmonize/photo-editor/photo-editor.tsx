@@ -22,8 +22,8 @@ const EditorCanvas = dynamic(
 type Notice = { tone: "success" | "info"; text: string } | null;
 type ConfirmAction = { type: "photo"; photoId: string; photoName: string } | { type: "clear" } | null;
 
-export function PhotoEditor({ patientId, patientName, onSaved }: { patientId: string; patientName: string; onSaved?: () => void }) {
-  const evaluationCacheKey = `/api/patients/${patientId}/evaluation`;
+export function PhotoEditor({ patientId, journeyId, patientName, onSaved }: { patientId: string; journeyId?: string; patientName: string; onSaved?: () => void }) {
+  const evaluationCacheKey = `/api/patients/${patientId}/evaluation?journeyId=${encodeURIComponent(journeyId ?? "")}`;
   const cachedEvaluation = readClientCache<{ evaluation?: { photos?: EvaluationPhoto[] } | null }>(evaluationCacheKey);
   const [photos, setPhotos] = useState<EvaluationPhoto[]>(cachedEvaluation?.evaluation?.photos ?? []);
   const [activePhotoId, setActivePhotoId] = useState<string | null>(null);
@@ -207,7 +207,7 @@ export function PhotoEditor({ patientId, patientName, onSaved }: { patientId: st
       const response = await fetch(`/api/patients/${patientId}/evaluation`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ photos }),
+        body: JSON.stringify({ journeyId, photos }),
       });
       if (!response.ok) throw new Error("Não foi possível salvar a avaliação.");
       invalidateClientCache(evaluationCacheKey, `/api/patients/${patientId}/history`);
@@ -350,10 +350,10 @@ async function readPhoto(file: File): Promise<EvaluationPhoto> {
     reader.readAsDataURL(file);
   });
   const { width: originalWidth, height: originalHeight } = await getImageSize(originalUrl);
-  const scale = Math.min(1, 1800 / originalWidth, 1800 / originalHeight);
+  const scale = Math.min(1, 1600 / originalWidth, 1600 / originalHeight);
   const width = Math.max(1, Math.round(originalWidth * scale));
   const height = Math.max(1, Math.round(originalHeight * scale));
-  const imageUrl = scale === 1 ? originalUrl : await resizeImage(originalUrl, width, height);
+  const imageUrl = scale < 1 || file.size > 500_000 ? await resizeImage(originalUrl, width, height) : originalUrl;
   return { id: `photo-${crypto.randomUUID()}`, name: file.name, imageUrl, width, height, annotations: [] };
 }
 

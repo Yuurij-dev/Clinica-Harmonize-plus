@@ -25,7 +25,7 @@ type SelectedProcedure = ProcedureOption & { quantity: number; unit: string };
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
-export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPaid?: () => void }) {
+export function PatientExpenses({ patientId, journeyId, onPaid }: { patientId: string; journeyId?: string; onPaid?: () => void }) {
   const cached = readClientCache<QuoteOptionsResponse>("/api/quotes/options");
   const cachedCostSettings = readClientCache<{ settings?: CostSettings }>("/api/clinic/cost-settings");
   const [procedures, setProcedures] = useState<ProcedureOption[]>(cached?.procedures ?? []);
@@ -45,6 +45,7 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
   const [paymentNoticeLeaving, setPaymentNoticeLeaving] = useState(false);
   const [createdPaymentId, setCreatedPaymentId] = useState<string | null>(null);
   const [latestQuoteId, setLatestQuoteId] = useState<string | null>(null);
+  const quoteCacheKey = `/api/quotes?patientId=${encodeURIComponent(patientId)}&journeyId=${encodeURIComponent(journeyId ?? "")}`;
   const [savedQuoteSignature, setSavedQuoteSignature] = useState<string | null>(null);
   const [paymentConfirmed, setPaymentConfirmed] = useState(false);
 
@@ -69,7 +70,7 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
 
   useEffect(() => {
     if (!patientId) return;
-    getCachedJson<{ quotes?: PatientQuote[] }>(`/api/quotes?patientId=${encodeURIComponent(patientId)}`)
+    getCachedJson<{ quotes?: PatientQuote[] }>(quoteCacheKey)
       .then((data) => {
         const quote = data.quotes?.[0];
         if (!quote) {
@@ -97,7 +98,7 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
         setPaymentConfirmed(false);
       })
       .finally(() => setQuoteLoading(false));
-  }, [patientId, procedures]);
+  }, [patientId, journeyId, procedures, quoteCacheKey]);
 
   const selectedItems = useMemo<SelectedProcedure[]>(
     () => procedures.filter((procedure) => selected[procedure.id]).map((procedure) => ({ ...procedure, quantity: selected[procedure.id], unit: procedureUnit(procedure, products) })),
@@ -141,7 +142,7 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
       const response = await fetch(latestQuoteId ? `/api/quotes/${latestQuoteId}` : "/api/quotes", {
         method: latestQuoteId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ patientId, items: selectedItems.map((item) => `${item.name} (${item.quantity}x)`).join(", "), total, paymentMethod }),
+        body: JSON.stringify({ patientId, journeyId, items: selectedItems.map((item) => `${item.name} (${item.quantity}x)`).join(", "), total, paymentMethod }),
       });
       const responseText = await response.text();
       let data: { quote?: { id: string }; message?: string } = {};
@@ -181,7 +182,7 @@ export function PatientExpenses({ patientId, onPaid }: { patientId: string; onPa
     }
     setPaymentSaving(true);
     try {
-      const response = await fetch("/api/payments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, value: total, method: paymentMethod, status: "Pago", installments: "A vista" }) });
+      const response = await fetch("/api/payments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, journeyId, value: total, method: paymentMethod, status: "Pago", installments: "A vista" }) });
       const data = await response.json() as { payment?: { id: string }; message?: string };
       if (!response.ok || !data.payment) throw new Error(data.message ?? "Não foi possível registrar o pagamento.");
       const quoteResponse = await fetch(`/api/quotes/${latestQuoteId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Aprovado" }) });

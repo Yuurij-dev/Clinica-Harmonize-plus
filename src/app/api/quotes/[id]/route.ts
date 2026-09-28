@@ -20,9 +20,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     const quoteMarker = `__quote:${quote.id}`;
     const existingRecord = await prisma.patientProcedure.findFirst({ where: { clinicId: user.clinicId, patientId: quote.patientId, notes: quoteMarker }, select: { id: true } });
     if (existingRecord) {
-      await prisma.patientProcedure.update({ where: { id: existingRecord.id }, data: { name: quote.items, professional: user.name } });
+      await prisma.patientProcedure.update({ where: { id: existingRecord.id }, data: { name: quote.items, professional: user.name, journeyId: quote.journeyId } });
     } else {
-      await prisma.patientProcedure.create({ data: { clinicId: user.clinicId, patientId: quote.patientId, name: quote.items, professional: user.name, performedAt: new Date(), notes: quoteMarker } });
+      await prisma.patientProcedure.create({ data: { clinicId: user.clinicId, patientId: quote.patientId, journeyId: quote.journeyId, name: quote.items, professional: user.name, performedAt: new Date(), notes: quoteMarker } });
     }
   }
   return NextResponse.json({ quote });
