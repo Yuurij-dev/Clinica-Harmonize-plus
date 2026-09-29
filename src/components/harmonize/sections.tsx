@@ -17,6 +17,7 @@ import {
   PencilLine,
   Plus,
   Sparkles,
+  Trash2,
   UserPlus,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -1440,15 +1441,18 @@ export function ReportsSection() {
   );
 }
 
-type TeamMember = { id: string; role: string; user: { id: string; name: string; email: string; createdAt: string } };
+type TeamMember = { id: string; role: string; isOwner: boolean; user: { id: string; name: string; email: string; createdAt: string } };
 
-export function SettingsSection({ isAdmin = false, clinicName, onClinicNameChange }: { isAdmin?: boolean; clinicName?: string; onClinicNameChange?: (name: string) => void }) {
+export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, onClinicNameChange }: { isAdmin?: boolean; isOwner?: boolean; clinicName?: string; onClinicNameChange?: (name: string) => void }) {
   const [editing, setEditing] = useState<string | null>(null);
   const cachedTeam = readClientCache<{ members?: TeamMember[] }>("/api/team");
   const [members, setMembers] = useState<TeamMember[]>(cachedTeam?.members ?? []);
   const [teamLoading, setTeamLoading] = useState(!cachedTeam);
   const [teamSaving, setTeamSaving] = useState(false);
   const [teamError, setTeamError] = useState("");
+  const [memberToRemove, setMemberToRemove] = useState<TeamMember | null>(null);
+  const [memberRemoving, setMemberRemoving] = useState(false);
+  const [memberRemoveError, setMemberRemoveError] = useState("");
   const cachedCostSettings = readClientCache<{ settings?: { name?: string; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string } }>("/api/clinic/cost-settings");
   const [costSettings, setCostSettings] = useState(() => ({
     laborCost: cachedCostSettings?.settings?.laborCost ?? 0,
@@ -1546,6 +1550,26 @@ export function SettingsSection({ isAdmin = false, clinicName, onClinicNameChang
     setTeamError("");
   }
 
+  async function removeCollaborator() {
+    if (!memberToRemove) return;
+    setMemberRemoving(true);
+    setMemberRemoveError("");
+    const response = await fetch("/api/team", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ membershipId: memberToRemove.id }),
+    });
+    const data = await response.json().catch(() => ({})) as { message?: string };
+    setMemberRemoving(false);
+    if (!response.ok) {
+      setMemberRemoveError(data.message ?? "Não foi possível remover o colaborador.");
+      return;
+    }
+    setMembers((current) => current.filter((member) => member.id !== memberToRemove.id));
+    invalidateClientCache("/api/team", "/api/agenda/bootstrap");
+    setMemberToRemove(null);
+  }
+
   return (
     <div>
       <SectionIntro
@@ -1558,7 +1582,7 @@ export function SettingsSection({ isAdmin = false, clinicName, onClinicNameChang
           ["Profissionais", "Perfis, agenda, permissões e assinatura visual."],
           ["Cálculo de custos", "Unidades, arredondamentos e regras de margem."],
         ].map(([title, description]) => (
-          <button className="text-left" key={title} onClick={() => { if (title === "Profissionais" && !isAdmin) return; setEditing(title); }}><Card className={`h-full p-5 transition ${title === "Profissionais" && !isAdmin ? "cursor-not-allowed opacity-60" : "hover:border-[#5147dc]"}`}>
+          <button className={cn("settings-option hp-pressable text-left", title === "Profissionais" && !isAdmin && "cursor-not-allowed opacity-60")} key={title} onClick={() => { if (title === "Profissionais" && !isAdmin) return; setEditing(title); }}><Card className="settings-option-card h-full p-5 transition-colors">
             <Sparkles className="mb-4 h-5 w-5 text-[#1438ff]" />
             <p className="font-black text-[#121733]">{title}</p>
             <p className="mt-2 text-sm leading-6 text-[#65708b]">{description}</p>
@@ -1572,12 +1596,19 @@ export function SettingsSection({ isAdmin = false, clinicName, onClinicNameChang
         </div>
         {teamError && !editing ? <p className="mt-4 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{teamError}</p> : null}
         <div className="mt-4 divide-y divide-[#ececf2]">
-          {teamLoading ? <div className="space-y-3 py-3">{[0, 1, 2].map((item) => <div className="flex items-center justify-between gap-4" key={item}><div className="flex-1 space-y-2"><LoadingSkeleton className="h-3 w-40" /><LoadingSkeleton className="h-2.5 w-56" /></div><LoadingSkeleton className="h-6 w-20 rounded-full" /></div>)}</div> : members.length ? members.map((member) => <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between" key={member.id}><div><p className="text-sm font-bold text-[#303144]">{member.user.name}</p><p className="text-xs text-[#858696]">{member.user.email}</p></div><Badge variant={member.role === "ADMIN" ? "purple" : "green"}>{member.role === "PROFESSIONAL" ? "Profissional" : member.role === "STAFF" ? "Equipe" : "Administrador"}</Badge></div>) : <p className="py-5 text-sm text-[#65708b]">Nenhum colaborador cadastrado.</p>}
+          {teamLoading ? <div className="space-y-3 py-3">{[0, 1, 2].map((item) => <div className="flex items-center justify-between gap-4" key={item}><div className="flex-1 space-y-2"><LoadingSkeleton className="h-3 w-40" /><LoadingSkeleton className="h-2.5 w-56" /></div><LoadingSkeleton className="h-6 w-20 rounded-full" /></div>)}</div> : members.length ? members.map((member) => <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between" key={member.id}><div><p className="text-sm font-bold text-[#303144]">{member.user.name}</p><p className="text-xs text-[#858696]">{member.user.email}</p></div><div className="flex items-center gap-2"><Badge variant={member.isOwner ? "purple" : member.role === "ADMIN" ? "purple" : "green"}>{member.isOwner ? "Administrador principal" : member.role === "PROFESSIONAL" ? "Profissional" : member.role === "STAFF" ? "Equipe" : "Administrador"}</Badge>{isOwner && !member.isOwner ? <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-[#b42318] hover:bg-[#fff1f0] hover:text-[#b42318]" aria-label={`Remover ${member.user.name}`} title="Remover colaborador" onClick={() => { setMemberRemoveError(""); setMemberToRemove(member); }}><Trash2 className="h-3.5 w-3.5" /></Button> : null}</div></div>) : <p className="py-5 text-sm text-[#65708b]">Nenhum colaborador cadastrado.</p>}
         </div>
       </Card>
       <Modal open={Boolean(editing)} onClose={() => setEditing(null)} title={`Configurar ${editing ?? ""}`} description="Essas preferências ficam salvas durante esta sessão.">
         {editing === "Clínica" ? <form className="grid gap-4" onSubmit={saveCostSettings}><p className="text-xs leading-5 text-[#65708b]">Configure o nome e o horário em que a clínica está aberta para novos atendimentos.</p><FormField label="Nome de exibição"><input className={fieldClassName} name="name" value={clinicNameInput} onChange={(event) => setClinicNameInput(event.target.value)} required /></FormField><div className="grid gap-4 sm:grid-cols-2"><FormField label="Início do funcionamento"><input className={fieldClassName} name="openingTime" type="time" value={openingTimeInput} onChange={(event) => setOpeningTimeInput(event.target.value)} required /></FormField><FormField label="Fim do funcionamento"><input className={fieldClassName} name="closingTime" type="time" value={closingTimeInput} onChange={(event) => setClosingTimeInput(event.target.value)} required /></FormField></div>{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar alterações"}</Button></div></form> : null}
         {editing === "Novo colaborador" ? <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveCollaborator}><div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div><FormField label="E-mail de acesso"><input className={fieldClassName} name="email" type="email" required /></FormField><FormField label="Senha inicial"><input className={fieldClassName} name="password" type="password" minLength={6} required /></FormField><FormField label="Perfil"><select className={fieldClassName} name="role"><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Equipe</option><option value="ADMIN">Administrador</option></select></FormField>{teamError ? <p className="sm:col-span-2 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{teamError}</p> : null}<div className="flex justify-end gap-2 sm:col-span-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div></form> : editing === "Cálculo de custos" ? <form className="grid gap-4" onSubmit={saveCostSettings}><div className="sm:col-span-2"><FormField label="Tolerância para marcar falta (minutos)"><input className={fieldClassName} name="appointmentToleranceMinutes" type="number" min="0" max="180" value={appointmentToleranceInput} onChange={(event) => setAppointmentToleranceInput(event.target.value)} required /></FormField><p className="mt-1 text-[10px] text-[#858696]">O atendimento só será marcado como faltou depois desse período.</p></div><p className="text-xs leading-5 text-[#65708b]">Defina os valores padrão que serão adicionados automaticamente aos orçamentos desta clínica.</p>{costSettingsLoading ? <div className="space-y-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : <><FormField label="Mão de obra / Honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField><FormField label="Sala / Estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField><FormField label="Anestésico / Medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField></>}{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div></form> : null}
+      </Modal>
+      <Modal open={Boolean(memberToRemove)} onClose={() => { if (!memberRemoving) setMemberToRemove(null); }} title="Remover colaborador" description="Essa ação remove o acesso do colaborador à clínica.">
+        <div className="space-y-4">
+          <p className="text-sm text-[#555668]">Tem certeza que deseja remover <strong>{memberToRemove?.user.name}</strong>?</p>
+          {memberRemoveError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{memberRemoveError}</p> : null}
+          <div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={memberRemoving} onClick={() => setMemberToRemove(null)}>Cancelar</Button><Button type="button" className="bg-[#b42318] hover:bg-[#991b1b]" disabled={memberRemoving} onClick={() => void removeCollaborator()}>{memberRemoving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}{memberRemoving ? "Removendo..." : "Remover colaborador"}</Button></div>
+        </div>
       </Modal>
     </div>
   );
