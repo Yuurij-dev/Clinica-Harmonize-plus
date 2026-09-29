@@ -541,6 +541,8 @@ html.dark [class*="bg-[#35ae78]"] {
 html.dark [class*="bg-[#3d9be9]"] { background-color: #3d9be9 !important; }
 html.dark [class*="bg-[#e0647d]"] { background-color: #d95370 !important; }
 html.dark [class*="bg-[#f59e0b]"] { background-color: #d99012 !important; }
+html.dark [class*="bg-[#2f9b67]"],
+html.dark [class*="bg-[#54ad7b]"] { background-color: #2f9b67 !important; }
 
 html.dark [class*="text-[#"] {
   color: #c4c7d7 !important;
@@ -579,6 +581,18 @@ html.dark [class*="text-[#7a5b16]"],
 html.dark [class*="text-[#b36c16]"],
 html.dark [class*="text-[#c38b19]"] {
   color: #f3c36b !important;
+}
+
+html.dark [class*="text-[#2f8f61]"] { color: #8be0ac !important; }
+
+.journey-step-completed {
+  border-color: #2f9b67 !important;
+  background-color: #2f9b67 !important;
+  color: #ffffff !important;
+}
+
+.journey-connector-completed {
+  background-color: #54ad7b !important;
 }
 
 html.dark [class*="border-[#"] {
