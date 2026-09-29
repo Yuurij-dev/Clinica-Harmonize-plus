@@ -26,6 +26,7 @@ create table "ClinicMembership" (
   "userId" text not null references "User"("id") on delete cascade,
   "clinicId" text not null references "Clinic"("id") on delete cascade,
   "role" "UserRole" not null default 'STAFF',
+  "isOwner" boolean not null default false,
   unique ("userId", "clinicId")
 );
 
@@ -165,7 +166,7 @@ insert into "Clinic" ("id", "name", "slug")
 values ('clinic-demo', 'Clínica Harmonize', 'harmonize-demo')
 on conflict ("slug") do nothing;
 
-insert into "ClinicMembership" ("id", "userId", "clinicId", "role")
-select 'membership-admin-demo', "id", 'clinic-demo', 'ADMIN'
+insert into "ClinicMembership" ("id", "userId", "clinicId", "role", "isOwner")
+select 'membership-admin-demo', "id", 'clinic-demo', 'ADMIN', true
 from "User" where "email" = 'admin'
 on conflict ("userId", "clinicId") do nothing;

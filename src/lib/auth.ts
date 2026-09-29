@@ -10,6 +10,7 @@ type AuthenticatedUser = {
   name: string;
   email: string;
   role: "ADMIN" | "PROFESSIONAL" | "STAFF";
+  isOwner: boolean;
   clinicId: string;
   clinic: { id: string; name: string; slug: string };
 };
@@ -53,7 +54,7 @@ export async function getCurrentUser() {
           role: true,
           memberships: {
             take: 1,
-            include: { clinic: { select: { id: true, name: true, slug: true } } },
+            select: { role: true, isOwner: true, clinic: { select: { id: true, name: true, slug: true } } },
           },
         },
       }).then((user): AuthenticatedUser | null => {
@@ -64,6 +65,7 @@ export async function getCurrentUser() {
         name: user.name,
         email: user.email,
         role: membership.role,
+        isOwner: membership.isOwner,
         clinicId: membership.clinic.id,
         clinic: membership.clinic,
       };

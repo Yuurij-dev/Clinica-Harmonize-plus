@@ -26,7 +26,7 @@ type Notice = {
   duration: number;
 };
 
-type CurrentUser = { name: string; role: string; clinic?: { name: string } };
+type CurrentUser = { name: string; role: string; isOwner?: boolean; clinic?: { name: string } };
 
 export function HarmonizeApp() {
   const router = useRouter();
@@ -131,7 +131,7 @@ export function HarmonizeApp() {
           {active === "pagamentos" && isAdmin ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => setCreateDialog("payment")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
           {active === "financeiro" && isAdmin ? <FinanceSection /> : null}
           {active === "relatorios" && isAdmin ? <ReportsSection /> : null}
-          {active === "configuracoes" && isAdmin ? <SettingsSection isAdmin clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
+          {active === "configuracoes" && isAdmin ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
         </main>
       </div>
       {notice ? (

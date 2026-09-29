@@ -595,6 +595,30 @@ html.dark [class*="text-[#2f8f61]"] { color: #8be0ac !important; }
   background-color: #54ad7b !important;
 }
 
+html.dark [class*="divide-[#"] > :not(:last-child) {
+  border-color: #303447 !important;
+}
+
+.settings-option-card {
+  border-color: #e2e3ed !important;
+  background-color: #ffffff !important;
+}
+
+.settings-option:not(.cursor-not-allowed):hover .settings-option-card {
+  border-color: #5147dc !important;
+  background-color: #f7f6ff !important;
+}
+
+html.dark .settings-option-card {
+  border-color: #303447 !important;
+  background-color: #171a26 !important;
+}
+
+html.dark .settings-option:not(.cursor-not-allowed):hover .settings-option-card {
+  border-color: #756cff !important;
+  background-color: #24243a !important;
+}
+
 html.dark [class*="border-[#"] {
   border-color: #303447 !important;
 }
