@@ -1,4 +1,4 @@
-import { Bell, ChevronDown, Loader2, LogOut, Menu, Search, Settings2, Sparkles } from "lucide-react";
+import { Bell, ChevronDown, Loader2, LogOut, Menu, Moon, Search, Settings2, Sparkles, Sun } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { SectionId } from "@/types/clinic";
@@ -28,11 +28,18 @@ function appointmentMinutesFromTime(time: string) {
   return (hours || 0) * 60 + (minutes || 0);
 }
 
+function initialDarkMode() {
+  if (typeof window === "undefined") return false;
+  const savedTheme = window.localStorage.getItem("harmonize-theme");
+  return savedTheme ? savedTheme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
 export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, user }: TopbarProps) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
   const [profileOpen, setProfileOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [darkMode, setDarkMode] = useState(initialDarkMode);
   const audioContextRef = useRef<AudioContext | null>(null);
   const previousAlertIdsRef = useRef<string[] | null>(null);
 
@@ -75,6 +82,17 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
   const userName = user?.name ?? "Usuário";
   const initials = userName.split(" ").map((part) => part[0]).slice(0, 2).join("").toUpperCase();
   const roleLabel = user?.role === "ADMIN" ? "Administradora" : user?.role === "PROFESSIONAL" ? "Profissional" : "Equipe";
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", darkMode);
+  }, [darkMode]);
+
+  function toggleTheme() {
+    const nextTheme = !darkMode;
+    setDarkMode(nextTheme);
+    window.localStorage.setItem("harmonize-theme", nextTheme ? "dark" : "light");
+    document.documentElement.classList.toggle("dark", nextTheme);
+  }
 
   useEffect(() => {
     const primeOnInteraction = () => primeNotificationAudio();
@@ -162,6 +180,9 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
         >
           <Settings2 className="h-5 w-5" />
         </Button> : null}
+        <Button variant="secondary" size="icon" aria-label={darkMode ? "Ativar tema claro" : "Ativar tema escuro"} title={darkMode ? "Tema claro" : "Tema escuro"} onClick={toggleTheme}>
+          {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+        </Button>
         <button className="hp-pressable relative hidden items-center gap-2 border-l border-[#ececf2] pl-4 sm:flex" disabled={isLoggingOut} onClick={() => setProfileOpen((open) => !open)}>
           <div className="grid h-8 w-8 place-items-center rounded-full bg-[#eeeaff] text-[11px] font-black text-[#5b4fd2]">
             {initials}

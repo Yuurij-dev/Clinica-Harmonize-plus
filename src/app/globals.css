@@ -40,6 +40,22 @@ input {
   font: inherit;
 }
 
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+button:not(:disabled).cursor-default {
+  cursor: default;
+}
+
+button:not(:disabled).cursor-zoom-in {
+  cursor: zoom-in;
+}
+
+button:not(:disabled).cursor-not-allowed {
+  cursor: not-allowed;
+}
+
 ::selection {
   background: #4f46e5;
   color: white;
@@ -340,4 +356,238 @@ input {
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+html.dark {
+  color-scheme: dark;
+  --background: #11131d;
+  --foreground: #f3f4fa;
+}
+
+html.dark body,
+html.dark [class*="bg-[#f8f9fc]"],
+html.dark [class*="bg-[#f7f9fd]"],
+html.dark [class*="bg-[#f7f8fc]"],
+html.dark [class*="bg-[#fbfbfd]"],
+html.dark [class*="bg-[#fafafd]"],
+html.dark [class*="bg-[#faf9ff]"],
+html.dark [class*="bg-[#f4f4f8]"],
+html.dark [class~="bg-white"],
+html.dark [class*="bg-white/"] {
+  background-color: #171a26 !important;
+}
+
+html.dark .bg-white,
+html.dark [class~="bg-white"],
+html.dark [class*="bg-[#fcfcfe]"],
+html.dark [class*="bg-[#fbfbfe]"],
+html.dark [class*="bg-[#fcfcfe]"] {
+  background-color: #171a26 !important;
+}
+
+html.dark [class*="bg-[#f7f6ff]"],
+html.dark [class*="bg-[#f2f3f7]"],
+html.dark [class*="bg-[#f3f4f9]"],
+html.dark [class*="bg-[#eeecff]"],
+html.dark [class*="bg-[#eeeaff]"] {
+  background-color: #24243a !important;
+}
+
+html.dark [class*="bg-[#eaf5ff]"] { background-color: #1c3348 !important; }
+html.dark [class*="bg-[#f0eeff]"] { background-color: #2c2950 !important; }
+html.dark [class*="bg-[#eaf8ef]"] { background-color: #1d3b2b !important; }
+html.dark [class*="bg-[#fff0f2]"] { background-color: #43232d !important; }
+
+html.dark [class*="text-[#191a2e]"],
+html.dark [class*="text-[#25263a]"],
+html.dark [class*="text-[#27283b]"],
+html.dark [class*="text-[#292a3d]"],
+html.dark [class*="text-[#303144]"],
+html.dark [class*="text-[#3f4053]"],
+html.dark [class*="text-[#424355]"],
+html.dark [class*="text-[#4e4f61]"],
+html.dark [class*="text-[#555668]"],
+html.dark [class*="text-[#5f6072]"],
+html.dark [class*="text-[#656678]"],
+html.dark [class*="text-[#68697b]"],
+html.dark [class*="text-[#77788a]"],
+html.dark [class*="text-[#858696]"],
+html.dark [class*="text-[#8c8d9f]"],
+html.dark [class*="text-[#9293a4]"],
+html.dark [class*="text-[#9495a5]"] {
+  color: #c4c7d7 !important;
+}
+
+html.dark [class*="text-[#121733]"],
+html.dark [class*="text-[#202136]"],
+html.dark [class*="text-[#26273a]"],
+html.dark [class*="text-[#65708b]"],
+html.dark [class*="text-[#7c86a2]"],
+html.dark [class*="text-[#7e3b43]"],
+html.dark [class*="text-[#3f485f]"],
+html.dark [class*="text-[#3d3e51]"],
+html.dark [class*="text-[#444557]"],
+html.dark [class*="text-[#4f5062]"],
+html.dark [class*="text-[#5a5b6e]"],
+html.dark [class*="text-[#77798c]"],
+html.dark [class*="text-[#9697a7]"],
+html.dark [class*="text-[#9a9baa]"],
+html.dark [class*="text-[#aaaab7]"],
+html.dark [class*="text-[#bbbcc8]"] {
+  color: #c4c7d7 !important;
+}
+
+html.dark [class*="text-[#3026a8]"],
+html.dark [class*="text-[#1438ff]"] {
+  color: #9d96ff !important;
+}
+
+html.dark [class*="text-[#175b91]"] { color: #8fc8ff !important; }
+html.dark [class*="text-[#3f36a9]"] { color: #aaa3ff !important; }
+html.dark [class*="text-[#247750]"] { color: #8be0ac !important; }
+html.dark [class*="text-[#9b3a4f]"] { color: #ff9caf !important; }
+
+html.dark [class*="border-[#e"],
+html.dark [class*="border-[#d"],
+html.dark [class*="border-[#c"] {
+  border-color: #303447 !important;
+}
+
+html.dark input,
+html.dark select,
+html.dark textarea {
+  color: #f2f3f8;
+  background-color: #1b1e2b;
+  border-color: #34384c;
+}
+
+html.dark input::placeholder,
+html.dark textarea::placeholder {
+  color: #858ba1;
+}
+
+html.dark [class*="shadow-"] {
+  --tw-shadow-color: rgba(0, 0, 0, 0.32) !important;
+}
+
+/* The app uses Tailwind color literals throughout its legacy screens. */
+html.dark [class*="bg-[#"]:not([class*="bg-[#5147dc]"]):not([class*="bg-[#5a50df]"]):not([class*="bg-[#6257e8]"]):not([class*="bg-[#6357ef]"]):not([class*="bg-[#5947ee]"]):not([class*="bg-[#4635d5]"]):not([class*="bg-[#4036c9]"]):not([class*="bg-[#16a34a]"]):not([class*="bg-[#16b88b]"]):not([class*="bg-[#35ae78]"]):not([class*="bg-[#3d9be9]"]):not([class*="bg-[#e0647d]"]):not([class*="bg-[#f59e0b]"]) {
+  background-color: #171a26 !important;
+}
+
+html.dark [class*="bg-[#5147dc]"],
+html.dark [class*="bg-[#5a50df]"],
+html.dark [class*="bg-[#6257e8]"],
+html.dark [class*="bg-[#6357ef]"],
+html.dark [class*="bg-[#5947ee]"],
+html.dark [class*="bg-[#4635d5]"],
+html.dark [class*="bg-[#4036c9]"] {
+  background-color: #5147dc !important;
+}
+
+html.dark [class*="bg-[#f7f6ff]"],
+html.dark [class*="bg-[#f2f3f7]"],
+html.dark [class*="bg-[#f3f4f9]"],
+html.dark [class*="bg-[#eeecff]"],
+html.dark [class*="bg-[#eeeaff]"],
+html.dark [class*="bg-[#efedff]"],
+html.dark [class*="bg-[#f8f7ff]"],
+html.dark [class*="bg-[#f5f4ff]"],
+html.dark [class*="bg-[#f0efff]"],
+html.dark [class*="bg-[#f1f0ff]"],
+html.dark [class*="bg-[#e8e5ff]"],
+html.dark [class*="bg-[#e8e8f8]"] {
+  background-color: #24243a !important;
+}
+
+html.dark [class*="bg-[#eaf5ff]"],
+html.dark [class*="bg-[#eaf3ff]"],
+html.dark [class*="bg-[#d7edff]"] {
+  background-color: #1c3348 !important;
+}
+
+html.dark [class*="bg-[#f0eeff]"],
+html.dark [class*="bg-[#f2edff]"],
+html.dark [class*="bg-[#e3dfff]"],
+html.dark [class*="bg-[#efefff]"] {
+  background-color: #2c2950 !important;
+}
+
+html.dark [class*="bg-[#eaf8ef]"],
+html.dark [class*="bg-[#effbf6]"],
+html.dark [class*="bg-[#eef8f2]"],
+html.dark [class*="bg-[#d7f1df]"] {
+  background-color: #1d3b2b !important;
+}
+
+html.dark [class*="bg-[#fff0f2]"],
+html.dark [class*="bg-[#fff1f0]"],
+html.dark [class*="bg-[#fff4f4]"],
+html.dark [class*="bg-[#fff7f7]"] {
+  background-color: #43232d !important;
+}
+
+html.dark [class*="bg-[#fff8e7]"],
+html.dark [class*="bg-[#fffbf1]"] {
+  background-color: #43351a !important;
+}
+
+html.dark [class*="bg-[#16a34a]"],
+html.dark [class*="bg-[#16b88b]"],
+html.dark [class*="bg-[#35ae78]"] {
+  background-color: #16a34a !important;
+}
+
+html.dark [class*="bg-[#3d9be9]"] { background-color: #3d9be9 !important; }
+html.dark [class*="bg-[#e0647d]"] { background-color: #d95370 !important; }
+html.dark [class*="bg-[#f59e0b]"] { background-color: #d99012 !important; }
+
+html.dark [class*="text-[#"] {
+  color: #c4c7d7 !important;
+}
+
+html.dark [class*="text-[#5147dc]"],
+html.dark [class*="text-[#3026a8]"],
+html.dark [class*="text-[#1438ff]"],
+html.dark [class*="text-[#3f36a9]"],
+html.dark [class*="text-[#5947ee]"] {
+  color: #aaa3ff !important;
+}
+
+html.dark [class*="text-[#175b91]"],
+html.dark [class*="text-[#2672ad]"] {
+  color: #8fc8ff !important;
+}
+
+html.dark [class*="text-[#157a3b]"],
+html.dark [class*="text-[#16805d]"],
+html.dark [class*="text-[#247750]"],
+html.dark [class*="text-[#287a50]"],
+html.dark [class*="text-[#258454]"] {
+  color: #8be0ac !important;
+}
+
+html.dark [class*="text-[#9b3a4f]"],
+html.dark [class*="text-[#a8465b]"],
+html.dark [class*="text-[#c24124]"],
+html.dark [class*="text-[#b42318]"] {
+  color: #ff9caf !important;
+}
+
+html.dark [class*="text-[#a56400]"],
+html.dark [class*="text-[#7a5b16]"],
+html.dark [class*="text-[#b36c16]"],
+html.dark [class*="text-[#c38b19]"] {
+  color: #f3c36b !important;
+}
+
+html.dark [class*="border-[#"] {
+  border-color: #303447 !important;
+}
+
+html.dark [class*="border-[#5147dc]"],
+html.dark [class*="border-[#2f9b67]"],
+html.dark [class*="border-[#35ae78]"],
+html.dark [class*="border-[#3d9be9]"] {
+  border-color: currentColor !important;
 }
