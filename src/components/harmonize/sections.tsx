@@ -7,6 +7,7 @@ import {
   CalendarPlus,
   Camera,
   CheckCircle2,
+  Check,
   CircleDollarSign,
   ChevronDown,
   ChevronLeft,
@@ -1265,15 +1266,23 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
 export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
   type ApiPayment = { id: string; value: number; method: string; date: string; status: string; installments: string; patient?: { name: string } | null };
   const cachedPayments = readClientCache<{ payments?: ApiPayment[] }>("/api/payments");
-  const [paymentRows, setPaymentRows] = useState<Payment[]>(() => (cachedPayments?.payments ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), status: item.status, installments: item.installments })));
+  const [paymentRows, setPaymentRows] = useState<Payment[]>(() => (cachedPayments?.payments ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), dateRaw: item.date, status: item.status, installments: item.installments })));
   const [isLoading, setIsLoading] = useState(!cachedPayments);
   const [isSaving, setIsSaving] = useState(false);
   const [methodFilter, setMethodFilter] = useState("Todos");
-  const visiblePayments = methodFilter === "Todos" ? paymentRows : paymentRows.filter((item) => item.method === methodFilter);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const visiblePayments = paymentRows.filter((item) => {
+    const matchesMethod = methodFilter === "Todos" || item.method === methodFilter;
+    const paymentDate = item.dateRaw?.slice(0, 10) ?? "";
+    const matchesFrom = !dateFrom || paymentDate >= dateFrom;
+    const matchesTo = !dateTo || paymentDate <= dateTo;
+    return matchesMethod && matchesFrom && matchesTo;
+  });
 
   useEffect(() => {
     getCachedJson<{ payments?: ApiPayment[] }>("/api/payments").then((data) => {
-      setPaymentRows((data.payments ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), status: item.status, installments: item.installments })));
+      setPaymentRows((data.payments ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), dateRaw: item.date, status: item.status, installments: item.installments })));
       setIsLoading(false);
     }).catch(() => setIsLoading(false));
   }, []);
@@ -1286,7 +1295,7 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
     const data = await response.json() as { payment: { id: string; value: number; method: string; date: string; status: string; installments: string; patient?: { name: string } | null } };
     const item = data.payment;
     invalidateClientCache("/api/payments", "/api/dashboard/bootstrap");
-    setPaymentRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), status: item.status, installments: item.installments }, ...current]);
+    setPaymentRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), dateRaw: item.date, status: item.status, installments: item.installments }, ...current]);
     onCreateClose(); onSaved?.(`Pagamento de ${patient} foi registrado.`);
   }
 
@@ -1298,6 +1307,27 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
         action="Registrar pagamento"
         onAction={onCreateOpen}
       />
+      <div className="mb-4 flex flex-wrap items-end gap-3" aria-label="Filtros de pagamentos">
+        {['Pix', 'Cartão de crédito', 'Cartão de débito', 'Dinheiro'].map((method) => {
+          const selected = methodFilter === method;
+          return <button
+            aria-pressed={selected}
+            className={`hp-pressable flex items-center gap-2 rounded-full border px-4 py-2.5 text-sm font-bold transition-colors ${selected ? "border-[#5147dc] bg-[#5147dc] text-white" : "border-[#dddfea] bg-white text-[#65708b] hover:border-[#5147dc] hover:text-[#5147dc]"}`}
+            key={method}
+            onClick={() => setMethodFilter(selected ? "Todos" : method)}
+            type="button"
+          >
+            <CircleDollarSign className="h-4 w-4" />
+            {method}
+            {selected ? <Check className="h-4 w-4" /> : null}
+          </button>;
+        })}
+        <div className="ml-0 flex flex-wrap items-end gap-3 sm:ml-auto">
+          <label className="flex flex-col gap-1.5 text-xs font-bold uppercase text-[#8c8d9f]">De<input className="h-11 min-w-[180px] rounded-[8px] border border-[#dddfea] bg-white px-3.5 text-sm font-semibold normal-case text-[#65708b] outline-none transition-colors focus:border-[#5147dc] focus:ring-2 focus:ring-[#5147dc]/15" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
+          <label className="flex flex-col gap-1.5 text-xs font-bold uppercase text-[#8c8d9f]">Até<input className="h-11 min-w-[180px] rounded-[8px] border border-[#dddfea] bg-white px-3.5 text-sm font-semibold normal-case text-[#65708b] outline-none transition-colors focus:border-[#5147dc] focus:ring-2 focus:ring-[#5147dc]/15" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>
+          {dateFrom || dateTo ? <button className="hp-pressable h-11 rounded-[8px] px-3 text-xs font-bold text-[#65708b] hover:text-[#5147dc]" type="button" onClick={() => { setDateFrom(""); setDateTo(""); }}>Limpar datas</button> : null}
+        </div>
+      </div>
       {isLoading ? <LoadingTable columns={6} /> : <MiniTable
         columns={["Paciente", "Valor", "Forma", "Data", "Status", "Parcelamento"]}
         rows={visiblePayments.map((payment) => [
@@ -1309,15 +1339,6 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
           payment.installments,
         ])}
       />}
-      <div className="hp-list-stagger mt-6 grid gap-6 md:grid-cols-2 xl:grid-cols-4">
-        {["Pix", "Cartão de crédito", "Cartão de débito", "Dinheiro"].map((method) => (
-          <button className="text-left" key={method} onClick={() => setMethodFilter(methodFilter === method ? "Todos" : method)}><Card className={`p-5 transition ${methodFilter === method ? "border-[#5147dc] bg-[#f7f6ff]" : ""}`}>
-            <CircleDollarSign className="mb-4 h-5 w-5 text-[#1438ff]" />
-            <p className="font-black text-[#121733]">{method}</p>
-            <p className="mt-1 text-sm text-[#65708b]">Disponível no lançamento</p>
-          </Card></button>
-        ))}
-      </div>
       <Modal open={openCreate} onClose={onCreateClose} title="Registrar pagamento" description="O lançamento aparecerá imediatamente no histórico financeiro.">
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={savePayment}>
           <div className="sm:col-span-2"><FormField label="Paciente"><input className={fieldClassName} name="patient" required /></FormField></div>
