@@ -27,6 +27,7 @@ type Notice = {
 };
 
 type CurrentUser = { name: string; role: string; isOwner?: boolean; clinic?: { name: string } };
+type AgendaFocus = { date: string; time: string };
 
 export function HarmonizeApp() {
   const router = useRouter();
@@ -36,14 +37,16 @@ export function HarmonizeApp() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [noticeLeaving, setNoticeLeaving] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [agendaFocus, setAgendaFocus] = useState<AgendaFocus | null>(null);
   const isAdmin = currentUser?.role === "ADMIN";
   const restrictedSections: SectionId[] = ["agenda", "clientes", "orcamentos"];
 
-  function selectSection(section: SectionId) {
+  function selectSection(section: SectionId, focus?: AgendaFocus) {
     if (!isAdmin && !restrictedSections.includes(section)) {
       setActive("agenda");
       return;
     }
+    setAgendaFocus(section === "agenda" ? focus ?? null : null);
     setActive(section);
     setMobileOpen(false);
   }
@@ -124,7 +127,7 @@ export function HarmonizeApp() {
             const target = { client: ["clientes", "client"], appointment: ["agenda", "appointment"], quote: ["orcamentos", "quote"], payment: ["pagamentos", "payment"] }[action] as [SectionId, NonNullable<typeof createDialog>];
             openCreate(target[0], target[1]);
           }} onNavigate={selectSection} /> : null}
-          {active === "agenda" ? <ScheduleSection openCreate={createDialog === "appointment"} onCreateOpen={() => setCreateDialog("appointment")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
+          {active === "agenda" ? <ScheduleSection focus={agendaFocus} openCreate={createDialog === "appointment"} onCreateOpen={() => setCreateDialog("appointment")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
           {active === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => setCreateDialog("client")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
           {active === "procedimentos" && isAdmin ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => setCreateDialog("procedure")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
           {active === "orcamentos" ? <QuotesSection openCreate={createDialog === "quote"} onCreateOpen={() => setCreateDialog("quote")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
