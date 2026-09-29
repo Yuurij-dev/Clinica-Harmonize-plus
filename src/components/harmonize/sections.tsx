@@ -593,7 +593,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
           <h3 className="ml-2 truncate text-base font-bold capitalize text-[#303144]">{calendarPeriodLabel(calendarDate, activeView)}</h3>
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
-          <div className="flex min-w-0 flex-1 items-center rounded-[7px] border border-[#e1e2ec] bg-white p-0.5 sm:flex-none">
+          <div className="flex w-full min-w-0 basis-full flex-1 items-center rounded-[7px] border border-[#e1e2ec] bg-white p-0.5 sm:w-auto sm:basis-auto sm:flex-none">
             {["Semana", "Dia", "Mês"].map((view) => (
               <button
                 className={cn("hp-pressable min-w-0 flex-1 rounded-[5px] px-3 py-2 text-xs font-semibold transition-colors sm:flex-none sm:px-4", activeView === view ? "bg-[#5147dc] text-white shadow-sm" : "text-[#77798c] hover:text-[#5147dc]")}
