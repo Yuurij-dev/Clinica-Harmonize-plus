@@ -120,6 +120,7 @@ export type Payment = {
   value: string;
   method: string;
   date: string;
+  dateRaw?: string;
   status: string;
   installments: string;
 };
