@@ -1,8 +1,45 @@
+import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Filter, Plus, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+
+export function CountUpValue({
+  value,
+  format = (currentValue) => String(Math.round(currentValue)),
+}: {
+  value: number;
+  format?: (value: number) => string;
+}) {
+  const [displayValue, setDisplayValue] = useState(0);
+  const previousValue = useRef(0);
+
+  useEffect(() => {
+    const from = previousValue.current;
+    const distance = Math.abs(value - from);
+    const duration = Math.min(760, Math.max(360, 360 + Math.log10(distance + 1) * 110));
+    const startedAt = performance.now();
+    let frame = 0;
+
+    const animate = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const acceleratedProgress = progress * progress;
+      setDisplayValue(from + (value - from) * acceleratedProgress);
+
+      if (progress < 1) {
+        frame = requestAnimationFrame(animate);
+      } else {
+        previousValue.current = value;
+      }
+    };
+
+    frame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frame);
+  }, [value]);
+
+  return <>{format(displayValue)}</>;
+}
 
 export function SectionIntro({
   title,
@@ -141,7 +178,7 @@ export function EmptyState({
 }
 
 export function LoadingSkeleton({ className = "" }: { className?: string }) {
-  return <div aria-hidden="true" className={cn("animate-pulse rounded-[6px] bg-[#ececf3]", className)} />;
+  return <div aria-hidden="true" className={cn("hp-skeleton animate-pulse rounded-[6px]", className)} />;
 }
 
 export function LoadingTable({ columns = 6, rows = 4 }: { columns?: number; rows?: number }) {

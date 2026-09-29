@@ -320,7 +320,7 @@ export function PatientDetail({
 
         <div className="min-w-0 p-4">
           <div className="mb-3 flex items-center justify-between gap-3"><div><p className="text-[9px] font-bold uppercase text-[#9a9baa]">Jornadas do cliente</p><p className="mt-1 text-[10px] text-[#858696]">Selecione uma jornada para abrir os dados relacionados</p></div><Button className="shrink-0" size="sm" type="button" disabled={journeySaving} onClick={openCreateJourney}><Plus className="h-3.5 w-3.5" />Nova jornada</Button></div>
-          {journeysLoading ? <div className="h-28 animate-pulse rounded-[7px] bg-[#f3f4f9]" /> : [...journeys].reverse().map((item) => {
+          {journeysLoading ? <div className="hp-skeleton h-28 animate-pulse rounded-[7px]" /> : [...journeys].reverse().map((item) => {
             const isDefaultJourney = item.id === journeys[0]?.id;
             const selectedJourney = item.id === selectedJourneyId;
             return <div className={cn("mb-3 rounded-[8px] border p-2 last:mb-0", selectedJourney ? "border-[#cfcaff] bg-[#fcfbff]" : "border-transparent")} key={item.id}>
@@ -653,7 +653,7 @@ function ProcedureCardsSkeleton() {
       {[0, 1].map((item) => (
         <Card className="animate-pulse overflow-hidden p-0" key={item}>
           <div className="flex items-start justify-between gap-3 border-b border-[#ededf3] p-4">
-            <div className="space-y-2"><div className="h-4 w-32 rounded bg-[#ececf3]" /><div className="h-3 w-44 rounded bg-[#f1f1f6]" /></div>
+            <div className="space-y-2"><div className="hp-skeleton h-4 w-32 rounded" /><div className="hp-skeleton h-3 w-44 rounded" /></div>
             <div className="h-6 w-20 rounded-full bg-[#f0efff]" />
           </div>
           <div className="grid gap-3 p-4 sm:grid-cols-2">
@@ -767,7 +767,7 @@ function BeforeAfterPhoto({ label, src, editable, photoInputEnabled = true, bloc
       </div>
       <div className="relative grid h-56 w-full place-items-center text-xs font-semibold text-[#858696] sm:h-64">
         {saving ? <div className="flex flex-col items-center gap-2 text-[#5147dc]" aria-label={`${operation === "remove" ? "Removendo" : "Carregando"} foto de ${label.toLowerCase()}`}>
-          <div className="h-12 w-16 animate-pulse rounded-[5px] bg-[#e8e8f8]" />
+          <div className="hp-skeleton h-12 w-16 animate-pulse rounded-[5px]" />
           <span className="flex items-center gap-1 text-xs font-bold"><Loader2 className="h-3.5 w-3.5 animate-spin" />{operation === "remove" ? "Removendo foto..." : "Carregando foto..."}</span>
         </div> : imageSrc ? <>
           <button type="button" className="absolute inset-0 cursor-zoom-in" aria-label={`Ampliar foto de ${label.toLowerCase()}`} onClick={() => onPreview?.(imageSrc)}><Image className="object-cover transition-transform duration-200 hover:scale-[1.02]" src={imageSrc} alt={`Foto de ${label.toLowerCase()} do procedimento`} fill sizes="(max-width: 640px) 100vw, (max-width: 1280px) 50vw, 400px" /></button>

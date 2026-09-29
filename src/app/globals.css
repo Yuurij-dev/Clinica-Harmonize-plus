@@ -364,6 +364,22 @@ html.dark {
   --foreground: #f3f4fa;
 }
 
+.hp-skeleton {
+  background: linear-gradient(90deg, #ececf3 0%, #f7f7fb 45%, #ececf3 100%);
+  background-size: 220% 100%;
+  animation: hp-skeleton-shimmer 1.35s ease-in-out infinite;
+}
+
+html.dark .hp-skeleton {
+  background: linear-gradient(90deg, #252a3c 0%, #353b54 45%, #252a3c 100%) !important;
+  background-size: 220% 100%;
+}
+
+@keyframes hp-skeleton-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
 html.dark body,
 html.dark [class*="bg-[#f8f9fc]"],
 html.dark [class*="bg-[#f7f9fd]"],

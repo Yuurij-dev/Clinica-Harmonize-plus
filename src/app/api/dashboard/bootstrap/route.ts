@@ -9,9 +9,9 @@ export async function GET() {
 
   const [appointments, patients, quotes, payments] = await Promise.all([
     prisma.appointment.findMany({ where: { clinicId: user.clinicId }, orderBy: [{ date: "asc" }, { time: "asc" }], include: { patient: { select: { name: true } } } }),
-    prisma.patient.findMany({ where: { clinicId: user.clinicId }, orderBy: { createdAt: "desc" }, take: 20, select: { name: true, status: true, lastVisit: true } }),
+    prisma.patient.findMany({ where: { clinicId: user.clinicId }, orderBy: { createdAt: "desc" }, take: 100, select: { name: true, status: true, lastVisit: true, createdAt: true } }),
     prisma.quote.findMany({ where: { clinicId: user.clinicId }, orderBy: { createdAt: "desc" }, take: 20, include: { patient: { select: { name: true } } } }),
-    prisma.payment.findMany({ where: { clinicId: user.clinicId }, orderBy: { date: "desc" }, take: 100, select: { value: true, status: true } }),
+    prisma.payment.findMany({ where: { clinicId: user.clinicId }, orderBy: { date: "desc" }, take: 100, select: { value: true, status: true, date: true } }),
   ]);
   return NextResponse.json({ appointments, patients, quotes, payments });
 }

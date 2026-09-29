@@ -27,6 +27,7 @@ import { MaskedInput } from "@/components/ui/masked-input";
 import {
   DetailCard,
   EmptyState,
+  CountUpValue,
   LoadingSkeleton,
   LoadingTable,
   MiniTable,
@@ -94,6 +95,8 @@ type CreateProps = {
   onCreateClose?: () => void;
   onSaved?: (message: string, undo?: () => void) => void;
 };
+
+type ScheduleFocus = { date: string; time: string };
 
 type ApiPatient = {
   id: string;
@@ -339,7 +342,7 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
   );
 }
 
-export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
+export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved, focus }: CreateProps & { focus?: ScheduleFocus | null }) {
   const cachedAgenda = readClientCache<{ appointments: ApiAppointment[]; patients: ApiPatient[]; procedures: ApiProcedureOption[]; members: Array<{ role: string; user: { name: string } }>; settings?: { appointmentToleranceMinutes: number; openingTime: string; closingTime: string } }>("/api/agenda/bootstrap");
   const rowColors = ["#5147dc", "#6d5ce7", "#2f9c88", "#d86655", "#ddb63f"];
   const [appointmentRows, setAppointmentRows] = useState<AppointmentRow[]>(() => cachedAgenda?.appointments.map((item) => mapApiAppointment(item, cachedAgenda.procedures)) ?? []);
@@ -357,8 +360,9 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   const [timePickerOpen, setTimePickerOpen] = useState(false);
   const [invalidAppointmentFields, setInvalidAppointmentFields] = useState<Set<string>>(new Set());
   const [appointmentFormError, setAppointmentFormError] = useState("");
-  const [activeView, setActiveView] = useState<"Dia" | "Semana" | "Mês">("Semana");
-  const [calendarDate, setCalendarDate] = useState(() => clinicNow());
+  const [activeView, setActiveView] = useState<"Dia" | "Semana" | "Mês">(() => focus ? "Dia" : "Semana");
+  const [calendarDate, setCalendarDate] = useState(() => focus ? focusDate(focus.date) : clinicNow());
+  const focusTime = focus?.time;
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [professional, setProfessional] = useState("Todos");
   const [appointmentToleranceMinutes, setAppointmentToleranceMinutes] = useState(cachedAgenda?.settings?.appointmentToleranceMinutes ?? 15);
@@ -616,6 +620,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         appointments={filteredAppointments}
         date={calendarDate}
         view={activeView}
+        focusTime={focusTime}
         openingTime={openingTime}
         closingTime={closingTime}
         loading={isLoading}
@@ -645,7 +650,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         <div className="hp-list-stagger">
         {isLoading ? Array.from({ length: 4 }).map((_, index) => (
           <div className="grid min-w-[1040px] animate-pulse grid-cols-[84px_1.1fr_1fr_1.05fr_1.15fr_210px] items-center gap-3 border-b border-[#f0f0f4] px-3 py-5" key={`loading-${index}`}>
-            {Array.from({ length: 6 }).map((__, cell) => <span className="h-3 rounded-full bg-[#ececf4]" key={cell} />)}
+            {Array.from({ length: 6 }).map((__, cell) => <span className="hp-skeleton h-3 rounded-full" key={cell} />)}
           </div>
         )) : null}
         {!isLoading && loadError ? <div className="p-8 text-center text-xs font-semibold text-[#b42318]">{loadError}</div> : null}
@@ -761,7 +766,7 @@ function getAllowedMinutes(openingTime: string, closingTime: string, hour: numbe
   return Array.from({ length: 60 }, (_, minute) => minute).filter((minute) => hour * 60 + minute >= opening && hour * 60 + minute < closing);
 }
 
-function ScheduleCalendar({ appointments, date, view, openingTime, closingTime, loading, openMenuId, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, appointmentToleranceMinutes, updatingId }: { appointments: AppointmentRow[]; date: Date; view: CalendarView; openingTime: string; closingTime: string; loading: boolean; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; appointmentToleranceMinutes: number; updatingId: string | null }) {
+function ScheduleCalendar({ appointments, date, view, focusTime, openingTime, closingTime, loading, openMenuId, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, appointmentToleranceMinutes, updatingId }: { appointments: AppointmentRow[]; date: Date; view: CalendarView; focusTime?: string; openingTime: string; closingTime: string; loading: boolean; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; appointmentToleranceMinutes: number; updatingId: string | null }) {
   const [now, setNow] = useState(() => clinicNow());
 
   useEffect(() => {
@@ -779,12 +784,12 @@ function ScheduleCalendar({ appointments, date, view, openingTime, closingTime, 
 
   useEffect(() => {
     const nowMinutes = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
-    const currentTimeTop = ((nowMinutes - firstHour * 60) / 60) * hourHeight;
+    const targetMinutes = focusTime ? appointmentMinutes(focusTime) : nowMinutes;
+    const currentTimeTop = ((targetMinutes - firstHour * 60) / 60) * hourHeight;
     const element = calendarRef.current;
-    if (element && currentTimeTop >= 0 && currentTimeTop <= calendarHeight) {
-      element.scrollTo({ top: Math.max(0, currentTimeTop - 180), behavior: "smooth" });
-    }
-  }, [calendarHeight, firstHour, loading, now, view]);
+    if (!element) return;
+    if (currentTimeTop >= 0 && currentTimeTop <= calendarHeight) element.scrollTo({ top: Math.max(0, currentTimeTop - 180), behavior: "smooth" });
+  }, [calendarHeight, firstHour, focusTime, loading, now, view]);
 
   if (loading) return <CalendarSkeleton />;
   if (view === "Mês") return <MonthCalendar date={date} appointments={appointments} onSelect={onSelect} />;
@@ -907,6 +912,11 @@ function clinicNow() {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return new Date(Number(values.year), Number(values.month) - 1, Number(values.day), Number(values.hour), Number(values.minute), Number(values.second));
+}
+
+function focusDate(date: string) {
+  const parsed = new Date(date);
+  return new Date(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate());
 }
 
 function getWeekDays(date: Date) {
@@ -1327,7 +1337,7 @@ export function FinanceSection() {
   const data = useFinancialData();
   const received = data?.payments.filter((item) => item.status === "Pago").reduce((sum, item) => sum + item.value, 0) ?? 0;
   const pending = data?.payments.filter((item) => item.status !== "Pago").reduce((sum, item) => sum + item.value, 0) ?? 0;
-  const values = [received, 0, received, pending, received].map((value) => currency.format(value));
+  const values = [received, 0, received, pending, received];
   const procedureTotals = Object.entries((data?.appointments ?? []).reduce<Record<string, number>>((result, item) => { result[item.procedure] = (result[item.procedure] ?? 0) + 1; return result; }, {}));
 
   return (
@@ -1347,7 +1357,9 @@ export function FinanceSection() {
         {["Receita", "Despesas", "Resultado", "Valores pendentes", "Recebidos"].map((label, index) => (
           <Card className="p-5" key={label}>
             <p className="text-sm font-semibold text-[#65708b]">{label}</p>
-            <p className="mt-3 text-2xl font-black text-[#121733]">{values[index]}</p>
+            <p className="mt-3 text-2xl font-black text-[#121733]">
+              <CountUpValue value={values[index]} format={(currentValue) => currency.format(Math.round(currentValue))} />
+            </p>
           </Card>
         ))}
       </div>
