@@ -39,7 +39,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
   const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
   const [profileOpen, setProfileOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
-  const [darkMode, setDarkMode] = useState(initialDarkMode);
+  const [darkMode, setDarkMode] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const previousAlertIdsRef = useRef<string[] | null>(null);
 
@@ -82,6 +82,11 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
   const userName = user?.name ?? "Usuário";
   const initials = userName.split(" ").map((part) => part[0]).slice(0, 2).join("").toUpperCase();
   const roleLabel = user?.role === "ADMIN" ? "Administradora" : user?.role === "PROFESSIONAL" ? "Profissional" : "Equipe";
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setDarkMode(initialDarkMode()));
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);

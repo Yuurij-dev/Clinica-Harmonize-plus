@@ -217,7 +217,7 @@ function CompactJourneyStep({
 
   return (
     <button className={cn("relative flex min-w-0 cursor-pointer flex-col items-center rounded-[7px] px-1 text-center", isJourneyStageClickable(stage) && "hover:bg-[#faf9ff]", shake && "animate-[hp-shake_0.42s_ease-in-out]")} onClick={onSelect}>
-      {!first ? <span className={cn("absolute right-1/2 top-4 h-px w-full", connectorComplete ? "bg-[#54ad7b]" : "bg-[#dcdce5]")} /> : null}
+      {!first ? <span className={cn("absolute right-1/2 top-4 h-px w-full", connectorComplete ? "journey-connector-completed" : "bg-[#dcdce5]")} /> : null}
       <span className={cn("relative z-10 grid h-8 w-8 place-items-center rounded-full border bg-white transition", stageCircle(stage.status), selected && "ring-4 ring-[#5147dc]/10")}>
         {stage.status === "completed" ? <Check className="h-3.5 w-3.5" /> : stage.status === "cancelled" ? <Ban className="h-3.5 w-3.5" /> : <Icon className="h-3.5 w-3.5" />}
       </span>
@@ -246,7 +246,7 @@ function JourneyStep({
   return (
     <button className={cn("group relative flex min-w-0 cursor-pointer flex-col items-center rounded-[7px] px-1 text-center", isJourneyStageClickable(stage) && "hover:bg-[#faf9ff]", shake && "animate-[hp-shake_0.42s_ease-in-out]")} onClick={onSelect}>
       {!first ? (
-        <span className={cn("absolute right-1/2 top-[19px] h-[2px] w-full", connectorComplete ? "bg-[#54ad7b]" : "bg-[#dedee7]")} />
+          <span className={cn("absolute right-1/2 top-[19px] h-[2px] w-full", connectorComplete ? "journey-connector-completed" : "bg-[#dedee7]")} />
       ) : null}
       <span className={cn("relative z-10 grid h-10 w-10 place-items-center rounded-full border-2 bg-white transition", stageCircle(stage.status), selected && "ring-4 ring-[#5147dc]/10")}>
         {stage.status === "completed" ? <Check className="h-4 w-4" /> : stage.status === "cancelled" ? <Ban className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
@@ -277,7 +277,7 @@ function MobileJourneyStep({
 
   return (
     <button className={cn("relative flex w-full cursor-pointer items-center gap-3 rounded-[7px] pb-5 text-left", last && "pb-0", isJourneyStageClickable(stage) && "hover:bg-[#faf9ff]", shake && "animate-[hp-shake_0.42s_ease-in-out]")} onClick={onSelect}>
-      {!last ? <span className={cn("absolute bottom-0 left-[19px] top-10 w-[2px]", connectorComplete ? "bg-[#54ad7b]" : "bg-[#dedee7]")} /> : null}
+      {!last ? <span className={cn("absolute bottom-0 left-[19px] top-10 w-[2px]", connectorComplete ? "journey-connector-completed" : "bg-[#dedee7]")} /> : null}
       <span className={cn("relative z-10 grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 bg-white", stageCircle(stage.status), selected && "ring-4 ring-[#5147dc]/10")}>
         {stage.status === "completed" ? <Check className="h-4 w-4" /> : stage.status === "cancelled" ? <Ban className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
       </span>
@@ -292,7 +292,7 @@ function MobileJourneyStep({
 
 function stageCircle(status: JourneyStageStatus) {
   return {
-    completed: "border-[#2f9b67] bg-[#2f9b67] text-white",
+    completed: "journey-step-completed text-white",
     current: "border-[#5147dc] text-[#5147dc] shadow-[0_0_0_5px_rgba(81,71,220,0.09)]",
     in_progress: "border-[#d99a28] text-[#b36c16] shadow-[0_0_0_5px_rgba(217,154,40,0.12)]",
     pending: "border-[#d6d6df] text-[#a4a5b2]",
