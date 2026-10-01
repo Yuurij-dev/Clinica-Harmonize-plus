@@ -18,7 +18,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser();
+  const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const body = await request.json().catch(() => null) as { patient?: string; patientId?: string; journeyId?: string; items?: string; total?: number; expires?: string; paymentMethod?: string } | null;
   const patient = body?.patientId ? await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId } }) : body?.patient ? await prisma.patient.findFirst({ where: { name: body.patient, clinicId: user.clinicId } }) : null;

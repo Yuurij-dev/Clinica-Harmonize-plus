@@ -24,9 +24,10 @@ type Notice = {
   message: string;
   undo?: () => void;
   duration: number;
+  tone?: "success" | "warning";
 };
 
-type CurrentUser = { name: string; role: string; isOwner?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
+type CurrentUser = { name: string; role: string; isOwner?: boolean; trialExpired?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
 type AgendaFocus = { date: string; time: string };
 
 export function HarmonizeApp() {
@@ -39,6 +40,7 @@ export function HarmonizeApp() {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [agendaFocus, setAgendaFocus] = useState<AgendaFocus | null>(null);
   const isAdmin = currentUser?.role === "ADMIN";
+  const trialExpired = currentUser?.trialExpired === true;
   const restrictedSections: SectionId[] = ["agenda", "clientes", "orcamentos"];
 
   function selectSection(section: SectionId, focus?: AgendaFocus) {
@@ -80,6 +82,10 @@ export function HarmonizeApp() {
   }, [notice]);
 
   function openCreate(section: SectionId, dialog: NonNullable<typeof createDialog>) {
+    if (trialExpired) {
+      showNotice("O teste grátis terminou. Ative um plano para continuar alterando os dados.", undefined, "warning");
+      return;
+    }
     setActive(section);
     setCreateDialog(dialog);
     setMobileOpen(false);
@@ -93,13 +99,14 @@ export function HarmonizeApp() {
     router.push("/login");
   }
 
-  function showNotice(message: string, undo?: () => void) {
+  function showNotice(message: string, undo?: () => void, tone: Notice["tone"] = "success") {
     setNoticeLeaving(false);
     setNotice({
       id: Date.now(),
       message,
       undo,
       duration: undo ? 6500 : 3600,
+      tone,
     });
   }
 
@@ -127,11 +134,11 @@ export function HarmonizeApp() {
             const target = { client: ["clientes", "client"], appointment: ["agenda", "appointment"], quote: ["orcamentos", "quote"], payment: ["pagamentos", "payment"] }[action] as [SectionId, NonNullable<typeof createDialog>];
             openCreate(target[0], target[1]);
           }} onNavigate={selectSection} /> : null}
-          {active === "agenda" ? <ScheduleSection focus={agendaFocus} openCreate={createDialog === "appointment"} onCreateOpen={() => setCreateDialog("appointment")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
-          {active === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => setCreateDialog("client")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
-          {active === "procedimentos" && isAdmin ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => setCreateDialog("procedure")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
-          {active === "orcamentos" ? <QuotesSection openCreate={createDialog === "quote"} onCreateOpen={() => setCreateDialog("quote")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
-          {active === "pagamentos" && isAdmin ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => setCreateDialog("payment")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
+          {active === "agenda" ? <ScheduleSection focus={agendaFocus} openCreate={createDialog === "appointment"} onCreateOpen={() => openCreate("agenda", "appointment")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
+          {active === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => openCreate("clientes", "client")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
+          {active === "procedimentos" && isAdmin ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => openCreate("procedimentos", "procedure")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
+          {active === "orcamentos" ? <QuotesSection openCreate={createDialog === "quote"} onCreateOpen={() => openCreate("orcamentos", "quote")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
+          {active === "pagamentos" && isAdmin ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => openCreate("pagamentos", "payment")} onCreateClose={() => setCreateDialog(null)} onSaved={showNotice} /> : null}
           {active === "financeiro" && isAdmin ? <FinanceSection /> : null}
           {active === "relatorios" && isAdmin ? <ReportsSection /> : null}
           {active === "configuracoes" && isAdmin ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
@@ -139,11 +146,11 @@ export function HarmonizeApp() {
       </div>
       {notice ? (
         <div
-          className={`${noticeLeaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-24 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] bg-[#25263a] text-xs font-bold text-white shadow-[0_18px_45px_rgba(31,32,50,0.24)] lg:bottom-6`}
+          className={`${noticeLeaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-24 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] ${notice.tone === "warning" ? "border border-[#f2d58b] bg-[#fff8df] text-[#7a5410] shadow-[0_18px_45px_rgba(166,116,18,0.2)]" : "bg-[#25263a] text-white shadow-[0_18px_45px_rgba(31,32,50,0.24)]"} text-xs font-bold lg:bottom-6`}
           key={notice.id}
         >
           <div className="flex items-center gap-3 px-4 py-3">
-            <CheckCircle2 className="h-4 w-4 shrink-0 text-[#78e6a1]" />
+            <CheckCircle2 className={`h-4 w-4 shrink-0 ${notice.tone === "warning" ? "text-[#c58a18]" : "text-[#78e6a1]"}`} />
             <span className="min-w-0 flex-1">{notice.message}</span>
             {notice.undo ? (
               <button className="shrink-0 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-black text-white transition hover:bg-white/18" onClick={undoNotice}>

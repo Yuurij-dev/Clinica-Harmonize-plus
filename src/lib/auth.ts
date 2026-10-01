@@ -12,7 +12,12 @@ type AuthenticatedUser = {
   role: "ADMIN" | "PROFESSIONAL" | "STAFF";
   isOwner: boolean;
   clinicId: string;
+  trialExpired: boolean;
   clinic: { id: string; name: string; slug: string; trialEndsAt: Date | null };
+};
+
+type CurrentUserOptions = {
+  requireActiveTrial?: boolean;
 };
 
 const globalAuthCache = globalThis as typeof globalThis & {
@@ -33,7 +38,7 @@ export async function createSession(userId: string) {
     .sign(getSecret());
 }
 
-export async function getCurrentUser() {
+export async function getCurrentUser({ requireActiveTrial = false }: CurrentUserOptions = {}) {
   const token = (await cookies()).get(sessionCookieName)?.value;
   if (!token) return null;
 
@@ -42,7 +47,8 @@ export async function getCurrentUser() {
     if (typeof payload.userId !== "string") return null;
     const cached = authCache.get(payload.userId);
     if (cached?.expiresAt && cached.expiresAt > Date.now()) {
-      return cached.pending ?? cached.value ?? null;
+      const cachedUser = cached.pending ? await cached.pending : cached.value ?? null;
+      return requireActiveTrial && cachedUser?.trialExpired ? null : cachedUser;
     }
 
     const pending = prisma.user.findUnique({
@@ -67,13 +73,14 @@ export async function getCurrentUser() {
         role: membership.role,
         isOwner: membership.isOwner,
         clinicId: membership.clinic.id,
+        trialExpired: Boolean(membership.clinic.trialEndsAt && membership.clinic.trialEndsAt.getTime() <= Date.now()),
         clinic: membership.clinic,
       };
     });
     authCache.set(payload.userId, { expiresAt: Date.now() + authCacheTtl, pending });
     const user = await pending;
     authCache.set(payload.userId, { expiresAt: Date.now() + authCacheTtl, value: user });
-    return user;
+    return requireActiveTrial && user?.trialExpired ? null : user;
   } catch {
     return null;
   }
