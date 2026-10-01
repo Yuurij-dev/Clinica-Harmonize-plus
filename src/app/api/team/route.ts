@@ -15,7 +15,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser();
+  const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (user.role !== "ADMIN") return NextResponse.json({ message: "Apenas administradores podem cadastrar colaboradores." }, { status: 403 });
 
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const user = await getCurrentUser();
+  const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (user.role !== "ADMIN" || !user.isOwner) return NextResponse.json({ message: "Apenas o administrador principal pode remover colaboradores." }, { status: 403 });
 

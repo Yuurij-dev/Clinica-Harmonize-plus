@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LoginScreen, type RegisterResult, type RegisterValues } from "./login-screen";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
@@ -8,6 +8,10 @@ import { ClinicEntryTransition } from "./clinic-entry-transition";
 export function LoginPageClient() {
   const router = useRouter();
   const [clinicName, setClinicName] = useState<string | null>(null);
+
+  useEffect(() => {
+    document.documentElement.classList.remove("dark");
+  }, []);
 
   async function handleLogin(credentials: { login: string; password: string }) {
     const response = await fetch("/api/auth/login", {
