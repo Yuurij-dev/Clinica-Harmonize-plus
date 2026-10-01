@@ -33,7 +33,7 @@ export async function POST(request: Request) {
 
   const passwordHash = await hash(password, 12);
   const member = await prisma.$transaction(async (transaction) => {
-    const createdUser = await transaction.user.create({ data: { name, email, passwordHash, role } });
+    const createdUser = await transaction.user.create({ data: { name, email, passwordHash, role, emailVerifiedAt: new Date() } });
     return transaction.clinicMembership.create({
       data: { userId: createdUser.id, clinicId: user.clinicId, role },
       select: { id: true, role: true, isOwner: true, user: { select: { id: true, name: true, email: true, createdAt: true } } },

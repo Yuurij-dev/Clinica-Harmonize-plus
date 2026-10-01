@@ -17,12 +17,15 @@ export async function POST(request: Request) {
     include: {
       memberships: {
         take: 1,
-        include: { clinic: { select: { id: true, name: true } } },
+        include: { clinic: { select: { id: true, name: true, trialEndsAt: true } } },
       },
     },
   });
   if (!user || !(await compare(password, user.passwordHash))) {
     return NextResponse.json({ message: "Usuário ou senha inválidos." }, { status: 401 });
+  }
+  if (!user.emailVerifiedAt) {
+    return NextResponse.json({ message: "Confirme seu e-mail antes de acessar o sistema." }, { status: 403 });
   }
 
   const membership = user.memberships[0];

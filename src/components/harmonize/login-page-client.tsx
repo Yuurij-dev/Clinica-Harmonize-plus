@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { LoginScreen } from "./login-screen";
+import { LoginScreen, type RegisterResult, type RegisterValues } from "./login-screen";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
 
 export function LoginPageClient() {
@@ -26,5 +26,20 @@ export function LoginPageClient() {
     return true;
   }
 
-  return clinicName ? <ClinicEntryTransition clinicName={clinicName} /> : <LoginScreen onLogin={handleLogin} />;
+  async function handleRegister(values: RegisterValues) {
+    const response = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null) as { message?: string } | null;
+      return { error: data?.message ?? "Não foi possível criar a conta agora. Tente novamente." } satisfies RegisterResult;
+    }
+    const data = await response.json() as { email?: string; verificationUrl?: string };
+    return { verificationEmail: data.email ?? values.email, verificationUrl: data.verificationUrl } satisfies RegisterResult;
+  }
+
+  return clinicName ? <ClinicEntryTransition clinicName={clinicName} /> : <LoginScreen onLogin={handleLogin} onRegister={handleRegister} />;
 }

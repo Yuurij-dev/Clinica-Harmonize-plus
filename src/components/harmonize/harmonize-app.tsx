@@ -26,7 +26,7 @@ type Notice = {
   duration: number;
 };
 
-type CurrentUser = { name: string; role: string; isOwner?: boolean; clinic?: { name: string } };
+type CurrentUser = { name: string; role: string; isOwner?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
 type AgendaFocus = { date: string; time: string };
 
 export function HarmonizeApp() {

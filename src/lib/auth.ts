@@ -12,7 +12,7 @@ type AuthenticatedUser = {
   role: "ADMIN" | "PROFESSIONAL" | "STAFF";
   isOwner: boolean;
   clinicId: string;
-  clinic: { id: string; name: string; slug: string };
+  clinic: { id: string; name: string; slug: string; trialEndsAt: Date | null };
 };
 
 const globalAuthCache = globalThis as typeof globalThis & {
@@ -54,7 +54,7 @@ export async function getCurrentUser() {
           role: true,
           memberships: {
             take: 1,
-            select: { role: true, isOwner: true, clinic: { select: { id: true, name: true, slug: true } } },
+            select: { role: true, isOwner: true, clinic: { select: { id: true, name: true, slug: true, trialEndsAt: true } } },
           },
         },
       }).then((user): AuthenticatedUser | null => {
