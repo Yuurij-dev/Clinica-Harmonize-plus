@@ -1,4 +1,4 @@
-import { Bell, ChevronDown, Loader2, LogOut, Menu, Moon, Search, Settings2, Sparkles, Sun } from "lucide-react";
+import { Bell, ChevronDown, Clock3, Loader2, LogOut, Menu, Moon, Search, Settings2, Sparkles, Sun } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { SectionId } from "@/types/clinic";
@@ -9,7 +9,7 @@ type TopbarProps = {
   onSettings: () => void;
   onNavigate: (section: SectionId) => void;
   onLogout: () => Promise<void>;
-  user?: { name: string; role: string } | null;
+  user?: { name: string; role: string; clinic?: { trialEndsAt?: string | null } } | null;
 };
 
 function clinicNow() {
@@ -31,7 +31,16 @@ function appointmentMinutesFromTime(time: string) {
 function initialDarkMode() {
   if (typeof window === "undefined") return false;
   const savedTheme = window.localStorage.getItem("harmonize-theme");
-  return savedTheme ? savedTheme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+  return savedTheme === "dark";
+}
+
+function formatTrialRemaining(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const days = Math.floor(totalSeconds / 86_400);
+  const hours = Math.floor((totalSeconds % 86_400) / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${days}d ${String(hours).padStart(2, "0")}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
 }
 
 export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, user }: TopbarProps) {
@@ -40,6 +49,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
   const [profileOpen, setProfileOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
+  const [trialRemaining, setTrialRemaining] = useState<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const previousAlertIdsRef = useRef<string[] | null>(null);
 
@@ -82,6 +92,9 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
   const userName = user?.name ?? "Usuário";
   const initials = userName.split(" ").map((part) => part[0]).slice(0, 2).join("").toUpperCase();
   const roleLabel = user?.role === "ADMIN" ? "Administradora" : user?.role === "PROFESSIONAL" ? "Profissional" : "Equipe";
+  const trialEndsAt = user?.clinic?.trialEndsAt;
+  const trialExpired = trialRemaining !== null && trialRemaining <= 0;
+  const trialUrgent = trialRemaining !== null && trialRemaining > 0 && trialRemaining <= 24 * 60 * 60 * 1000;
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setDarkMode(initialDarkMode()));
@@ -91,6 +104,25 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
   }, [darkMode]);
+
+  useEffect(() => {
+    if (!trialEndsAt) {
+      const clearRemaining = window.setTimeout(() => setTrialRemaining(null), 0);
+      return () => window.clearTimeout(clearRemaining);
+    }
+    const endsAt = Date.parse(trialEndsAt);
+    if (Number.isNaN(endsAt)) {
+      const clearRemaining = window.setTimeout(() => setTrialRemaining(null), 0);
+      return () => window.clearTimeout(clearRemaining);
+    }
+    const updateRemaining = () => setTrialRemaining(endsAt - Date.now());
+    const initialUpdate = window.setTimeout(updateRemaining, 0);
+    const timer = window.setInterval(updateRemaining, 1000);
+    return () => {
+      window.clearTimeout(initialUpdate);
+      window.clearInterval(timer);
+    };
+  }, [trialEndsAt]);
 
   function toggleTheme() {
     const nextTheme = !darkMode;
@@ -171,6 +203,11 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
           <Sparkles className="h-3.5 w-3.5" />
           Resumo do dia
         </Button> : null}
+
+        {trialRemaining !== null ? <div className={`hidden items-center gap-2 rounded-full border px-3 py-2 text-[10px] font-bold md:flex ${trialExpired || trialUrgent ? "border-[#f2d59c] bg-[#fff8e7] text-[#a56400]" : "border-[#bfe7ce] bg-[#eaf8ef] text-[#247750]"}`} role="status" aria-live="polite">
+          <Clock3 className="h-3.5 w-3.5" />
+          <span>{trialExpired ? "Teste grátis encerrado" : <>Teste grátis: <strong>{formatTrialRemaining(trialRemaining)}</strong></>}</span>
+        </div> : null}
 
         <div className="relative"><Button variant="secondary" size="icon" aria-label="Notificações" onClick={() => { primeNotificationAudio(); setNotificationsOpen((open) => !open); }}>
           <Bell className="h-5 w-5" />

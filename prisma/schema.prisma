@@ -13,6 +13,13 @@ model User {
   name         String
   email        String   @unique
   passwordHash String
+  phone        String?
+  profession   String?
+  practiceArea String?
+  hasSecretary Boolean?
+  emailVerifiedAt DateTime? @db.Timestamptz(6)
+  emailVerificationTokenHash String? @unique
+  emailVerificationExpiresAt DateTime? @db.Timestamptz(6)
   role         UserRole @default(ADMIN)
   createdAt    DateTime @default(now()) @db.Timestamptz(6)
   updatedAt    DateTime @default(now()) @updatedAt @db.Timestamptz(6)
@@ -29,6 +36,8 @@ model Clinic {
   appointmentToleranceMinutes Int @default(15)
   openingTime    String           @default("08:00")
   closingTime    String           @default("19:00")
+  trialStartedAt DateTime?        @db.Timestamptz(6)
+  trialEndsAt    DateTime?        @db.Timestamptz(6)
   createdAt    DateTime           @default(now()) @db.Timestamptz(6)
   updatedAt    DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
   memberships  ClinicMembership[]
