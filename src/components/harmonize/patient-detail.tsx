@@ -118,6 +118,8 @@ export function PatientDetail({
   const procedureRecord = history?.procedures[0];
   const hasBeforePhoto = procedurePhotos.before || Boolean(procedureRecord?.beforePhoto);
   const hasAfterPhoto = procedurePhotos.after || Boolean(procedureRecord?.afterPhoto);
+  const selectedJourney = journeys.find((item) => item.id === selectedJourneyId);
+  const paidQuoteForSelectedJourney = Boolean(selectedJourney?.hasPaidQuote || quoteCompleted);
   useEffect(() => {
     if (!patient.id) return;
     let cancelled = false;
@@ -172,7 +174,7 @@ export function PatientDetail({
   }
 
   function selectTab(tab: string) {
-    if (tab === "Procedimentos" && !quoteCompleted) {
+    if (tab === "Procedimentos" && !paidQuoteForSelectedJourney) {
       setTabShake(tab);
       window.setTimeout(() => setTabShake(null), 450);
       return;
@@ -268,7 +270,7 @@ export function PatientDetail({
       if (stage.id === "procedure" && (hasQuote || hasBefore || hasAfter)) {
         if (hasAfter) return { ...stage, status: "completed" as const };
         if (hasBefore) return { ...stage, status: "in_progress" as const };
-        return { ...stage, status: "pending" as const };
+        return { ...stage, status: "current" as const };
       }
       if (stage.id === "return" && hasAfter && stage.status === "pending") return { ...stage, status: "current" as const };
       if (stage.id === "aftercare" && !hasAfter) return { ...stage, status: "pending" as const };
@@ -384,7 +386,7 @@ export function PatientDetail({
       {activeTab === "Orçamento" ? (
         <PatientExpenses key={`expenses-${selectedJourneyId ?? "none"}`} patientId={currentPatient.id ?? ""} journeyId={selectedJourneyId} onPaid={() => setQuoteCompleted(true)} />
       ) : (
-        <PatientTabContent key={`tab-${activeTab}-${selectedJourneyId ?? "none"}`} patient={currentPatient} journeyId={selectedJourneyId} activeTab={activeTab} history={history} historyLoading={historyLoading} quoteCompleted={quoteCompleted} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={() => setReturnAppointmentTarget(null)} onEvaluationSaved={() => setEvaluationCompleted(true)} onPatientUpdated={setCurrentPatient} onProcedurePhotosChange={(before, after) => setProcedurePhotos({ before, after })} onProcedurePhotoUpdated={(procedureId, photo) => setHistory((current) => current ? { ...current, procedures: current.procedures.map((item) => item.id === procedureId ? { ...item, beforePhoto: photo.beforePhoto ?? "", afterPhoto: photo.afterPhoto ?? "", status: procedurePhotoStatus(photo.beforePhoto, photo.afterPhoto) } : item) } : current)} onScheduleReturn={(procedure, kind = "return") => { setReturnAppointmentTarget({ ...procedure, kind }); selectTab("Agendamentos"); }} />
+        <PatientTabContent key={`tab-${activeTab}-${selectedJourneyId ?? "none"}`} patient={currentPatient} journeyId={selectedJourneyId} activeTab={activeTab} history={history} historyLoading={historyLoading} quoteCompleted={paidQuoteForSelectedJourney} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={() => setReturnAppointmentTarget(null)} onEvaluationSaved={() => setEvaluationCompleted(true)} onPatientUpdated={setCurrentPatient} onProcedurePhotosChange={(before, after) => setProcedurePhotos({ before, after })} onProcedurePhotoUpdated={(procedureId, photo) => setHistory((current) => current ? { ...current, procedures: current.procedures.map((item) => item.id === procedureId ? { ...item, beforePhoto: photo.beforePhoto ?? "", afterPhoto: photo.afterPhoto ?? "", status: procedurePhotoStatus(photo.beforePhoto, photo.afterPhoto) } : item) } : current)} onScheduleReturn={(procedure, kind = "return") => { setReturnAppointmentTarget({ ...procedure, kind }); selectTab("Agendamentos"); }} />
       )}
     </div>
   );
