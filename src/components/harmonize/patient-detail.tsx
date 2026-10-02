@@ -77,7 +77,7 @@ type PatientHistoryRecord = {
   payments: PatientPaymentRecord[];
 };
 
-type PatientJourneyOption = { id: string; name: string; createdAt: string; hasPaidQuote?: boolean };
+type PatientJourneyOption = { id: string; name: string; createdAt: string; hasEvaluation?: boolean; hasPaidQuote?: boolean; hasBeforePhoto?: boolean; hasAfterPhoto?: boolean };
 type JourneyEditorMode = { type: "create" } | { type: "edit"; journey: PatientJourneyOption };
 
 type ReturnAppointmentTarget = Pick<PatientProcedureRecord, "name" | "professional"> & { kind?: "return" | "procedure" };
@@ -115,7 +115,6 @@ export function PatientDetail({
   const [quoteCompleted, setQuoteCompleted] = useState(false);
   const [procedurePhotos, setProcedurePhotos] = useState({ before: false, after: false });
   const initials = currentPatient.name.split(" ").map((part) => part[0]).slice(0, 2).join("");
-  const evaluationStageCompleted = evaluationCompleted || quoteCompleted || journey.some((stage) => ["quote", "procedure", "return", "aftercare"].includes(stage.id) && ["completed", "current"].includes(stage.status));
   const procedureRecord = history?.procedures[0];
   const hasBeforePhoto = procedurePhotos.before || Boolean(procedureRecord?.beforePhoto);
   const hasAfterPhoto = procedurePhotos.after || Boolean(procedureRecord?.afterPhoto);
@@ -254,19 +253,28 @@ export function PatientDetail({
     setJourneyDeleteError("");
     setJourneyToDelete(item);
   }
-  const visibleJourney = journey.map((stage) => {
-    if (stage.id === "evaluation" && evaluationStageCompleted) return { ...stage, status: "completed" as const };
-    if (stage.id === "quote" && quoteCompleted) return { ...stage, status: "completed" as const };
-    if (stage.id === "procedure" && !quoteCompleted && !hasBeforePhoto && !hasAfterPhoto) return { ...stage, status: "pending" as const };
-    if (stage.id === "procedure" && (quoteCompleted || hasBeforePhoto || hasAfterPhoto)) {
-      if (hasAfterPhoto) return { ...stage, status: "completed" as const };
-      if (hasBeforePhoto) return { ...stage, status: "in_progress" as const };
-      return { ...stage, status: "pending" as const };
-    }
-    if (stage.id === "return" && hasAfterPhoto && stage.status === "pending") return { ...stage, status: "current" as const };
-    if (stage.id === "aftercare" && !hasAfterPhoto) return { ...stage, status: "pending" as const };
-    return stage;
-  });
+  function journeyStagesFor(item: PatientJourneyOption) {
+    const selected = item.id === selectedJourneyId;
+    const hasEvaluation = Boolean(item.hasEvaluation || (selected && evaluationCompleted) || item.hasPaidQuote || item.hasBeforePhoto || item.hasAfterPhoto);
+    const hasQuote = Boolean(item.hasPaidQuote || (selected && quoteCompleted));
+    const hasBefore = Boolean(item.hasBeforePhoto || (selected && hasBeforePhoto));
+    const hasAfter = Boolean(item.hasAfterPhoto || (selected && hasAfterPhoto));
+    const base = item.id === journeys[0]?.id ? journey : newJourneyStages();
+
+    return base.map((stage) => {
+      if (stage.id === "evaluation" && hasEvaluation) return { ...stage, status: "completed" as const };
+      if (stage.id === "quote" && hasQuote) return { ...stage, status: "completed" as const };
+      if (stage.id === "procedure" && !hasQuote && !hasBefore && !hasAfter) return { ...stage, status: "pending" as const };
+      if (stage.id === "procedure" && (hasQuote || hasBefore || hasAfter)) {
+        if (hasAfter) return { ...stage, status: "completed" as const };
+        if (hasBefore) return { ...stage, status: "in_progress" as const };
+        return { ...stage, status: "pending" as const };
+      }
+      if (stage.id === "return" && hasAfter && stage.status === "pending") return { ...stage, status: "current" as const };
+      if (stage.id === "aftercare" && !hasAfter) return { ...stage, status: "pending" as const };
+      return stage;
+    });
+  }
 
   useEffect(() => {
     if (!patient.id || (!selectedJourneyId && activeTab !== "Histórico") || !shouldLoadPatientHistory(activeTab)) return;
@@ -321,13 +329,12 @@ export function PatientDetail({
         <div className="min-w-0 p-4">
           <div className="mb-3 flex items-center justify-between gap-3"><div><p className="text-[9px] font-bold uppercase text-[#9a9baa]">Jornadas do cliente</p><p className="mt-1 text-[10px] text-[#858696]">Selecione uma jornada para abrir os dados relacionados</p></div><Button className="shrink-0" size="sm" type="button" disabled={journeySaving} onClick={openCreateJourney}><Plus className="h-3.5 w-3.5" />Nova jornada</Button></div>
           {journeysLoading ? <div className="hp-skeleton h-28 animate-pulse rounded-[7px]" /> : [...journeys].reverse().map((item) => {
-            const isDefaultJourney = item.id === journeys[0]?.id;
             const selectedJourney = item.id === selectedJourneyId;
             return <div className={cn("mb-3 rounded-[8px] border p-2 last:mb-0", selectedJourney ? "border-[#cfcaff] bg-[#fcfbff]" : "border-transparent")} key={item.id}>
               <div className="mb-1 flex items-center gap-2 px-1"><button className="min-w-0 flex-1 text-left" type="button" onClick={() => selectJourney(item.id)}><span className={cn("block truncate text-[10px] font-bold", selectedJourney ? "text-[#5147dc]" : "text-[#77788a]")}>{item.name}</span></button><button className="hp-pressable rounded p-1 text-[#88899a] hover:bg-[#eeecff] hover:text-[#5147dc] disabled:cursor-default disabled:opacity-35" type="button" aria-label={`Editar ${item.name}`} disabled={journeyDeleting} onClick={() => openEditJourney(item)}><PencilLine className="h-3 w-3" /></button><button className={cn("hp-pressable rounded p-1 text-[#88899a] hover:bg-[#fff0ee] hover:text-[#b42318] disabled:cursor-default disabled:opacity-35", journeyValidationShake === item.id && "animate-[hp-shake_0.42s_ease-in-out]")} type="button" aria-label={`Excluir ${item.name}`} title={item.hasPaidQuote ? "Não é possível excluir uma jornada com orçamento pago" : journeys.length <= 1 ? "Mantenha pelo menos uma jornada" : "Excluir jornada"} disabled={journeyDeleting} onClick={() => requestJourneyDelete(item)}><Trash2 className="h-3 w-3" /></button>{selectedJourney ? <span className="text-[9px] font-semibold text-[#5147dc]">Selecionada</span> : null}</div>
               <CustomerJourney
                 compact
-                journey={isDefaultJourney ? visibleJourney : newJourneyStages()}
+                journey={journeyStagesFor(item)}
                 onOpenStage={(stageId) => {
                   selectJourney(item.id);
                   const stageTabs = { lead: "Dados", evaluation: "Avaliação", quote: "Orçamento", procedure: "Procedimentos", return: "Agendamentos", aftercare: "Observações" } as const;
