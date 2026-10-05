@@ -25,7 +25,7 @@ export function Sidebar({
 }: SidebarProps) {
   const visibleNavItems = isAdmin ? navItems : navItems.filter((item) => ["agenda", "clientes", "orcamentos"].includes(item.id));
   const content = (
-    <aside className="hp-sidebar-enter flex h-full w-[220px] flex-col border-r border-[#eeeef3] bg-white px-4 py-5 text-[#28293d]">
+    <aside className="flex h-full w-[220px] flex-col border-r border-[#eeeef3] bg-white px-4 py-5 text-[#28293d]">
       <div className="mb-7 flex items-center justify-between gap-3 px-1">
         <div className="min-w-0">
           <div className="flex items-center gap-2.5">

@@ -1,6 +1,7 @@
 "use client";
 
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   CalendarDays,
@@ -220,6 +221,7 @@ function useFinancialData() {
 }
 
 export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
+  const router = useRouter();
   const cachedPatients = readClientCache<{ patients: ApiPatient[] }>("/api/patients");
   const [selectedPatientName, setSelectedPatientName] = useState<string | null>(null);
   const [patientRows, setPatientRows] = useState<Patient[]>(() => cachedPatients?.patients.map(mapApiPatient) ?? []);
@@ -227,6 +229,13 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
   const [saveError, setSaveError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    const syncSelectedPatient = () => setSelectedPatientName(new URLSearchParams(window.location.search).get("patient"));
+    syncSelectedPatient();
+    window.addEventListener("popstate", syncSelectedPatient);
+    return () => window.removeEventListener("popstate", syncSelectedPatient);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -243,10 +252,16 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
 
     return () => { active = false; };
   }, []);
-  const selectedPatient = patientRows.find((patient) => patient.name === selectedPatientName);
+  const selectedPatient = patientRows.find((patient) => patient.id === selectedPatientName || patient.name === selectedPatientName);
   const filteredPatients = patientRows.filter((patient) =>
     `${patient.name} ${patient.phone} ${patient.status}`.toLowerCase().includes(query.toLowerCase()),
   );
+
+  function openPatient(patient: Patient) {
+    const key = patient.id ?? patient.name;
+    setSelectedPatientName(key);
+    router.push(`/clientes?patient=${encodeURIComponent(key)}`);
+  }
 
   async function savePatient(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -290,7 +305,10 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
         key={selectedPatient.name}
         patient={selectedPatient}
         journey={journeyForPatient(selectedPatient)}
-        onBack={() => setSelectedPatientName(null)}
+        onBack={() => {
+          setSelectedPatientName(null);
+          router.replace("/clientes");
+        }}
       />
     );
   }
@@ -313,12 +331,12 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
           const currentStage = journey.find((stage) => stage.status === "current");
 
           return [
-          <button className="text-left font-bold text-[#303144] hover:text-[#5147dc]" key={patient.name} onClick={() => setSelectedPatientName(patient.name)}>{patient.name}</button>,
+          <button className="text-left font-bold text-[#303144] hover:text-[#5147dc]" key={patient.name} onClick={() => openPatient(patient)}>{patient.name}</button>,
           patient.phone,
           <StatusBadge key={patient.status} status={patient.status} />,
           <span className="font-bold text-[#5147dc]" key={currentStage?.id}>{currentStage?.label ?? "Concluída"}</span>,
           patient.nextReturn,
-          <Button key="open" size="sm" variant="secondary" onClick={() => setSelectedPatientName(patient.name)}>Ver perfil <ArrowRight className="h-3 w-3" /></Button>,
+          <Button key="open" size="sm" variant="secondary" onClick={() => openPatient(patient)}>Ver perfil <ArrowRight className="h-3 w-3" /></Button>,
           ];
         })}
       /> : null}
