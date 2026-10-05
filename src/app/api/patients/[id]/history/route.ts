@@ -11,7 +11,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const journeyId = requestedTab === "Histórico" ? undefined : requestedJourneyId || undefined;
   const includeAppointments = ["Procedimentos", "Agendamentos", "Histórico"].includes(requestedTab ?? "");
   const includePayments = ["Pagamentos", "Histórico"].includes(requestedTab ?? "");
-  const includeQuotes = ["Procedimentos", "Agendamentos"].includes(requestedTab ?? "");
+  const includeQuotes = ["Procedimentos", "Agendamentos", "Histórico"].includes(requestedTab ?? "");
   const includeProcedureRecords = ["Procedimentos", "Agendamentos", "Histórico"].includes(requestedTab ?? "");
   const includeProcedurePhotos = requestedTab === "Procedimentos" || requestedTab === "Histórico";
   const patient = await prisma.patient.findFirst({
@@ -27,7 +27,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     includeAppointments ? prisma.appointment.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: [{ date: "desc" }, { time: "desc" }] }) : Promise.resolve([]),
     includePayments ? prisma.payment.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { date: "desc" } }) : Promise.resolve([]),
     includeQuotes ? prisma.quote.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { createdAt: "desc" }, select: { id: true, items: true, status: true, createdAt: true } }) : Promise.resolve([]),
-    includeProcedureRecords ? prisma.patientProcedure.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { performedAt: "desc" }, select: { id: true, name: true, professional: true, performedAt: true, notes: true, beforePhoto: true, afterPhoto: true } }) : Promise.resolve([]),
+    includeProcedureRecords ? prisma.patientProcedure.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { performedAt: "desc" }, select: { id: true, name: true, professional: true, performedAt: true, notes: true, beforePhoto: true, afterPhoto: true, photoSessions: { orderBy: { createdAt: "asc" }, select: { id: true, name: true, beforePhoto: true, afterPhoto: true, createdAt: true } } } }) : Promise.resolve([]),
     prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { appointmentToleranceMinutes: true } }),
   ]);
   const now = clinicNow();
@@ -42,6 +42,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     ...procedure,
     beforePhoto: includeProcedurePhotos ? procedure.beforePhoto : procedure.beforePhoto ? "__photo__" : null,
     afterPhoto: includeProcedurePhotos ? procedure.afterPhoto : procedure.afterPhoto ? "__photo__" : null,
+    photoSessions: procedure.photoSessions.map((session) => ({
+      ...session,
+      beforePhoto: includeProcedurePhotos ? session.beforePhoto : session.beforePhoto ? "__photo__" : null,
+      afterPhoto: includeProcedurePhotos ? session.afterPhoto : session.afterPhoto ? "__photo__" : null,
+    })),
   }));
 
   return NextResponse.json({ patient: { id: patient.id, appointments: updatedAppointments, payments, quotes, procedureRecords: responseProcedureRecords, appointmentToleranceMinutes: toleranceMinutes } });

@@ -8,7 +8,16 @@ async function getPatient(patientId: string, clinicId: string) {
 
 async function ensureDefaultJourney(patientId: string, clinicId: string) {
   const existing = await prisma.patientJourney.findFirst({ where: { patientId, clinicId, archivedAt: null }, orderBy: { createdAt: "asc" } });
-  if (existing) return existing;
+  if (existing) {
+    await Promise.all([
+      prisma.appointment.updateMany({ where: { patientId, clinicId, journeyId: null }, data: { journeyId: existing.id } }),
+      prisma.patientProcedure.updateMany({ where: { patientId, clinicId, journeyId: null }, data: { journeyId: existing.id } }),
+      prisma.evaluation.updateMany({ where: { patientId, clinicId, journeyId: null }, data: { journeyId: existing.id } }),
+      prisma.quote.updateMany({ where: { patientId, clinicId, journeyId: null }, data: { journeyId: existing.id } }),
+      prisma.payment.updateMany({ where: { patientId, clinicId, journeyId: null }, data: { journeyId: existing.id } }),
+    ]);
+    return existing;
+  }
 
   return prisma.$transaction(async (transaction) => {
     const journey = await transaction.patientJourney.create({ data: { patientId, clinicId, name: "Jornada 1" } });
@@ -46,6 +55,7 @@ function serializeJourney(journey: {
     createdAt: journey.createdAt,
     hasEvaluation: journey.evaluations.some((evaluation) => evaluation.photos.length > 0),
     hasPaidQuote: journey.quotes.some((quote) => ["Pago", "Aprovado"].includes(quote.status)),
+    hasProcedure: journey.procedures.length > 0,
     hasBeforePhoto: journey.procedures.some((procedure) => Boolean(procedure.beforePhoto)),
     hasAfterPhoto: journey.procedures.some((procedure) => Boolean(procedure.afterPhoto)),
   };
