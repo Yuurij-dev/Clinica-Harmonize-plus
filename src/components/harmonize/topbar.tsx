@@ -49,6 +49,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
   const [profileOpen, setProfileOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
+  const [themeReady, setThemeReady] = useState(false);
   const [trialRemaining, setTrialRemaining] = useState<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const previousAlertIdsRef = useRef<string[] | null>(null);
@@ -97,13 +98,17 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
   const trialUrgent = trialRemaining !== null && trialRemaining > 0 && trialRemaining <= 24 * 60 * 60 * 1000;
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => setDarkMode(initialDarkMode()));
+    const frame = window.requestAnimationFrame(() => {
+      setDarkMode(initialDarkMode());
+      setThemeReady(true);
+    });
     return () => window.cancelAnimationFrame(frame);
   }, []);
 
   useEffect(() => {
+    if (!themeReady) return;
     document.documentElement.classList.toggle("dark", darkMode);
-  }, [darkMode]);
+  }, [darkMode, themeReady]);
 
   useEffect(() => {
     if (!trialEndsAt) {
@@ -177,7 +182,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
   }
 
   return (
-    <header className="hp-topbar-enter sticky top-0 z-30 border-b border-[#eeeef3] bg-white/95 px-4 py-3 backdrop-blur-xl sm:px-7 lg:px-9">
+    <header className="sticky top-0 z-30 border-b border-[#eeeef3] bg-white/95 px-4 py-3 backdrop-blur-xl sm:px-7 lg:px-9">
       <div className="flex items-center gap-3">
         <Button
           className="lg:hidden"

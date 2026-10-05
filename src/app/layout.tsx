@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { AppRouterShell } from "@/components/harmonize/app-router-shell";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -22,9 +23,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="pt-BR"
+      suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: `(() => { try { if (window.location.pathname !== "/login" && window.localStorage.getItem("harmonize-theme") === "dark") document.documentElement.classList.add("dark"); } catch {} })();` }} />
+      </head>
+      <body className="min-h-full flex flex-col"><AppRouterShell>{children}</AppRouterShell></body>
     </html>
   );
 }

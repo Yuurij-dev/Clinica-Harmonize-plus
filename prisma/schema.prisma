@@ -147,10 +147,24 @@ model PatientProcedure {
   clinic       Clinic?  @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   journey      PatientJourney? @relation(fields: [journeyId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  photoSessions PatientProcedurePhotoSession[]
 
   @@index([clinicId])
   @@index([patientId, performedAt])
   @@index([journeyId, performedAt])
+}
+
+model PatientProcedurePhotoSession {
+  id          String   @id @default(cuid())
+  procedureId String
+  name        String
+  beforePhoto String?
+  afterPhoto  String?
+  createdAt   DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(6)
+  procedure   PatientProcedure @relation(fields: [procedureId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([procedureId, createdAt])
 }
 
 model Evaluation {

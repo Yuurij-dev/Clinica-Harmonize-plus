@@ -1,14 +1,17 @@
 "use client";
 
 import Image from "next/image";
-import { type CSSProperties, type FormEvent, useEffect, useState } from "react";
+import { type CSSProperties, type FormEvent, type PointerEvent as ReactPointerEvent, type RefObject, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
+  ArrowLeftRight,
   CalendarPlus,
   CalendarDays,
   CheckCircle2,
   Camera,
+  ChevronDown,
   Clock3,
+  Columns2,
   CreditCard,
   FileText,
   Loader2,
@@ -32,7 +35,7 @@ import { CustomerJourney } from "./customer-journey";
 import { PatientExpenses } from "./patient-expenses";
 import { PhotoEditor } from "./photo-editor/photo-editor";
 import { EmptyState, LoadingSkeleton } from "./shared";
-import { getCachedJson, invalidateClientCache } from "@/lib/client-cache";
+import { invalidateClientCache } from "@/lib/client-cache";
 import { FormField, fieldClassName } from "@/components/ui/modal";
 import { formatCpf, formatInteger, formatPhone } from "@/lib/input-masks";
 
@@ -46,7 +49,15 @@ type PatientProcedureRecord = {
   status: string;
   beforePhoto: string;
   afterPhoto: string;
+  photoSessions: PatientPhotoSession[];
   notes?: string;
+};
+
+type PatientPhotoSession = {
+  id: string;
+  name: string;
+  beforePhoto: string;
+  afterPhoto: string;
 };
 
 type PatientAppointmentRecord = {
@@ -77,7 +88,7 @@ type PatientHistoryRecord = {
   payments: PatientPaymentRecord[];
 };
 
-type PatientJourneyOption = { id: string; name: string; createdAt: string; hasPaidQuote?: boolean };
+type PatientJourneyOption = { id: string; name: string; createdAt: string; hasEvaluation?: boolean; hasPaidQuote?: boolean; hasProcedure?: boolean; hasBeforePhoto?: boolean; hasAfterPhoto?: boolean };
 type JourneyEditorMode = { type: "create" } | { type: "edit"; journey: PatientJourneyOption };
 
 type ReturnAppointmentTarget = Pick<PatientProcedureRecord, "name" | "professional"> & { kind?: "return" | "procedure" };
@@ -109,16 +120,18 @@ export function PatientDetail({
   const [journeyValidationNotice, setJourneyValidationNotice] = useState("");
   const [journeyValidationShake, setJourneyValidationShake] = useState<string | null>(null);
   const [history, setHistory] = useState<PatientHistoryRecord>();
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [historyLoading, setHistoryLoading] = useState(Boolean(patient.id && shouldLoadPatientHistory(initialTab)));
   const [returnAppointmentTarget, setReturnAppointmentTarget] = useState<ReturnAppointmentTarget | null>(null);
   const [evaluationCompleted, setEvaluationCompleted] = useState(false);
   const [quoteCompleted, setQuoteCompleted] = useState(false);
   const [procedurePhotos, setProcedurePhotos] = useState({ before: false, after: false });
   const initials = currentPatient.name.split(" ").map((part) => part[0]).slice(0, 2).join("");
-  const evaluationStageCompleted = evaluationCompleted || quoteCompleted || journey.some((stage) => ["quote", "procedure", "return", "aftercare"].includes(stage.id) && ["completed", "current"].includes(stage.status));
   const procedureRecord = history?.procedures[0];
   const hasBeforePhoto = procedurePhotos.before || Boolean(procedureRecord?.beforePhoto);
   const hasAfterPhoto = procedurePhotos.after || Boolean(procedureRecord?.afterPhoto);
+  const selectedJourney = journeys.find((item) => item.id === selectedJourneyId);
+  const paidQuoteForSelectedJourney = Boolean(selectedJourney?.hasPaidQuote || selectedJourney?.hasProcedure || quoteCompleted);
   useEffect(() => {
     if (!patient.id) return;
     let cancelled = false;
@@ -173,7 +186,7 @@ export function PatientDetail({
   }
 
   function selectTab(tab: string) {
-    if (tab === "Procedimentos" && !quoteCompleted) {
+    if (tab === "Procedimentos" && !paidQuoteForSelectedJourney) {
       setTabShake(tab);
       window.setTimeout(() => setTabShake(null), 450);
       return;
@@ -254,38 +267,59 @@ export function PatientDetail({
     setJourneyDeleteError("");
     setJourneyToDelete(item);
   }
-  const visibleJourney = journey.map((stage) => {
-    if (stage.id === "evaluation" && evaluationStageCompleted) return { ...stage, status: "completed" as const };
-    if (stage.id === "quote" && quoteCompleted) return { ...stage, status: "completed" as const };
-    if (stage.id === "procedure" && !quoteCompleted && !hasBeforePhoto && !hasAfterPhoto) return { ...stage, status: "pending" as const };
-    if (stage.id === "procedure" && (quoteCompleted || hasBeforePhoto || hasAfterPhoto)) {
-      if (hasAfterPhoto) return { ...stage, status: "completed" as const };
-      if (hasBeforePhoto) return { ...stage, status: "in_progress" as const };
-      return { ...stage, status: "pending" as const };
-    }
-    if (stage.id === "return" && hasAfterPhoto && stage.status === "pending") return { ...stage, status: "current" as const };
-    if (stage.id === "aftercare" && !hasAfterPhoto) return { ...stage, status: "pending" as const };
-    return stage;
-  });
+  function journeyStagesFor(item: PatientJourneyOption) {
+    const selected = item.id === selectedJourneyId;
+    const hasEvaluation = Boolean(item.hasEvaluation || (selected && evaluationCompleted) || item.hasPaidQuote || item.hasBeforePhoto || item.hasAfterPhoto);
+    const hasQuote = Boolean(item.hasPaidQuote || (selected && quoteCompleted));
+    const hasBefore = Boolean(item.hasBeforePhoto || (selected && hasBeforePhoto));
+    const hasAfter = Boolean(item.hasAfterPhoto || (selected && hasAfterPhoto));
+    const hasProcedure = Boolean(item.hasProcedure || hasQuote || hasBefore || hasAfter);
+    const base = item.id === journeys[0]?.id ? journey : newJourneyStages();
+
+    return base.map((stage) => {
+      if (stage.id === "evaluation" && hasEvaluation) return { ...stage, status: "completed" as const };
+      if (stage.id === "quote" && hasQuote) return { ...stage, status: "completed" as const };
+      if (stage.id === "procedure" && !hasProcedure) return { ...stage, status: "pending" as const };
+      if (stage.id === "procedure" && hasProcedure) {
+        if (hasAfter) return { ...stage, status: "completed" as const };
+        if (hasBefore) return { ...stage, status: "in_progress" as const };
+        return { ...stage, status: "current" as const };
+      }
+      if (stage.id === "return" && hasAfter && stage.status === "pending") return { ...stage, status: "current" as const };
+      if (stage.id === "aftercare" && !hasAfter) return { ...stage, status: "pending" as const };
+      return stage;
+    });
+  }
 
   useEffect(() => {
     if (!patient.id || (!selectedJourneyId && activeTab !== "Histórico") || !shouldLoadPatientHistory(activeTab)) return;
     let cancelled = false;
     const historyJourneyQuery = activeTab === "Histórico" ? "" : `&journeyId=${encodeURIComponent(selectedJourneyId as string)}`;
-    getCachedJson<{ patient?: { appointmentToleranceMinutes?: number; appointments: Array<{ id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string }>; payments: Array<{ id: string; value: number; method: string; status: string; installments: string }>; quotes: Array<{ items: string; status: string }>; procedureRecords: Array<{ id: string; name: string; professional: string; performedAt: string; notes: string; beforePhoto: string | null; afterPhoto: string | null }> } }>(`/api/patients/${patient.id}/history?tab=${encodeURIComponent(activeTab)}${historyJourneyQuery}`)
+    const historyUrl = `/api/patients/${patient.id}/history?tab=${encodeURIComponent(activeTab)}${historyJourneyQuery}`;
+    fetch(historyUrl, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Não foi possível carregar o histórico (${response.status}).`);
+        return response.json() as Promise<{ patient?: { appointmentToleranceMinutes?: number; appointments: Array<{ id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string }>; payments: Array<{ id: string; value: number; method: string; status: string; installments: string }>; quotes: Array<{ id: string; items: string; status: string; createdAt?: string }>; procedureRecords: Array<{ id: string; name: string; professional: string; performedAt: string; notes: string; beforePhoto: string | null; afterPhoto: string | null; photoSessions?: Array<{ id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }> }> } }>;
+      })
       .then((data) => {
         if (cancelled) return;
         const appointments = data.patient?.appointments ?? [];
         const payments = data.patient?.payments ?? [];
-        const latestQuoteItems = data.patient?.quotes?.[0]?.items;
+        const paidQuotes = (data.patient?.quotes ?? []).filter((quote) => ["Pago", "Aprovado"].includes(quote.status));
+        const latestQuoteItems = paidQuotes[0]?.items;
         const useQuoteTitle = Boolean(latestQuoteItems && data.patient?.procedureRecords?.length === 1);
         setQuoteCompleted(data.patient?.quotes?.some((quote) => ["Pago", "Aprovado"].includes(quote.status)) ?? false);
         const latestProcedure = data.patient?.procedureRecords?.[0];
         setProcedurePhotos({ before: Boolean(latestProcedure?.beforePhoto), after: Boolean(latestProcedure?.afterPhoto) });
+        const persistedProcedures = data.patient?.procedureRecords ?? [];
+        const procedures = persistedProcedures.length
+          ? persistedProcedures.map((item) => ({ id: item.id, name: useQuoteTitle ? latestQuoteItems ?? item.name : item.name, date: new Date(item.performedAt).toLocaleDateString("pt-BR"), professional: item.professional, status: procedurePhotoStatus(item.beforePhoto, item.afterPhoto), beforePhoto: item.beforePhoto ?? "", afterPhoto: item.afterPhoto ?? "", photoSessions: item.photoSessions?.map((session) => ({ id: session.id, name: session.name, beforePhoto: session.beforePhoto ?? "", afterPhoto: session.afterPhoto ?? "" })) ?? [], notes: item.notes.startsWith("__quote:") ? "" : item.notes }))
+          : paidQuotes.map((quote) => ({ name: quote.items, date: quote.createdAt ? new Date(quote.createdAt).toLocaleDateString("pt-BR") : new Date().toLocaleDateString("pt-BR"), professional: "", status: "Aguardando foto", beforePhoto: "", afterPhoto: "", photoSessions: [], notes: "" }))
+            .concat(appointments.filter((item) => ["Atendido", "Finalizado"].includes(item.status)).map((item) => ({ name: item.procedure, date: new Date(item.date).toLocaleDateString("pt-BR"), professional: item.professional, status: item.status, beforePhoto: "", afterPhoto: "", photoSessions: [], notes: item.notes })));
         setHistory({
           appointments: appointments.map((item) => ({ id: item.id, date: new Date(item.date).toLocaleDateString("pt-BR"), time: item.time, procedure: item.procedure, professional: item.professional, status: item.status, notes: item.notes })),
           appointmentToleranceMinutes: data.patient?.appointmentToleranceMinutes ?? 15,
-          procedures: data.patient?.procedureRecords?.length ? data.patient.procedureRecords.map((item) => ({ id: item.id, name: useQuoteTitle ? latestQuoteItems ?? item.name : item.name, date: new Date(item.performedAt).toLocaleDateString("pt-BR"), professional: item.professional, status: procedurePhotoStatus(item.beforePhoto, item.afterPhoto), beforePhoto: item.beforePhoto ?? "", afterPhoto: item.afterPhoto ?? "", notes: item.notes.startsWith("__quote:") ? "" : item.notes })) : appointments.filter((item) => ["Atendido", "Finalizado"].includes(item.status)).map((item) => ({ name: item.procedure, date: new Date(item.date).toLocaleDateString("pt-BR"), professional: item.professional, status: item.status, beforePhoto: "", afterPhoto: "" })),
+          procedures,
           payments: payments.map((item) => ({ id: item.id, procedure: "Atendimento", value: new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(item.value), method: item.method, status: item.status, disabled: item.status === "Pago", disabledReason: item.status === "Pago" ? "Pagamento já finalizado" : undefined })),
           observations: [],
         });
@@ -293,7 +327,7 @@ export function PatientDetail({
       .catch(() => { if (!cancelled) setHistory(undefined); })
       .finally(() => { if (!cancelled) setHistoryLoading(false); });
     return () => { cancelled = true; };
-  }, [patient.id, activeTab, selectedJourneyId]);
+  }, [patient.id, activeTab, selectedJourneyId, historyRefreshKey]);
 
   return (
     <div className="mx-auto max-w-[1400px] space-y-4">
@@ -321,13 +355,12 @@ export function PatientDetail({
         <div className="min-w-0 p-4">
           <div className="mb-3 flex items-center justify-between gap-3"><div><p className="text-[9px] font-bold uppercase text-[#9a9baa]">Jornadas do cliente</p><p className="mt-1 text-[10px] text-[#858696]">Selecione uma jornada para abrir os dados relacionados</p></div><Button className="shrink-0" size="sm" type="button" disabled={journeySaving} onClick={openCreateJourney}><Plus className="h-3.5 w-3.5" />Nova jornada</Button></div>
           {journeysLoading ? <div className="hp-skeleton h-28 animate-pulse rounded-[7px]" /> : [...journeys].reverse().map((item) => {
-            const isDefaultJourney = item.id === journeys[0]?.id;
             const selectedJourney = item.id === selectedJourneyId;
             return <div className={cn("mb-3 rounded-[8px] border p-2 last:mb-0", selectedJourney ? "border-[#cfcaff] bg-[#fcfbff]" : "border-transparent")} key={item.id}>
               <div className="mb-1 flex items-center gap-2 px-1"><button className="min-w-0 flex-1 text-left" type="button" onClick={() => selectJourney(item.id)}><span className={cn("block truncate text-[10px] font-bold", selectedJourney ? "text-[#5147dc]" : "text-[#77788a]")}>{item.name}</span></button><button className="hp-pressable rounded p-1 text-[#88899a] hover:bg-[#eeecff] hover:text-[#5147dc] disabled:cursor-default disabled:opacity-35" type="button" aria-label={`Editar ${item.name}`} disabled={journeyDeleting} onClick={() => openEditJourney(item)}><PencilLine className="h-3 w-3" /></button><button className={cn("hp-pressable rounded p-1 text-[#88899a] hover:bg-[#fff0ee] hover:text-[#b42318] disabled:cursor-default disabled:opacity-35", journeyValidationShake === item.id && "animate-[hp-shake_0.42s_ease-in-out]")} type="button" aria-label={`Excluir ${item.name}`} title={item.hasPaidQuote ? "Não é possível excluir uma jornada com orçamento pago" : journeys.length <= 1 ? "Mantenha pelo menos uma jornada" : "Excluir jornada"} disabled={journeyDeleting} onClick={() => requestJourneyDelete(item)}><Trash2 className="h-3 w-3" /></button>{selectedJourney ? <span className="text-[9px] font-semibold text-[#5147dc]">Selecionada</span> : null}</div>
               <CustomerJourney
                 compact
-                journey={isDefaultJourney ? visibleJourney : newJourneyStages()}
+                journey={journeyStagesFor(item)}
                 onOpenStage={(stageId) => {
                   selectJourney(item.id);
                   const stageTabs = { lead: "Dados", evaluation: "Avaliação", quote: "Orçamento", procedure: "Procedimentos", return: "Agendamentos", aftercare: "Observações" } as const;
@@ -375,9 +408,9 @@ export function PatientDetail({
       </Card>
 
       {activeTab === "Orçamento" ? (
-        <PatientExpenses key={`expenses-${selectedJourneyId ?? "none"}`} patientId={currentPatient.id ?? ""} journeyId={selectedJourneyId} onPaid={() => setQuoteCompleted(true)} />
+        <PatientExpenses key={`expenses-${selectedJourneyId ?? "none"}`} patientId={currentPatient.id ?? ""} journeyId={selectedJourneyId} onPaid={() => { setQuoteCompleted(true); setHistory(undefined); setHistoryLoading(true); setHistoryRefreshKey((current) => current + 1); }} />
       ) : (
-        <PatientTabContent key={`tab-${activeTab}-${selectedJourneyId ?? "none"}`} patient={currentPatient} journeyId={selectedJourneyId} activeTab={activeTab} history={history} historyLoading={historyLoading} quoteCompleted={quoteCompleted} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={() => setReturnAppointmentTarget(null)} onEvaluationSaved={() => setEvaluationCompleted(true)} onPatientUpdated={setCurrentPatient} onProcedurePhotosChange={(before, after) => setProcedurePhotos({ before, after })} onProcedurePhotoUpdated={(procedureId, photo) => setHistory((current) => current ? { ...current, procedures: current.procedures.map((item) => item.id === procedureId ? { ...item, beforePhoto: photo.beforePhoto ?? "", afterPhoto: photo.afterPhoto ?? "", status: procedurePhotoStatus(photo.beforePhoto, photo.afterPhoto) } : item) } : current)} onScheduleReturn={(procedure, kind = "return") => { setReturnAppointmentTarget({ ...procedure, kind }); selectTab("Agendamentos"); }} />
+        <PatientTabContent key={`tab-${activeTab}-${selectedJourneyId ?? "none"}`} patient={currentPatient} journeyId={selectedJourneyId} activeTab={activeTab} history={history} historyLoading={historyLoading} quoteCompleted={paidQuoteForSelectedJourney} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={() => setReturnAppointmentTarget(null)} onEvaluationSaved={() => setEvaluationCompleted(true)} onPatientUpdated={setCurrentPatient} onProcedurePhotosChange={(before, after) => setProcedurePhotos({ before, after })} onProcedurePhotoUpdated={(procedureId, photo) => setHistory((current) => current ? { ...current, procedures: current.procedures.map((item) => item.id === procedureId ? { ...item, beforePhoto: photo.beforePhoto ?? "", afterPhoto: photo.afterPhoto ?? "", status: procedurePhotoStatus(photo.beforePhoto, photo.afterPhoto) } : item) } : current)} onScheduleReturn={(procedure, kind = "return") => { setReturnAppointmentTarget({ ...procedure, kind }); selectTab("Agendamentos"); }} />
       )}
     </div>
   );
@@ -534,28 +567,28 @@ function HistoryTab({ patient, history }: { patient: Patient; history?: PatientH
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[1.25fr_0.75fr]">
-      <Card className="p-5">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-[#5147dc]" />
-          <h3 className="text-sm font-bold text-[#303144]">Histórico do cliente</h3>
-        </div>
-        <div className="mt-5 space-y-3">
-          {history.procedures.map((procedure) => (
-            <ProcedureHistoryCard key={`${procedure.name}-${procedure.date}`} procedure={procedure} />
-          ))}
-          {!history.procedures.length ? <EmptyInline text="Cliente ainda não realizou procedimentos." /> : null}
-        </div>
-      </Card>
-      <Card className="p-5">
+    <div className="space-y-4">
+      <Card className="self-start p-5">
         <p className="text-[9px] font-bold uppercase text-[#a0a1af]">Resumo</p>
-        <div className="mt-4 grid gap-3 text-xs">
+        <div className="mt-4 grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
           <SummaryLine label="Procedimentos feitos" value={String(history.procedures.length)} />
           <SummaryLine label="Agendamentos" value={String(history.appointments.length)} />
           <SummaryLine label="Pagamentos registrados" value={String(history.payments.filter((payment) => !payment.disabled).length)} />
           <SummaryLine label="Observações" value={String(history.observations.length)} />
         </div>
       </Card>
+      <div>
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-[#5147dc]" />
+          <h3 className="text-sm font-bold text-[#303144]">Histórico do cliente</h3>
+        </div>
+        <div className="mt-5 grid gap-3 lg:grid-cols-2">
+          {history.procedures.map((procedure) => (
+            <ProcedureHistoryCard key={`${procedure.name}-${procedure.date}`} procedure={procedure} />
+          ))}
+          {!history.procedures.length ? <EmptyInline text="Cliente ainda não realizou procedimentos." /> : null}
+        </div>
+      </div>
     </div>
   );
 }
@@ -563,6 +596,7 @@ function HistoryTab({ patient, history }: { patient: Patient; history?: PatientH
 function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange, onProcedurePhotoUpdated, onScheduleReturn }: { patientId: string; history?: PatientHistoryRecord; loading: boolean; onProcedurePhotosChange: (before: boolean, after: boolean) => void; onProcedurePhotoUpdated: (procedureId: string, photo: { beforePhoto: string | null; afterPhoto: string | null }) => void; onScheduleReturn: (procedure: ReturnAppointmentTarget, kind?: "return" | "procedure") => void }) {
   const [procedures, setProcedures] = useState<PatientProcedureRecord[]>(history?.procedures ?? []);
   const [photoOperations, setPhotoOperations] = useState<Record<string, "upload" | "remove">>({});
+  const [deletingPhotoSessionKey, setDeletingPhotoSessionKey] = useState<string>();
   const [appointmentStatuses, setAppointmentStatuses] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [currentTime, setCurrentTime] = useState(() => clinicNowForForm());
@@ -591,7 +625,7 @@ function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange, o
     }
   }
 
-  async function updateProcedurePhoto(procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", photo: string | null, operation: "upload" | "remove" = "upload") {
+  async function updateProcedurePhoto(procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", photo: string | null, operation: "upload" | "remove" = "upload", sessionId?: string) {
     if (!procedureId) return;
     const operationKey = `${procedureId}-${photoType}`;
     setPhotoOperations((current) => ({ ...current, [operationKey]: operation }));
@@ -600,13 +634,17 @@ function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange, o
       const response = await fetch(`/api/patients/${patientId}/procedures/${procedureId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ photoType, photo }),
+        body: JSON.stringify({ photoType, photo, ...(sessionId ? { sessionId } : {}) }),
       });
-      const data = await response.json() as { procedure?: { beforePhoto: string | null; afterPhoto: string | null }; message?: string };
-      if (!response.ok || !data.procedure) throw new Error(data.message ?? "Não foi possível atualizar a foto.");
-      setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, beforePhoto: data.procedure?.beforePhoto ?? "", afterPhoto: data.procedure?.afterPhoto ?? "", status: procedurePhotoStatus(data.procedure?.beforePhoto ?? null, data.procedure?.afterPhoto ?? null) } : item));
-      onProcedurePhotosChange(Boolean(data.procedure.beforePhoto), Boolean(data.procedure.afterPhoto));
-      onProcedurePhotoUpdated(procedureId, data.procedure);
+      const data = await response.json() as { procedure?: { beforePhoto: string | null; afterPhoto: string | null }; session?: { id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }; message?: string };
+      if (!response.ok || (!data.procedure && !data.session)) throw new Error(data.message ?? "Não foi possível atualizar a foto.");
+      if (data.session) {
+        setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, photoSessions: item.photoSessions.map((session) => session.id === data.session?.id ? { ...session, beforePhoto: data.session?.beforePhoto ?? "", afterPhoto: data.session?.afterPhoto ?? "" } : session) } : item));
+      } else if (data.procedure) {
+        setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, beforePhoto: data.procedure?.beforePhoto ?? "", afterPhoto: data.procedure?.afterPhoto ?? "", status: procedurePhotoStatus(data.procedure?.beforePhoto ?? null, data.procedure?.afterPhoto ?? null) } : item));
+        onProcedurePhotosChange(Boolean(data.procedure.beforePhoto), Boolean(data.procedure.afterPhoto));
+        onProcedurePhotoUpdated(procedureId, data.procedure);
+      }
       invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`);
     } catch (photoError) {
       setError(photoError instanceof Error ? photoError.message : "Não foi possível atualizar a foto.");
@@ -619,28 +657,82 @@ function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange, o
     }
   }
 
-  async function saveProcedurePhoto(procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", file: File) {
+  async function saveProcedurePhoto(procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", file: File, sessionId?: string) {
     const photo = await readProcedurePhoto(file);
     if (!photo) {
       setError("Selecione uma imagem JPG, PNG ou WEBP válida.");
       return;
     }
-    await updateProcedurePhoto(procedureId, photoType, photo);
+    await updateProcedurePhoto(procedureId, photoType, photo, "upload", sessionId);
+  }
+
+  async function createPhotoSession(procedureId: string | undefined, name: string) {
+    if (!procedureId) return null;
+    setError("");
+    try {
+      const response = await fetch(`/api/patients/${patientId}/procedures/${procedureId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+      const data = await response.json() as { session?: { id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }; message?: string };
+      if (!response.ok || !data.session) throw new Error(data.message ?? "Não foi possível criar a sessão de fotos.");
+      const session = { id: data.session.id, name: data.session.name, beforePhoto: data.session.beforePhoto ?? "", afterPhoto: data.session.afterPhoto ?? "" };
+      setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, photoSessions: [...item.photoSessions, session] } : item));
+      invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`);
+      return session;
+    } catch (sessionError) {
+      setError(sessionError instanceof Error ? sessionError.message : "Não foi possível criar a sessão de fotos.");
+      return null;
+    }
+  }
+
+  async function deletePhotoSession(procedureId: string | undefined, sessionId: string) {
+    if (!procedureId) return false;
+    const operationKey = `${procedureId}-${sessionId}`;
+    setDeletingPhotoSessionKey(operationKey);
+    setError("");
+    try {
+      const response = await fetch(`/api/patients/${patientId}/procedures/${procedureId}?sessionId=${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+      const data = await response.json().catch(() => null) as { message?: string } | null;
+      if (!response.ok) throw new Error(data?.message ?? "Não foi possível excluir a sessão de fotos.");
+      setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, photoSessions: item.photoSessions.filter((session) => session.id !== sessionId) } : item));
+      invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`);
+      return true;
+    } catch (sessionError) {
+      setError(sessionError instanceof Error ? sessionError.message : "Não foi possível excluir a sessão de fotos.");
+      return false;
+    } finally {
+      setDeletingPhotoSessionKey(undefined);
+    }
+  }
+
+  async function renamePhotoSession(procedureId: string | undefined, sessionId: string, name: string) {
+    if (!procedureId || !name.trim()) return false;
+    setError("");
+    try {
+      const response = await fetch(`/api/patients/${patientId}/procedures/${procedureId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId, name: name.trim() }) });
+      const data = await response.json().catch(() => null) as { session?: { id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }; message?: string } | null;
+      if (!response.ok || !data?.session) throw new Error(data?.message ?? "Não foi possível renomear a sessão de fotos.");
+      setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, photoSessions: item.photoSessions.map((session) => session.id === sessionId ? { ...session, name: data.session?.name ?? name.trim() } : session) } : item));
+      invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`);
+      return true;
+    } catch (sessionError) {
+      setError(sessionError instanceof Error ? sessionError.message : "Não foi possível renomear a sessão de fotos.");
+      return false;
+    }
   }
 
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4"><div><h3 className="text-sm font-bold text-[#303144]">Procedimentos realizados</h3><p className="mt-1 text-[10px] text-[#858696]">Os procedimentos aparecem aqui automaticamente a partir do orçamento aprovado. Adicione as fotos de antes e depois no atendimento.</p></div><div className="flex flex-wrap justify-end gap-2"><Button className={cn("shrink-0", procedureScheduled && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:border-[#b9e8d8] hover:bg-[#eaf8ef] hover:text-[#16805d]")} type="button" variant="secondary" disabled={!primaryProcedure || primaryProcedure.status === "Realizado" || procedureScheduled} onClick={() => { if (primaryProcedure) onScheduleReturn(primaryProcedure, "procedure"); }}><CalendarPlus className="h-3.5 w-3.5" />{procedureScheduled ? "Procedimento marcado" : "Marcar procedimento"}</Button><Button className={cn("shrink-0", returnScheduled && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:border-[#b9e8d8] hover:bg-[#eaf8ef] hover:text-[#16805d]")} type="button" variant="secondary" disabled={!primaryProcedure || primaryProcedure.status !== "Realizado" || returnScheduled} onClick={() => { if (primaryProcedure) onScheduleReturn(primaryProcedure, "return"); }}><CalendarPlus className="h-3.5 w-3.5" />{returnScheduled ? "Retorno marcado" : "Marcar retorno"}</Button></div></div>
-      {loading ? <ProcedureCardsSkeleton /> : !visibleProcedures.length ? <EmptyPatientState message="Este cliente ainda não possui procedimentos realizados." /> : <div className="grid gap-4 xl:grid-cols-2">{visibleProcedures.map((procedure) => {
+      {loading ? <ProcedureCardsSkeleton /> : !visibleProcedures.length ? <EmptyPatientState message="Este cliente ainda não possui procedimentos realizados." /> : <div className="grid gap-4">{visibleProcedures.map((procedure) => {
         const beforeKey = `${procedure.id}-beforePhoto`;
         const afterKey = `${procedure.id}-afterPhoto`;
         const appointment = history?.appointments.find((item) => item.procedure === procedure.name);
         const effectiveStatus = appointment?.id ? appointmentStatuses[appointment.id] ?? appointment.status : undefined;
         const appointmentWithStatus = appointment ? { ...appointment, status: effectiveStatus ?? appointment.status } : undefined;
         const procedureDay = appointmentWithStatus ? appointmentDateValue(appointmentWithStatus) === currentTime.date : false;
+        const afterPhotoEnabled = procedure.status === "Realizado" || appointmentWithStatus?.status === "Atendido" || procedureDay;
         const procedureCanStart = appointmentWithStatus?.status === "Agendado" && appointmentCanStart(appointmentWithStatus, history?.appointmentToleranceMinutes ?? 15, currentTime);
         const procedureInProgress = appointmentWithStatus?.status === "Em atendimento";
-        return <ProcedureHistoryCard key={procedure.id ?? `${procedure.name}-${procedure.date}`} procedure={procedure} editable afterPhotoEnabled={procedureDay} afterPhotoMessage={!procedureDay ? "Aguardando o dia do procedimento" : undefined} appointment={appointmentWithStatus} canStartProcedure={procedureCanStart} procedureInProgress={procedureInProgress} onProcedureStatusChange={(status) => { if (appointmentWithStatus) void updateProcedureAppointment(appointmentWithStatus, status); }} beforePhotoSaving={Boolean(photoOperations[beforeKey])} afterPhotoSaving={Boolean(photoOperations[afterKey])} beforePhotoOperation={photoOperations[beforeKey]} afterPhotoOperation={photoOperations[afterKey]} onPhotoChange={saveProcedurePhoto} onPhotoRemove={(procedureId, photoType) => updateProcedurePhoto(procedureId, photoType, null, "remove")} />;
+        return <ProcedureHistoryCard key={procedure.id ?? `${procedure.name}-${procedure.date}`} procedure={procedure} editable expandable afterPhotoEnabled={afterPhotoEnabled} afterPhotoMessage={!afterPhotoEnabled ? "Aguardando o dia do procedimento" : undefined} appointment={appointmentWithStatus} canStartProcedure={procedureCanStart} procedureInProgress={procedureInProgress} onProcedureStatusChange={(status) => { if (appointmentWithStatus) void updateProcedureAppointment(appointmentWithStatus, status); }} beforePhotoSaving={Boolean(photoOperations[beforeKey])} afterPhotoSaving={Boolean(photoOperations[afterKey])} beforePhotoOperation={photoOperations[beforeKey]} afterPhotoOperation={photoOperations[afterKey]} onPhotoChange={saveProcedurePhoto} onPhotoRemove={(procedureId, photoType, sessionId) => updateProcedurePhoto(procedureId, photoType, null, "remove", sessionId)} onPhotoSessionCreate={createPhotoSession} onPhotoSessionDelete={deletePhotoSession} onPhotoSessionRename={renamePhotoSession} deletingPhotoSessionKey={deletingPhotoSessionKey} />;
       })}</div>}
       {error ? <p className="rounded-[7px] bg-[#fff1f0] px-3 py-2 text-xs font-semibold text-[#b42318]">{error}</p> : null}
     </div>
@@ -649,15 +741,15 @@ function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange, o
 
 function ProcedureCardsSkeleton() {
   return (
-    <div className="grid gap-4 xl:grid-cols-2" aria-label="Carregando procedimentos">
+    <div className="grid gap-4" aria-label="Carregando procedimentos">
       {[0, 1].map((item) => (
         <Card className="animate-pulse overflow-hidden p-0" key={item}>
           <div className="flex items-start justify-between gap-3 border-b border-[#ededf3] p-4">
             <div className="space-y-2"><div className="hp-skeleton h-4 w-32 rounded" /><div className="hp-skeleton h-3 w-44 rounded" /></div>
             <div className="h-6 w-20 rounded-full bg-[#f0efff]" />
           </div>
-          <div className="grid gap-3 p-4 sm:grid-cols-2">
-            {[0, 1].map((photo) => <div className="overflow-hidden rounded-[7px] border border-[#e7e9f2]" key={photo}><div className="h-7 border-b border-[#e7e9f2] bg-[#fafafd]" /><div className="h-56 bg-[#f1f2f7] sm:h-64" /></div>)}
+          <div className="grid justify-items-center gap-3 p-4 sm:grid-cols-2">
+            {[0, 1].map((photo) => <div className="w-full max-w-[280px] overflow-hidden rounded-[7px] border border-[#e7e9f2]" key={photo}><div className="h-7 border-b border-[#e7e9f2] bg-[#fafafd]" /><div className="aspect-[9/16] bg-[#f1f2f7]" /></div>)}
           </div>
         </Card>
       ))}
@@ -732,45 +824,201 @@ function patientAppointmentSortValue(appointment: PatientAppointmentRecord) {
   return `${year}-${month}-${day}T${appointment.time}`;
 }
 
-function ProcedureHistoryCard({ procedure, editable, afterPhotoEnabled = true, afterPhotoMessage, appointment, canStartProcedure, procedureInProgress, onProcedureStatusChange, beforePhotoSaving, afterPhotoSaving, beforePhotoOperation, afterPhotoOperation, onPhotoChange, onPhotoRemove }: { procedure: PatientProcedureRecord; editable?: boolean; afterPhotoEnabled?: boolean; afterPhotoMessage?: string; appointment?: PatientAppointmentRecord; canStartProcedure?: boolean; procedureInProgress?: boolean; onProcedureStatusChange?: (status: "Em atendimento" | "Atendido") => void; beforePhotoSaving?: boolean; afterPhotoSaving?: boolean; beforePhotoOperation?: "upload" | "remove"; afterPhotoOperation?: "upload" | "remove"; onPhotoChange?: (procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", file: File) => void; onPhotoRemove?: (procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto") => void }) {
+function getProcedurePhotoSessions(procedure: PatientProcedureRecord) {
+  return [{ id: `legacy-${procedure.id ?? "procedure"}`, name: "Sessão principal", beforePhoto: procedure.beforePhoto, afterPhoto: procedure.afterPhoto }, ...procedure.photoSessions];
+}
+
+function ProcedureHistoryCard({ procedure, editable, expandable = false, afterPhotoEnabled = true, afterPhotoMessage, appointment, canStartProcedure, procedureInProgress, onProcedureStatusChange, beforePhotoSaving, afterPhotoSaving, beforePhotoOperation, afterPhotoOperation, onPhotoChange, onPhotoRemove, onPhotoSessionCreate, onPhotoSessionDelete, onPhotoSessionRename, deletingPhotoSessionKey }: { procedure: PatientProcedureRecord; editable?: boolean; expandable?: boolean; afterPhotoEnabled?: boolean; afterPhotoMessage?: string; appointment?: PatientAppointmentRecord; canStartProcedure?: boolean; procedureInProgress?: boolean; onProcedureStatusChange?: (status: "Em atendimento" | "Atendido") => void; beforePhotoSaving?: boolean; afterPhotoSaving?: boolean; beforePhotoOperation?: "upload" | "remove"; afterPhotoOperation?: "upload" | "remove"; onPhotoChange?: (procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", file: File, sessionId?: string) => void; onPhotoRemove?: (procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", sessionId?: string) => void; onPhotoSessionCreate?: (procedureId: string | undefined, name: string) => Promise<PatientPhotoSession | null>; onPhotoSessionDelete?: (procedureId: string | undefined, sessionId: string) => Promise<boolean>; onPhotoSessionRename?: (procedureId: string | undefined, sessionId: string, name: string) => Promise<boolean>; deletingPhotoSessionKey?: string }) {
   const [expandedPhoto, setExpandedPhoto] = useState<{ label: string; src: string } | null>(null);
+  const [photoSessionToDelete, setPhotoSessionToDelete] = useState<PatientPhotoSession | null>(null);
+  const [photoSessionEditor, setPhotoSessionEditor] = useState<"create" | "edit" | null>(null);
+  const [photoSessionEditingId, setPhotoSessionEditingId] = useState<string>();
+  const [photoSessionName, setPhotoSessionName] = useState("");
+  const [photoSessionNameSaving, setPhotoSessionNameSaving] = useState(false);
+  const [deletingPhotoSession, setDeletingPhotoSession] = useState(false);
+  const [expanded, setExpanded] = useState(!expandable);
+  const [activePhotoSessionId, setActivePhotoSessionId] = useState(() => getProcedurePhotoSessions(procedure)[0]?.id);
+  const [viewMode, setViewMode] = useState<"compare" | "sideBySide">("compare");
+  const [sliderPosition, setSliderPosition] = useState(50);
+  const [creatingPhotoSession, setCreatingPhotoSession] = useState(false);
+  const creatingPhotoSessionRef = useRef(false);
+  const comparisonRef = useRef<HTMLDivElement>(null);
+  const photoEditable = editable && Boolean(procedure.id);
+  const beforeLabel = `Antes · ${procedure.date}`;
+  const afterLabel = `Depois · ${procedure.date}`;
+  const photoSessions = getProcedurePhotoSessions(procedure);
+  const activePhotoSession = photoSessions.find((session) => session.id === activePhotoSessionId) ?? photoSessions[0];
+  const activeSessionIdForRequest = activePhotoSession?.id.startsWith("legacy-") ? undefined : activePhotoSession?.id;
+
+  function openPhotoSessionCreator() {
+    if (creatingPhotoSessionRef.current) return;
+    setPhotoSessionName(`Ângulo ${photoSessions.length + 1}`);
+    setPhotoSessionEditor("create");
+  }
+
+  function openPhotoSessionEditor(sessionId: string) {
+    const session = photoSessions.find((item) => item.id === sessionId);
+    if (!session || session.id.startsWith("legacy-")) return;
+    setPhotoSessionName(session.name);
+    setPhotoSessionEditingId(session.id);
+    setPhotoSessionEditor("edit");
+  }
+
+  async function savePhotoSessionName() {
+    const name = photoSessionName.trim();
+    if (!name || photoSessionNameSaving) return;
+    setPhotoSessionNameSaving(true);
+    const session = photoSessionEditor === "create" ? await addPhotoSession() : null;
+    const renamed = photoSessionEditor === "edit" && photoSessionEditingId
+      ? await onPhotoSessionRename?.(procedure.id, photoSessionEditingId, name)
+      : false;
+    setPhotoSessionNameSaving(false);
+    if (session) setActivePhotoSessionId(session.id);
+    if (renamed && photoSessionEditingId) setActivePhotoSessionId(photoSessionEditingId);
+    if (session || renamed) setPhotoSessionEditor(null);
+  }
+
+  async function addPhotoSession() {
+    if (creatingPhotoSessionRef.current) return null;
+    creatingPhotoSessionRef.current = true;
+    setCreatingPhotoSession(true);
+    try {
+      const session = await onPhotoSessionCreate?.(procedure.id, photoSessionName.trim());
+      if (session) setActivePhotoSessionId(session.id);
+      return session ?? null;
+    } finally {
+      creatingPhotoSessionRef.current = false;
+      setCreatingPhotoSession(false);
+    }
+  }
+
+  async function confirmDeletePhotoSession() {
+    if (!photoSessionToDelete || photoSessionToDelete.id.startsWith("legacy-") || deletingPhotoSession) return;
+    setDeletingPhotoSession(true);
+    const deleted = await onPhotoSessionDelete?.(procedure.id, photoSessionToDelete.id);
+    setDeletingPhotoSession(false);
+    if (!deleted) return;
+    const nextSession = photoSessions.find((session) => session.id !== photoSessionToDelete.id);
+    if (nextSession) setActivePhotoSessionId(nextSession.id);
+    setPhotoSessionToDelete(null);
+  }
+
+  function updateSlider(clientX: number) {
+    const bounds = comparisonRef.current?.getBoundingClientRect();
+    if (!bounds || !bounds.width) return;
+    setSliderPosition(Math.min(100, Math.max(0, ((clientX - bounds.left) / bounds.width) * 100)));
+  }
+
+  function handleSliderPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    updateSlider(event.clientX);
+  }
+
+  function handleSliderPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.preventDefault();
+      updateSlider(event.clientX);
+    }
+  }
 
   return (
     <Card className="overflow-hidden p-0">
       <div className="flex items-start justify-between gap-3 border-b border-[#ededf3] p-4">
-        <div>
+        <button className={cn("min-w-0 flex-1 text-left", expandable && "cursor-pointer")} type="button" onClick={() => expandable && setExpanded((current) => !current)} aria-expanded={expandable ? expanded : undefined}>
           <h3 className="text-sm font-bold text-[#303144]">{procedure.name}</h3>
           <p className="mt-1 text-xs text-[#858696]">{procedure.date} · {procedure.professional}</p>
+        </button>
+        <div className="flex flex-wrap items-center justify-end gap-2"><Badge variant={procedure.status === "Realizado" ? "green" : procedure.status === "Em procedimento" ? "amber" : "slate"}>{procedure.status}</Badge>{appointment?.status === "Agendado" && appointment.id ? <Button className="h-8 px-2" type="button" disabled={!canStartProcedure} onClick={() => onProcedureStatusChange?.("Em atendimento")} title={canStartProcedure ? "Iniciar procedimento" : "Aguarde o dia e horário do procedimento"}><Clock3 className="h-3.5 w-3.5" />Iniciar procedimento</Button> : null}{procedureInProgress && appointment?.id ? <Button className="h-8 px-2" type="button" onClick={() => onProcedureStatusChange?.("Atendido")}><CheckCircle2 className="h-3.5 w-3.5" />Finalizar procedimento</Button> : null}{expandable ? <button className="grid h-8 w-8 place-items-center rounded-full text-[#77788a] transition hover:bg-[#f3f2ff] hover:text-[#5147dc]" type="button" onClick={() => setExpanded((current) => !current)} aria-label={expanded ? "Recolher procedimento" : "Expandir procedimento"} aria-expanded={expanded}><ChevronDown className={cn("h-4 w-4 transition-transform", expanded && "rotate-180")} /></button> : null}</div>
+      </div>
+      {expanded ? <div className={cn("p-4", expandable && "grid gap-5 lg:grid-cols-[minmax(0,1fr)_260px]")}>
+        <div className="min-w-0">
+          <div className="mb-3 flex justify-end">
+            <div className="inline-flex rounded-[7px] border border-[#dddfea] bg-[#fafafd] p-1">
+              <button className={cn("inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 text-[10px] font-bold transition", viewMode === "compare" ? "bg-[#5147dc] text-white shadow-[0_4px_12px_rgba(81,71,220,0.2)]" : "text-[#77788a] hover:bg-white hover:text-[#5147dc]")} type="button" onClick={() => setViewMode("compare")} aria-pressed={viewMode === "compare"}><ArrowLeftRight className="h-3.5 w-3.5" />Comparar</button>
+              <button className={cn("inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 text-[10px] font-bold transition", viewMode === "sideBySide" ? "bg-[#5147dc] text-white shadow-[0_4px_12px_rgba(81,71,220,0.2)]" : "text-[#77788a] hover:bg-white hover:text-[#5147dc]")} type="button" onClick={() => setViewMode("sideBySide")} aria-pressed={viewMode === "sideBySide"}><Columns2 className="h-3.5 w-3.5" />Lado a lado</button>
+            </div>
+          </div>
+          {viewMode === "compare" ? <BeforeAfterComparison beforeSrc={activePhotoSession?.beforePhoto} afterSrc={activePhotoSession?.afterPhoto} beforeLabel={beforeLabel} afterLabel={afterLabel} sliderPosition={sliderPosition} comparisonRef={comparisonRef} onPointerDown={handleSliderPointerDown} onPointerMove={handleSliderPointerMove} onPointerUp={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onBeforePreview={(src) => setExpandedPhoto({ label: "Antes", src })} onAfterPreview={(src) => setExpandedPhoto({ label: "Depois", src })} editable={photoEditable} showControls={!expandable} beforeSaving={beforePhotoSaving} afterSaving={afterPhotoSaving} beforeOperation={beforePhotoOperation} afterOperation={afterPhotoOperation} afterPhotoEnabled={afterPhotoEnabled} afterPhotoMessage={afterPhotoMessage} onBeforePhotoChange={(file) => onPhotoChange?.(procedure.id, "beforePhoto", file, activeSessionIdForRequest)} onAfterPhotoChange={(file) => onPhotoChange?.(procedure.id, "afterPhoto", file, activeSessionIdForRequest)} onBeforePhotoRemove={() => onPhotoRemove?.(procedure.id, "beforePhoto", activeSessionIdForRequest)} onAfterPhotoRemove={() => onPhotoRemove?.(procedure.id, "afterPhoto", activeSessionIdForRequest)} /> : <div className="grid justify-items-center gap-3 sm:grid-cols-2"><BeforeAfterPhoto label="Antes" overlayLabel={beforeLabel} src={activePhotoSession?.beforePhoto} editable={photoEditable && !expandable} saving={beforePhotoSaving} operation={beforePhotoOperation} onPhotoChange={(file) => onPhotoChange?.(procedure.id, "beforePhoto", file, activeSessionIdForRequest)} onPhotoRemove={() => onPhotoRemove?.(procedure.id, "beforePhoto", activeSessionIdForRequest)} onPreview={(src) => setExpandedPhoto({ label: "Antes", src })} /><BeforeAfterPhoto label="Depois" overlayLabel={afterLabel} src={activePhotoSession?.afterPhoto} editable={photoEditable && !expandable} photoInputEnabled={afterPhotoEnabled} blockedMessage={afterPhotoMessage} saving={afterPhotoSaving} operation={afterPhotoOperation} onPhotoChange={(file) => onPhotoChange?.(procedure.id, "afterPhoto", file, activeSessionIdForRequest)} onPhotoRemove={() => onPhotoRemove?.(procedure.id, "afterPhoto", activeSessionIdForRequest)} onPreview={(src) => setExpandedPhoto({ label: "Depois", src })} /></div>}
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2"><Badge variant={procedure.status === "Realizado" ? "green" : procedure.status === "Em procedimento" ? "amber" : "slate"}>{procedure.status}</Badge>{appointment?.status === "Agendado" && appointment.id ? <Button className="h-8 px-2" type="button" disabled={!canStartProcedure} onClick={() => onProcedureStatusChange?.("Em atendimento")} title={canStartProcedure ? "Iniciar procedimento" : "Aguarde o dia e horário do procedimento"}><Clock3 className="h-3.5 w-3.5" />Iniciar procedimento</Button> : null}{procedureInProgress && appointment?.id ? <Button className="h-8 px-2" type="button" onClick={() => onProcedureStatusChange?.("Atendido")}><CheckCircle2 className="h-3.5 w-3.5" />Finalizar procedimento</Button> : null}</div>
-      </div>
-      <div className="grid gap-3 p-4 sm:grid-cols-2">
-        <BeforeAfterPhoto label="Antes" src={procedure.beforePhoto} editable={editable && Boolean(procedure.id)} saving={beforePhotoSaving} operation={beforePhotoOperation} onPhotoChange={(file) => onPhotoChange?.(procedure.id, "beforePhoto", file)} onPhotoRemove={() => onPhotoRemove?.(procedure.id, "beforePhoto")} onPreview={(src) => setExpandedPhoto({ label: "Antes", src })} />
-        <BeforeAfterPhoto label="Depois" src={procedure.afterPhoto} editable={editable && Boolean(procedure.id)} photoInputEnabled={afterPhotoEnabled} blockedMessage={afterPhotoMessage} saving={afterPhotoSaving} operation={afterPhotoOperation} onPhotoChange={(file) => onPhotoChange?.(procedure.id, "afterPhoto", file)} onPhotoRemove={() => onPhotoRemove?.(procedure.id, "afterPhoto")} onPreview={(src) => setExpandedPhoto({ label: "Depois", src })} />
-      </div>
+        {expandable ? <ProcedureInfoPanel photoSessions={photoSessions} activePhotoSessionId={activePhotoSession?.id} onSelectPhotoSession={setActivePhotoSessionId} onCreatePhotoSession={openPhotoSessionCreator} onEditPhotoSession={openPhotoSessionEditor} onDeletePhotoSession={(sessionId) => setPhotoSessionToDelete(photoSessions.find((session) => session.id === sessionId) ?? null)} deletingPhotoSessionKey={deletingPhotoSessionKey} procedureId={procedure.id} creatingPhotoSession={creatingPhotoSession} editable={photoEditable} afterPhotoEnabled={afterPhotoEnabled} afterPhotoMessage={afterPhotoMessage} beforeSaving={beforePhotoSaving} afterSaving={afterPhotoSaving} beforeOperation={beforePhotoOperation} afterOperation={afterPhotoOperation} onBeforePhotoChange={(file) => onPhotoChange?.(procedure.id, "beforePhoto", file, activeSessionIdForRequest)} onAfterPhotoChange={(file) => onPhotoChange?.(procedure.id, "afterPhoto", file, activeSessionIdForRequest)} onBeforePhotoRemove={() => onPhotoRemove?.(procedure.id, "beforePhoto", activeSessionIdForRequest)} onAfterPhotoRemove={() => onPhotoRemove?.(procedure.id, "afterPhoto", activeSessionIdForRequest)} onBeforePreview={(src) => setExpandedPhoto({ label: "Antes", src })} onAfterPreview={(src) => setExpandedPhoto({ label: "Depois", src })} /> : null}
+      </div> : null}
       {procedure.notes ? <div className="border-t border-[#ededf3] px-4 py-3 text-xs leading-5 text-[#656678]"><strong className="text-[#3f4053]">Observações: </strong>{procedure.notes}</div> : null}
       <Modal open={Boolean(expandedPhoto)} onClose={() => setExpandedPhoto(null)} title={`Foto de ${expandedPhoto?.label.toLowerCase() ?? "procedimento"}`} description="Visualização ampliada da foto do procedimento.">
         {expandedPhoto ? <div className="relative h-[min(70vh,620px)] w-full overflow-hidden rounded-[7px] bg-[#f7f8fc]"><Image className="object-contain" src={expandedPhoto.src} alt={`Foto ampliada de ${expandedPhoto.label.toLowerCase()}`} fill sizes="(max-width: 640px) 90vw, 560px" /></div> : null}
+      </Modal>
+      <Modal open={Boolean(photoSessionToDelete)} onClose={() => { if (!deletingPhotoSession) setPhotoSessionToDelete(null); }} title="Excluir sessão de fotos" description="As fotos dessa sessão serão removidas da evolução do procedimento.">
+        <div className="space-y-4"><p className="text-sm text-[#555668]">Tem certeza que deseja excluir <strong>{photoSessionToDelete?.name}</strong>?</p><div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={deletingPhotoSession} onClick={() => setPhotoSessionToDelete(null)}>Cancelar</Button><Button type="button" className="bg-[#c43f35] hover:bg-[#a8322a]" disabled={deletingPhotoSession} onClick={() => void confirmDeletePhotoSession()}>{deletingPhotoSession ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}{deletingPhotoSession ? "Excluindo..." : "Excluir sessão"}</Button></div></div>
+      </Modal>
+      <Modal open={Boolean(photoSessionEditor)} onClose={() => { if (!photoSessionNameSaving && !creatingPhotoSession) setPhotoSessionEditor(null); }} title={photoSessionEditor === "edit" ? "Editar sessão de fotos" : "Nova sessão de fotos"} description="Defina um nome para identificar este ângulo.">
+        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void savePhotoSessionName(); }}><FormField label="Nome da sessão"><input className={fieldClassName} value={photoSessionName} onChange={(event) => setPhotoSessionName(event.target.value)} autoFocus maxLength={60} placeholder="Ex.: Perfil direito" /></FormField><div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={photoSessionNameSaving || creatingPhotoSession} onClick={() => setPhotoSessionEditor(null)}>Cancelar</Button><Button type="submit" disabled={!photoSessionName.trim() || photoSessionNameSaving || creatingPhotoSession}>{photoSessionNameSaving || creatingPhotoSession ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}{photoSessionEditor === "edit" ? "Salvar nome" : "Criar sessão"}</Button></div></form>
       </Modal>
     </Card>
   );
 }
 
-function BeforeAfterPhoto({ label, src, editable, photoInputEnabled = true, blockedMessage, saving, operation, onPhotoChange, onPhotoRemove, onPreview }: { label: string; src?: string; editable?: boolean; photoInputEnabled?: boolean; blockedMessage?: string; saving?: boolean; operation?: "upload" | "remove"; onPhotoChange?: (file: File) => void; onPhotoRemove?: () => void; onPreview?: (src: string) => void }) {
+function ProcedureInfoPanel({ photoSessions, activePhotoSessionId, onSelectPhotoSession, onCreatePhotoSession, onEditPhotoSession, onDeletePhotoSession, deletingPhotoSessionKey, procedureId, creatingPhotoSession, editable, afterPhotoEnabled = true, afterPhotoMessage, beforeSaving, afterSaving, beforeOperation, afterOperation, onBeforePhotoChange, onAfterPhotoChange, onBeforePhotoRemove, onAfterPhotoRemove, onBeforePreview, onAfterPreview }: { photoSessions: PatientPhotoSession[]; activePhotoSessionId?: string; onSelectPhotoSession: (sessionId: string) => void; onCreatePhotoSession: () => void; onEditPhotoSession: (sessionId: string) => void; onDeletePhotoSession: (sessionId: string) => void; deletingPhotoSessionKey?: string; procedureId?: string; creatingPhotoSession: boolean; editable?: boolean; afterPhotoEnabled?: boolean; afterPhotoMessage?: string; beforeSaving?: boolean; afterSaving?: boolean; beforeOperation?: "upload" | "remove"; afterOperation?: "upload" | "remove"; onBeforePhotoChange?: (file: File) => void; onAfterPhotoChange?: (file: File) => void; onBeforePhotoRemove?: () => void; onAfterPhotoRemove?: () => void; onBeforePreview?: (src: string) => void; onAfterPreview?: (src: string) => void }) {
+  const activePhotoSession = photoSessions.find((session) => session.id === activePhotoSessionId) ?? photoSessions[0];
+  const beforeImage = activePhotoSession?.beforePhoto && activePhotoSession.beforePhoto !== "__photo__" ? activePhotoSession.beforePhoto : undefined;
+  const afterImage = activePhotoSession?.afterPhoto && activePhotoSession.afterPhoto !== "__photo__" ? activePhotoSession.afterPhoto : undefined;
+
+  return <aside className="h-fit rounded-[7px] border border-[#e7e9f2] bg-[#fafafd] p-3">
+    <div className="flex items-center justify-between gap-2"><h4 className="text-xs font-bold text-[#303144]">Sessões de fotos</h4>{editable ? <button className="inline-flex items-center gap-1 rounded-[5px] px-2 py-1 text-[9px] font-bold text-[#5147dc] transition hover:bg-[#f0efff] disabled:cursor-not-allowed disabled:opacity-60" type="button" onClick={onCreatePhotoSession} disabled={creatingPhotoSession} aria-busy={creatingPhotoSession}>{creatingPhotoSession ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}{creatingPhotoSession ? "Criando..." : "Nova sessão"}</button> : null}</div>
+    <div className="mt-2 grid gap-1.5">{photoSessions.map((session, index) => { const sessionKey = `${procedureId ?? "procedure"}-${session.id}`; const canManage = editable && !session.id.startsWith("legacy-"); return <div className={cn("flex items-center gap-1 rounded-[5px] border p-1 transition", session.id === activePhotoSessionId ? "border-[#5147dc] bg-[#f0efff]" : "border-[#e7e9f2] bg-white")} key={session.id}><button className={cn("min-w-0 flex-1 rounded-[4px] px-1.5 py-1.5 text-left text-[10px] font-semibold", session.id === activePhotoSessionId ? "text-[#5147dc]" : "text-[#656678] hover:text-[#5147dc]")} type="button" onClick={() => onSelectPhotoSession(session.id)} aria-pressed={session.id === activePhotoSessionId}><span className="block truncate">{session.name || `Sessão ${index + 1}`}</span><span className="block text-[9px] text-[#858696]">{session.beforePhoto || session.afterPhoto ? "Com fotos" : "Vazia"}</span></button>{canManage ? <><button className="grid h-7 w-7 shrink-0 place-items-center rounded-[4px] text-[#858696] transition hover:bg-[#f0efff] hover:text-[#5147dc]" type="button" aria-label={`Editar ${session.name || `Sessão ${index + 1}`}`} title="Editar nome" onClick={() => onEditPhotoSession(session.id)}><PencilLine className="h-3.5 w-3.5" /></button><button className="grid h-7 w-7 shrink-0 place-items-center rounded-[4px] text-[#858696] transition hover:bg-[#fff0ee] hover:text-[#b42318] disabled:cursor-not-allowed disabled:opacity-45" type="button" aria-label={`Excluir ${session.name || `Sessão ${index + 1}`}`} title="Excluir sessão" disabled={Boolean(deletingPhotoSessionKey === sessionKey)} onClick={() => onDeletePhotoSession(session.id)}><Trash2 className="h-3.5 w-3.5" /></button></> : null}</div>; })}</div>
+    <div className="mt-4 border-t border-[#e7e9f2] pt-3"><div className="flex items-center justify-between gap-2"><h4 className="text-xs font-bold text-[#303144]">{activePhotoSession?.name ?? "Fotos"}</h4><span className="text-[9px] font-semibold text-[#858696]">Antes / depois</span></div><div className="mt-2 grid grid-cols-2 gap-2"><ProcedurePhotoThumbnail label="Antes" src={beforeImage} editable={editable} saving={beforeSaving} onPreview={onBeforePreview} onRemove={onBeforePhotoRemove} /><ProcedurePhotoThumbnail label="Depois" src={afterImage} editable={editable} saving={afterSaving} disabled={!afterPhotoEnabled} onPreview={onAfterPreview} onRemove={onAfterPhotoRemove} /></div>{editable ? <div className="mt-3 grid gap-2"><PhotoInput icon={Upload} label={beforeImage ? "Trocar foto antes" : "Adicionar foto antes"} busyLabel={beforeOperation === "remove" ? "Removendo..." : "Carregando..."} disabled={beforeSaving} onChange={onBeforePhotoChange} /><PhotoInput icon={Upload} label={afterImage ? "Trocar foto depois" : "Adicionar foto depois"} busyLabel={afterOperation === "remove" ? "Removendo..." : "Carregando..."} disabled={afterSaving || !afterPhotoEnabled} blocked={!afterPhotoEnabled && !afterSaving} onChange={onAfterPhotoChange} />{afterPhotoMessage && !afterPhotoEnabled ? <p className="text-[9px] font-semibold text-[#858696]">{afterPhotoMessage}</p> : null}</div> : null}</div>
+  </aside>;
+}
+
+function ProcedurePhotoThumbnail({ label, src, editable, saving, disabled, onPreview, onRemove }: { label: string; src?: string; editable?: boolean; saving?: boolean; disabled?: boolean; onPreview?: (src: string) => void; onRemove?: () => void }) {
+  return <div className="overflow-hidden rounded-[5px] border border-[#e7e9f2] bg-white"><div className="px-2 py-1.5 text-[9px] font-bold uppercase text-[#858696]">{label}</div><div className="relative aspect-[9/16] bg-[#f1f2f7]">{src ? <button className="absolute inset-0 cursor-zoom-in" type="button" onClick={() => onPreview?.(src)} aria-label={`Ampliar foto ${label.toLowerCase()}`}><Image className="object-cover" src={src} alt={`Miniatura da foto ${label.toLowerCase()}`} fill sizes="130px" /></button> : <span className="absolute inset-0 grid place-items-center px-2 text-center text-[9px] font-semibold text-[#858696]">Sem foto</span>}{editable && src ? <button className="absolute right-1.5 top-1.5 z-10 grid h-6 w-6 place-items-center rounded-full bg-[#25263a]/80 text-white transition hover:bg-[#b42318] disabled:cursor-not-allowed disabled:opacity-50" type="button" aria-label={`Remover foto ${label.toLowerCase()}`} disabled={saving || disabled} onClick={onRemove}><X className="h-3 w-3" /></button> : null}</div></div>;
+}
+
+function BeforeAfterComparison({ beforeSrc, afterSrc, beforeLabel, afterLabel, sliderPosition, comparisonRef, onPointerDown, onPointerMove, onPointerUp, onBeforePreview, onAfterPreview, editable, showControls = true, beforeSaving, afterSaving, beforeOperation, afterOperation, afterPhotoEnabled, afterPhotoMessage, onBeforePhotoChange, onAfterPhotoChange, onBeforePhotoRemove, onAfterPhotoRemove }: { beforeSrc?: string; afterSrc?: string; beforeLabel: string; afterLabel: string; sliderPosition: number; comparisonRef: RefObject<HTMLDivElement | null>; onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void; onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void; onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void; onBeforePreview: (src: string) => void; onAfterPreview: (src: string) => void; editable?: boolean; showControls?: boolean; beforeSaving?: boolean; afterSaving?: boolean; beforeOperation?: "upload" | "remove"; afterOperation?: "upload" | "remove"; afterPhotoEnabled?: boolean; afterPhotoMessage?: string; onBeforePhotoChange?: (file: File) => void; onAfterPhotoChange?: (file: File) => void; onBeforePhotoRemove?: () => void; onAfterPhotoRemove?: () => void }) {
+  const beforeImage = beforeSrc && beforeSrc !== "__photo__" ? beforeSrc : undefined;
+  const afterImage = afterSrc && afterSrc !== "__photo__" ? afterSrc : undefined;
+
+  return (
+    <div className="mx-auto w-full max-w-[460px]">
+      <div ref={comparisonRef} className="relative aspect-[9/16] w-full cursor-ew-resize touch-none select-none overflow-hidden rounded-[7px] border border-[#e7e9f2] bg-[#f7f8fc]" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
+        <ComparisonPhotoLayer src={afterImage} alt="Foto depois do procedimento" label={afterLabel} onPreview={onAfterPreview} />
+        <div className="pointer-events-none absolute inset-0" style={{ clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}>
+          <ComparisonPhotoLayer src={beforeImage} alt="Foto antes do procedimento" label={beforeLabel} onPreview={onBeforePreview} />
+        </div>
+        <div className="pointer-events-none absolute inset-y-0 z-10 w-0.5 bg-white shadow-[0_0_0_1px_rgba(37,38,58,0.12)]" style={{ left: `${sliderPosition}%` }}>
+          <span className="absolute left-1/2 top-1/2 grid h-9 w-9 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white bg-[#5147dc] text-white shadow-[0_5px_16px_rgba(37,38,58,0.28)]"><ArrowLeftRight className="h-4 w-4" /></span>
+        </div>
+      </div>
+      {editable && showControls ? <ComparisonPhotoControls label="Antes" saving={beforeSaving} operation={beforeOperation} onPhotoChange={onBeforePhotoChange} onPhotoRemove={onBeforePhotoRemove} /> : null}
+      {editable && showControls ? <ComparisonPhotoControls label="Depois" saving={afterSaving} operation={afterOperation} photoInputEnabled={afterPhotoEnabled} blockedMessage={afterPhotoMessage} onPhotoChange={onAfterPhotoChange} onPhotoRemove={onAfterPhotoRemove} /> : null}
+    </div>
+  );
+}
+
+function ComparisonPhotoLayer({ src, alt, label, onPreview }: { src?: string; alt: string; label: string; onPreview: (src: string) => void }) {
+  return src ? <button className="absolute inset-0 h-full w-full cursor-zoom-in" type="button" aria-label={`Ampliar ${label.toLowerCase()}`} onClick={(event) => { event.stopPropagation(); onPreview(src); }}><Image className="object-cover" src={src} alt={alt} fill draggable={false} onDragStart={(event) => event.preventDefault()} sizes="(max-width: 640px) 90vw, 420px" /><span className="absolute bottom-3 left-3 rounded-full bg-white/90 px-2.5 py-1 text-[9px] font-bold text-[#303144] shadow-[0_3px_10px_rgba(37,38,58,0.12)]">{label}</span></button> : <div className="absolute inset-0 grid place-items-center px-4 text-center text-xs font-semibold text-[#858696]"><span>{label}<br />Nenhuma foto cadastrada</span></div>;
+}
+
+function ComparisonPhotoControls({ label, saving, operation, photoInputEnabled = true, blockedMessage, onPhotoChange, onPhotoRemove }: { label: string; saving?: boolean; operation?: "upload" | "remove"; photoInputEnabled?: boolean; blockedMessage?: string; onPhotoChange?: (file: File) => void; onPhotoRemove?: () => void }) {
+  return <div className="mt-2 flex gap-2"><PhotoInput icon={Upload} label={`${label}: enviar`} busyLabel={operation === "remove" ? "Removendo..." : "Carregando..."} disabled={saving || !photoInputEnabled} blocked={!photoInputEnabled && !saving} onChange={onPhotoChange} /><PhotoInput icon={Camera} label={`${label}: tirar`} busyLabel={operation === "remove" ? "Removendo..." : "Carregando..."} capture disabled={saving || !photoInputEnabled} blocked={!photoInputEnabled && !saving} onChange={onPhotoChange} />{onPhotoRemove ? <button className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-[#dddfea] text-[#77788a] transition hover:border-[#b42318] hover:text-[#b42318] disabled:cursor-not-allowed disabled:opacity-50" type="button" aria-label={`Remover foto de ${label.toLowerCase()}`} disabled={saving || !photoInputEnabled} onClick={onPhotoRemove}><X className="h-3 w-3" /></button> : null}{blockedMessage && !photoInputEnabled ? <span className="sr-only">{blockedMessage}</span> : null}</div>;
+}
+
+function BeforeAfterPhoto({ label, overlayLabel, src, editable, photoInputEnabled = true, blockedMessage, saving, operation, onPhotoChange, onPhotoRemove, onPreview }: { label: string; overlayLabel?: string; src?: string; editable?: boolean; photoInputEnabled?: boolean; blockedMessage?: string; saving?: boolean; operation?: "upload" | "remove"; onPhotoChange?: (file: File) => void; onPhotoRemove?: () => void; onPreview?: (src: string) => void }) {
   const imageSrc = src && src !== "__photo__" ? src : undefined;
   const hasPhoto = Boolean(src);
   return (
-    <div className="overflow-hidden rounded-[7px] border border-[#e7e9f2] bg-[#f7f8fc]">
+    <div className="w-full max-w-[280px] overflow-hidden rounded-[7px] border border-[#e7e9f2] bg-[#f7f8fc]">
       <div className="flex items-center gap-2 px-3 py-2 text-[9px] font-bold uppercase text-[#858696]">
         <Camera className="h-3.5 w-3.5 text-[#5147dc]" />
         {label}
       </div>
-      <div className="relative grid h-56 w-full place-items-center text-xs font-semibold text-[#858696] sm:h-64">
+      <div className="relative grid aspect-[9/16] w-full place-items-center text-xs font-semibold text-[#858696]">
         {saving ? <div className="flex flex-col items-center gap-2 text-[#5147dc]" aria-label={`${operation === "remove" ? "Removendo" : "Carregando"} foto de ${label.toLowerCase()}`}>
           <div className="hp-skeleton h-12 w-16 animate-pulse rounded-[5px]" />
           <span className="flex items-center gap-1 text-xs font-bold"><Loader2 className="h-3.5 w-3.5 animate-spin" />{operation === "remove" ? "Removendo foto..." : "Carregando foto..."}</span>
         </div> : imageSrc ? <>
           <button type="button" className="absolute inset-0 cursor-zoom-in" aria-label={`Ampliar foto de ${label.toLowerCase()}`} onClick={() => onPreview?.(imageSrc)}><Image className="object-cover transition-transform duration-200 hover:scale-[1.02]" src={imageSrc} alt={`Foto de ${label.toLowerCase()} do procedimento`} fill sizes="(max-width: 640px) 100vw, (max-width: 1280px) 50vw, 400px" /></button>
+          {overlayLabel ? <span className="pointer-events-none absolute bottom-3 left-3 z-10 rounded-full bg-white/90 px-2.5 py-1 text-[9px] font-bold text-[#303144] shadow-[0_3px_10px_rgba(37,38,58,0.12)]">{overlayLabel}</span> : null}
           {editable ? <button type="button" className="absolute right-2 top-2 z-10 grid h-7 w-7 place-items-center rounded-full bg-[#25263a]/80 text-white transition hover:bg-[#b42318] disabled:cursor-not-allowed disabled:opacity-50" aria-label={`Remover foto de ${label.toLowerCase()}`} disabled={saving || !photoInputEnabled} onClick={onPhotoRemove}><X className="h-3.5 w-3.5" /></button> : null}
         </> : hasPhoto ? <span className="px-4 text-center">Foto cadastrada</span> : blockedMessage ?? "Nenhuma foto cadastrada"}
       </div>
@@ -783,10 +1031,10 @@ function BeforeAfterPhoto({ label, src, editable, photoInputEnabled = true, bloc
 }
 
 function PhotoInput({ icon: Icon, label, busyLabel, capture, disabled, blocked, onChange }: { icon: typeof Camera; label: string; busyLabel: string; capture?: boolean; disabled?: boolean; blocked?: boolean; onChange?: (file: File) => void }) {
+  const busy = Boolean(disabled && !blocked);
   return (
-    <label className={cn("inline-flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-full border border-[#dddfea] bg-white px-2 text-[9px] font-bold text-[#5147dc] transition hover:border-[#5147dc]", disabled && "pointer-events-none opacity-50")}>
-      <Icon className="h-3 w-3" />
-      {disabled && !blocked ? <><Loader2 className="h-3 w-3 animate-spin" />{busyLabel}</> : label}
+    <label className={cn("inline-flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-full border border-[#dddfea] bg-white px-2 text-[9px] font-bold text-[#5147dc] transition hover:border-[#5147dc]", disabled && "pointer-events-none opacity-50")} aria-busy={busy}>
+      {busy ? <><Loader2 className="h-3 w-3 animate-spin" />{busyLabel}</> : <><Icon className="h-3 w-3" />{label}</>}
       <input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" capture={capture ? "environment" : undefined} disabled={disabled} onChange={(event) => { const file = event.target.files?.[0]; if (file) onChange?.(file); event.currentTarget.value = ""; }} />
     </label>
   );
