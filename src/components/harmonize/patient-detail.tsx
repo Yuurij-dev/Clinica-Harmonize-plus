@@ -596,6 +596,7 @@ function HistoryTab({ patient, history }: { patient: Patient; history?: PatientH
 function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange, onProcedurePhotoUpdated, onScheduleReturn }: { patientId: string; history?: PatientHistoryRecord; loading: boolean; onProcedurePhotosChange: (before: boolean, after: boolean) => void; onProcedurePhotoUpdated: (procedureId: string, photo: { beforePhoto: string | null; afterPhoto: string | null }) => void; onScheduleReturn: (procedure: ReturnAppointmentTarget, kind?: "return" | "procedure") => void }) {
   const [procedures, setProcedures] = useState<PatientProcedureRecord[]>(history?.procedures ?? []);
   const [photoOperations, setPhotoOperations] = useState<Record<string, "upload" | "remove">>({});
+  const [deletingPhotoSessionKey, setDeletingPhotoSessionKey] = useState<string>();
   const [appointmentStatuses, setAppointmentStatuses] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [currentTime, setCurrentTime] = useState(() => clinicNowForForm());
@@ -626,7 +627,7 @@ function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange, o
 
   async function updateProcedurePhoto(procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", photo: string | null, operation: "upload" | "remove" = "upload", sessionId?: string) {
     if (!procedureId) return;
-    const operationKey = `${procedureId}-${sessionId ?? "main"}-${photoType}`;
+    const operationKey = `${procedureId}-${photoType}`;
     setPhotoOperations((current) => ({ ...current, [operationKey]: operation }));
     setError("");
     try {
@@ -682,6 +683,42 @@ function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange, o
     }
   }
 
+  async function deletePhotoSession(procedureId: string | undefined, sessionId: string) {
+    if (!procedureId) return false;
+    const operationKey = `${procedureId}-${sessionId}`;
+    setDeletingPhotoSessionKey(operationKey);
+    setError("");
+    try {
+      const response = await fetch(`/api/patients/${patientId}/procedures/${procedureId}?sessionId=${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+      const data = await response.json().catch(() => null) as { message?: string } | null;
+      if (!response.ok) throw new Error(data?.message ?? "Não foi possível excluir a sessão de fotos.");
+      setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, photoSessions: item.photoSessions.filter((session) => session.id !== sessionId) } : item));
+      invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`);
+      return true;
+    } catch (sessionError) {
+      setError(sessionError instanceof Error ? sessionError.message : "Não foi possível excluir a sessão de fotos.");
+      return false;
+    } finally {
+      setDeletingPhotoSessionKey(undefined);
+    }
+  }
+
+  async function renamePhotoSession(procedureId: string | undefined, sessionId: string, name: string) {
+    if (!procedureId || !name.trim()) return false;
+    setError("");
+    try {
+      const response = await fetch(`/api/patients/${patientId}/procedures/${procedureId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId, name: name.trim() }) });
+      const data = await response.json().catch(() => null) as { session?: { id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }; message?: string } | null;
+      if (!response.ok || !data?.session) throw new Error(data?.message ?? "Não foi possível renomear a sessão de fotos.");
+      setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, photoSessions: item.photoSessions.map((session) => session.id === sessionId ? { ...session, name: data.session?.name ?? name.trim() } : session) } : item));
+      invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`);
+      return true;
+    } catch (sessionError) {
+      setError(sessionError instanceof Error ? sessionError.message : "Não foi possível renomear a sessão de fotos.");
+      return false;
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4"><div><h3 className="text-sm font-bold text-[#303144]">Procedimentos realizados</h3><p className="mt-1 text-[10px] text-[#858696]">Os procedimentos aparecem aqui automaticamente a partir do orçamento aprovado. Adicione as fotos de antes e depois no atendimento.</p></div><div className="flex flex-wrap justify-end gap-2"><Button className={cn("shrink-0", procedureScheduled && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:border-[#b9e8d8] hover:bg-[#eaf8ef] hover:text-[#16805d]")} type="button" variant="secondary" disabled={!primaryProcedure || primaryProcedure.status === "Realizado" || procedureScheduled} onClick={() => { if (primaryProcedure) onScheduleReturn(primaryProcedure, "procedure"); }}><CalendarPlus className="h-3.5 w-3.5" />{procedureScheduled ? "Procedimento marcado" : "Marcar procedimento"}</Button><Button className={cn("shrink-0", returnScheduled && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:border-[#b9e8d8] hover:bg-[#eaf8ef] hover:text-[#16805d]")} type="button" variant="secondary" disabled={!primaryProcedure || primaryProcedure.status !== "Realizado" || returnScheduled} onClick={() => { if (primaryProcedure) onScheduleReturn(primaryProcedure, "return"); }}><CalendarPlus className="h-3.5 w-3.5" />{returnScheduled ? "Retorno marcado" : "Marcar retorno"}</Button></div></div>
@@ -695,7 +732,7 @@ function ProceduresTab({ patientId, history, loading, onProcedurePhotosChange, o
         const afterPhotoEnabled = procedure.status === "Realizado" || appointmentWithStatus?.status === "Atendido" || procedureDay;
         const procedureCanStart = appointmentWithStatus?.status === "Agendado" && appointmentCanStart(appointmentWithStatus, history?.appointmentToleranceMinutes ?? 15, currentTime);
         const procedureInProgress = appointmentWithStatus?.status === "Em atendimento";
-        return <ProcedureHistoryCard key={procedure.id ?? `${procedure.name}-${procedure.date}`} procedure={procedure} editable expandable afterPhotoEnabled={afterPhotoEnabled} afterPhotoMessage={!afterPhotoEnabled ? "Aguardando o dia do procedimento" : undefined} appointment={appointmentWithStatus} canStartProcedure={procedureCanStart} procedureInProgress={procedureInProgress} onProcedureStatusChange={(status) => { if (appointmentWithStatus) void updateProcedureAppointment(appointmentWithStatus, status); }} beforePhotoSaving={Boolean(photoOperations[beforeKey])} afterPhotoSaving={Boolean(photoOperations[afterKey])} beforePhotoOperation={photoOperations[beforeKey]} afterPhotoOperation={photoOperations[afterKey]} onPhotoChange={saveProcedurePhoto} onPhotoRemove={(procedureId, photoType, sessionId) => updateProcedurePhoto(procedureId, photoType, null, "remove", sessionId)} onPhotoSessionCreate={createPhotoSession} />;
+        return <ProcedureHistoryCard key={procedure.id ?? `${procedure.name}-${procedure.date}`} procedure={procedure} editable expandable afterPhotoEnabled={afterPhotoEnabled} afterPhotoMessage={!afterPhotoEnabled ? "Aguardando o dia do procedimento" : undefined} appointment={appointmentWithStatus} canStartProcedure={procedureCanStart} procedureInProgress={procedureInProgress} onProcedureStatusChange={(status) => { if (appointmentWithStatus) void updateProcedureAppointment(appointmentWithStatus, status); }} beforePhotoSaving={Boolean(photoOperations[beforeKey])} afterPhotoSaving={Boolean(photoOperations[afterKey])} beforePhotoOperation={photoOperations[beforeKey]} afterPhotoOperation={photoOperations[afterKey]} onPhotoChange={saveProcedurePhoto} onPhotoRemove={(procedureId, photoType, sessionId) => updateProcedurePhoto(procedureId, photoType, null, "remove", sessionId)} onPhotoSessionCreate={createPhotoSession} onPhotoSessionDelete={deletePhotoSession} onPhotoSessionRename={renamePhotoSession} deletingPhotoSessionKey={deletingPhotoSessionKey} />;
       })}</div>}
       {error ? <p className="rounded-[7px] bg-[#fff1f0] px-3 py-2 text-xs font-semibold text-[#b42318]">{error}</p> : null}
     </div>
@@ -791,12 +828,20 @@ function getProcedurePhotoSessions(procedure: PatientProcedureRecord) {
   return [{ id: `legacy-${procedure.id ?? "procedure"}`, name: "Sessão principal", beforePhoto: procedure.beforePhoto, afterPhoto: procedure.afterPhoto }, ...procedure.photoSessions];
 }
 
-function ProcedureHistoryCard({ procedure, editable, expandable = false, afterPhotoEnabled = true, afterPhotoMessage, appointment, canStartProcedure, procedureInProgress, onProcedureStatusChange, beforePhotoSaving, afterPhotoSaving, beforePhotoOperation, afterPhotoOperation, onPhotoChange, onPhotoRemove, onPhotoSessionCreate }: { procedure: PatientProcedureRecord; editable?: boolean; expandable?: boolean; afterPhotoEnabled?: boolean; afterPhotoMessage?: string; appointment?: PatientAppointmentRecord; canStartProcedure?: boolean; procedureInProgress?: boolean; onProcedureStatusChange?: (status: "Em atendimento" | "Atendido") => void; beforePhotoSaving?: boolean; afterPhotoSaving?: boolean; beforePhotoOperation?: "upload" | "remove"; afterPhotoOperation?: "upload" | "remove"; onPhotoChange?: (procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", file: File, sessionId?: string) => void; onPhotoRemove?: (procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", sessionId?: string) => void; onPhotoSessionCreate?: (procedureId: string | undefined, name: string) => Promise<PatientPhotoSession | null> }) {
+function ProcedureHistoryCard({ procedure, editable, expandable = false, afterPhotoEnabled = true, afterPhotoMessage, appointment, canStartProcedure, procedureInProgress, onProcedureStatusChange, beforePhotoSaving, afterPhotoSaving, beforePhotoOperation, afterPhotoOperation, onPhotoChange, onPhotoRemove, onPhotoSessionCreate, onPhotoSessionDelete, onPhotoSessionRename, deletingPhotoSessionKey }: { procedure: PatientProcedureRecord; editable?: boolean; expandable?: boolean; afterPhotoEnabled?: boolean; afterPhotoMessage?: string; appointment?: PatientAppointmentRecord; canStartProcedure?: boolean; procedureInProgress?: boolean; onProcedureStatusChange?: (status: "Em atendimento" | "Atendido") => void; beforePhotoSaving?: boolean; afterPhotoSaving?: boolean; beforePhotoOperation?: "upload" | "remove"; afterPhotoOperation?: "upload" | "remove"; onPhotoChange?: (procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", file: File, sessionId?: string) => void; onPhotoRemove?: (procedureId: string | undefined, photoType: "beforePhoto" | "afterPhoto", sessionId?: string) => void; onPhotoSessionCreate?: (procedureId: string | undefined, name: string) => Promise<PatientPhotoSession | null>; onPhotoSessionDelete?: (procedureId: string | undefined, sessionId: string) => Promise<boolean>; onPhotoSessionRename?: (procedureId: string | undefined, sessionId: string, name: string) => Promise<boolean>; deletingPhotoSessionKey?: string }) {
   const [expandedPhoto, setExpandedPhoto] = useState<{ label: string; src: string } | null>(null);
+  const [photoSessionToDelete, setPhotoSessionToDelete] = useState<PatientPhotoSession | null>(null);
+  const [photoSessionEditor, setPhotoSessionEditor] = useState<"create" | "edit" | null>(null);
+  const [photoSessionEditingId, setPhotoSessionEditingId] = useState<string>();
+  const [photoSessionName, setPhotoSessionName] = useState("");
+  const [photoSessionNameSaving, setPhotoSessionNameSaving] = useState(false);
+  const [deletingPhotoSession, setDeletingPhotoSession] = useState(false);
   const [expanded, setExpanded] = useState(!expandable);
   const [activePhotoSessionId, setActivePhotoSessionId] = useState(() => getProcedurePhotoSessions(procedure)[0]?.id);
   const [viewMode, setViewMode] = useState<"compare" | "sideBySide">("compare");
   const [sliderPosition, setSliderPosition] = useState(50);
+  const [creatingPhotoSession, setCreatingPhotoSession] = useState(false);
+  const creatingPhotoSessionRef = useRef(false);
   const comparisonRef = useRef<HTMLDivElement>(null);
   const photoEditable = editable && Boolean(procedure.id);
   const beforeLabel = `Antes · ${procedure.date}`;
@@ -805,11 +850,57 @@ function ProcedureHistoryCard({ procedure, editable, expandable = false, afterPh
   const activePhotoSession = photoSessions.find((session) => session.id === activePhotoSessionId) ?? photoSessions[0];
   const activeSessionIdForRequest = activePhotoSession?.id.startsWith("legacy-") ? undefined : activePhotoSession?.id;
 
+  function openPhotoSessionCreator() {
+    if (creatingPhotoSessionRef.current) return;
+    setPhotoSessionName(`Ângulo ${photoSessions.length + 1}`);
+    setPhotoSessionEditor("create");
+  }
+
+  function openPhotoSessionEditor(sessionId: string) {
+    const session = photoSessions.find((item) => item.id === sessionId);
+    if (!session || session.id.startsWith("legacy-")) return;
+    setPhotoSessionName(session.name);
+    setPhotoSessionEditingId(session.id);
+    setPhotoSessionEditor("edit");
+  }
+
+  async function savePhotoSessionName() {
+    const name = photoSessionName.trim();
+    if (!name || photoSessionNameSaving) return;
+    setPhotoSessionNameSaving(true);
+    const session = photoSessionEditor === "create" ? await addPhotoSession() : null;
+    const renamed = photoSessionEditor === "edit" && photoSessionEditingId
+      ? await onPhotoSessionRename?.(procedure.id, photoSessionEditingId, name)
+      : false;
+    setPhotoSessionNameSaving(false);
+    if (session) setActivePhotoSessionId(session.id);
+    if (renamed && photoSessionEditingId) setActivePhotoSessionId(photoSessionEditingId);
+    if (session || renamed) setPhotoSessionEditor(null);
+  }
+
   async function addPhotoSession() {
-    const nextNumber = photoSessions.length + 1;
-    const session = await onPhotoSessionCreate?.(procedure.id, `Ângulo ${nextNumber}`);
-    if (!session) return;
-    setActivePhotoSessionId(session.id);
+    if (creatingPhotoSessionRef.current) return null;
+    creatingPhotoSessionRef.current = true;
+    setCreatingPhotoSession(true);
+    try {
+      const session = await onPhotoSessionCreate?.(procedure.id, photoSessionName.trim());
+      if (session) setActivePhotoSessionId(session.id);
+      return session ?? null;
+    } finally {
+      creatingPhotoSessionRef.current = false;
+      setCreatingPhotoSession(false);
+    }
+  }
+
+  async function confirmDeletePhotoSession() {
+    if (!photoSessionToDelete || photoSessionToDelete.id.startsWith("legacy-") || deletingPhotoSession) return;
+    setDeletingPhotoSession(true);
+    const deleted = await onPhotoSessionDelete?.(procedure.id, photoSessionToDelete.id);
+    setDeletingPhotoSession(false);
+    if (!deleted) return;
+    const nextSession = photoSessions.find((session) => session.id !== photoSessionToDelete.id);
+    if (nextSession) setActivePhotoSessionId(nextSession.id);
+    setPhotoSessionToDelete(null);
   }
 
   function updateSlider(clientX: number) {
@@ -851,24 +942,30 @@ function ProcedureHistoryCard({ procedure, editable, expandable = false, afterPh
           </div>
           {viewMode === "compare" ? <BeforeAfterComparison beforeSrc={activePhotoSession?.beforePhoto} afterSrc={activePhotoSession?.afterPhoto} beforeLabel={beforeLabel} afterLabel={afterLabel} sliderPosition={sliderPosition} comparisonRef={comparisonRef} onPointerDown={handleSliderPointerDown} onPointerMove={handleSliderPointerMove} onPointerUp={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onBeforePreview={(src) => setExpandedPhoto({ label: "Antes", src })} onAfterPreview={(src) => setExpandedPhoto({ label: "Depois", src })} editable={photoEditable} showControls={!expandable} beforeSaving={beforePhotoSaving} afterSaving={afterPhotoSaving} beforeOperation={beforePhotoOperation} afterOperation={afterPhotoOperation} afterPhotoEnabled={afterPhotoEnabled} afterPhotoMessage={afterPhotoMessage} onBeforePhotoChange={(file) => onPhotoChange?.(procedure.id, "beforePhoto", file, activeSessionIdForRequest)} onAfterPhotoChange={(file) => onPhotoChange?.(procedure.id, "afterPhoto", file, activeSessionIdForRequest)} onBeforePhotoRemove={() => onPhotoRemove?.(procedure.id, "beforePhoto", activeSessionIdForRequest)} onAfterPhotoRemove={() => onPhotoRemove?.(procedure.id, "afterPhoto", activeSessionIdForRequest)} /> : <div className="grid justify-items-center gap-3 sm:grid-cols-2"><BeforeAfterPhoto label="Antes" overlayLabel={beforeLabel} src={activePhotoSession?.beforePhoto} editable={photoEditable && !expandable} saving={beforePhotoSaving} operation={beforePhotoOperation} onPhotoChange={(file) => onPhotoChange?.(procedure.id, "beforePhoto", file, activeSessionIdForRequest)} onPhotoRemove={() => onPhotoRemove?.(procedure.id, "beforePhoto", activeSessionIdForRequest)} onPreview={(src) => setExpandedPhoto({ label: "Antes", src })} /><BeforeAfterPhoto label="Depois" overlayLabel={afterLabel} src={activePhotoSession?.afterPhoto} editable={photoEditable && !expandable} photoInputEnabled={afterPhotoEnabled} blockedMessage={afterPhotoMessage} saving={afterPhotoSaving} operation={afterPhotoOperation} onPhotoChange={(file) => onPhotoChange?.(procedure.id, "afterPhoto", file, activeSessionIdForRequest)} onPhotoRemove={() => onPhotoRemove?.(procedure.id, "afterPhoto", activeSessionIdForRequest)} onPreview={(src) => setExpandedPhoto({ label: "Depois", src })} /></div>}
         </div>
-        {expandable ? <ProcedureInfoPanel photoSessions={photoSessions} activePhotoSessionId={activePhotoSession?.id} onSelectPhotoSession={setActivePhotoSessionId} onCreatePhotoSession={addPhotoSession} editable={photoEditable} afterPhotoEnabled={afterPhotoEnabled} afterPhotoMessage={afterPhotoMessage} beforeSaving={beforePhotoSaving} afterSaving={afterPhotoSaving} beforeOperation={beforePhotoOperation} afterOperation={afterPhotoOperation} onBeforePhotoChange={(file) => onPhotoChange?.(procedure.id, "beforePhoto", file, activeSessionIdForRequest)} onAfterPhotoChange={(file) => onPhotoChange?.(procedure.id, "afterPhoto", file, activeSessionIdForRequest)} onBeforePhotoRemove={() => onPhotoRemove?.(procedure.id, "beforePhoto", activeSessionIdForRequest)} onAfterPhotoRemove={() => onPhotoRemove?.(procedure.id, "afterPhoto", activeSessionIdForRequest)} onBeforePreview={(src) => setExpandedPhoto({ label: "Antes", src })} onAfterPreview={(src) => setExpandedPhoto({ label: "Depois", src })} /> : null}
+        {expandable ? <ProcedureInfoPanel photoSessions={photoSessions} activePhotoSessionId={activePhotoSession?.id} onSelectPhotoSession={setActivePhotoSessionId} onCreatePhotoSession={openPhotoSessionCreator} onEditPhotoSession={openPhotoSessionEditor} onDeletePhotoSession={(sessionId) => setPhotoSessionToDelete(photoSessions.find((session) => session.id === sessionId) ?? null)} deletingPhotoSessionKey={deletingPhotoSessionKey} procedureId={procedure.id} creatingPhotoSession={creatingPhotoSession} editable={photoEditable} afterPhotoEnabled={afterPhotoEnabled} afterPhotoMessage={afterPhotoMessage} beforeSaving={beforePhotoSaving} afterSaving={afterPhotoSaving} beforeOperation={beforePhotoOperation} afterOperation={afterPhotoOperation} onBeforePhotoChange={(file) => onPhotoChange?.(procedure.id, "beforePhoto", file, activeSessionIdForRequest)} onAfterPhotoChange={(file) => onPhotoChange?.(procedure.id, "afterPhoto", file, activeSessionIdForRequest)} onBeforePhotoRemove={() => onPhotoRemove?.(procedure.id, "beforePhoto", activeSessionIdForRequest)} onAfterPhotoRemove={() => onPhotoRemove?.(procedure.id, "afterPhoto", activeSessionIdForRequest)} onBeforePreview={(src) => setExpandedPhoto({ label: "Antes", src })} onAfterPreview={(src) => setExpandedPhoto({ label: "Depois", src })} /> : null}
       </div> : null}
       {procedure.notes ? <div className="border-t border-[#ededf3] px-4 py-3 text-xs leading-5 text-[#656678]"><strong className="text-[#3f4053]">Observações: </strong>{procedure.notes}</div> : null}
       <Modal open={Boolean(expandedPhoto)} onClose={() => setExpandedPhoto(null)} title={`Foto de ${expandedPhoto?.label.toLowerCase() ?? "procedimento"}`} description="Visualização ampliada da foto do procedimento.">
         {expandedPhoto ? <div className="relative h-[min(70vh,620px)] w-full overflow-hidden rounded-[7px] bg-[#f7f8fc]"><Image className="object-contain" src={expandedPhoto.src} alt={`Foto ampliada de ${expandedPhoto.label.toLowerCase()}`} fill sizes="(max-width: 640px) 90vw, 560px" /></div> : null}
       </Modal>
+      <Modal open={Boolean(photoSessionToDelete)} onClose={() => { if (!deletingPhotoSession) setPhotoSessionToDelete(null); }} title="Excluir sessão de fotos" description="As fotos dessa sessão serão removidas da evolução do procedimento.">
+        <div className="space-y-4"><p className="text-sm text-[#555668]">Tem certeza que deseja excluir <strong>{photoSessionToDelete?.name}</strong>?</p><div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={deletingPhotoSession} onClick={() => setPhotoSessionToDelete(null)}>Cancelar</Button><Button type="button" className="bg-[#c43f35] hover:bg-[#a8322a]" disabled={deletingPhotoSession} onClick={() => void confirmDeletePhotoSession()}>{deletingPhotoSession ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}{deletingPhotoSession ? "Excluindo..." : "Excluir sessão"}</Button></div></div>
+      </Modal>
+      <Modal open={Boolean(photoSessionEditor)} onClose={() => { if (!photoSessionNameSaving && !creatingPhotoSession) setPhotoSessionEditor(null); }} title={photoSessionEditor === "edit" ? "Editar sessão de fotos" : "Nova sessão de fotos"} description="Defina um nome para identificar este ângulo.">
+        <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void savePhotoSessionName(); }}><FormField label="Nome da sessão"><input className={fieldClassName} value={photoSessionName} onChange={(event) => setPhotoSessionName(event.target.value)} autoFocus maxLength={60} placeholder="Ex.: Perfil direito" /></FormField><div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={photoSessionNameSaving || creatingPhotoSession} onClick={() => setPhotoSessionEditor(null)}>Cancelar</Button><Button type="submit" disabled={!photoSessionName.trim() || photoSessionNameSaving || creatingPhotoSession}>{photoSessionNameSaving || creatingPhotoSession ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}{photoSessionEditor === "edit" ? "Salvar nome" : "Criar sessão"}</Button></div></form>
+      </Modal>
     </Card>
   );
 }
 
-function ProcedureInfoPanel({ photoSessions, activePhotoSessionId, onSelectPhotoSession, onCreatePhotoSession, editable, afterPhotoEnabled = true, afterPhotoMessage, beforeSaving, afterSaving, beforeOperation, afterOperation, onBeforePhotoChange, onAfterPhotoChange, onBeforePhotoRemove, onAfterPhotoRemove, onBeforePreview, onAfterPreview }: { photoSessions: PatientPhotoSession[]; activePhotoSessionId?: string; onSelectPhotoSession: (sessionId: string) => void; onCreatePhotoSession: () => void; editable?: boolean; afterPhotoEnabled?: boolean; afterPhotoMessage?: string; beforeSaving?: boolean; afterSaving?: boolean; beforeOperation?: "upload" | "remove"; afterOperation?: "upload" | "remove"; onBeforePhotoChange?: (file: File) => void; onAfterPhotoChange?: (file: File) => void; onBeforePhotoRemove?: () => void; onAfterPhotoRemove?: () => void; onBeforePreview?: (src: string) => void; onAfterPreview?: (src: string) => void }) {
+function ProcedureInfoPanel({ photoSessions, activePhotoSessionId, onSelectPhotoSession, onCreatePhotoSession, onEditPhotoSession, onDeletePhotoSession, deletingPhotoSessionKey, procedureId, creatingPhotoSession, editable, afterPhotoEnabled = true, afterPhotoMessage, beforeSaving, afterSaving, beforeOperation, afterOperation, onBeforePhotoChange, onAfterPhotoChange, onBeforePhotoRemove, onAfterPhotoRemove, onBeforePreview, onAfterPreview }: { photoSessions: PatientPhotoSession[]; activePhotoSessionId?: string; onSelectPhotoSession: (sessionId: string) => void; onCreatePhotoSession: () => void; onEditPhotoSession: (sessionId: string) => void; onDeletePhotoSession: (sessionId: string) => void; deletingPhotoSessionKey?: string; procedureId?: string; creatingPhotoSession: boolean; editable?: boolean; afterPhotoEnabled?: boolean; afterPhotoMessage?: string; beforeSaving?: boolean; afterSaving?: boolean; beforeOperation?: "upload" | "remove"; afterOperation?: "upload" | "remove"; onBeforePhotoChange?: (file: File) => void; onAfterPhotoChange?: (file: File) => void; onBeforePhotoRemove?: () => void; onAfterPhotoRemove?: () => void; onBeforePreview?: (src: string) => void; onAfterPreview?: (src: string) => void }) {
   const activePhotoSession = photoSessions.find((session) => session.id === activePhotoSessionId) ?? photoSessions[0];
   const beforeImage = activePhotoSession?.beforePhoto && activePhotoSession.beforePhoto !== "__photo__" ? activePhotoSession.beforePhoto : undefined;
   const afterImage = activePhotoSession?.afterPhoto && activePhotoSession.afterPhoto !== "__photo__" ? activePhotoSession.afterPhoto : undefined;
 
   return <aside className="h-fit rounded-[7px] border border-[#e7e9f2] bg-[#fafafd] p-3">
-    <div className="flex items-center justify-between gap-2"><h4 className="text-xs font-bold text-[#303144]">Sessões de fotos</h4>{editable ? <button className="inline-flex items-center gap-1 rounded-[5px] px-2 py-1 text-[9px] font-bold text-[#5147dc] transition hover:bg-[#f0efff]" type="button" onClick={onCreatePhotoSession}><Plus className="h-3 w-3" />Nova sessão</button> : null}</div>
-    <div className="mt-2 grid gap-1.5">{photoSessions.map((session, index) => <button className={cn("flex items-center justify-between gap-2 rounded-[5px] border px-2.5 py-2 text-left text-[10px] font-semibold transition", session.id === activePhotoSessionId ? "border-[#5147dc] bg-[#f0efff] text-[#5147dc]" : "border-[#e7e9f2] bg-white text-[#656678] hover:border-[#bdb9f7]")} type="button" key={session.id} onClick={() => onSelectPhotoSession(session.id)} aria-pressed={session.id === activePhotoSessionId}><span className="truncate">{session.name || `Sessão ${index + 1}`}</span><span className="shrink-0 text-[9px] text-[#858696]">{session.beforePhoto || session.afterPhoto ? "Com fotos" : "Vazia"}</span></button>)}</div>
+    <div className="flex items-center justify-between gap-2"><h4 className="text-xs font-bold text-[#303144]">Sessões de fotos</h4>{editable ? <button className="inline-flex items-center gap-1 rounded-[5px] px-2 py-1 text-[9px] font-bold text-[#5147dc] transition hover:bg-[#f0efff] disabled:cursor-not-allowed disabled:opacity-60" type="button" onClick={onCreatePhotoSession} disabled={creatingPhotoSession} aria-busy={creatingPhotoSession}>{creatingPhotoSession ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}{creatingPhotoSession ? "Criando..." : "Nova sessão"}</button> : null}</div>
+    <div className="mt-2 grid gap-1.5">{photoSessions.map((session, index) => { const sessionKey = `${procedureId ?? "procedure"}-${session.id}`; const canManage = editable && !session.id.startsWith("legacy-"); return <div className={cn("flex items-center gap-1 rounded-[5px] border p-1 transition", session.id === activePhotoSessionId ? "border-[#5147dc] bg-[#f0efff]" : "border-[#e7e9f2] bg-white")} key={session.id}><button className={cn("min-w-0 flex-1 rounded-[4px] px-1.5 py-1.5 text-left text-[10px] font-semibold", session.id === activePhotoSessionId ? "text-[#5147dc]" : "text-[#656678] hover:text-[#5147dc]")} type="button" onClick={() => onSelectPhotoSession(session.id)} aria-pressed={session.id === activePhotoSessionId}><span className="block truncate">{session.name || `Sessão ${index + 1}`}</span><span className="block text-[9px] text-[#858696]">{session.beforePhoto || session.afterPhoto ? "Com fotos" : "Vazia"}</span></button>{canManage ? <><button className="grid h-7 w-7 shrink-0 place-items-center rounded-[4px] text-[#858696] transition hover:bg-[#f0efff] hover:text-[#5147dc]" type="button" aria-label={`Editar ${session.name || `Sessão ${index + 1}`}`} title="Editar nome" onClick={() => onEditPhotoSession(session.id)}><PencilLine className="h-3.5 w-3.5" /></button><button className="grid h-7 w-7 shrink-0 place-items-center rounded-[4px] text-[#858696] transition hover:bg-[#fff0ee] hover:text-[#b42318] disabled:cursor-not-allowed disabled:opacity-45" type="button" aria-label={`Excluir ${session.name || `Sessão ${index + 1}`}`} title="Excluir sessão" disabled={Boolean(deletingPhotoSessionKey === sessionKey)} onClick={() => onDeletePhotoSession(session.id)}><Trash2 className="h-3.5 w-3.5" /></button></> : null}</div>; })}</div>
     <div className="mt-4 border-t border-[#e7e9f2] pt-3"><div className="flex items-center justify-between gap-2"><h4 className="text-xs font-bold text-[#303144]">{activePhotoSession?.name ?? "Fotos"}</h4><span className="text-[9px] font-semibold text-[#858696]">Antes / depois</span></div><div className="mt-2 grid grid-cols-2 gap-2"><ProcedurePhotoThumbnail label="Antes" src={beforeImage} editable={editable} saving={beforeSaving} onPreview={onBeforePreview} onRemove={onBeforePhotoRemove} /><ProcedurePhotoThumbnail label="Depois" src={afterImage} editable={editable} saving={afterSaving} disabled={!afterPhotoEnabled} onPreview={onAfterPreview} onRemove={onAfterPhotoRemove} /></div>{editable ? <div className="mt-3 grid gap-2"><PhotoInput icon={Upload} label={beforeImage ? "Trocar foto antes" : "Adicionar foto antes"} busyLabel={beforeOperation === "remove" ? "Removendo..." : "Carregando..."} disabled={beforeSaving} onChange={onBeforePhotoChange} /><PhotoInput icon={Upload} label={afterImage ? "Trocar foto depois" : "Adicionar foto depois"} busyLabel={afterOperation === "remove" ? "Removendo..." : "Carregando..."} disabled={afterSaving || !afterPhotoEnabled} blocked={!afterPhotoEnabled && !afterSaving} onChange={onAfterPhotoChange} />{afterPhotoMessage && !afterPhotoEnabled ? <p className="text-[9px] font-semibold text-[#858696]">{afterPhotoMessage}</p> : null}</div> : null}</div>
   </aside>;
 }
@@ -934,10 +1031,10 @@ function BeforeAfterPhoto({ label, overlayLabel, src, editable, photoInputEnable
 }
 
 function PhotoInput({ icon: Icon, label, busyLabel, capture, disabled, blocked, onChange }: { icon: typeof Camera; label: string; busyLabel: string; capture?: boolean; disabled?: boolean; blocked?: boolean; onChange?: (file: File) => void }) {
+  const busy = Boolean(disabled && !blocked);
   return (
-    <label className={cn("inline-flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-full border border-[#dddfea] bg-white px-2 text-[9px] font-bold text-[#5147dc] transition hover:border-[#5147dc]", disabled && "pointer-events-none opacity-50")}>
-      <Icon className="h-3 w-3" />
-      {disabled && !blocked ? <><Loader2 className="h-3 w-3 animate-spin" />{busyLabel}</> : label}
+    <label className={cn("inline-flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-full border border-[#dddfea] bg-white px-2 text-[9px] font-bold text-[#5147dc] transition hover:border-[#5147dc]", disabled && "pointer-events-none opacity-50")} aria-busy={busy}>
+      {busy ? <><Loader2 className="h-3 w-3 animate-spin" />{busyLabel}</> : <><Icon className="h-3 w-3" />{label}</>}
       <input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" capture={capture ? "environment" : undefined} disabled={disabled} onChange={(event) => { const file = event.target.files?.[0]; if (file) onChange?.(file); event.currentTarget.value = ""; }} />
     </label>
   );

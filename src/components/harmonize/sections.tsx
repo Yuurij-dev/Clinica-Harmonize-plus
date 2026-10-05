@@ -1552,9 +1552,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       facilityCost: form.has("facilityCost") ? parseCurrency(form.get("facilityCost")) : costSettings.facilityCost,
       medicationCost: form.has("medicationCost") ? parseCurrency(form.get("medicationCost")) : costSettings.medicationCost,
       appointmentToleranceMinutes: parseInteger(appointmentToleranceInput),
-      openingTime: openingTimeInput,
-      closingTime: closingTimeInput,
-      ...(editing === "Clínica" ? { name: clinicNameInput.trim() } : {}),
+      ...(editing === "Clínica" ? { name: clinicNameInput.trim(), openingTime: openingTimeInput, closingTime: closingTimeInput } : {}),
     };
     const response = await fetch("/api/clinic/cost-settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(nextSettings) });
     const responseText = await response.text();
@@ -1571,7 +1569,15 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       setCostSettingsError(data.message ?? "Não foi possível salvar os custos da clínica.");
       return;
     }
-    setCostSettings(data.settings);
+    setCostSettings((current) => ({
+      ...current,
+      laborCost: data.settings?.laborCost ?? current.laborCost,
+      facilityCost: data.settings?.facilityCost ?? current.facilityCost,
+      medicationCost: data.settings?.medicationCost ?? current.medicationCost,
+      appointmentToleranceMinutes: data.settings?.appointmentToleranceMinutes ?? current.appointmentToleranceMinutes,
+      openingTime: data.settings?.openingTime ?? current.openingTime,
+      closingTime: data.settings?.closingTime ?? current.closingTime,
+    }));
     if (data.settings.name) {
       setClinicNameInput(data.settings.name);
       onClinicNameChange?.(data.settings.name);

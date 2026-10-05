@@ -41,12 +41,13 @@ export async function PATCH(request: Request) {
   const facilityCost = Number(body?.facilityCost);
   const medicationCost = Number(body?.medicationCost);
   const appointmentToleranceMinutes = Number(body?.appointmentToleranceMinutes);
-  const openingTime = String(body?.openingTime ?? "08:00");
-  const closingTime = String(body?.closingTime ?? "19:00");
+  const openingTime = typeof body?.openingTime === "string" ? body.openingTime : null;
+  const closingTime = typeof body?.closingTime === "string" ? body.closingTime : null;
   const name = typeof body?.name === "string" ? body.name.trim() : "";
-  const openingMinutes = parseClockMinutes(openingTime);
-  const closingMinutes = parseClockMinutes(closingTime);
-  if ((body?.name !== undefined && (name.length < 2 || name.length > 120)) || ![laborCost, facilityCost, medicationCost, appointmentToleranceMinutes].every((value) => Number.isFinite(value) && value >= 0) || !Number.isInteger(appointmentToleranceMinutes) || appointmentToleranceMinutes > 180 || openingMinutes === null || closingMinutes === null || closingMinutes <= openingMinutes) {
+  const openingMinutes = openingTime ? parseClockMinutes(openingTime) : null;
+  const closingMinutes = closingTime ? parseClockMinutes(closingTime) : null;
+  const hasBusinessHours = openingTime !== null || closingTime !== null;
+  if ((body?.name !== undefined && (name.length < 2 || name.length > 120)) || ![laborCost, facilityCost, medicationCost, appointmentToleranceMinutes].every((value) => Number.isFinite(value) && value >= 0) || !Number.isInteger(appointmentToleranceMinutes) || appointmentToleranceMinutes > 180 || (hasBusinessHours && (!openingTime || !closingTime || openingMinutes === null || closingMinutes === null || closingMinutes <= openingMinutes))) {
     return NextResponse.json({ message: "Informe valores válidos para os custos e a tolerância." }, { status: 400 });
   }
 
@@ -62,7 +63,7 @@ export async function PATCH(request: Request) {
     try {
       const tolerance = await prisma.clinic.update({
         where: { id: user.clinicId },
-        data: { appointmentToleranceMinutes, openingTime, closingTime },
+        data: { appointmentToleranceMinutes, ...(openingTime !== null ? { openingTime } : {}), ...(closingTime !== null ? { closingTime } : {}) },
         select: { appointmentToleranceMinutes: true, openingTime: true, closingTime: true },
       });
       savedTolerance = tolerance.appointmentToleranceMinutes;
