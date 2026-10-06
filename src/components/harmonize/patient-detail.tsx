@@ -13,13 +13,20 @@ import {
   Clock3,
   Columns2,
   CreditCard,
+  ChevronRight,
+  Eye,
   FileText,
+  Filter,
   Loader2,
   MapPin,
+  MessageSquare,
+  Paperclip,
   PencilLine,
   Plus,
   Phone,
+  Search,
   Sparkles,
+  Syringe,
   Trash2,
   Upload,
   X,
@@ -86,6 +93,18 @@ type PatientHistoryRecord = {
   appointmentToleranceMinutes?: number;
   observations: string[];
   payments: PatientPaymentRecord[];
+};
+
+type HistoryEventKind = "procedure" | "appointment" | "payment" | "observation";
+type HistoryTimelineEvent = {
+  key: string;
+  kind: HistoryEventKind;
+  date?: string;
+  title: string;
+  subtitle: string;
+  status: string;
+  details: string;
+  procedure?: PatientProcedureRecord;
 };
 
 type PatientJourneyOption = { id: string; name: string; createdAt: string; hasEvaluation?: boolean; hasPaidQuote?: boolean; hasProcedure?: boolean; hasBeforePhoto?: boolean; hasAfterPhoto?: boolean };
@@ -423,7 +442,7 @@ function PatientTabContent({ patient, journeyId, activeTab, history, historyLoad
   }
 
   if (activeTab === "Histórico") {
-    return <HistoryTab patient={patient} history={history} />;
+    return <HistoryTab patient={patient} history={history} loading={historyLoading} />;
   }
 
   if (activeTab === "Procedimentos") {
@@ -561,33 +580,287 @@ function shouldLoadPatientHistory(tab: string) {
   return ["Procedimentos", "Agendamentos", "Histórico", "Pagamentos"].includes(tab);
 }
 
-function HistoryTab({ patient, history }: { patient: Patient; history?: PatientHistoryRecord }) {
+function HistoryTab({ patient, history, loading }: { patient: Patient; history?: PatientHistoryRecord; loading: boolean }) {
+  const [search, setSearch] = useState("");
+  const [eventFilter, setEventFilter] = useState<HistoryEventKind | "all">("all");
+  const [periodFilter, setPeriodFilter] = useState<"all" | "30" | "90">("all");
+  const [expandedEventKey, setExpandedEventKey] = useState<string | null>(null);
+  const [selectedProcedure, setSelectedProcedure] = useState<PatientProcedureRecord | null>(null);
+  const [historyNow] = useState(() => Date.now());
+
+  if (loading) return <HistoryTabSkeleton />;
+
   if (!history || (!history.procedures.length && !history.appointments.length && !history.payments.length && !history.observations.length)) {
     return <EmptyPatientState message={`${patient.name} ainda não possui um histórico.`} />;
   }
 
+  const events = buildHistoryTimeline(history);
+  const normalizedSearch = search.trim().toLocaleLowerCase("pt-BR");
+  const cutoff = periodFilter === "all" ? null : new Date(historyNow - Number(periodFilter) * 24 * 60 * 60 * 1000);
+  const filteredEvents = events.filter((event) => {
+    const matchesKind = eventFilter === "all" || event.kind === eventFilter;
+    const searchableText = `${event.title} ${event.subtitle} ${event.details}`.toLocaleLowerCase("pt-BR");
+    const matchesSearch = !normalizedSearch || searchableText.includes(normalizedSearch);
+    const eventDate = parseHistoryDate(event.date);
+    const matchesPeriod = !cutoff || (eventDate && eventDate >= cutoff);
+    return matchesKind && matchesSearch && matchesPeriod;
+  });
+
   return (
     <div className="space-y-4">
-      <Card className="self-start p-5">
-        <p className="text-[9px] font-bold uppercase text-[#a0a1af]">Resumo</p>
-        <div className="mt-4 grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
-          <SummaryLine label="Procedimentos feitos" value={String(history.procedures.length)} />
-          <SummaryLine label="Agendamentos" value={String(history.appointments.length)} />
-          <SummaryLine label="Pagamentos registrados" value={String(history.payments.filter((payment) => !payment.disabled).length)} />
-          <SummaryLine label="Observações" value={String(history.observations.length)} />
+      <Card className="p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-[#5147dc]" />
+              <h3 className="text-base font-bold text-[#303144]">Histórico do cliente</h3>
+            </div>
+            <p className="mt-1 text-xs text-[#858696]">Acompanhe os atendimentos e a evolução da cliente.</p>
+          </div>
+          <span className="hidden rounded-full bg-[#f1f0ff] px-2.5 py-1 text-[9px] font-bold uppercase text-[#5147dc] sm:inline-flex">Linha do tempo</span>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <HistoryMetric icon={Syringe} label="Procedimentos" value={String(history.procedures.length)} tone="purple" />
+          <HistoryMetric icon={CalendarDays} label="Agendamentos" value={String(history.appointments.length)} tone="blue" />
+          <HistoryMetric icon={CreditCard} label="Pagamentos" value={String(history.payments.filter((payment) => !payment.disabled).length)} tone="amber" />
+          <HistoryMetric icon={MessageSquare} label="Observações" value={String(history.observations.length)} tone="green" />
+        </div>
+
+        <div className="mt-5 grid gap-2 lg:grid-cols-[minmax(0,1fr)_190px_180px]">
+          <label className="flex h-10 items-center gap-2 rounded-[7px] border border-[#dddfea] bg-white px-3 text-xs text-[#858696] focus-within:border-[#5147dc]">
+            <Search className="h-4 w-4 shrink-0" />
+            <input className="min-w-0 flex-1 bg-transparent text-xs text-[#303144] outline-none placeholder:text-[#999aaa]" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar no histórico" aria-label="Buscar no histórico" />
+          </label>
+          <label className="relative flex h-10 items-center gap-2 rounded-[7px] border border-[#dddfea] bg-white px-3 text-xs text-[#555668] focus-within:border-[#5147dc]">
+            <Filter className="h-4 w-4 shrink-0 text-[#5147dc]" />
+            <select className="min-w-0 flex-1 appearance-none bg-transparent pr-5 text-xs outline-none" value={eventFilter} onChange={(event) => setEventFilter(event.target.value as HistoryEventKind | "all")} aria-label="Filtrar eventos">
+              <option value="all">Todos os eventos</option>
+              <option value="procedure">Procedimentos</option>
+              <option value="appointment">Agendamentos</option>
+              <option value="payment">Pagamentos</option>
+              <option value="observation">Observações</option>
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-3 h-3.5 w-3.5" />
+          </label>
+          <label className="relative flex h-10 items-center gap-2 rounded-[7px] border border-[#dddfea] bg-white px-3 text-xs text-[#555668] focus-within:border-[#5147dc]">
+            <CalendarDays className="h-4 w-4 shrink-0 text-[#5147dc]" />
+            <select className="min-w-0 flex-1 appearance-none bg-transparent pr-5 text-xs outline-none" value={periodFilter} onChange={(event) => setPeriodFilter(event.target.value as "all" | "30" | "90")} aria-label="Filtrar período">
+              <option value="all">Todo o período</option>
+              <option value="30">Últimos 30 dias</option>
+              <option value="90">Últimos 90 dias</option>
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-3 h-3.5 w-3.5" />
+          </label>
         </div>
       </Card>
-      <div>
+
+      <div className="space-y-3">
+        {filteredEvents.length ? filteredEvents.map((event, index) => (
+          <HistoryTimelineEventCard
+            event={event}
+            key={event.key}
+            expanded={expandedEventKey === event.key || (expandedEventKey === null && index === 0 && event.kind === "procedure")}
+            onToggle={() => setExpandedEventKey((current) => current === event.key ? null : event.key)}
+            onViewProcedure={setSelectedProcedure}
+          />
+        )) : <EmptyInline text="Nenhum evento encontrado com os filtros selecionados." />}
+      </div>
+
+      {selectedProcedure ? <HistoryProcedureViewer procedure={selectedProcedure} onClose={() => setSelectedProcedure(null)} /> : null}
+    </div>
+  );
+}
+
+function buildHistoryTimeline(history: PatientHistoryRecord): HistoryTimelineEvent[] {
+  const procedures: HistoryTimelineEvent[] = history.procedures.map((procedure, index) => ({
+    key: `procedure-${procedure.id ?? `${procedure.name}-${procedure.date}`}-${index}`,
+    kind: "procedure" as const,
+    date: procedure.date,
+    title: procedure.name,
+    subtitle: `${procedure.date}${procedure.professional ? ` · ${procedure.professional}` : ""}`,
+    status: procedure.status,
+    details: procedure.notes || "Atendimento registrado no histórico da cliente.",
+    procedure,
+  }));
+  const appointments: HistoryTimelineEvent[] = history.appointments.map((appointment) => ({
+    key: `appointment-${appointment.id ?? `${appointment.date}-${appointment.time}-${appointment.procedure}`}`,
+    kind: "appointment" as const,
+    date: appointment.date,
+    title: "Agendamento confirmado",
+    subtitle: `${appointment.date} às ${appointment.time} · ${appointment.procedure}${appointment.professional ? ` · ${appointment.professional}` : ""}`,
+    status: appointment.status,
+    details: appointment.notes || "Agendamento registrado para este atendimento.",
+  }));
+  const payments: HistoryTimelineEvent[] = history.payments.filter((payment) => !payment.disabled).map((payment, index) => ({
+    key: `payment-${payment.id ?? index}`,
+    kind: "payment" as const,
+    title: payment.procedure,
+    subtitle: `${payment.method} · ${payment.value}`,
+    status: payment.status,
+    details: `Pagamento registrado em ${payment.method}, no valor de ${payment.value}.`,
+  }));
+  const observations: HistoryTimelineEvent[] = history.observations.map((observation, index) => ({
+    key: `observation-${index}`,
+    kind: "observation" as const,
+    title: "Observação registrada",
+    subtitle: "Anotação da equipe",
+    status: "Registrada",
+    details: observation,
+  }));
+
+  return [...procedures, ...appointments, ...payments, ...observations].sort((left, right) => {
+    const leftDate = parseHistoryDate(left.date)?.getTime() ?? 0;
+    const rightDate = parseHistoryDate(right.date)?.getTime() ?? 0;
+    return rightDate - leftDate;
+  });
+}
+
+function parseHistoryDate(value?: string) {
+  if (!value) return null;
+  const [day, month, year] = value.split("/").map(Number);
+  if (!day || !month || !year) return null;
+  const date = new Date(year, month - 1, day);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function HistoryMetric({ icon: Icon, label, value, tone }: { icon: typeof Sparkles; label: string; value: string; tone: "purple" | "blue" | "amber" | "green" }) {
+  const tones = {
+    purple: "bg-[#f1f0ff] text-[#5147dc]",
+    blue: "bg-[#edf5ff] text-[#3c80dc]",
+    amber: "bg-[#fff5e7] text-[#c57a11]",
+    green: "bg-[#eaf8f0] text-[#269765]",
+  };
+  return <div className="flex items-center gap-3 rounded-[7px] border border-[#e8e9f2] bg-[#fbfbfd] p-3"><span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-[9px]", tones[tone])}><Icon className="h-5 w-5" /></span><div><p className="text-[10px] text-[#77788a]">{label}</p><strong className="mt-0.5 block text-lg leading-5 text-[#303144]">{value}</strong></div></div>;
+}
+
+function HistoryTimelineEventCard({ event, expanded, onToggle, onViewProcedure }: { event: HistoryTimelineEvent; expanded: boolean; onToggle: () => void; onViewProcedure: (procedure: PatientProcedureRecord) => void }) {
+  const isProcedure = event.kind === "procedure" && event.procedure;
+  const dateParts = formatHistoryDateParts(event.date);
+  const statusVariant = event.status === "Realizado" || event.status === "Atendido" || event.status === "Concluído" || event.status === "Pago" ? "green" : event.status === "Em procedimento" ? "amber" : "slate";
+
+  return (
+    <div className={cn("relative grid gap-3 sm:grid-cols-[66px_minmax(0,1fr)]", isProcedure && expanded && "") }>
+      <div className="hidden pt-4 text-center sm:block"><strong className="block text-sm text-[#303144]">{dateParts.day}</strong><span className="text-[9px] font-bold uppercase text-[#858696]">{dateParts.month}</span></div>
+      <Card className={cn("overflow-hidden p-0", isProcedure && expanded && "border-[#b9b2ff] shadow-[0_8px_24px_rgba(81,71,220,0.08)]")}>
+        <button className="flex w-full items-start justify-between gap-3 p-4 text-left" type="button" onClick={onToggle} aria-expanded={expanded}>
+          <div className="flex min-w-0 items-start gap-3">
+            <span className={cn("mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full", event.kind === "procedure" ? "bg-[#f1f0ff] text-[#5147dc]" : event.kind === "appointment" ? "bg-[#edf5ff] text-[#3c80dc]" : event.kind === "payment" ? "bg-[#fff5e7] text-[#c57a11]" : "bg-[#eaf8f0] text-[#269765]")}>
+              {event.kind === "procedure" ? <Syringe className="h-4 w-4" /> : event.kind === "appointment" ? <CalendarDays className="h-4 w-4" /> : event.kind === "payment" ? <CreditCard className="h-4 w-4" /> : <MessageSquare className="h-4 w-4" />}
+            </span>
+            <span className="min-w-0"><span className="flex flex-wrap items-center gap-2"><strong className="text-sm text-[#303144]">{event.title}</strong><Badge variant={statusVariant}>{event.status}</Badge></span><span className="mt-1 block text-xs text-[#858696]">{event.subtitle}</span></span>
+          </div>
+          <ChevronDown className={cn("mt-1 h-4 w-4 shrink-0 text-[#77788a] transition-transform", expanded && "rotate-180 text-[#5147dc]")} />
+        </button>
+        {expanded ? <div className="border-t border-[#ededf3] px-4 pb-4 pt-3">
+          {isProcedure ? <>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="rounded-[7px] border border-[#e8e9f2] bg-[#fbfbfd] p-3"><p className="text-xs font-bold text-[#3f4053]">Procedimentos realizados</p><p className="mt-2 text-xs text-[#656678]">{event.title}</p></div>
+              <div className="rounded-[7px] border border-[#e8e9f2] bg-[#fbfbfd] p-3"><p className="text-xs font-bold text-[#3f4053]">Observações</p><p className="mt-2 text-xs text-[#656678]">{event.details}</p></div>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button type="button" className="h-8 px-3 text-[10px]" onClick={() => onViewProcedure(event.procedure as PatientProcedureRecord)}><Eye className="h-3.5 w-3.5" />Ver procedimento</Button>
+              <Button type="button" variant="secondary" className="h-8 px-3 text-[10px]" disabled title="Visualização de anexos em breve"><Paperclip className="h-3.5 w-3.5" />Ver anexos ({getProcedurePhotoSessions(event.procedure as PatientProcedureRecord).length})</Button>
+              <div className="ml-auto flex -space-x-1.5">{getProcedurePhotoSessions(event.procedure as PatientProcedureRecord).slice(0, 3).flatMap((session) => [session.beforePhoto, session.afterPhoto]).filter((src) => Boolean(src && src !== "__photo__")).slice(0, 3).map((src, index) => <span className="relative h-8 w-8 overflow-hidden rounded-[5px] border-2 border-white bg-[#f1f2f7]" key={`${src}-${index}`}><Image src={src as string} alt="Miniatura do procedimento" fill className="object-cover" sizes="32px" /></span>)}</div>
+            </div>
+          </> : <div className="rounded-[7px] border border-[#e8e9f2] bg-[#fbfbfd] p-3 text-xs text-[#656678]">{event.details}</div>}
+        </div> : null}
+      </Card>
+    </div>
+  );
+}
+
+function formatHistoryDateParts(value?: string) {
+  const date = parseHistoryDate(value);
+  if (!date) return { day: "--", month: "" };
+  return { day: String(date.getDate()).padStart(2, "0"), month: date.toLocaleDateString("pt-BR", { month: "short" }).replace(".", "") };
+}
+
+function HistoryProcedureViewer({ procedure, onClose }: { procedure: PatientProcedureRecord; onClose: () => void }) {
+  const sessions = getProcedurePhotoSessions(procedure);
+  const [activeSessionId, setActiveSessionId] = useState<string>();
+  const [viewMode, setViewMode] = useState<"compare" | "sideBySide">("compare");
+  const [sliderPosition, setSliderPosition] = useState(50);
+  const [animationDirection, setAnimationDirection] = useState<"next" | "previous">("next");
+  const [animationKey, setAnimationKey] = useState(0);
+  const [expandedPhoto, setExpandedPhoto] = useState<{ label: string; src: string } | null>(null);
+  const comparisonRef = useRef<HTMLDivElement>(null);
+  const activeIndex = Math.max(0, sessions.findIndex((session) => session.id === activeSessionId));
+  const activeSession = sessions[activeIndex] ?? sessions[0];
+
+  function updateSlider(clientX: number) {
+    const bounds = comparisonRef.current?.getBoundingClientRect();
+    if (!bounds?.width) return;
+    setSliderPosition(Math.min(100, Math.max(0, ((clientX - bounds.left) / bounds.width) * 100)));
+  }
+
+  function handleSliderPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    updateSlider(event.clientX);
+  }
+
+  function handleSliderPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+    event.preventDefault();
+    updateSlider(event.clientX);
+  }
+
+  function changeSession(nextIndex: number) {
+    setActiveSessionId(sessions[nextIndex]?.id);
+    setSliderPosition(50);
+  }
+
+  function changeAngle(direction: "next" | "previous") {
+    const nextSessionIndex = direction === "next" ? activeIndex + 1 : activeIndex - 1;
+    if (!sessions[nextSessionIndex]) return;
+    setAnimationDirection(direction);
+    setAnimationKey((current) => current + 1);
+    changeSession(nextSessionIndex);
+  }
+
+  return <Modal open title={procedure.name} description={`${procedure.date}${procedure.professional ? ` · ${procedure.professional}` : ""}`} onClose={onClose} closeOnOverlayClick={false} overlayContent={<div className="pointer-events-none fixed inset-y-0 z-[1001] flex items-center justify-between" style={{ left: "max(0.5rem, calc(50% - 330px))", right: "max(0.5rem, calc(50% - 330px))" }}><Button className="pointer-events-auto rounded-full bg-white shadow-[0_8px_24px_rgba(37,38,58,0.2)]" type="button" variant="secondary" size="icon" aria-label="Ângulo anterior" disabled={activeIndex === 0} onClick={() => changeAngle("previous")}><ChevronRight className="h-5 w-5 rotate-180" /></Button><Button className="pointer-events-auto rounded-full bg-white shadow-[0_8px_24px_rgba(37,38,58,0.2)]" type="button" variant="secondary" size="icon" aria-label="Próximo ângulo" disabled={activeIndex === sessions.length - 1} onClick={() => changeAngle("next")}><ChevronRight className="h-5 w-5" /></Button></div>}>
+    <div key={animationKey} className={cn("space-y-4", animationDirection === "next" ? "hp-history-modal-next" : "hp-history-modal-previous")}>
+      <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[9px] font-bold uppercase text-[#858696]">Ângulo selecionado</p><p className="mt-1 text-sm font-bold text-[#303144]">{activeSession?.name ?? "Sessão principal"}</p></div><Button type="button" variant="secondary" className="h-8 px-3 text-[10px]" disabled title="Visualização de anexos em breve"><Paperclip className="h-3.5 w-3.5" />Ver anexos</Button></div>
+      <div className="flex justify-center"><div className="inline-flex rounded-[7px] border border-[#dddfea] bg-[#fafafd] p-1"><button className={cn("inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 text-[10px] font-bold", viewMode === "compare" ? "bg-[#5147dc] text-white" : "text-[#77788a] hover:bg-white hover:text-[#5147dc]")} type="button" onClick={() => setViewMode("compare")} aria-pressed={viewMode === "compare"}><ArrowLeftRight className="h-3.5 w-3.5" />Comparar</button><button className={cn("inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 text-[10px] font-bold", viewMode === "sideBySide" ? "bg-[#5147dc] text-white" : "text-[#77788a] hover:bg-white hover:text-[#5147dc]")} type="button" onClick={() => setViewMode("sideBySide")} aria-pressed={viewMode === "sideBySide"}><Columns2 className="h-3.5 w-3.5" />Lado a lado</button></div></div>
+      <div className="relative mx-auto w-full max-w-[420px]">
+        <div className="flex min-h-0 justify-center">{viewMode === "compare" ? <BeforeAfterComparison compact beforeSrc={activeSession?.beforePhoto} afterSrc={activeSession?.afterPhoto} beforeLabel={`Antes · ${procedure.date}`} afterLabel={`Depois · ${procedure.date}`} sliderPosition={sliderPosition} comparisonRef={comparisonRef} onPointerDown={handleSliderPointerDown} onPointerMove={handleSliderPointerMove} onPointerUp={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onBeforePreview={(src) => setExpandedPhoto({ label: "Antes", src })} onAfterPreview={(src) => setExpandedPhoto({ label: "Depois", src })} /> : <div className="grid w-full max-w-[380px] gap-2 sm:grid-cols-2"><BeforeAfterPhoto label="Antes" overlayLabel={`Antes · ${procedure.date}`} src={activeSession?.beforePhoto} onPreview={(src) => setExpandedPhoto({ label: "Antes", src })} /><BeforeAfterPhoto label="Depois" overlayLabel={`Depois · ${procedure.date}`} src={activeSession?.afterPhoto} onPreview={(src) => setExpandedPhoto({ label: "Depois", src })} /></div>}</div>
+      </div>
+      <div className="text-center"><p className="text-xs font-bold text-[#303144]">{activeSession?.name ?? "Sessão principal"}</p><p className="mt-0.5 text-[10px] text-[#858696]">Ângulo {activeIndex + 1} de {sessions.length}</p></div>
+    </div>
+    <Modal open={Boolean(expandedPhoto)} title={`Foto ${expandedPhoto?.label.toLowerCase() ?? "ampliada"}`} description="Visualização ampliada da foto do procedimento." closeOnOverlayClick={false} onClose={() => setExpandedPhoto(null)}>
+      {expandedPhoto ? <div className="relative mx-auto h-[min(68vh,560px)] w-full max-w-[360px] overflow-hidden rounded-[7px] bg-[#f7f8fc]"><Image className="object-contain" src={expandedPhoto.src} alt={`Foto ampliada de ${expandedPhoto.label.toLowerCase()}`} fill sizes="(max-width: 640px) 90vw, 360px" /></div> : null}
+    </Modal>
+  </Modal>;
+}
+
+function HistoryTabSkeleton() {
+  return (
+    <div className="space-y-4" aria-label="Carregando histórico">
+      <Card className="self-start p-5">
+        <LoadingSkeleton className="h-3 w-20" />
+        <div className="mt-4 grid gap-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
+          {[0, 1, 2, 3].map((item) => <LoadingSkeleton className="h-12 w-full rounded-[7px]" key={item} />)}
+        </div>
+      </Card>
+      <div className="space-y-3">
         <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-[#5147dc]" />
-          <h3 className="text-sm font-bold text-[#303144]">Histórico do cliente</h3>
+          <LoadingSkeleton className="h-4 w-4 rounded-full" />
+          <LoadingSkeleton className="h-4 w-36" />
         </div>
-        <div className="mt-5 grid gap-3 lg:grid-cols-2">
-          {history.procedures.map((procedure) => (
-            <ProcedureHistoryCard key={`${procedure.name}-${procedure.date}`} procedure={procedure} />
-          ))}
-          {!history.procedures.length ? <EmptyInline text="Cliente ainda não realizou procedimentos." /> : null}
-        </div>
+        {[0, 1].map((item) => (
+          <Card className="space-y-3 p-4" key={item}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-2">
+                <LoadingSkeleton className="h-4 w-44" />
+                <LoadingSkeleton className="h-3 w-56 max-w-full" />
+              </div>
+              <LoadingSkeleton className="h-6 w-20 rounded-full" />
+            </div>
+            <LoadingSkeleton className="h-10 w-full" />
+          </Card>
+        ))}
       </div>
     </div>
   );
@@ -974,20 +1247,22 @@ function ProcedurePhotoThumbnail({ label, src, editable, saving, disabled, onPre
   return <div className="overflow-hidden rounded-[5px] border border-[#e7e9f2] bg-white"><div className="px-2 py-1.5 text-[9px] font-bold uppercase text-[#858696]">{label}</div><div className="relative aspect-[9/16] bg-[#f1f2f7]">{src ? <button className="absolute inset-0 cursor-zoom-in" type="button" onClick={() => onPreview?.(src)} aria-label={`Ampliar foto ${label.toLowerCase()}`}><Image className="object-cover" src={src} alt={`Miniatura da foto ${label.toLowerCase()}`} fill sizes="130px" /></button> : <span className="absolute inset-0 grid place-items-center px-2 text-center text-[9px] font-semibold text-[#858696]">Sem foto</span>}{editable && src ? <button className="absolute right-1.5 top-1.5 z-10 grid h-6 w-6 place-items-center rounded-full bg-[#25263a]/80 text-white transition hover:bg-[#b42318] disabled:cursor-not-allowed disabled:opacity-50" type="button" aria-label={`Remover foto ${label.toLowerCase()}`} disabled={saving || disabled} onClick={onRemove}><X className="h-3 w-3" /></button> : null}</div></div>;
 }
 
-function BeforeAfterComparison({ beforeSrc, afterSrc, beforeLabel, afterLabel, sliderPosition, comparisonRef, onPointerDown, onPointerMove, onPointerUp, onBeforePreview, onAfterPreview, editable, showControls = true, beforeSaving, afterSaving, beforeOperation, afterOperation, afterPhotoEnabled, afterPhotoMessage, onBeforePhotoChange, onAfterPhotoChange, onBeforePhotoRemove, onAfterPhotoRemove }: { beforeSrc?: string; afterSrc?: string; beforeLabel: string; afterLabel: string; sliderPosition: number; comparisonRef: RefObject<HTMLDivElement | null>; onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void; onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void; onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void; onBeforePreview: (src: string) => void; onAfterPreview: (src: string) => void; editable?: boolean; showControls?: boolean; beforeSaving?: boolean; afterSaving?: boolean; beforeOperation?: "upload" | "remove"; afterOperation?: "upload" | "remove"; afterPhotoEnabled?: boolean; afterPhotoMessage?: string; onBeforePhotoChange?: (file: File) => void; onAfterPhotoChange?: (file: File) => void; onBeforePhotoRemove?: () => void; onAfterPhotoRemove?: () => void }) {
+function BeforeAfterComparison({ beforeSrc, afterSrc, beforeLabel, afterLabel, sliderPosition, comparisonRef, onPointerDown, onPointerMove, onPointerUp, onBeforePreview, onAfterPreview, editable, showControls = true, compact = false, beforeSaving, afterSaving, beforeOperation, afterOperation, afterPhotoEnabled, afterPhotoMessage, onBeforePhotoChange, onAfterPhotoChange, onBeforePhotoRemove, onAfterPhotoRemove }: { beforeSrc?: string; afterSrc?: string; beforeLabel: string; afterLabel: string; sliderPosition: number; comparisonRef: RefObject<HTMLDivElement | null>; onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void; onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void; onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void; onBeforePreview: (src: string) => void; onAfterPreview: (src: string) => void; editable?: boolean; showControls?: boolean; compact?: boolean; beforeSaving?: boolean; afterSaving?: boolean; beforeOperation?: "upload" | "remove"; afterOperation?: "upload" | "remove"; afterPhotoEnabled?: boolean; afterPhotoMessage?: string; onBeforePhotoChange?: (file: File) => void; onAfterPhotoChange?: (file: File) => void; onBeforePhotoRemove?: () => void; onAfterPhotoRemove?: () => void }) {
   const beforeImage = beforeSrc && beforeSrc !== "__photo__" ? beforeSrc : undefined;
   const afterImage = afterSrc && afterSrc !== "__photo__" ? afterSrc : undefined;
 
   return (
-    <div className="mx-auto w-full max-w-[460px]">
+    <div className={cn("mx-auto w-full", compact ? "max-w-[280px]" : "max-w-[460px]")}>
       <div ref={comparisonRef} className="relative aspect-[9/16] w-full cursor-ew-resize touch-none select-none overflow-hidden rounded-[7px] border border-[#e7e9f2] bg-[#f7f8fc]" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
-        <ComparisonPhotoLayer src={afterImage} alt="Foto depois do procedimento" label={afterLabel} onPreview={onAfterPreview} />
-        <div className="pointer-events-none absolute inset-0" style={{ clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}>
-          <ComparisonPhotoLayer src={beforeImage} alt="Foto antes do procedimento" label={beforeLabel} onPreview={onBeforePreview} />
-        </div>
-        <div className="pointer-events-none absolute inset-y-0 z-10 w-0.5 bg-white shadow-[0_0_0_1px_rgba(37,38,58,0.12)]" style={{ left: `${sliderPosition}%` }}>
-          <span className="absolute left-1/2 top-1/2 grid h-9 w-9 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white bg-[#5147dc] text-white shadow-[0_5px_16px_rgba(37,38,58,0.28)]"><ArrowLeftRight className="h-4 w-4" /></span>
-        </div>
+        {!beforeImage && !afterImage ? <span className="absolute inset-0 grid place-items-center px-4 text-center text-xs font-semibold text-[#858696]">Nenhuma foto cadastrada</span> : <>
+          <ComparisonPhotoLayer src={afterImage} alt="Foto depois do procedimento" label={afterLabel} emptySide="after" onPreview={onAfterPreview} />
+          <div className="pointer-events-none absolute inset-0" style={{ clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}>
+            <ComparisonPhotoLayer src={beforeImage} alt="Foto antes do procedimento" label={beforeLabel} emptySide="before" onPreview={onBeforePreview} />
+          </div>
+          <div className="pointer-events-none absolute inset-y-0 z-10 w-0.5 bg-white shadow-[0_0_0_1px_rgba(37,38,58,0.12)]" style={{ left: `${sliderPosition}%` }}>
+            <span className="absolute left-1/2 top-1/2 grid h-9 w-9 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white bg-[#5147dc] text-white shadow-[0_5px_16px_rgba(37,38,58,0.28)]"><ArrowLeftRight className="h-4 w-4" /></span>
+          </div>
+        </>}
       </div>
       {editable && showControls ? <ComparisonPhotoControls label="Antes" saving={beforeSaving} operation={beforeOperation} onPhotoChange={onBeforePhotoChange} onPhotoRemove={onBeforePhotoRemove} /> : null}
       {editable && showControls ? <ComparisonPhotoControls label="Depois" saving={afterSaving} operation={afterOperation} photoInputEnabled={afterPhotoEnabled} blockedMessage={afterPhotoMessage} onPhotoChange={onAfterPhotoChange} onPhotoRemove={onAfterPhotoRemove} /> : null}
@@ -995,8 +1270,8 @@ function BeforeAfterComparison({ beforeSrc, afterSrc, beforeLabel, afterLabel, s
   );
 }
 
-function ComparisonPhotoLayer({ src, alt, label, onPreview }: { src?: string; alt: string; label: string; onPreview: (src: string) => void }) {
-  return src ? <button className="absolute inset-0 h-full w-full cursor-zoom-in" type="button" aria-label={`Ampliar ${label.toLowerCase()}`} onClick={(event) => { event.stopPropagation(); onPreview(src); }}><Image className="object-cover" src={src} alt={alt} fill draggable={false} onDragStart={(event) => event.preventDefault()} sizes="(max-width: 640px) 90vw, 420px" /><span className="absolute bottom-3 left-3 rounded-full bg-white/90 px-2.5 py-1 text-[9px] font-bold text-[#303144] shadow-[0_3px_10px_rgba(37,38,58,0.12)]">{label}</span></button> : <div className="absolute inset-0 grid place-items-center px-4 text-center text-xs font-semibold text-[#858696]"><span>{label}<br />Nenhuma foto cadastrada</span></div>;
+function ComparisonPhotoLayer({ src, alt, label, emptySide, onPreview }: { src?: string; alt: string; label: string; emptySide: "before" | "after"; onPreview: (src: string) => void }) {
+  return src ? <button className="absolute inset-0 h-full w-full cursor-zoom-in" type="button" aria-label={`Ampliar ${label.toLowerCase()}`} onClick={(event) => { event.stopPropagation(); onPreview(src); }}><Image className="object-cover" src={src} alt={alt} fill draggable={false} onDragStart={(event) => event.preventDefault()} sizes="(max-width: 640px) 90vw, 420px" /><span className="absolute bottom-3 left-3 rounded-full bg-white/90 px-2.5 py-1 text-[9px] font-bold text-[#303144] shadow-[0_3px_10px_rgba(37,38,58,0.12)]">{label}</span></button> : <div className="absolute inset-0"><span className={cn("absolute top-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] font-semibold text-[#858696]", emptySide === "before" ? "left-[5%]" : "right-[5%]")}>Nenhuma foto cadastrada</span></div>;
 }
 
 function ComparisonPhotoControls({ label, saving, operation, photoInputEnabled = true, blockedMessage, onPhotoChange, onPhotoRemove }: { label: string; saving?: boolean; operation?: "upload" | "remove"; photoInputEnabled?: boolean; blockedMessage?: string; onPhotoChange?: (file: File) => void; onPhotoRemove?: () => void }) {
@@ -1218,15 +1493,6 @@ function PaymentsTab({ history }: { history?: PatientHistoryRecord }) {
 
 function EmptyInline({ text }: { text: string }) {
   return <div className="rounded-[7px] border border-dashed border-[#d9dce8] p-4 text-xs font-semibold text-[#858696]">{text}</div>;
-}
-
-function SummaryLine({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between rounded-[7px] bg-[#f7f8fc] px-3 py-2">
-      <span className="text-[#77788a]">{label}</span>
-      <strong className="text-[#303144]">{value}</strong>
-    </div>
-  );
 }
 
 function InfoBlock({ icon: Icon, label, value }: { icon: typeof Phone; label: string; value: string }) {

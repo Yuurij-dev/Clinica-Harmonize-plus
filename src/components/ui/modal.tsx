@@ -11,9 +11,11 @@ type ModalProps = {
   description?: string;
   children: React.ReactNode;
   onClose: () => void;
+  overlayContent?: React.ReactNode;
+  closeOnOverlayClick?: boolean;
 };
 
-export function Modal({ open, title, description, children, onClose }: ModalProps) {
+export function Modal({ open, title, description, children, onClose, overlayContent, closeOnOverlayClick = true }: ModalProps) {
   useEffect(() => {
     if (!open) return;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -33,7 +35,8 @@ export function Modal({ open, title, description, children, onClose }: ModalProp
 
   return createPortal(
     <div className="fixed inset-0 z-[1000] grid min-h-dvh place-items-center overflow-y-auto bg-[#202136]/48 p-4 backdrop-blur-sm">
-      <button className="fixed inset-0 cursor-default" aria-label="Fechar" onClick={onClose} />
+      <button className="fixed inset-0 cursor-default" aria-label={closeOnOverlayClick ? "Fechar" : "Modal aberto"} onClick={closeOnOverlayClick ? onClose : undefined} />
+      {overlayContent}
       <div className="hp-panel-enter relative z-10 my-6 w-full max-w-xl rounded-[8px] border border-[#e5e5ee] bg-white shadow-[0_24px_80px_rgba(32,33,54,0.24)]">
         <div className="flex items-start justify-between gap-4 border-b border-[#ededf3] px-6 py-5">
           <div>
