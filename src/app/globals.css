@@ -3,11 +3,54 @@
 :root {
   --background: #f8f9fc;
   --foreground: #191a2e;
+  --card: #ffffff;
+  --card-foreground: #191a2e;
+  --popover: #ffffff;
+  --popover-foreground: #191a2e;
+  --primary: #5147dc;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f2f7;
+  --secondary-foreground: #303144;
+  --muted: #f1f2f7;
+  --muted-foreground: #77788a;
+  --accent: #f1f0ff;
+  --accent-foreground: #5147dc;
+  --destructive: #b42318;
+  --destructive-foreground: #ffffff;
+  --border: #e5e7ef;
+  --input: #d9dce8;
+  --ring: #8178ee;
+  --radius: 0.5rem;
+  --success: #16805d;
+  --warning: #a56400;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -401,6 +444,25 @@ html.dark {
   color-scheme: dark;
   --background: #11131d;
   --foreground: #f3f4fa;
+  --card: #171a26;
+  --card-foreground: #f3f4fa;
+  --popover: #1b1e2b;
+  --popover-foreground: #f3f4fa;
+  --primary: #766cf0;
+  --primary-foreground: #ffffff;
+  --secondary: #242838;
+  --secondary-foreground: #e6e8f2;
+  --muted: #242838;
+  --muted-foreground: #a0a5b8;
+  --accent: #2c2950;
+  --accent-foreground: #c5c0ff;
+  --destructive: #ef6b65;
+  --destructive-foreground: #ffffff;
+  --border: #303447;
+  --input: #34384c;
+  --ring: #8e86f7;
+  --success: #57c995;
+  --warning: #e4ad4f;
 }
 
 .hp-skeleton {

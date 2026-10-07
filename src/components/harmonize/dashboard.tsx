@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CalendarCheck, CalendarDays, ChevronRight, RotateCcw, Plus, TrendingUp, UserPlus, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CountUpValue, DetailCard, LoadingSkeleton, ProgressBar, StatusBadge } from "./shared";
+import { CountUpValue, DetailCard, LoadingSkeleton, PageContainer, ProgressBar, StatCard, StatusBadge } from "./shared";
 import type { SectionId } from "@/types/clinic";
 import { getCachedJson, readClientCache } from "@/lib/client-cache";
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -81,13 +81,13 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
     ["Novo cliente", "client"], ["Novo atendimento", "appointment"], ["Novo orçamento", "quote"], ["Registrar pagamento", "payment"],
   ] as const;
   return (
-    <div className="space-y-5">
-      <div className="hp-page-enter border-b border-[#ececf2] pb-5">
+    <PageContainer>
+      <div className="hp-page-enter border-b border-border pb-5">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="text-xs font-semibold text-[#8c8d9f]">{new Intl.DateTimeFormat("pt-BR", { dateStyle: "full" }).format(new Date())}</p>
-            <h2 className="mt-1 text-xl font-bold text-[#25263a]">Olá, {userName}</h2>
-            <p className="mt-1 max-w-2xl text-xs leading-5 text-[#8c8d9f]">
+            <p className="text-xs font-semibold text-muted-foreground">{new Intl.DateTimeFormat("pt-BR", { dateStyle: "full" }).format(new Date())}</p>
+            <h2 className="mt-1 text-xl font-bold text-foreground">Olá, {userName}</h2>
+            <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
               Acompanhe os números e os próximos atendimentos da sua clínica.
             </p>
           </div>
@@ -112,16 +112,7 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
 
       <div className="hp-list-stagger grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         {stats.map((stat) => (
-          <Card key={stat.label} className="p-4">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-[10px] font-bold uppercase text-[#8c8d9f]">{stat.label}</p>
-              <TrendingUp className="h-3.5 w-3.5 text-[#5147dc]" />
-            </div>
-            <p className="mt-3 text-xl font-bold text-[#25263a]">
-              <CountUpValue value={stat.value} format={stat.format} />
-            </p>
-            <p className="mt-1 text-[10px] font-medium text-[#9798a8]">{stat.detail}</p>
-          </Card>
+          <StatCard key={stat.label} label={stat.label} value={<CountUpValue value={stat.value} format={stat.format} />} detail={stat.detail} icon={TrendingUp} />
         ))}
       </div>
 
@@ -246,7 +237,7 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
           </div>
         </DetailCard>
       </div>
-    </div>
+    </PageContainer>
   );
 }
 
