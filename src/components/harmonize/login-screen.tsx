@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { formatPhone } from "@/lib/input-masks";
 
 export type RegisterValues = {
+  clinicName: string;
   name: string;
   phone: string;
   profession: string;
@@ -40,6 +41,7 @@ type LoginScreenProps = {
 };
 
 const initialRegisterValues: RegisterValues = {
+  clinicName: "",
   name: "",
   phone: "",
   profession: "",
@@ -172,6 +174,7 @@ function RegisterForm({ error, isSubmitting, onBack, onChange, onSubmit, values,
       <button className="mb-5 inline-flex items-center gap-2 text-xs font-bold text-[#68728a] transition hover:text-[#5947ee]" onClick={onBack} type="button"><ArrowLeft className="h-4 w-4" />Voltar para o acesso</button>
       <div className="mb-7"><p className="text-xs font-black uppercase text-[#18a9c6]">Harmonize+</p><h2 className="mt-2 text-3xl font-black tracking-[0] text-[#161d38]">Teste grátis por 3 dias</h2><p className="mt-3 text-sm leading-6 text-[#6b7285]">Crie sua conta e comece a organizar a rotina da sua clínica.</p></div>
       <form className="grid gap-4 sm:grid-cols-2" onSubmit={onSubmit}>
+        <div className="sm:col-span-2"><TextField label="Nome da clínica" onChange={(value) => onChange("clinicName", value)} placeholder="Ex.: Clínica Harmonia" value={values.clinicName} autoComplete="organization" maxLength={100} /></div>
         <TextField label="Nome" onChange={(value) => onChange("name", value)} placeholder="Nome e sobrenome" value={values.name} autoComplete="name" />
         <TextField icon={Phone} label="Celular" onChange={(value) => onChange("phone", formatPhone(value))} placeholder="(00) 00000-0000" type="tel" value={values.phone} autoComplete="tel" />
         <SelectField label="Você é..." onChange={(value) => onChange("profession", value)} options={professionOptions} value={values.profession} />
@@ -186,8 +189,8 @@ function RegisterForm({ error, isSubmitting, onBack, onChange, onSubmit, values,
   );
 }
 
-function TextField({ icon: Icon, label, onChange, placeholder, type = "text", value, autoComplete }: { icon?: typeof Mail; label: string; onChange: (value: string) => void; placeholder: string; type?: string; value: string; autoComplete?: string }) {
-  return <label className="block"><span className="mb-2 block text-xs font-bold text-[#2d3654]">{label}</span><span className="flex h-12 items-center gap-3 rounded-[8px] border border-[#dfe7f2] bg-[#fbfdff] px-4 text-sm text-[#68728a] transition focus-within:border-[#5947ee] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(89,71,238,0.08)]">{Icon ? <Icon className="h-4 w-4 shrink-0 text-[#18a9c6]" /> : null}<input className="w-full bg-transparent font-semibold text-[#172033] outline-none placeholder:text-[#9aa5b8]" autoComplete={autoComplete} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} required type={type} value={value} /></span></label>;
+function TextField({ icon: Icon, label, onChange, placeholder, type = "text", value, autoComplete, maxLength }: { icon?: typeof Mail; label: string; onChange: (value: string) => void; placeholder: string; type?: string; value: string; autoComplete?: string; maxLength?: number }) {
+  return <label className="block"><span className="mb-2 block text-xs font-bold text-[#2d3654]">{label}</span><span className="flex h-12 items-center gap-3 rounded-[8px] border border-[#dfe7f2] bg-[#fbfdff] px-4 text-sm text-[#68728a] transition focus-within:border-[#5947ee] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(89,71,238,0.08)]">{Icon ? <Icon className="h-4 w-4 shrink-0 text-[#18a9c6]" /> : null}<input className="w-full bg-transparent font-semibold text-[#172033] outline-none placeholder:text-[#9aa5b8]" autoComplete={autoComplete} maxLength={maxLength} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} required type={type} value={value} /></span></label>;
 }
 
 function SelectField({ label, onChange, options, value }: { label: string; onChange: (value: string) => void; options: string[]; value: string }) {
