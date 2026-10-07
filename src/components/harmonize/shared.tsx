@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, Filter, Plus, Search } from "lucide-react";
+import { ArrowRight, FileText, Filter, Plus, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
 export function CountUpValue({
@@ -55,8 +59,8 @@ export function SectionIntro({
   return (
     <div className="hp-page-enter mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div>
-        <h2 className="text-lg font-bold text-[#3026a8]">{title}</h2>
-        <p className="mt-1 max-w-2xl text-xs leading-5 text-[#8a8b9c]">
+        <h2 className="text-lg font-bold text-primary">{title}</h2>
+        <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
           {description}
         </p>
       </div>
@@ -68,6 +72,12 @@ export function SectionIntro({
       ) : null}
     </div>
   );
+}
+
+export const PageHeader = SectionIntro;
+
+export function PageContainer({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
+  return <div className={cn("space-y-5", className)} {...props} />;
 }
 
 export function SearchFilterBar({
@@ -83,13 +93,14 @@ export function SearchFilterBar({
 }) {
   return (
     <div className="hp-page-enter mb-4 flex flex-col gap-3 sm:flex-row">
-      <label className="flex h-10 flex-1 items-center gap-3 rounded-[7px] border border-[#e5e5ec] bg-white px-4 text-xs text-[#8b8c9d] transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-[#5147dc] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(81,71,220,0.08)]">
-        <Search className="h-4 w-4" />
-        <input
-          className="w-full bg-transparent outline-none placeholder:text-[#8b93aa]"
+      <label className="flex h-10 flex-1 items-center gap-3 rounded-md border border-input bg-background px-4 text-xs text-muted-foreground transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-ring focus-within:shadow-[0_0_0_4px_color-mix(in_srgb,var(--ring)_12%,transparent)]">
+        <Search className="h-4 w-4 text-muted-foreground" />
+        <Input
+          className="h-auto border-0 bg-transparent p-0 shadow-none focus-visible:border-0 focus-visible:ring-0"
           placeholder={placeholder}
           value={value}
           onChange={(event) => onChange?.(event.target.value)}
+          aria-label={placeholder}
         />
       </label>
       <Button variant="secondary" onClick={onFilter}>
@@ -128,36 +139,17 @@ export function MiniTable({
   rows: (string | React.ReactNode)[][];
 }) {
   return (
-    <div className="hp-panel-enter overflow-hidden rounded-[7px] border border-[#ebebf1] bg-white shadow-[0_4px_18px_rgba(36,37,58,0.025)]">
-      <div
-        className="grid min-w-[720px] border-b border-[#eeeeF3] bg-[#fbfbfd] text-[9px] font-bold uppercase text-[#a3a4b2]"
-        style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}
-      >
-        {columns.map((column) => (
-          <div className="px-4 py-3.5" key={column}>
-            {column}
-          </div>
-        ))}
-      </div>
-      <div className="overflow-x-auto">
-        <div className="hp-list-stagger min-w-[720px] divide-y divide-[#f0f0f4]">
-          {rows.map((row, rowIndex) => (
-            <div
-              className="grid min-h-14 items-center text-xs text-[#555668] transition-colors duration-200 hover:bg-[#fafaff]"
-              key={rowIndex}
-              style={{
-                gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))`,
-              }}
-            >
-              {row.map((cell, cellIndex) => (
-                <div className="px-4 py-3.5" key={cellIndex}>
-                  {cell}
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      </div>
+    <div className="hp-panel-enter overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+      <Table className="min-w-[720px]">
+        <TableHeader>
+          <TableRow className="bg-muted/60 hover:bg-muted/60">
+            {columns.map((column) => <TableHead className="h-11 px-4 text-[10px] font-semibold uppercase" key={column}>{column}</TableHead>)}
+          </TableRow>
+        </TableHeader>
+        <TableBody className="hp-list-stagger">
+          {rows.map((row, rowIndex) => <TableRow className="min-h-14 text-foreground" key={rowIndex}>{row.map((cell, cellIndex) => <TableCell className="px-4 py-3.5" key={cellIndex}>{cell}</TableCell>)}</TableRow>)}
+        </TableBody>
+      </Table>
     </div>
   );
 }
@@ -165,31 +157,30 @@ export function MiniTable({
 export function EmptyState({
   title,
   description,
+  action,
 }: {
   title: string;
   description: string;
+  action?: React.ReactNode;
 }) {
   return (
-    <div className="hp-panel-enter rounded-[7px] border border-dashed border-[#d9d9e2] bg-[#fafafd] p-6 text-center">
-      <p className="font-bold text-[#121733]">{title}</p>
-      <p className="mt-1 text-sm text-[#65708b]">{description}</p>
+    <div className="hp-panel-enter rounded-lg border border-dashed border-border bg-muted/30 p-6 text-center">
+      <span className="mx-auto grid h-10 w-10 place-items-center rounded-full bg-accent text-accent-foreground"><FileText className="h-5 w-5" /></span>
+      <p className="mt-3 font-semibold text-foreground">{title}</p>
+      <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">{description}</p>
+      {action ? <div className="mt-4 flex justify-center">{action}</div> : null}
     </div>
   );
 }
 
 export function LoadingSkeleton({ className = "" }: { className?: string }) {
-  return <div aria-hidden="true" className={cn("hp-skeleton animate-pulse rounded-[6px]", className)} />;
+  return <Skeleton className={cn("hp-skeleton", className)} />;
 }
 
 export function LoadingTable({ columns = 6, rows = 4 }: { columns?: number; rows?: number }) {
   return (
-    <div aria-label="Carregando" className="overflow-hidden rounded-[7px] border border-[#ebebf1] bg-white">
-      <div className="flex gap-4 border-b border-[#eeeeF3] bg-[#fbfbfd] px-4 py-4">
-        {Array.from({ length: columns }).map((_, index) => <LoadingSkeleton className="h-2.5 flex-1" key={index} />)}
-      </div>
-      <div className="divide-y divide-[#f0f0f4]">
-        {Array.from({ length: rows }).map((_, row) => <div className="flex min-h-14 items-center gap-4 px-4" key={row}>{Array.from({ length: columns }).map((__, column) => <LoadingSkeleton className={cn("h-3 flex-1", column === 0 && "max-w-32")} key={column} />)}</div>)}
-      </div>
+    <div aria-label="Carregando" aria-busy="true" className="overflow-hidden rounded-lg border border-border bg-card">
+      <Table className="min-w-[720px]"><TableHeader><TableRow className="bg-muted/60 hover:bg-muted/60">{Array.from({ length: columns }).map((_, index) => <TableHead key={index}><LoadingSkeleton className="h-3 w-full" /></TableHead>)}</TableRow></TableHeader><TableBody>{Array.from({ length: rows }).map((_, row) => <TableRow key={row}>{Array.from({ length: columns }).map((__, column) => <TableCell key={column}><LoadingSkeleton className={cn("h-3 w-full", column === 0 && "max-w-32")} /></TableCell>)}</TableRow>)}</TableBody></Table>
     </div>
   );
 }
@@ -222,18 +213,22 @@ export function ProgressBar({
   tone?: "blue" | "green" | "purple" | "amber";
 }) {
   const color = {
-    blue: "bg-[#1438ff]",
-    green: "bg-[#16a34a]",
-    purple: "bg-[#7c3aed]",
-    amber: "bg-[#f59e0b]",
+    blue: "bg-primary",
+    green: "bg-success",
+    purple: "bg-primary",
+    amber: "bg-warning",
   }[tone];
 
-  return (
-    <div className="h-2 overflow-hidden rounded-full bg-[#edf0f7]">
-      <div
-        className={cn("h-full rounded-full transition-[width] duration-700 ease-out", color)}
-        style={{ width: `${value}%` }}
-      />
+  return <Progress value={value} indicatorClassName={color} aria-label="Progresso" />;
+}
+
+export function StatCard({ label, value, detail, icon: Icon }: { label: string; value: React.ReactNode; detail?: React.ReactNode; icon?: React.ComponentType<{ className?: string }> }) {
+  return <Card className="p-4">
+    <div className="flex items-center justify-between gap-2">
+      <p className="text-[10px] font-bold uppercase text-muted-foreground">{label}</p>
+      {Icon ? <Icon className="h-3.5 w-3.5 text-primary" /> : null}
     </div>
-  );
+    <p className="mt-3 text-xl font-bold text-foreground">{value}</p>
+    {detail ? <p className="mt-1 text-[10px] font-medium text-muted-foreground">{detail}</p> : null}
+  </Card>;
 }

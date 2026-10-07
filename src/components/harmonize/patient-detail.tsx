@@ -35,8 +35,10 @@ import type { CustomerJourneyStage, JourneyStageId, Patient } from "@/types/clin
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { MaskedInput } from "@/components/ui/masked-input";
 import { Modal } from "@/components/ui/modal";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { CustomerJourney } from "./customer-journey";
 import { PatientExpenses } from "./patient-expenses";
@@ -349,7 +351,7 @@ export function PatientDetail({
   }, [patient.id, activeTab, selectedJourneyId, historyRefreshKey]);
 
   return (
-    <div className="mx-auto max-w-[1400px] space-y-4">
+    <Tabs value={activeTab} onValueChange={selectTab} className="mx-auto max-w-[1400px] space-y-4">
       <button className="flex items-center gap-2 text-[11px] font-bold text-[#696a7c] hover:text-[#5147dc]" onClick={onBack}>
         <ArrowLeft className="h-3.5 w-3.5" />
         Voltar para clientes
@@ -399,31 +401,41 @@ export function PatientDetail({
         </form>
       </Modal>
 
-      <Modal open={Boolean(journeyToDelete)} onClose={() => setJourneyToDelete(null)} title="Excluir jornada" description="Essa ação remove a jornada da lista, mas permite desfazer por alguns segundos.">
-        <div className="space-y-4"><p className="text-sm text-[#555668]">Tem certeza que deseja excluir <strong>{journeyToDelete?.name}</strong>?</p>{journeyDeleteError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{journeyDeleteError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={journeyDeleting} onClick={() => setJourneyToDelete(null)}>Cancelar</Button><Button type="button" className="bg-[#c43f35] hover:bg-[#a8322a]" disabled={journeyDeleting} onClick={() => void deleteJourney()}>{journeyDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}{journeyDeleting ? "Excluindo..." : "Tenho certeza, excluir"}</Button></div></div>
-      </Modal>
+      <AlertDialog open={Boolean(journeyToDelete)} onOpenChange={(open) => { if (!open && !journeyDeleting) setJourneyToDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader className="text-left">
+            <AlertDialogTitle>Excluir jornada</AlertDialogTitle>
+            <AlertDialogDescription>Essa ação remove a jornada da lista, mas permite desfazer por alguns segundos. Tem certeza que deseja excluir <strong className="text-foreground">{journeyToDelete?.name}</strong>?</AlertDialogDescription>
+          </AlertDialogHeader>
+          {journeyDeleteError ? <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs font-semibold text-destructive" role="alert">{journeyDeleteError}</p> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel asChild><Button type="button" variant="secondary" disabled={journeyDeleting}>Cancelar</Button></AlertDialogCancel>
+            <Button type="button" variant="destructive" disabled={journeyDeleting} onClick={() => void deleteJourney()}>{journeyDeleting ? <Loader2 className="animate-spin" /> : <Trash2 />}{journeyDeleting ? "Excluindo..." : "Tenho certeza, excluir"}</Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {journeyNotice ? <div className="fixed bottom-6 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded-[8px] bg-[#25263a] px-4 py-3 text-xs font-bold text-white shadow-[0_18px_45px_rgba(31,32,50,0.24)]"><div className="flex items-center gap-3"><span className="min-w-0 flex-1">Jornada excluída.</span><button className="shrink-0 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-black transition hover:bg-white/20 disabled:cursor-default disabled:opacity-60" type="button" disabled={journeyDeleting} onClick={() => void undoDeleteJourney()}>{journeyDeleting ? "Excluindo..." : "Desfazer"}</button></div><div className="mt-3 h-1 rounded-full bg-[#7cffb2] hp-snackbar-progress" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
       {journeyValidationNotice ? <div className="fixed bottom-24 left-1/2 z-[120] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 overflow-hidden rounded-[8px] bg-[#25263a] px-4 py-3 text-xs font-bold text-white shadow-[0_18px_45px_rgba(31,32,50,0.24)] animate-[hp-shake_0.42s_ease-in-out] lg:bottom-16" role="alert"><div className="flex items-center gap-3"><span className="min-w-0 flex-1">{journeyValidationNotice}</span></div><div className="mt-3 h-1 rounded-full bg-[#ff8077] hp-snackbar-progress" style={{ "--snackbar-duration": "4200ms" } as CSSProperties} /></div> : null}
 
       <Card className="overflow-x-auto p-0">
-        <div className="flex min-w-max px-2">
+        <TabsList className="flex h-auto min-w-max justify-start gap-0 rounded-none bg-transparent px-2 py-0 text-muted-foreground">
           {tabs.map((tab) => (
-            <button
+            <TabsTrigger
               className={cn(
-                "border-b-2 px-5 py-3 text-[10px] font-semibold transition-colors",
+                "h-auto rounded-none border-b-2 px-5 py-3 text-[10px] font-semibold shadow-none transition-colors data-[state=active]:bg-accent data-[state=active]:text-accent-foreground data-[state=active]:shadow-none",
                 tabShake === tab && "animate-[hp-shake_0.42s_ease-in-out]",
                 activeTab === tab
-                  ? "border-[#5147dc] bg-[#faf9ff] text-[#5147dc]"
-                  : "border-transparent text-[#77788a] hover:bg-[#faf9ff] hover:text-[#5147dc]",
+                  ? "border-primary"
+                  : "border-transparent hover:bg-muted hover:text-foreground",
               )}
+              value={tab}
               key={tab}
-              onClick={() => selectTab(tab)}
             >
               {tab}
-            </button>
+            </TabsTrigger>
           ))}
-        </div>
+        </TabsList>
       </Card>
 
       {activeTab === "Orçamento" ? (
@@ -431,7 +443,7 @@ export function PatientDetail({
       ) : (
         <PatientTabContent key={`tab-${activeTab}-${selectedJourneyId ?? "none"}`} patient={currentPatient} journeyId={selectedJourneyId} activeTab={activeTab} history={history} historyLoading={historyLoading} quoteCompleted={paidQuoteForSelectedJourney} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={() => setReturnAppointmentTarget(null)} onEvaluationSaved={() => setEvaluationCompleted(true)} onPatientUpdated={setCurrentPatient} onProcedurePhotosChange={(before, after) => setProcedurePhotos({ before, after })} onProcedurePhotoUpdated={(procedureId, photo) => setHistory((current) => current ? { ...current, procedures: current.procedures.map((item) => item.id === procedureId ? { ...item, beforePhoto: photo.beforePhoto ?? "", afterPhoto: photo.afterPhoto ?? "", status: procedurePhotoStatus(photo.beforePhoto, photo.afterPhoto) } : item) } : current)} onScheduleReturn={(procedure, kind = "return") => { setReturnAppointmentTarget({ ...procedure, kind }); selectTab("Agendamentos"); }} />
       )}
-    </div>
+    </Tabs>
   );
 }
 
@@ -1221,9 +1233,18 @@ function ProcedureHistoryCard({ procedure, editable, expandable = false, afterPh
       <Modal open={Boolean(expandedPhoto)} onClose={() => setExpandedPhoto(null)} title={`Foto de ${expandedPhoto?.label.toLowerCase() ?? "procedimento"}`} description="Visualização ampliada da foto do procedimento.">
         {expandedPhoto ? <div className="relative h-[min(70vh,620px)] w-full overflow-hidden rounded-[7px] bg-[#f7f8fc]"><Image className="object-contain" src={expandedPhoto.src} alt={`Foto ampliada de ${expandedPhoto.label.toLowerCase()}`} fill sizes="(max-width: 640px) 90vw, 560px" /></div> : null}
       </Modal>
-      <Modal open={Boolean(photoSessionToDelete)} onClose={() => { if (!deletingPhotoSession) setPhotoSessionToDelete(null); }} title="Excluir sessão de fotos" description="As fotos dessa sessão serão removidas da evolução do procedimento.">
-        <div className="space-y-4"><p className="text-sm text-[#555668]">Tem certeza que deseja excluir <strong>{photoSessionToDelete?.name}</strong>?</p><div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={deletingPhotoSession} onClick={() => setPhotoSessionToDelete(null)}>Cancelar</Button><Button type="button" className="bg-[#c43f35] hover:bg-[#a8322a]" disabled={deletingPhotoSession} onClick={() => void confirmDeletePhotoSession()}>{deletingPhotoSession ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}{deletingPhotoSession ? "Excluindo..." : "Excluir sessão"}</Button></div></div>
-      </Modal>
+      <AlertDialog open={Boolean(photoSessionToDelete)} onOpenChange={(open) => { if (!open && !deletingPhotoSession) setPhotoSessionToDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader className="text-left">
+            <AlertDialogTitle>Excluir sessão de fotos</AlertDialogTitle>
+            <AlertDialogDescription>As fotos dessa sessão serão removidas da evolução do procedimento. Tem certeza que deseja excluir <strong className="text-foreground">{photoSessionToDelete?.name}</strong>?</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel asChild><Button type="button" variant="secondary" disabled={deletingPhotoSession}>Cancelar</Button></AlertDialogCancel>
+            <Button type="button" variant="destructive" disabled={deletingPhotoSession} onClick={() => void confirmDeletePhotoSession()}>{deletingPhotoSession ? <Loader2 className="animate-spin" /> : <Trash2 />}{deletingPhotoSession ? "Excluindo..." : "Excluir sessão"}</Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <Modal open={Boolean(photoSessionEditor)} onClose={() => { if (!photoSessionNameSaving && !creatingPhotoSession) setPhotoSessionEditor(null); }} title={photoSessionEditor === "edit" ? "Editar sessão de fotos" : "Nova sessão de fotos"} description="Defina um nome para identificar este ângulo.">
         <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void savePhotoSessionName(); }}><FormField label="Nome da sessão"><input className={fieldClassName} value={photoSessionName} onChange={(event) => setPhotoSessionName(event.target.value)} autoFocus maxLength={60} placeholder="Ex.: Perfil direito" /></FormField><div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={photoSessionNameSaving || creatingPhotoSession} onClick={() => setPhotoSessionEditor(null)}>Cancelar</Button><Button type="submit" disabled={!photoSessionName.trim() || photoSessionNameSaving || creatingPhotoSession}>{photoSessionNameSaving || creatingPhotoSession ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}{photoSessionEditor === "edit" ? "Salvar nome" : "Criar sessão"}</Button></div></form>
       </Modal>

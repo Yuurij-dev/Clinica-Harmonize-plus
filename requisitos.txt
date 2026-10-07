@@ -1,0 +1,25 @@
+O que nosso CRM vai ter?
+
+📋 Prontuário completo do paciente (Terminando)
+📸 Registro e evolução com fotos (Terminando)
+📝 Histórico de procedimentos realizados (terminando)
+💉 Registro de produtos, técnicas e protocolos
+📅 Agenda e agendamento de pacientes *
+🔔 Lembretes e confirmações de consultas *
+👥 Cadastro completo de pacientes *
+📊 Evolução e acompanhamento de resultados (Terminando)
+💰 Precificação de procedimentos 
+🧾 Controle de valores e serviços realizados 
+📦 Controle de produtos e estoque
+💳 Controle financeiro e formas de pagamento 
+📈 Relatórios e indicadores da clínica (Falta ajustes)
+📱 Histórico de atendimento e comunicação
+📑 Termos, documentos e registros do paciente
+🔐 Organização e segurança das informações
+🎯 Gestão de retornos e acompanhamento pós-procedimento (Em andamento)
+🤝 Gestão de relacionamento com o paciente (CRM)
+📣 Lembretes de retorno e campanhas de relacionamento
+📊 Indicadores de faturamento, procedimentos e pacientes (Falta ajustes)
+⚙️ Protocolos e procedimentos personalizáveis (Falta ajustes)
+
+Tudo em um só lugar para organizar, acompanhar e fazer a clínica crescer. fsdfsdffsfsd

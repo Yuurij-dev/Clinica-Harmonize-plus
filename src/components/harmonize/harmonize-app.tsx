@@ -1,9 +1,9 @@
 "use client";
 
-import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
-import { CheckCircle2 } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { AppToaster } from "./app-toaster";
 import { Dashboard } from "./dashboard";
 import { Sidebar } from "./sidebar";
 import { Topbar } from "./topbar";
@@ -18,14 +18,6 @@ import {
   SettingsSection,
 } from "./sections";
 import type { SectionId } from "@/types/clinic";
-
-type Notice = {
-  id: number;
-  message: string;
-  undo?: () => void;
-  duration: number;
-  tone?: "success" | "warning";
-};
 
 type CurrentUser = { name: string; role: string; isOwner?: boolean; trialExpired?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
 type AgendaFocus = { date: string; time: string };
@@ -56,8 +48,6 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const active = sectionFromPath(pathname);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [createDialog, setCreateDialog] = useState<CreateDialog | null>(initialCreate ?? null);
-  const [notice, setNotice] = useState<Notice | null>(null);
-  const [noticeLeaving, setNoticeLeaving] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [agendaFocus, setAgendaFocus] = useState<AgendaFocus | null>(null);
   const isAdmin = currentUser?.role === "ADMIN";
@@ -89,19 +79,6 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       });
   }, [router]);
 
-  useEffect(() => {
-    if (!notice) return;
-    const leaveTimer = window.setTimeout(() => setNoticeLeaving(true), notice.duration);
-    const clearTimer = window.setTimeout(() => {
-      setNotice(null);
-      setNoticeLeaving(false);
-    }, notice.duration + 240);
-    return () => {
-      window.clearTimeout(leaveTimer);
-      window.clearTimeout(clearTimer);
-    };
-  }, [notice]);
-
   function openCreate(section: SectionId, dialog: NonNullable<typeof createDialog>) {
     if (trialExpired) {
       showNotice("O teste grátis terminou. Ative um plano para continuar alterando os dados.", undefined, "warning");
@@ -124,25 +101,16 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     router.replace("/login");
   }
 
-  function showNotice(message: string, undo?: () => void, tone: Notice["tone"] = "success") {
-    setNoticeLeaving(false);
-    setNotice({
-      id: Date.now(),
-      message,
-      undo,
+  function showNotice(message: string, undo?: () => void, tone: "success" | "warning" = "success") {
+    const notify = tone === "warning" ? toast.warning : toast.success;
+    notify(message, {
       duration: undo ? 6500 : 3600,
-      tone,
+      action: undo ? { label: "Desfazer", onClick: undo } : undefined,
     });
   }
 
-  function undoNotice() {
-    notice?.undo?.();
-    setNotice(null);
-    setNoticeLeaving(false);
-  }
-
   return (
-    <div className="harmonize-app min-h-screen bg-[#f8f9fc] text-[#191a2e]">
+    <div className="harmonize-app min-h-screen bg-background text-foreground">
       <Sidebar
         active={active}
         mobileOpen={mobileOpen}
@@ -169,28 +137,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
           {active === "configuracoes" && isAdmin ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
         </main>
       </div>
-      {notice ? (
-        <div
-          className={`${noticeLeaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-24 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] ${notice.tone === "warning" ? "border border-[#f2d58b] bg-[#fff8df] text-[#7a5410] shadow-[0_18px_45px_rgba(166,116,18,0.2)]" : "bg-[#25263a] text-white shadow-[0_18px_45px_rgba(31,32,50,0.24)]"} text-xs font-bold lg:bottom-6`}
-          key={notice.id}
-        >
-          <div className="flex items-center gap-3 px-4 py-3">
-            <CheckCircle2 className={`h-4 w-4 shrink-0 ${notice.tone === "warning" ? "text-[#c58a18]" : "text-[#78e6a1]"}`} />
-            <span className="min-w-0 flex-1">{notice.message}</span>
-            {notice.undo ? (
-              <button className="shrink-0 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-black text-white transition hover:bg-white/18" onClick={undoNotice}>
-                Desfazer
-              </button>
-            ) : null}
-          </div>
-          <div className="h-1.5 bg-white/14">
-            <div
-              className="hp-snackbar-progress h-full bg-[#7cffb2] shadow-[0_0_14px_rgba(124,255,178,0.38)]"
-              style={{ "--snackbar-duration": `${notice.duration}ms` } as CSSProperties}
-            />
-          </div>
-        </div>
-      ) : null}
+      <AppToaster />
     </div>
   );
 }
