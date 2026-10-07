@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Eye,
   EyeOff,
+  KeyRound,
   LockKeyhole,
   Mail,
   MailCheck,
@@ -36,7 +37,8 @@ export type RegisterResult = {
 };
 
 type LoginScreenProps = {
-  onLogin: (credentials: { login: string; password: string }) => Promise<boolean>;
+  onLogin: (credentials: { login: string; password: string }) => Promise<{ error?: string; passwordChangeRequired?: boolean }>;
+  onChangePassword: (password: string) => Promise<{ error?: string }>;
   onRegister: (values: RegisterValues) => Promise<RegisterResult>;
 };
 
@@ -54,8 +56,8 @@ const initialRegisterValues: RegisterValues = {
 const professionOptions = ["Médico(a)", "Dentista", "Biomédico(a)", "Esteticista", "Outro"];
 const practiceAreaOptions = ["Harmonização facial", "Dermatologia", "Odontologia estética", "Estética corporal", "Outra área"];
 
-export function LoginScreen({ onLogin, onRegister }: LoginScreenProps) {
-  const [mode, setMode] = useState<"login" | "register">("login");
+export function LoginScreen({ onLogin, onChangePassword, onRegister }: LoginScreenProps) {
+  const [mode, setMode] = useState<"login" | "register" | "change-password">("login");
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -82,12 +84,18 @@ export function LoginScreen({ onLogin, onRegister }: LoginScreenProps) {
   async function handleLoginSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsSubmitting(true);
-    const success = await onLogin({ login: login.trim().toLowerCase(), password });
-    if (success) {
+    const result = await onLogin({ login: login.trim().toLowerCase(), password });
+    if (result.passwordChangeRequired) {
+      setError("");
+      setMode("change-password");
+      setIsSubmitting(false);
+      return;
+    }
+    if (!result.error) {
       setError("");
       return;
     }
-    setError("Usuário ou senha inválidos.");
+    setError(result.error);
     setIsSubmitting(false);
   }
 
@@ -140,6 +148,8 @@ export function LoginScreen({ onLogin, onRegister }: LoginScreenProps) {
           <div className="mx-auto w-full max-w-xl">
             {verificationEmail ? (
               <VerificationPending email={verificationEmail} onBack={openLogin} verificationUrl={verificationUrl} />
+            ) : mode === "change-password" ? (
+              <FirstAccessPasswordForm onSubmit={onChangePassword} />
             ) : mode === "login" ? (
               <LoginForm error={error} isSubmitting={isSubmitting} login={login} onLoginChange={setLogin} onOpenRegister={openRegister} onPasswordChange={setPassword} onSubmit={handleLoginSubmit} password={password} setShowPassword={setShowPassword} showPassword={showPassword} />
             ) : (
@@ -158,7 +168,7 @@ function LoginForm({ error, isSubmitting, login, onLoginChange, onOpenRegister, 
       <div className="mb-8"><div className="hp-pulse-ring mb-5 grid h-11 w-11 place-items-center rounded-[8px] bg-[#eff4ff] text-[#5947ee]"><ShieldCheck className="h-5 w-5" /></div><p className="text-xs font-black uppercase text-[#18a9c6]">Harmonize+</p><h2 className="mt-2 text-3xl font-black tracking-[0] text-[#161d38]">Bem-vindo de volta</h2><p className="mt-3 text-sm leading-6 text-[#6b7285]">Entre para acompanhar sua agenda e continuar a gestão da clínica.</p></div>
       <form className="hp-list-stagger space-y-4" onSubmit={onSubmit}>
         <TextField icon={Mail} label="E-mail ou usuário" onChange={onLoginChange} placeholder="nome@dominio.com ou usuário" value={login} autoComplete="username" />
-        <PasswordField onChange={onPasswordChange} password={password} setShowPassword={setShowPassword} showPassword={showPassword} />
+        <PasswordField onChange={onPasswordChange} password={password} setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="current-password" />
         {error ? <ErrorMessage>{error}</ErrorMessage> : null}
         <Button className="h-12 w-full bg-[#5947ee] text-sm shadow-[0_12px_26px_rgba(89,71,238,0.24)] hover:bg-[#4635d5]" disabled={isSubmitting} type="submit">{isSubmitting ? "Validando acesso..." : "Acessar painel"}<ArrowRight className="h-4 w-4" /></Button>
       </form>
@@ -197,8 +207,40 @@ function SelectField({ label, onChange, options, value }: { label: string; onCha
   return <label className="block"><span className="mb-2 block text-xs font-bold text-[#2d3654]">{label}</span><span className="relative flex h-12 items-center rounded-[8px] border border-[#dfe7f2] bg-[#fbfdff] transition focus-within:border-[#5947ee] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(89,71,238,0.08)]"><select className="h-full w-full appearance-none bg-transparent px-4 pr-10 text-sm font-semibold text-[#172033] outline-none" onChange={(event) => onChange(event.target.value)} required value={value}><option disabled value="">Selecione uma opção</option>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select><ChevronDown className="pointer-events-none absolute right-4 h-4 w-4 text-[#172033]" /></span></label>;
 }
 
-function PasswordField({ label = "Senha", onChange, password, placeholder = "Digite sua senha", setShowPassword, showPassword }: { label?: string; onChange: (value: string) => void; password: string; placeholder?: string; setShowPassword: (value: boolean) => void; showPassword: boolean }) {
-  return <label className="block"><span className="mb-2 block text-xs font-bold text-[#2d3654]">{label}</span><span className="flex h-12 items-center gap-3 rounded-[8px] border border-[#dfe7f2] bg-[#fbfdff] px-4 text-sm text-[#68728a] transition focus-within:border-[#5947ee] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(89,71,238,0.08)]"><LockKeyhole className="h-4 w-4 shrink-0 text-[#18a9c6]" /><input className="w-full bg-transparent font-semibold text-[#172033] outline-none placeholder:text-[#9aa5b8]" autoComplete={label === "Senha" ? "new-password" : "current-password"} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} required type={showPassword ? "text" : "password"} value={password} /><button className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[#7b8499] transition hover:bg-[#eef4fb] hover:text-[#5947ee]" aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"} onClick={() => setShowPassword(!showPassword)} type="button">{showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></span></label>;
+function PasswordField({ label = "Senha", onChange, password, placeholder = "Digite sua senha", setShowPassword, showPassword, autoComplete = label === "Senha" ? "new-password" : "current-password", minLength }: { label?: string; onChange: (value: string) => void; password: string; placeholder?: string; setShowPassword: (value: boolean) => void; showPassword: boolean; autoComplete?: string; minLength?: number }) {
+  return <label className="block"><span className="mb-2 block text-xs font-bold text-[#2d3654]">{label}</span><span className="flex h-12 items-center gap-3 rounded-[8px] border border-[#dfe7f2] bg-[#fbfdff] px-4 text-sm text-[#68728a] transition focus-within:border-[#5947ee] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(89,71,238,0.08)]"><LockKeyhole className="h-4 w-4 shrink-0 text-[#18a9c6]" /><input className="w-full bg-transparent font-semibold text-[#172033] outline-none placeholder:text-[#9aa5b8]" autoComplete={autoComplete} minLength={minLength} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} required type={showPassword ? "text" : "password"} value={password} /><button className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[#7b8499] transition hover:bg-[#eef4fb] hover:text-[#5947ee]" aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"} onClick={() => setShowPassword(!showPassword)} type="button">{showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></span></label>;
+}
+
+function FirstAccessPasswordForm({ onSubmit }: { onSubmit: (password: string) => Promise<{ error?: string }> }) {
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (password !== confirmation) {
+      setError("As senhas não coincidem.");
+      return;
+    }
+    setIsSubmitting(true);
+    const result = await onSubmit(password);
+    if (result.error) {
+      setError(result.error);
+      setIsSubmitting(false);
+    }
+  }
+
+  return <>
+    <div className="mb-7"><div className="mb-5 grid h-11 w-11 place-items-center rounded-[8px] bg-[#eff4ff] text-[#5947ee]"><KeyRound className="h-5 w-5" /></div><p className="text-xs font-black uppercase text-[#18a9c6]">Primeiro acesso</p><h2 className="mt-2 text-3xl font-black tracking-[0] text-[#161d38]">Defina sua senha</h2><p className="mt-3 text-sm leading-6 text-[#6b7285]">Para continuar, troque a senha inicial por uma senha pessoal.</p></div>
+    <form className="space-y-4" onSubmit={handleSubmit}>
+      <PasswordField label="Nova senha" onChange={(value) => { setPassword(value); setError(""); }} password={password} placeholder="Crie uma senha com pelo menos 8 caracteres" setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="new-password" minLength={8} />
+      <PasswordField label="Confirmar nova senha" onChange={(value) => { setConfirmation(value); setError(""); }} password={confirmation} placeholder="Digite a senha novamente" setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="new-password" minLength={8} />
+      {error ? <ErrorMessage>{error}</ErrorMessage> : null}
+      <Button className="h-12 w-full bg-[#5947ee] text-sm shadow-[0_12px_26px_rgba(89,71,238,0.24)] hover:bg-[#4635d5]" disabled={isSubmitting} type="submit">{isSubmitting ? "Salvando nova senha..." : "Salvar senha e acessar"}<ArrowRight className="h-4 w-4" /></Button>
+    </form>
+  </>;
 }
 
 function ErrorMessage({ children }: { children: React.ReactNode }) {

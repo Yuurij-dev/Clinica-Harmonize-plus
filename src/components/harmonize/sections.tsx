@@ -1590,21 +1590,34 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
     setTeamSaving(true);
     setTeamError("");
     const form = new FormData(event.currentTarget);
-    const response = await fetch("/api/team", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: form.get("name"), email: form.get("email"), password: form.get("password"), role: form.get("role") }),
-    });
-    const data = await response.json() as { member?: TeamMember; message?: string };
-    setTeamSaving(false);
-    if (!response.ok || !data.member) {
-      setTeamError(data.message ?? "Não foi possível cadastrar o colaborador.");
-      return;
+    try {
+      const response = await fetch("/api/team", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: form.get("name"), email: form.get("email"), password: form.get("password"), role: form.get("role") }),
+      });
+      const responseText = await response.text();
+      let data: { member?: TeamMember; message?: string } | null = null;
+      if (responseText) {
+        try {
+          data = JSON.parse(responseText) as { member?: TeamMember; message?: string };
+        } catch {
+          data = null;
+        }
+      }
+      setTeamSaving(false);
+      if (!response.ok || !data?.member) {
+        setTeamError(data?.message ?? "Não foi possível cadastrar o colaborador. Tente novamente.");
+        return;
+      }
+      setMembers((current) => [...current, data.member as TeamMember].sort((a, b) => a.user.name.localeCompare(b.user.name)));
+      invalidateClientCache("/api/team");
+      setEditing(null);
+      setTeamError("");
+    } catch {
+      setTeamSaving(false);
+      setTeamError("Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente.");
     }
-    setMembers((current) => [...current, data.member as TeamMember].sort((a, b) => a.user.name.localeCompare(b.user.name)));
-    invalidateClientCache("/api/team");
-    setEditing(null);
-    setTeamError("");
   }
 
   async function removeCollaborator() {
