@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Calculator,
   CalendarDays,
   CreditCard,
   FileText,
@@ -20,5 +21,6 @@ export const navItems: NavItem[] = [
   { id: "pagamentos", label: "Pagamentos", icon: CreditCard },
   { id: "financeiro", label: "Financeiro", icon: WalletCards },
   { id: "relatorios", label: "Relatórios", icon: BarChart3 },
+  { id: "calculadora", label: "Calculadora", icon: Calculator },
   { id: "configuracoes", label: "Configurações", icon: Settings },
 ];
