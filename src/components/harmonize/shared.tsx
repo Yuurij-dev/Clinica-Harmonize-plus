@@ -50,11 +50,13 @@ export function SectionIntro({
   description,
   action,
   onAction,
+  actionClassName,
 }: {
   title: string;
   description: string;
   action?: string;
   onAction?: () => void;
+  actionClassName?: string;
 }) {
   return (
     <div className="hp-page-enter mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -65,7 +67,7 @@ export function SectionIntro({
         </p>
       </div>
       {action ? (
-        <Button onClick={onAction}>
+        <Button className={actionClassName} onClick={onAction}>
           <Plus className="h-4 w-4" />
           {action}
         </Button>
@@ -85,28 +87,34 @@ export function SearchFilterBar({
   value,
   onChange,
   onFilter,
+  showFilter = true,
+  searchClassName,
+  inputClassName,
 }: {
   placeholder: string;
   value?: string;
   onChange?: (value: string) => void;
   onFilter?: () => void;
+  showFilter?: boolean;
+  searchClassName?: string;
+  inputClassName?: string;
 }) {
   return (
     <div className="hp-page-enter mb-4 flex flex-col gap-3 sm:flex-row">
-      <label className="flex h-10 flex-1 items-center gap-3 rounded-md border border-input bg-background px-4 text-xs text-muted-foreground transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-ring focus-within:shadow-[0_0_0_4px_color-mix(in_srgb,var(--ring)_12%,transparent)]">
+      <label className={cn("group flex h-10 flex-1 items-center gap-3 rounded-md border border-input bg-background px-4 text-xs text-muted-foreground transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-ring focus-within:shadow-[0_0_0_4px_color-mix(in_srgb,var(--ring)_12%,transparent)]", searchClassName)}>
         <Search className="h-4 w-4 text-muted-foreground" />
         <Input
-          className="h-auto border-0 bg-transparent p-0 shadow-none focus-visible:border-0 focus-visible:ring-0"
+          className={cn("h-auto border-0 bg-transparent p-0 shadow-none focus-visible:border-0 focus-visible:ring-0", inputClassName)}
           placeholder={placeholder}
           value={value}
           onChange={(event) => onChange?.(event.target.value)}
           aria-label={placeholder}
         />
       </label>
-      <Button variant="secondary" onClick={onFilter}>
+      {showFilter ? <Button variant="secondary" onClick={onFilter}>
         <Filter className="h-4 w-4" />
         Filtrar
-      </Button>
+      </Button> : null}
     </div>
   );
 }

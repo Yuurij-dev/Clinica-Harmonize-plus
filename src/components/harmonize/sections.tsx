@@ -1187,23 +1187,29 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
 }
 
 export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
-  type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null };
+  type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; createdAt?: string; patient?: { name: string } | null };
+  type QuoteRow = Quote & { createdAt?: string };
   type QuoteOptions = { patients?: Array<{ id: string; name: string; cpf: string | null }>; procedures?: Array<{ id: string; name: string; price: number }> };
   const cachedQuotes = readClientCache<{ quotes?: ApiQuote[] }>("/api/quotes");
   const cachedQuoteOptions = readClientCache<QuoteOptions>("/api/quotes/options");
-  const [quoteRows, setQuoteRows] = useState<Quote[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade" })));
+  const [quoteRows, setQuoteRows] = useState<QuoteRow[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
   const [isLoading, setIsLoading] = useState(!cachedQuotes);
   const [isSaving, setIsSaving] = useState(false);
   const [quotePatients, setQuotePatients] = useState(cachedQuoteOptions?.patients ?? []);
   const [quoteProcedures, setQuoteProcedures] = useState(cachedQuoteOptions?.procedures ?? []);
   const [optionsLoading, setOptionsLoading] = useState(!cachedQuoteOptions);
   const [patientQuery, setPatientQuery] = useState("");
+  const [quoteSearch, setQuoteSearch] = useState("");
+  const [itemSearch, setItemSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("Todos");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [selectedPatientId, setSelectedPatientId] = useState("");
   const [selectedProcedureNames, setSelectedProcedureNames] = useState<string[]>([]);
 
   useEffect(() => {
     getCachedJson<{ quotes?: ApiQuote[] }>("/api/quotes").then((data) => {
-      setQuoteRows((data.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade" })));
+      setQuoteRows((data.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
       setIsLoading(false);
     }).catch(() => setIsLoading(false));
   }, []);
@@ -1218,6 +1224,16 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
 
   const matchingQuotePatients = quotePatients.filter((patient) => `${patient.name} ${patient.cpf ?? ""}`.toLowerCase().includes(patientQuery.toLowerCase()));
   const suggestedTotal = selectedProcedureNames.reduce((total, name) => total + (quoteProcedures.find((procedure) => procedure.name === name)?.price ?? 0), 0);
+  const visibleQuotes = quoteRows.filter((quote) => {
+    const normalizedName = quoteSearch.trim().toLocaleLowerCase("pt-BR");
+    const normalizedItems = itemSearch.trim().toLocaleLowerCase("pt-BR");
+    const creationDate = quote.createdAt?.slice(0, 10) ?? "";
+    return (!normalizedName || quote.patient.toLocaleLowerCase("pt-BR").includes(normalizedName))
+      && (!normalizedItems || quote.items.toLocaleLowerCase("pt-BR").includes(normalizedItems))
+      && (statusFilter === "Todos" || quote.status === statusFilter)
+      && (!dateFrom || (creationDate && creationDate >= dateFrom))
+      && (!dateTo || (creationDate && creationDate <= dateTo));
+  });
 
   async function saveQuote(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patient = quotePatients.find((item) => item.id === selectedPatientId)?.name ?? "Paciente";
@@ -1227,16 +1243,15 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     const data = await response.json() as { quote: { id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null } };
     const item = data.quote;
     invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
-    setQuoteRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade" }, ...current]);
+    setQuoteRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: new Date().toISOString() }, ...current]);
     setPatientQuery(""); setSelectedPatientId(""); setSelectedProcedureNames([]);
     onCreateClose(); onSaved?.(`Orçamento de ${patient} foi criado.`);
   }
 
-  async function sendQuote(index: number) {
-    const quote = quoteRows[index];
+  async function sendQuote(quote: QuoteRow) {
     if (!quote.id) return;
     await fetch(`/api/quotes/${quote.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Enviado" }) });
-    setQuoteRows((current) => current.map((item, currentIndex) => currentIndex === index ? { ...item, status: "Enviado" } : item));
+    setQuoteRows((current) => current.map((item) => item.id === quote.id ? { ...item, status: "Enviado" } : item));
     invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
     onSaved?.("Orçamento marcado como enviado.");
   }
@@ -1248,18 +1263,28 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
         description="Propostas associadas ao paciente com status comercial e total calculado por procedimento."
         action="Novo orçamento"
         onAction={onCreateOpen}
+        actionClassName="transition-[background-color,box-shadow] duration-200 hover:bg-[#4338ca] hover:shadow-md active:bg-[#3730a3] dark:hover:bg-primary/90 dark:active:bg-primary/80"
       />
-      {isLoading ? <LoadingTable columns={6} /> : <MiniTable
+      <div className="[&_input]:text-base">
+        <SearchFilterBar placeholder="Pesquisar por nome do paciente" value={quoteSearch} onChange={setQuoteSearch} showFilter={false} searchClassName="bg-white text-black hover:bg-[#f3f4f6] hover:text-[#374151]" inputClassName="text-black placeholder:text-black group-hover:text-[#374151] group-hover:placeholder:text-[#374151]" />
+      </div>
+      <div className="mb-4 grid gap-3 rounded-lg border border-[#e7e7ef] bg-white p-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Filtros de orçamentos">
+        <label className="grid gap-1 text-xs font-semibold text-[#68697b]">Procedimentos<select className={fieldClassName} value={itemSearch} onChange={(event) => setItemSearch(event.target.value)}><option value="">Todos os procedimentos</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name}</option>)}</select></label>
+        <label className="grid gap-1 text-xs font-semibold text-[#68697b]">Status<select className={fieldClassName} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option>Todos</option>{[...new Set(quoteRows.map((quote) => quote.status))].sort().map((status) => <option key={status}>{status}</option>)}</select></label>
+        <label className="grid gap-1 text-xs font-semibold text-[#68697b]">Criado a partir de<input className={fieldClassName} type="date" value={dateFrom} max={dateTo || undefined} onChange={(event) => setDateFrom(event.target.value)} /></label>
+        <label className="grid gap-1 text-xs font-semibold text-[#68697b]">Criado até<input className={fieldClassName} type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => setDateTo(event.target.value)} /></label>
+      </div>
+      {isLoading ? <LoadingTable columns={6} /> : visibleQuotes.length ? <MiniTable
         columns={["Paciente", "Itens", "Total", "Status", "Validade", "Ação"]}
-        rows={quoteRows.map((quote, index) => [
+        rows={visibleQuotes.map((quote) => [
           <strong className="text-[#121733]" key={quote.patient}>{quote.patient}</strong>,
           quote.items,
           <span className="font-black text-[#1438ff]" key={quote.total}>{quote.total}</span>,
           <StatusBadge key={quote.status} status={quote.status} />,
           quote.expires,
-          <Button key="send" size="sm" variant="secondary" disabled={quote.status === "Enviado"} onClick={() => sendQuote(index)}>{quote.status === "Enviado" ? "Enviado" : "Enviar"}</Button>,
+          <Button key="send" size="sm" variant="secondary" disabled={quote.status === "Enviado"} onClick={() => sendQuote(quote)}>{quote.status === "Enviado" ? "Enviado" : "Enviar"}</Button>,
         ])}
-      />}
+      /> : <EmptyState title="Nenhum orçamento encontrado" description="Ajuste os filtros ou a pesquisa para encontrar orçamentos." />}
       <Modal open={openCreate} onClose={onCreateClose} title="Novo orçamento" description="Crie uma proposta comercial para o cliente.">
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveQuote}>
           <div className="relative sm:col-span-2">
