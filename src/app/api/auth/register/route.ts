@@ -19,7 +19,6 @@ function hashVerificationToken(token: string) {
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as {
-    clinicName?: string;
     name?: string;
     phone?: string;
     profession?: string;
@@ -29,7 +28,6 @@ export async function POST(request: Request) {
     password?: string;
   } | null;
 
-  const clinicName = body?.clinicName?.trim() ?? "";
   const name = body?.name?.trim() ?? "";
   const phone = body?.phone?.trim() ?? "";
   const profession = body?.profession?.trim() ?? "";
@@ -37,10 +35,6 @@ export async function POST(request: Request) {
   const hasSecretary = body?.hasSecretary === "Sim" ? true : body?.hasSecretary === "Não" ? false : null;
   const email = body?.email?.trim().toLowerCase() ?? "";
   const password = body?.password ?? "";
-
-  if (!clinicName || clinicName.length > 100) {
-    return NextResponse.json({ message: "Informe um nome para a clínica com até 100 caracteres." }, { status: 400 });
-  }
 
   if (!name || !phone || !profession || !practiceArea || hasSecretary === null || !email || password.length < 6) {
     return NextResponse.json({ message: "Preencha todos os campos e informe uma senha com pelo menos 6 caracteres." }, { status: 400 });
@@ -50,6 +44,8 @@ export async function POST(request: Request) {
   if (existing) return NextResponse.json({ message: "Já existe uma conta com este e-mail." }, { status: 409 });
 
   const passwordHash = await hash(password, 12);
+  const firstName = name.split(/\s+/)[0];
+  const clinicName = `Clínica ${firstName}`;
   const clinicSlug = `${slugPart(clinicName)}-${randomUUID().slice(0, 8)}`;
   const trialStartedAt = new Date();
   const trialEndsAt = new Date(trialStartedAt.getTime() + 3 * 24 * 60 * 60 * 1000);

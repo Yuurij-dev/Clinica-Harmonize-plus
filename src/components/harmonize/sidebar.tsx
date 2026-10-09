@@ -2,7 +2,6 @@ import { Menu, Plus } from "lucide-react";
 import { navItems } from "@/data/navigation";
 import type { SectionId } from "@/types/clinic";
 import { Button } from "@/components/ui/button";
-import { Sheet } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 
 type SidebarProps = {
@@ -26,7 +25,7 @@ export function Sidebar({
 }: SidebarProps) {
   const visibleNavItems = isAdmin ? navItems : navItems.filter((item) => ["agenda", "clientes", "orcamentos"].includes(item.id));
   const content = (
-    <aside className="flex h-full w-[220px] flex-col border-r border-border bg-card px-4 py-5 text-card-foreground">
+    <aside className="flex h-full w-[220px] flex-col border-r border-[#eeeef3] bg-white px-4 py-5 text-[#28293d]">
       <div className="mb-7 flex items-center justify-between gap-3 px-1">
         <div className="min-w-0">
           <div className="flex items-center gap-2.5">
@@ -34,13 +33,13 @@ export function Sidebar({
               H+
             </div>
             <div className="min-w-0">
-              <p className="text-[15px] font-black leading-none text-foreground">Harmonize+</p>
-              <p className="mt-1 text-[9px] font-medium text-muted-foreground">Gestão para clínicas</p>
+              <p className="text-[15px] font-black leading-none text-[#25263a]">Harmonize+</p>
+              <p className="mt-1 text-[9px] font-medium text-[#9a9bad]">Gestão para clínicas</p>
             </div>
           </div>
         </div>
         <button
-          className="grid h-9 w-9 place-items-center rounded-md bg-muted text-primary lg:hidden"
+          className="grid h-9 w-9 place-items-center rounded-[7px] bg-[#f4f4f8] text-[#5147dc] lg:hidden"
           onClick={onClose}
           aria-label="Fechar menu"
         >
@@ -62,10 +61,10 @@ export function Sidebar({
             <button
               key={item.id}
             className={cn(
-                "hp-pressable flex h-10 w-full items-center justify-between rounded-md px-3 text-left text-[12px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "hp-pressable flex h-10 w-full items-center justify-between rounded-[6px] px-3 text-left text-[12px] font-semibold",
                 isActive
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                  ? "bg-[#f0efff] text-[#5147dc]"
+                  : "text-[#747587] hover:bg-[#f7f7fa] hover:text-[#2c2d41]",
               )}
               onClick={() => {
                 onSelect(item.id);
@@ -82,9 +81,9 @@ export function Sidebar({
         })}
       </nav>
 
-      <div className="mt-auto border-t border-border px-2 pt-4">
-        <p className="text-[10px] font-semibold text-muted-foreground">{clinicName ?? "Clínica"}</p>
-        <p className="mt-1 text-xs font-bold text-foreground">Plano profissional</p>
+      <div className="mt-auto border-t border-[#eeeef3] px-2 pt-4">
+        <p className="text-[10px] font-semibold text-[#a0a1b1]">{clinicName ?? "Clínica"}</p>
+        <p className="mt-1 text-xs font-bold text-[#424357]">Plano profissional</p>
       </div>
     </aside>
   );
@@ -94,9 +93,21 @@ export function Sidebar({
       <div className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:block">
         {content}
       </div>
-      <Sheet open={mobileOpen} onOpenChange={(open) => { if (!open) onClose(); }} title="Navegação principal" side="left" className="p-0 lg:hidden" showCloseButton={false}>
+      <div
+        className={cn(
+          "fixed inset-0 z-40 bg-[#202136]/30 backdrop-blur-sm transition-opacity duration-300 lg:hidden",
+          mobileOpen ? "opacity-100" : "pointer-events-none opacity-0",
+        )}
+        onClick={onClose}
+      />
+      <div
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 transition-transform duration-300 ease-out lg:hidden",
+          mobileOpen ? "translate-x-0" : "pointer-events-none -translate-x-full",
+        )}
+      >
         {content}
-      </Sheet>
+      </div>
     </>
   );
 }

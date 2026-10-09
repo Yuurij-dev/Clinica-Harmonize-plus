@@ -19,16 +19,12 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const patientId = (await params).id;
   const searchParams = new URL(request.url).searchParams;
   const evaluationId = searchParams.get("evaluationId");
-  const journeyId = searchParams.get("journeyId");
   const patient = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true } });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
 
   if (searchParams.get("list")) {
-    if (journeyId && !await prisma.patientJourney.findFirst({ where: { id: journeyId, patientId, clinicId: user.clinicId }, select: { id: true } })) {
-      return NextResponse.json({ message: "Jornada não encontrada." }, { status: 404 });
-    }
     const evaluations = await prisma.evaluation.findMany({
-      where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) },
+      where: { patientId, clinicId: user.clinicId },
       orderBy: { createdAt: "desc" },
       select: { id: true, professional: true, createdAt: true, updatedAt: true, _count: { select: { photos: true } } },
     });
@@ -67,18 +63,13 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const patient = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true } });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
 
-  const body = await request.json().catch(() => null) as { evaluationId?: string; journeyId?: string; photos?: EvaluationPhotoPayload[] } | null;
+  const body = await request.json().catch(() => null) as { evaluationId?: string; photos?: EvaluationPhotoPayload[] } | null;
   const photos = body?.photos;
   if (!Array.isArray(photos)) return NextResponse.json({ message: "Envie as fotos da avaliação." }, { status: 400 });
   if (body?.evaluationId && !await prisma.evaluation.findFirst({ where: { id: body.evaluationId, patientId, clinicId: user.clinicId }, select: { id: true } })) {
     return NextResponse.json({ message: "Avaliação não encontrada." }, { status: 404 });
   }
-  const journey = body?.evaluationId
-    ? null
-    : body?.journeyId
-      ? await prisma.patientJourney.findFirst({ where: { id: body.journeyId, patientId, clinicId: user.clinicId }, select: { id: true } })
-      : await ensurePatientJourney(patientId, user.clinicId);
-  if (!body?.evaluationId && body?.journeyId && !journey) return NextResponse.json({ message: "Jornada não encontrada." }, { status: 404 });
+  const journey = body?.evaluationId ? null : await ensurePatientJourney(patientId, user.clinicId);
 
   const validPhotos = photos.filter((photo) => (
     photo && typeof photo.name === "string" && typeof photo.imageUrl === "string" &&

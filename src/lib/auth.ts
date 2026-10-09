@@ -38,18 +38,6 @@ export async function createSession(userId: string) {
     .sign(getSecret());
 }
 
-export async function createPasswordChangeSession(userId: string) {
-  return new SignJWT({ userId, passwordChangeOnly: true })
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime("15m")
-    .sign(getSecret());
-}
-
-export function invalidateUserAuthCache(userId: string) {
-  authCache.delete(userId);
-}
-
 export async function getCurrentUser({ requireActiveTrial = false }: CurrentUserOptions = {}) {
   const token = (await cookies()).get(sessionCookieName)?.value;
   if (!token) return null;
@@ -57,7 +45,6 @@ export async function getCurrentUser({ requireActiveTrial = false }: CurrentUser
   try {
     const { payload } = await jwtVerify(token, getSecret());
     if (typeof payload.userId !== "string") return null;
-    if (payload.passwordChangeOnly === true) return null;
     const cached = authCache.get(payload.userId);
     if (cached?.expiresAt && cached.expiresAt > Date.now()) {
       const cachedUser = cached.pending ? await cached.pending : cached.value ?? null;

@@ -1,6 +1,6 @@
 import { compare } from "bcryptjs";
 import { NextResponse } from "next/server";
-import { createPasswordChangeSession, createSession, sessionCookieName } from "@/lib/auth";
+import { createSession, sessionCookieName } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
 export async function POST(request: Request) {
@@ -33,13 +33,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ message: "Este usuário ainda não está vinculado a uma clínica." }, { status: 403 });
   }
 
-  const token = user.mustChangePassword
-    ? await createPasswordChangeSession(user.id)
-    : await createSession(user.id);
-  const response = NextResponse.json({
-    ...(user.mustChangePassword ? { passwordChangeRequired: true } : {}),
-    user: { id: user.id, name: user.name, email: user.email, role: membership.role, clinic: membership.clinic },
-  });
+  const token = await createSession(user.id);
+  const response = NextResponse.json({ user: { id: user.id, name: user.name, email: user.email, role: membership.role, clinic: membership.clinic } });
   response.cookies.set({
     name: sessionCookieName,
     value: token,

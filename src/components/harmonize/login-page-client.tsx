@@ -20,31 +20,14 @@ export function LoginPageClient() {
       body: JSON.stringify(credentials),
     });
 
-    const data = await response.json().catch(() => null) as { message?: string; passwordChangeRequired?: boolean; user?: { clinic?: { name?: string } } } | null;
-    if (!response.ok) return { error: data?.message ?? "Usuário ou senha inválidos." };
-    if (data?.passwordChangeRequired) return { passwordChangeRequired: true };
-    setClinicName(data?.user?.clinic?.name ?? "Sua clínica");
+    if (!response.ok) return false;
+    const data = await response.json() as { user?: { clinic?: { name?: string } } };
+    setClinicName(data.user?.clinic?.name ?? "Sua clínica");
     window.setTimeout(() => {
       router.replace("/");
       router.refresh();
     }, 1500);
-    return {};
-  }
-
-  async function handlePasswordChange(password: string) {
-    const response = await fetch("/api/auth/change-password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
-    });
-    const data = await response.json().catch(() => null) as { message?: string; clinicName?: string } | null;
-    if (!response.ok) return { error: data?.message ?? "Não foi possível salvar a nova senha." };
-    setClinicName(data?.clinicName ?? "Sua clínica");
-    window.setTimeout(() => {
-      router.replace("/");
-      router.refresh();
-    }, 1500);
-    return {};
+    return true;
   }
 
   async function handleRegister(values: RegisterValues) {
@@ -62,5 +45,5 @@ export function LoginPageClient() {
     return { verificationEmail: data.email ?? values.email, verificationUrl: data.verificationUrl } satisfies RegisterResult;
   }
 
-  return clinicName ? <ClinicEntryTransition clinicName={clinicName} /> : <LoginScreen onLogin={handleLogin} onChangePassword={handlePasswordChange} onRegister={handleRegister} />;
+  return clinicName ? <ClinicEntryTransition clinicName={clinicName} /> : <LoginScreen onLogin={handleLogin} onRegister={handleRegister} />;
 }
