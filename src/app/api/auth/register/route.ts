@@ -1,7 +1,6 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { hash } from "bcryptjs";
 import { NextResponse } from "next/server";
-import { sendVerificationEmail } from "@/lib/email";
 import { prisma } from "@/lib/prisma";
 
 function slugPart(value: string) {
@@ -11,10 +10,6 @@ function slugPart(value: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "") || "clinica";
-}
-
-function hashVerificationToken(token: string) {
-  return createHash("sha256").update(token).digest("hex");
 }
 
 export async function POST(request: Request) {
@@ -53,11 +48,8 @@ export async function POST(request: Request) {
   const clinicSlug = `${slugPart(clinicName)}-${randomUUID().slice(0, 8)}`;
   const trialStartedAt = new Date();
   const trialEndsAt = new Date(trialStartedAt.getTime() + 3 * 24 * 60 * 60 * 1000);
-  const verificationToken = randomBytes(32).toString("hex");
-  const verificationExpiresAt = new Date(Date.now() + 30 * 60 * 1000);
-
   try {
-    const account = await prisma.$transaction(async (transaction) => {
+    await prisma.$transaction(async (transaction) => {
       const clinic = await transaction.clinic.create({ data: { name: clinicName, slug: clinicSlug, trialStartedAt, trialEndsAt } });
       const createdUser = await transaction.user.create({
         data: {
@@ -68,34 +60,15 @@ export async function POST(request: Request) {
           profession,
           practiceArea,
           hasSecretary,
-          emailVerificationTokenHash: hashVerificationToken(verificationToken),
-          emailVerificationExpiresAt: verificationExpiresAt,
+          emailVerifiedAt: new Date(),
           role: "ADMIN",
         },
       });
       await transaction.clinicMembership.create({
         data: { userId: createdUser.id, clinicId: clinic.id, role: "ADMIN", isOwner: true },
       });
-      return { user: createdUser, clinic };
     });
-
-    const verificationUrl = new URL(`/api/auth/verify-email?token=${encodeURIComponent(verificationToken)}`, request.url).toString();
-    try {
-      const developmentVerificationUrl = await sendVerificationEmail({ recipient: email, name, verificationUrl });
-      return NextResponse.json({
-        verificationRequired: true,
-        email,
-        ...(developmentVerificationUrl ? { verificationUrl: developmentVerificationUrl } : {}),
-      }, { status: 201 });
-    } catch (error) {
-      await prisma.$transaction(async (transaction) => {
-        await transaction.clinic.delete({ where: { id: account.clinic.id } });
-        await transaction.user.delete({ where: { id: account.user.id } });
-      });
-      console.error("[email-verification]", error);
-      return NextResponse.json({ message: "Não foi possível enviar o e-mail de confirmação. Tente novamente." }, { status: 503 });
-    }
-
+    return NextResponse.json({ created: true }, { status: 201 });
   } catch (error) {
     console.error("[register]", error);
     return NextResponse.json({ message: "Não foi possível criar a conta agora. Tente novamente." }, { status: 500 });

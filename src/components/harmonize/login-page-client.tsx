@@ -58,8 +58,8 @@ export function LoginPageClient() {
       const data = await response.json().catch(() => null) as { message?: string } | null;
       return { error: data?.message ?? "Não foi possível criar a conta agora. Tente novamente." } satisfies RegisterResult;
     }
-    const data = await response.json() as { email?: string; verificationUrl?: string };
-    return { verificationEmail: data.email ?? values.email, verificationUrl: data.verificationUrl } satisfies RegisterResult;
+    const result = await handleLogin({ login: values.email, password: values.password });
+    return { error: result.error } satisfies RegisterResult;
   }
 
   return clinicName ? <ClinicEntryTransition clinicName={clinicName} /> : <LoginScreen onLogin={handleLogin} onChangePassword={handlePasswordChange} onRegister={handleRegister} />;
