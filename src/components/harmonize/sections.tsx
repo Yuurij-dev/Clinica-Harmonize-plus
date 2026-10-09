@@ -28,6 +28,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MaskedInput } from "@/components/ui/masked-input";
 import {
   DetailCard,
+  DateRangeFilter,
   EmptyState,
   CountUpValue,
   LoadingSkeleton,
@@ -629,7 +630,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
             ))}
           </div>
           <Button variant="secondary" size="icon" aria-label="Selecionar data" title="Selecionar data"><CalendarDays className="h-4 w-4" /></Button>
-          <select className="min-w-0 flex-1 rounded-[7px] border border-[#dddfea] bg-white px-3 py-2 text-xs font-semibold text-[#555668] outline-none focus:border-[#5147dc] sm:min-w-[170px] sm:flex-none" value={activeProfessional} onChange={(event) => setProfessional(event.target.value)} aria-label="Filtrar por profissional">
+          <select className={cn(fieldClassName, "min-w-0 flex-1 text-xs sm:min-w-[170px] sm:flex-none")} value={activeProfessional} onChange={(event) => setProfessional(event.target.value)} aria-label="Filtrar por profissional">
             {professionalOptions.map((item) => <option key={item}>{item}</option>)}
           </select>
         </div>
@@ -1263,16 +1264,17 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
         description="Propostas associadas ao paciente com status comercial e total calculado por procedimento."
         action="Novo orçamento"
         onAction={onCreateOpen}
-        actionClassName="transition-[background-color,box-shadow] duration-200 hover:bg-[#4338ca] hover:shadow-md active:bg-[#3730a3] dark:hover:bg-primary/90 dark:active:bg-primary/80"
       />
-      <div className="[&_input]:text-base">
-        <SearchFilterBar placeholder="Pesquisar por nome do paciente" value={quoteSearch} onChange={setQuoteSearch} showFilter={false} searchClassName="bg-white text-black hover:bg-[#f3f4f6] hover:text-[#374151]" inputClassName="text-black placeholder:text-black group-hover:text-[#374151] group-hover:placeholder:text-[#374151]" />
-      </div>
-      <div className="mb-4 grid gap-3 rounded-lg border border-[#e7e7ef] bg-white p-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Filtros de orçamentos">
-        <label className="grid gap-1 text-xs font-semibold text-[#68697b]">Procedimentos<select className={fieldClassName} value={itemSearch} onChange={(event) => setItemSearch(event.target.value)}><option value="">Todos os procedimentos</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name}</option>)}</select></label>
+      <SearchFilterBar
+          placeholder="Pesquisar por nome do paciente"
+          value={quoteSearch}
+          onChange={setQuoteSearch}
+          showFilter={false}
+          trailing={<DateRangeFilter startDate={dateFrom} endDate={dateTo} onStartDateChange={setDateFrom} onEndDateChange={setDateTo} />}
+      />
+      <div className="mb-4 flex flex-wrap items-end gap-3" aria-label="Filtros de orçamentos">
+        <label className="grid gap-1 text-xs font-semibold text-[#68697b]">Procedimento<select className={fieldClassName} value={itemSearch} onChange={(event) => setItemSearch(event.target.value)}><option value="">Todos os procedimentos</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name}</option>)}</select></label>
         <label className="grid gap-1 text-xs font-semibold text-[#68697b]">Status<select className={fieldClassName} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option>Todos</option>{[...new Set(quoteRows.map((quote) => quote.status))].sort().map((status) => <option key={status}>{status}</option>)}</select></label>
-        <label className="grid gap-1 text-xs font-semibold text-[#68697b]">Criado a partir de<input className={fieldClassName} type="date" value={dateFrom} max={dateTo || undefined} onChange={(event) => setDateFrom(event.target.value)} /></label>
-        <label className="grid gap-1 text-xs font-semibold text-[#68697b]">Criado até<input className={fieldClassName} type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => setDateTo(event.target.value)} /></label>
       </div>
       {isLoading ? <LoadingTable columns={6} /> : visibleQuotes.length ? <MiniTable
         columns={["Paciente", "Itens", "Total", "Status", "Validade", "Ação"]}
@@ -1365,11 +1367,7 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
             {selected ? <Check className="h-4 w-4" /> : null}
           </button>;
         })}
-        <div className="ml-0 flex flex-wrap items-end gap-3 sm:ml-auto">
-          <label className="flex flex-col gap-1.5 text-xs font-bold uppercase text-[#8c8d9f]">De<input className="h-11 min-w-[180px] rounded-[8px] border border-[#dddfea] bg-white px-3.5 text-sm font-semibold normal-case text-[#65708b] outline-none transition-colors focus:border-[#5147dc] focus:ring-2 focus:ring-[#5147dc]/15" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
-          <label className="flex flex-col gap-1.5 text-xs font-bold uppercase text-[#8c8d9f]">Até<input className="h-11 min-w-[180px] rounded-[8px] border border-[#dddfea] bg-white px-3.5 text-sm font-semibold normal-case text-[#65708b] outline-none transition-colors focus:border-[#5147dc] focus:ring-2 focus:ring-[#5147dc]/15" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>
-          {dateFrom || dateTo ? <button className="hp-pressable h-11 rounded-[8px] px-3 text-xs font-bold text-[#65708b] hover:text-[#5147dc]" type="button" onClick={() => { setDateFrom(""); setDateTo(""); }}>Limpar datas</button> : null}
-        </div>
+        <div className="ml-0 sm:ml-auto"><DateRangeFilter startDate={dateFrom} endDate={dateTo} onStartDateChange={setDateFrom} onEndDateChange={setDateTo} /></div>
       </div>
       {isLoading ? <LoadingTable columns={6} /> : <MiniTable
         columns={["Paciente", "Valor", "Forma", "Data", "Status", "Parcelamento"]}

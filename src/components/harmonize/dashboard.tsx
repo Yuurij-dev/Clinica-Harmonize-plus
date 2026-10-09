@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { CalendarCheck, CalendarDays, ChevronRight, RotateCcw, Plus, TrendingUp, UserPlus, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { inputVariants } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import { CountUpValue, DetailCard, LoadingSkeleton, PageContainer, ProgressBar, StatCard, StatusBadge } from "./shared";
 import type { SectionId } from "@/types/clinic";
 import { getCachedJson, readClientCache } from "@/lib/client-cache";
@@ -125,7 +127,7 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
             </div>
             <div className="relative shrink-0">
               <CalendarDays className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#5147dc]" />
-              <select className="rounded-[7px] border border-[#dddfea] bg-white py-2 pl-8 pr-8 text-xs font-semibold text-[#555668] outline-none focus:border-[#5147dc]" aria-label="Mês dos atendimentos" defaultValue={attendance.label}>
+              <select className={cn(inputVariants, "w-auto py-2 pl-8 pr-8 text-xs font-semibold")} aria-label="Mês dos atendimentos" defaultValue={attendance.label}>
                 <option value={attendance.label}>{attendance.label.charAt(0).toUpperCase() + attendance.label.slice(1)}</option>
               </select>
             </div>

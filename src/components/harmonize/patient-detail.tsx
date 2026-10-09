@@ -640,12 +640,12 @@ function HistoryTab({ patient, history, loading }: { patient: Patient; history?:
         </div>
 
         <div className="mt-5 grid gap-2 lg:grid-cols-[minmax(0,1fr)_190px_180px]">
-          <label className="flex h-10 items-center gap-2 rounded-[7px] border border-[#dddfea] bg-white px-3 text-xs text-[#858696] focus-within:border-[#5147dc]">
+          <label className="flex h-10 items-center gap-2 rounded-[8px] border border-input bg-white px-3 text-xs text-muted-foreground transition focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
             <Search className="h-4 w-4 shrink-0" />
-            <input className="min-w-0 flex-1 bg-transparent text-xs text-[#303144] outline-none placeholder:text-[#999aaa]" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar no histórico" aria-label="Buscar no histórico" />
+            <input className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar no histórico" aria-label="Buscar no histórico" />
           </label>
-          <label className="relative flex h-10 items-center gap-2 rounded-[7px] border border-[#dddfea] bg-white px-3 text-xs text-[#555668] focus-within:border-[#5147dc]">
-            <Filter className="h-4 w-4 shrink-0 text-[#5147dc]" />
+          <label className="relative flex h-10 items-center gap-2 rounded-[8px] border border-input bg-white px-3 text-xs text-foreground transition focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
+            <Filter className="h-4 w-4 shrink-0 text-primary" />
             <select className="min-w-0 flex-1 appearance-none bg-transparent pr-5 text-xs outline-none" value={eventFilter} onChange={(event) => setEventFilter(event.target.value as HistoryEventKind | "all")} aria-label="Filtrar eventos">
               <option value="all">Todos os eventos</option>
               <option value="procedure">Procedimentos</option>
@@ -653,16 +653,16 @@ function HistoryTab({ patient, history, loading }: { patient: Patient; history?:
               <option value="payment">Pagamentos</option>
               <option value="observation">Observações</option>
             </select>
-            <ChevronDown className="pointer-events-none absolute right-3 h-3.5 w-3.5" />
+            <ChevronDown className="pointer-events-none absolute right-3 h-3.5 w-3.5 text-muted-foreground" />
           </label>
-          <label className="relative flex h-10 items-center gap-2 rounded-[7px] border border-[#dddfea] bg-white px-3 text-xs text-[#555668] focus-within:border-[#5147dc]">
-            <CalendarDays className="h-4 w-4 shrink-0 text-[#5147dc]" />
+          <label className="relative flex h-10 items-center gap-2 rounded-[8px] border border-input bg-white px-3 text-xs text-foreground transition focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
+            <CalendarDays className="h-4 w-4 shrink-0 text-primary" />
             <select className="min-w-0 flex-1 appearance-none bg-transparent pr-5 text-xs outline-none" value={periodFilter} onChange={(event) => setPeriodFilter(event.target.value as "all" | "30" | "90")} aria-label="Filtrar período">
               <option value="all">Todo o período</option>
               <option value="30">Últimos 30 dias</option>
               <option value="90">Últimos 90 dias</option>
             </select>
-            <ChevronDown className="pointer-events-none absolute right-3 h-3.5 w-3.5" />
+            <ChevronDown className="pointer-events-none absolute right-3 h-3.5 w-3.5 text-muted-foreground" />
           </label>
         </div>
       </Card>
@@ -771,8 +771,8 @@ function HistoryTimelineEventCard({ event, expanded, onToggle, onViewProcedure }
               <div className="rounded-[7px] border border-[#e8e9f2] bg-[#fbfbfd] p-3"><p className="text-xs font-bold text-[#3f4053]">Observações</p><p className="mt-2 text-xs text-[#656678]">{event.details}</p></div>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <Button type="button" className="h-8 px-3 text-[10px]" onClick={() => onViewProcedure(event.procedure as PatientProcedureRecord)}><Eye className="h-3.5 w-3.5" />Ver procedimento</Button>
-              <Button type="button" variant="secondary" className="h-8 px-3 text-[10px]" disabled title="Visualização de anexos em breve"><Paperclip className="h-3.5 w-3.5" />Ver anexos ({getProcedurePhotoSessions(event.procedure as PatientProcedureRecord).length})</Button>
+              <Button type="button" size="sm" onClick={() => onViewProcedure(event.procedure as PatientProcedureRecord)}><Eye className="h-3.5 w-3.5" />Ver procedimento</Button>
+              <Button type="button" variant="secondary" size="sm" disabled title="Visualização de anexos em breve"><Paperclip className="h-3.5 w-3.5" />Ver anexos ({getProcedurePhotoSessions(event.procedure as PatientProcedureRecord).length})</Button>
               <div className="ml-auto flex -space-x-1.5">{getProcedurePhotoSessions(event.procedure as PatientProcedureRecord).slice(0, 3).flatMap((session) => [session.beforePhoto, session.afterPhoto]).filter((src) => Boolean(src && src !== "__photo__")).slice(0, 3).map((src, index) => <span className="relative h-8 w-8 overflow-hidden rounded-[5px] border-2 border-white bg-[#f1f2f7]" key={`${src}-${index}`}><Image src={src as string} alt="Miniatura do procedimento" fill className="object-cover" sizes="32px" /></span>)}</div>
             </div>
           </> : <div className="rounded-[7px] border border-[#e8e9f2] bg-[#fbfbfd] p-3 text-xs text-[#656678]">{event.details}</div>}
@@ -834,7 +834,7 @@ function HistoryProcedureViewer({ procedure, onClose }: { procedure: PatientProc
 
   return <Modal open title={procedure.name} description={`${procedure.date}${procedure.professional ? ` · ${procedure.professional}` : ""}`} onClose={onClose} closeOnOverlayClick={false} overlayContent={<div className="pointer-events-none fixed inset-y-0 z-[1001] flex items-center justify-between" style={{ left: "max(0.5rem, calc(50% - 330px))", right: "max(0.5rem, calc(50% - 330px))" }}><Button className="pointer-events-auto rounded-full bg-white shadow-[0_8px_24px_rgba(37,38,58,0.2)]" type="button" variant="secondary" size="icon" aria-label="Ângulo anterior" disabled={activeIndex === 0} onClick={() => changeAngle("previous")}><ChevronRight className="h-5 w-5 rotate-180" /></Button><Button className="pointer-events-auto rounded-full bg-white shadow-[0_8px_24px_rgba(37,38,58,0.2)]" type="button" variant="secondary" size="icon" aria-label="Próximo ângulo" disabled={activeIndex === sessions.length - 1} onClick={() => changeAngle("next")}><ChevronRight className="h-5 w-5" /></Button></div>}>
     <div key={animationKey} className={cn("space-y-4", animationDirection === "next" ? "hp-history-modal-next" : "hp-history-modal-previous")}>
-      <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[9px] font-bold uppercase text-[#858696]">Ângulo selecionado</p><p className="mt-1 text-sm font-bold text-[#303144]">{activeSession?.name ?? "Sessão principal"}</p></div><Button type="button" variant="secondary" className="h-8 px-3 text-[10px]" disabled title="Visualização de anexos em breve"><Paperclip className="h-3.5 w-3.5" />Ver anexos</Button></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[9px] font-bold uppercase text-[#858696]">Ângulo selecionado</p><p className="mt-1 text-sm font-bold text-[#303144]">{activeSession?.name ?? "Sessão principal"}</p></div><Button type="button" variant="secondary" size="sm" disabled title="Visualização de anexos em breve"><Paperclip className="h-3.5 w-3.5" />Ver anexos</Button></div>
       <div className="flex justify-center"><div className="inline-flex rounded-[7px] border border-[#dddfea] bg-[#fafafd] p-1"><button className={cn("inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 text-[10px] font-bold", viewMode === "compare" ? "bg-[#5147dc] text-white" : "text-[#77788a] hover:bg-white hover:text-[#5147dc]")} type="button" onClick={() => setViewMode("compare")} aria-pressed={viewMode === "compare"}><ArrowLeftRight className="h-3.5 w-3.5" />Comparar</button><button className={cn("inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 text-[10px] font-bold", viewMode === "sideBySide" ? "bg-[#5147dc] text-white" : "text-[#77788a] hover:bg-white hover:text-[#5147dc]")} type="button" onClick={() => setViewMode("sideBySide")} aria-pressed={viewMode === "sideBySide"}><Columns2 className="h-3.5 w-3.5" />Lado a lado</button></div></div>
       <div className="relative mx-auto w-full max-w-[420px]">
         <div className="flex min-h-0 justify-center">{viewMode === "compare" ? <BeforeAfterComparison compact beforeSrc={activeSession?.beforePhoto} afterSrc={activeSession?.afterPhoto} beforeLabel={`Antes · ${procedure.date}`} afterLabel={`Depois · ${procedure.date}`} sliderPosition={sliderPosition} comparisonRef={comparisonRef} onPointerDown={handleSliderPointerDown} onPointerMove={handleSliderPointerMove} onPointerUp={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onBeforePreview={(src) => setExpandedPhoto({ label: "Antes", src })} onAfterPreview={(src) => setExpandedPhoto({ label: "Depois", src })} /> : <div className="grid w-full max-w-[380px] gap-2 sm:grid-cols-2"><BeforeAfterPhoto label="Antes" overlayLabel={`Antes · ${procedure.date}`} src={activeSession?.beforePhoto} onPreview={(src) => setExpandedPhoto({ label: "Antes", src })} /><BeforeAfterPhoto label="Depois" overlayLabel={`Depois · ${procedure.date}`} src={activeSession?.afterPhoto} onPreview={(src) => setExpandedPhoto({ label: "Depois", src })} /></div>}</div>

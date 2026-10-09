@@ -3,7 +3,7 @@ import { ArrowRight, FileText, Filter, Plus, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { Input, inputVariants } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -50,13 +50,11 @@ export function SectionIntro({
   description,
   action,
   onAction,
-  actionClassName,
 }: {
   title: string;
   description: string;
   action?: string;
   onAction?: () => void;
-  actionClassName?: string;
 }) {
   return (
     <div className="hp-page-enter mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -67,7 +65,7 @@ export function SectionIntro({
         </p>
       </div>
       {action ? (
-        <Button className={actionClassName} onClick={onAction}>
+        <Button onClick={onAction}>
           <Plus className="h-4 w-4" />
           {action}
         </Button>
@@ -87,24 +85,22 @@ export function SearchFilterBar({
   value,
   onChange,
   onFilter,
+  trailing,
   showFilter = true,
-  searchClassName,
-  inputClassName,
 }: {
   placeholder: string;
   value?: string;
   onChange?: (value: string) => void;
   onFilter?: () => void;
+  trailing?: React.ReactNode;
   showFilter?: boolean;
-  searchClassName?: string;
-  inputClassName?: string;
 }) {
   return (
-    <div className="hp-page-enter mb-4 flex flex-col gap-3 sm:flex-row">
-      <label className={cn("group flex h-10 flex-1 items-center gap-3 rounded-md border border-input bg-background px-4 text-xs text-muted-foreground transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-ring focus-within:shadow-[0_0_0_4px_color-mix(in_srgb,var(--ring)_12%,transparent)]", searchClassName)}>
+    <div className={cn("hp-page-enter mb-4 flex flex-col gap-3", trailing ? "lg:flex-row lg:items-end" : "sm:flex-row sm:items-end")}>
+      <label className="group flex h-10 min-w-0 flex-1 items-center gap-3 rounded-[8px] border border-input bg-white px-4 text-xs text-muted-foreground transition-[border-color,box-shadow,background-color] duration-150 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
         <Search className="h-4 w-4 text-muted-foreground" />
         <Input
-          className={cn("h-auto border-0 bg-transparent p-0 shadow-none focus-visible:border-0 focus-visible:ring-0", inputClassName)}
+          className="h-auto border-0 bg-transparent p-0 shadow-none focus-visible:border-0 focus-visible:ring-0"
           placeholder={placeholder}
           value={value}
           onChange={(event) => onChange?.(event.target.value)}
@@ -115,6 +111,35 @@ export function SearchFilterBar({
         <Filter className="h-4 w-4" />
         Filtrar
       </Button> : null}
+      {trailing}
+    </div>
+  );
+}
+
+export function DateRangeFilter({
+  startDate,
+  endDate,
+  onStartDateChange,
+  onEndDateChange,
+  clearable = true,
+}: {
+  startDate: string;
+  endDate: string;
+  onStartDateChange: (value: string) => void;
+  onEndDateChange: (value: string) => void;
+  clearable?: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap items-end gap-3">
+      <label className="flex flex-col gap-1.5 text-xs font-bold uppercase text-[#8c8d9f]">
+        De
+        <input className={cn(inputVariants, "h-10 min-w-[160px] px-3.5 text-sm font-semibold sm:min-w-[180px]")} type="date" value={startDate} max={endDate || undefined} aria-label="Data inicial" onChange={(event) => onStartDateChange(event.target.value)} />
+      </label>
+      <label className="flex flex-col gap-1.5 text-xs font-bold uppercase text-[#8c8d9f]">
+        Até
+        <input className={cn(inputVariants, "h-10 min-w-[160px] px-3.5 text-sm font-semibold sm:min-w-[180px]")} type="date" value={endDate} min={startDate || undefined} aria-label="Data final" onChange={(event) => onEndDateChange(event.target.value)} />
+      </label>
+      {clearable && (startDate || endDate) ? <Button className="px-3 text-xs" variant="ghost" size="sm" type="button" onClick={() => { onStartDateChange(""); onEndDateChange(""); }}>Limpar datas</Button> : null}
     </div>
   );
 }
