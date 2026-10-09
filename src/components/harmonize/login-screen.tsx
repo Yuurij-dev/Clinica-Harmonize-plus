@@ -10,7 +10,6 @@ import {
   KeyRound,
   LockKeyhole,
   Mail,
-  MailCheck,
   Phone,
   ShieldCheck,
   Sparkles,
@@ -32,8 +31,6 @@ export type RegisterValues = {
 
 export type RegisterResult = {
   error?: string;
-  verificationEmail?: string;
-  verificationUrl?: string;
 };
 
 type LoginScreenProps = {
@@ -62,22 +59,16 @@ export function LoginScreen({ onLogin, onChangePassword, onRegister }: LoginScre
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [registerValues, setRegisterValues] = useState(initialRegisterValues);
-  const [verificationEmail, setVerificationEmail] = useState<string | null>(null);
-  const [verificationUrl, setVerificationUrl] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   function openRegister() {
     setError("");
-    setVerificationEmail(null);
-    setVerificationUrl(null);
     setMode("register");
   }
 
   function openLogin() {
     setError("");
-    setVerificationEmail(null);
-    setVerificationUrl(null);
     setMode("login");
   }
 
@@ -103,14 +94,12 @@ export function LoginScreen({ onLogin, onChangePassword, onRegister }: LoginScre
     event.preventDefault();
     setIsSubmitting(true);
     const result = await onRegister(registerValues);
-    if (result.verificationEmail) {
-      setError("");
-      setVerificationEmail(result.verificationEmail);
-      setVerificationUrl(result.verificationUrl ?? null);
+    if (result.error) {
+      setError(result.error);
       setIsSubmitting(false);
       return;
     }
-    setError(result.error ?? "Não foi possível criar a conta agora. Tente novamente.");
+    setError("");
     setIsSubmitting(false);
   }
 
@@ -146,9 +135,7 @@ export function LoginScreen({ onLogin, onChangePassword, onRegister }: LoginScre
 
         <div className="hp-panel-enter flex items-center rounded-[8px] border border-[#e6edf7] bg-white/88 p-5 shadow-[0_18px_60px_rgba(30,45,90,0.1)] backdrop-blur-xl sm:p-8 lg:p-10">
           <div className="mx-auto w-full max-w-xl">
-            {verificationEmail ? (
-              <VerificationPending email={verificationEmail} onBack={openLogin} verificationUrl={verificationUrl} />
-            ) : mode === "change-password" ? (
+            {mode === "change-password" ? (
               <FirstAccessPasswordForm onSubmit={onChangePassword} />
             ) : mode === "login" ? (
               <LoginForm error={error} isSubmitting={isSubmitting} login={login} onLoginChange={setLogin} onOpenRegister={openRegister} onPasswordChange={setPassword} onSubmit={handleLoginSubmit} password={password} setShowPassword={setShowPassword} showPassword={showPassword} />
@@ -245,18 +232,4 @@ function FirstAccessPasswordForm({ onSubmit }: { onSubmit: (password: string) =>
 
 function ErrorMessage({ children }: { children: React.ReactNode }) {
   return <p className="rounded-[8px] border border-[#ffd7d7] bg-[#fff7f7] px-4 py-3 text-xs font-bold text-[#b42318]">{children}</p>;
-}
-
-function VerificationPending({ email, onBack, verificationUrl }: { email: string; onBack: () => void; verificationUrl: string | null }) {
-  return (
-    <div className="text-center">
-      <div className="mx-auto mb-5 grid h-14 w-14 place-items-center rounded-full bg-[#eaf8ef] text-[#247750]"><MailCheck className="h-7 w-7" /></div>
-      <p className="text-xs font-black uppercase text-[#18a9c6]">Quase lá</p>
-      <h2 className="mt-2 text-3xl font-black tracking-[0] text-[#161d38]">Confirme seu e-mail</h2>
-      <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-[#6b7285]">Enviamos um link de confirmação para <strong className="text-[#303144]">{email}</strong>. Clique nele para ativar sua conta e acessar o Harmonize+.</p>
-      {verificationUrl ? <a className="mt-6 inline-flex h-11 items-center justify-center gap-2 rounded-full bg-[#5947ee] px-5 text-sm font-bold text-white shadow-[0_12px_26px_rgba(89,71,238,0.24)] hover:bg-[#4635d5]" href={verificationUrl}>Abrir link de teste <ArrowRight className="h-4 w-4" /></a> : null}
-      <p className="mt-6 text-xs text-[#858da0]">O link é válido por 30 minutos e só pode ser usado uma vez.</p>
-      <button className="mt-6 inline-flex items-center gap-2 text-xs font-bold text-[#68728a] transition hover:text-[#5947ee]" onClick={onBack} type="button"><ArrowLeft className="h-4 w-4" />Voltar para o acesso</button>
-    </div>
-  );
 }

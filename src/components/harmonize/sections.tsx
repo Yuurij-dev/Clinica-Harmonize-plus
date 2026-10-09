@@ -1560,7 +1560,18 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
   useEffect(() => {
     getCachedJson<{ settings?: { name?: string; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings")
       .then((data) => {
-        const settings = data.settings ?? { laborCost: 0, facilityCost: 0, medicationCost: 0, appointmentToleranceMinutes: 15, openingTime: "08:00", closingTime: "19:00" };
+        const settings = data.settings ?? {
+          name: undefined,
+          laborCost: 0,
+          facilityCost: 0,
+          medicationCost: 0,
+          appointmentToleranceMinutes: 15,
+          openingTime: "08:00",
+          closingTime: "19:00",
+          professionalOpeningTime: "09:00",
+          professionalClosingTime: "18:00",
+          professionalHourlyCost: 0,
+        };
         setCostSettings(settings);
         if (settings.name) setClinicNameInput(settings.name);
         setAppointmentToleranceInput(String(settings.appointmentToleranceMinutes));

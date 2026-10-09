@@ -24,10 +24,6 @@ export async function POST(request: Request) {
   if (!user || !(await compare(password, user.passwordHash))) {
     return NextResponse.json({ message: "Usuário ou senha inválidos." }, { status: 401 });
   }
-  if (!user.emailVerifiedAt) {
-    return NextResponse.json({ message: "Confirme seu e-mail antes de acessar o sistema." }, { status: 403 });
-  }
-
   const membership = user.memberships[0];
   if (!membership) {
     return NextResponse.json({ message: "Este usuário ainda não está vinculado a uma clínica." }, { status: 403 });
