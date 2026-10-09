@@ -212,7 +212,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
       }
       if (!response.ok) throw new Error(data.message ?? `Não foi possível salvar o orçamento (${response.status}).`);
       if (!data.quote?.id) throw new Error("O orçamento foi processado, mas não retornou um identificador válido.");
-      invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
+      invalidateClientCache("/api/quotes", "/api/patients", "/api/dashboard/bootstrap");
       setLatestQuoteId(data.quote.id);
       setSavedQuoteSignature(currentQuoteSignature);
       onSaved(data.quote);
@@ -246,7 +246,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
       const quoteResponse = await fetch(`/api/quotes/${latestQuoteId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Aprovado" }) });
       if (!quoteResponse.ok) throw new Error("Pagamento registrado, mas não foi possível concluir o orçamento.");
       invalidateClientCache("/api/payments", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
-      invalidateClientCache("/api/quotes");
+      invalidateClientCache("/api/quotes", "/api/patients");
       setPaymentConfirmed(true);
       onStatusChange(latestQuoteId, "Aprovado");
       onPaid?.();
@@ -287,7 +287,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
     const response = await fetch(`/api/payments/${createdPaymentId}`, { method: "DELETE" });
     if (!response.ok) return;
     const quoteResponse = latestQuoteId ? await fetch(`/api/quotes/${latestQuoteId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Pendente" }) }) : null;
-    invalidateClientCache("/api/payments", "/api/quotes", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
+    invalidateClientCache("/api/payments", "/api/quotes", "/api/patients", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
     setPaymentNotice(false);
     setPaymentNoticeLeaving(false);
     setCreatedPaymentId(null);

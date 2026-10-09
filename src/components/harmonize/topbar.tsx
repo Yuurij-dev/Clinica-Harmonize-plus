@@ -11,7 +11,7 @@ type TopbarProps = {
   onSettings: () => void;
   onNavigate: (section: SectionId) => void;
   onLogout: () => Promise<void>;
-  user?: { name: string; role: string; clinic?: { trialEndsAt?: string | null } } | null;
+  user?: { id: string; name: string; role: string; clinic?: { trialEndsAt?: string | null } } | null;
 };
 
 function clinicNow() {
@@ -145,10 +145,11 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
   }, []);
 
   useEffect(() => {
+    if (!user?.id) return;
     let active = true;
 
     async function loadAppointmentAlerts() {
-      const response = await fetch("/api/agenda/bootstrap", { cache: "no-store" }).catch(() => null);
+      const response = await fetch("/api/agenda/alerts", { cache: "no-store" }).catch(() => null);
       if (!response?.ok) return;
       const data = await response.json() as { appointments?: Array<{ id: string; date: string; time: string; status: string; patient?: { name?: string } }> };
       if (!active) return;
@@ -176,7 +177,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
     void loadAppointmentAlerts();
     const timer = window.setInterval(() => { void loadAppointmentAlerts(); }, 30_000);
     return () => { active = false; window.clearInterval(timer); };
-  }, []);
+  }, [user?.id]);
 
   async function handleLogout() {
     setIsLoggingOut(true);

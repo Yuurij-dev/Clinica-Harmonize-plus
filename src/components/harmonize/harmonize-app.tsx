@@ -18,8 +18,9 @@ import {
   SettingsSection,
 } from "./sections";
 import type { SectionId } from "@/types/clinic";
+import { CLIENT_CACHE_UNAUTHORIZED_EVENT, setClientCacheScope } from "@/lib/client-cache";
 
-type CurrentUser = { name: string; role: string; isOwner?: boolean; trialExpired?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
+type CurrentUser = { id: string; clinicId: string; name: string; role: string; isOwner?: boolean; trialExpired?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
 type AgendaFocus = { date: string; time: string };
 type CreateDialog = "appointment" | "client" | "procedure" | "quote" | "payment";
 type HarmonizeAppProps = { initialCreate?: CreateDialog };
@@ -66,18 +67,49 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   }
 
   useEffect(() => {
+    let active = true;
     fetch("/api/auth/me")
       .then(async (response) => {
         if (!response.ok) {
-          router.replace("/login");
+          if (active) {
+            setClientCacheScope(null);
+            router.replace("/login");
+          }
           return null;
         }
         return response.json() as Promise<{ user: CurrentUser }>;
       })
-      .then((data) => setCurrentUser(data?.user ?? null))
+      .then((data) => {
+        if (!active || !data?.user) return;
+        setClientCacheScope(`${data.user.id}:${data.user.clinicId}`);
+        setCurrentUser(data.user);
+      })
       .catch(() => {
-        router.replace("/login");
+        if (active) {
+          setClientCacheScope(null);
+          router.replace("/login");
+        }
       });
+    return () => { active = false; };
+  }, [router]);
+
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      setCurrentUser(null);
+      router.replace("/login");
+    };
+    const handleSessionChange = (event: StorageEvent) => {
+      if (event.key !== "harmonize-session-change") return;
+      setClientCacheScope(null);
+      setCurrentUser(null);
+      window.location.reload();
+    };
+    window.addEventListener(CLIENT_CACHE_UNAUTHORIZED_EVENT, handleUnauthorized);
+    window.addEventListener("storage", handleSessionChange);
+    return () => {
+      window.removeEventListener(CLIENT_CACHE_UNAUTHORIZED_EVENT, handleUnauthorized);
+      window.removeEventListener("storage", handleSessionChange);
+    };
   }, [router]);
 
   function openCreate(section: SectionId, dialog: NonNullable<typeof createDialog>) {
@@ -96,10 +128,16 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   }
 
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    setMobileOpen(false);
-    setCreateDialog(null);
-    router.replace("/login");
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      setClientCacheScope(null);
+      setCurrentUser(null);
+      window.localStorage.setItem("harmonize-session-change", String(Date.now()));
+      setMobileOpen(false);
+      setCreateDialog(null);
+      router.replace("/login");
+    }
   }
 
   function showNotice(message: string, undo?: () => void, tone: "success" | "warning" = "success") {
@@ -124,19 +162,19 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       <div className="lg:pl-[220px]">
         <Topbar user={currentUser} onMenu={() => setMobileOpen(true)} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onLogout={logout} />
         <main className={`mx-auto w-full ${active === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-10 pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
-          {active === "dashboard" && isAdmin ? <Dashboard userName={currentUser?.name} onAction={(action) => {
+          {currentUser && active === "dashboard" && isAdmin ? <Dashboard userName={currentUser?.name} onAction={(action) => {
             const target = { client: ["clientes", "client"], appointment: ["agenda", "appointment"], quote: ["orcamentos", "quote"], payment: ["pagamentos", "payment"] }[action] as [SectionId, NonNullable<typeof createDialog>];
             openCreate(target[0], target[1]);
           }} onNavigate={selectSection} /> : null}
-          {active === "agenda" ? <ScheduleSection focus={agendaFocus} openCreate={createDialog === "appointment"} onCreateOpen={() => openCreate("agenda", "appointment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {active === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => openCreate("clientes", "client")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {active === "procedimentos" && isAdmin ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => openCreate("procedimentos", "procedure")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {active === "orcamentos" ? <QuotesSection openCreate={createDialog === "quote"} onCreateOpen={() => openCreate("orcamentos", "quote")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {active === "pagamentos" && isAdmin ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => openCreate("pagamentos", "payment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {active === "financeiro" && isAdmin ? <FinanceSection /> : null}
-          {active === "relatorios" && isAdmin ? <ReportsSection /> : null}
-          {active === "calculadora" && isAdmin ? <SettingsSection mode="calculator" /> : null}
-          {active === "configuracoes" && isAdmin ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
+          {currentUser && active === "agenda" ? <ScheduleSection focus={agendaFocus} openCreate={createDialog === "appointment"} onCreateOpen={() => openCreate("agenda", "appointment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && active === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => openCreate("clientes", "client")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && active === "procedimentos" && isAdmin ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => openCreate("procedimentos", "procedure")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && active === "orcamentos" ? <QuotesSection openCreate={createDialog === "quote"} onCreateOpen={() => openCreate("orcamentos", "quote")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && active === "pagamentos" && isAdmin ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => openCreate("pagamentos", "payment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && active === "financeiro" && isAdmin ? <FinanceSection /> : null}
+          {currentUser && active === "relatorios" && isAdmin ? <ReportsSection /> : null}
+          {currentUser && active === "calculadora" && isAdmin ? <SettingsSection mode="calculator" /> : null}
+          {currentUser && active === "configuracoes" && isAdmin ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
         </main>
       </div>
       <AppToaster />

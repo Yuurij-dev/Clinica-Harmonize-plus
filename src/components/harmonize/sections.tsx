@@ -303,7 +303,7 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
   if (selectedPatient) {
     return (
       <PatientDetail
-        key={selectedPatient.name}
+        key={selectedPatient.id ?? selectedPatient.name}
         patient={selectedPatient}
         journey={journeyForPatient(selectedPatient)}
         onBack={() => {
@@ -536,7 +536,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     if (!response.ok) { setUpdatingId(null); return; }
     const nextRows = appointmentRows.map((item) => item.id === target.id ? { ...item, status: nextStatus } : item);
     setAppointmentRows(nextRows);
-    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", ...(nextStatus === "Atendido" ? ["/api/patients"] : []));
     setUpdatingId(null);
     onSaved?.(`${target.patient}: ${nextStatus}.`);
   }
@@ -1249,7 +1249,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     if (!response.ok) return;
     const data = await response.json() as { quote: { id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null } };
     const item = data.quote;
-    invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
+    invalidateClientCache("/api/quotes", "/api/patients", `/api/patients/${selectedPatientId}/history`, "/api/dashboard/bootstrap");
     setQuoteRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: new Date().toISOString() }, ...current]);
     setPatientQuery(""); setSelectedPatientId(""); setSelectedProcedureNames([]);
     onCreateClose(); onSaved?.(`Orçamento de ${patient} foi criado.`);

@@ -43,11 +43,15 @@ import { PatientExpenses } from "./patient-expenses";
 import { CustomerJourney } from "./customer-journey";
 import { PatientEvaluations } from "./patient-evaluations";
 import { EmptyState, LoadingSkeleton } from "./shared";
-import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache } from "@/lib/client-cache";
+import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { FormField, fieldClassName } from "@/components/ui/modal";
 import { formatCpf, formatInteger, formatPhone } from "@/lib/input-masks";
 
 const tabs = ["Dados", "Avaliação", "Orçamento", "Procedimentos", "Agendamentos", "Observações", "Histórico", "Pagamentos"];
+
+function historyCacheKey(patientId: string, tab: string) {
+  return `/api/patients/${patientId}/history?tab=${encodeURIComponent(tab)}`;
+}
 
 type PatientProcedureRecord = {
   id?: string;
@@ -129,9 +133,12 @@ export function PatientDetail({
   const initialTab = journeyStageToTab(patient.currentStage ?? journey.find((stage) => stage.status === "current")?.id);
   const [activeTab, setActiveTab] = useState(initialTab);
   const [tabShake, setTabShake] = useState<string | null>(null);
-  const [history, setHistory] = useState<PatientHistoryRecord>();
+  const [history, setHistory] = useState<PatientHistoryRecord | undefined>(() => {
+    const cached = patient.id && shouldLoadPatientHistory(initialTab) ? readClientCache<PatientHistoryResponse>(historyCacheKey(patient.id, initialTab)) : undefined;
+    return cached ? mapPatientHistory(cached).history : undefined;
+  });
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
-  const [historyLoading, setHistoryLoading] = useState(Boolean(patient.id && shouldLoadPatientHistory(initialTab)));
+  const [historyLoading, setHistoryLoading] = useState(Boolean(patient.id && shouldLoadPatientHistory(initialTab) && !readClientCache(historyCacheKey(patient.id, initialTab))));
   const [returnAppointmentTarget, setReturnAppointmentTarget] = useState<ReturnAppointmentTarget | null>(null);
   const [quoteCompleted, setQuoteCompleted] = useState(false);
   // Apenas uma linha do tempo de procedimento fica exibida no topo por vez.
@@ -162,14 +169,9 @@ export function PatientDetail({
   useEffect(() => {
     if (!patient.id || !pinnedJourneyKey) return;
     let cancelled = false;
-    const loadJson = async <T,>(url: string) => {
-      const response = await fetch(url, { cache: "no-store" });
-      if (!response.ok) throw new Error(`Não foi possível carregar ${url}.`);
-      return response.json() as Promise<T>;
-    };
     Promise.all([
-      loadJson<PatientHistoryResponse>(`/api/patients/${patient.id}/history?tab=Procedimentos`),
-      loadJson<{ evaluations?: EvaluationSummary[] }>(`/api/patients/${patient.id}/evaluation?list=1`),
+      getCachedJson<PatientHistoryResponse>(historyCacheKey(patient.id, "Procedimentos")),
+      getCachedJson<{ evaluations?: EvaluationSummary[] }>(`/api/patients/${patient.id}/evaluation?list=1`),
     ])
       .then(([historyData, evaluationData]) => {
         if (cancelled) return;
@@ -190,19 +192,17 @@ export function PatientDetail({
       return;
     }
     if (tab === activeTab) return;
-    setHistoryLoading(Boolean(patient.id && shouldLoadPatientHistory(tab)));
+    const cached = patient.id && shouldLoadPatientHistory(tab) ? readClientCache<PatientHistoryResponse>(historyCacheKey(patient.id, tab)) : undefined;
+    setHistory(cached ? mapPatientHistory(cached).history : undefined);
+    setHistoryLoading(Boolean(patient.id && shouldLoadPatientHistory(tab) && !cached));
     setActiveTab(tab);
   }
 
   useEffect(() => {
     if (!patient.id || !shouldLoadPatientHistory(activeTab)) return;
     let cancelled = false;
-    const historyUrl = `/api/patients/${patient.id}/history?tab=${encodeURIComponent(activeTab)}`;
-    fetch(historyUrl, { cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Não foi possível carregar o histórico (${response.status}).`);
-        return response.json() as Promise<PatientHistoryResponse>;
-      })
+    const historyUrl = historyCacheKey(patient.id, activeTab);
+    getCachedJson<PatientHistoryResponse>(historyUrl)
       .then((data) => {
         if (cancelled) return;
         const mapped = mapPatientHistory(data);
@@ -739,7 +739,7 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
       const data = await response.json().catch(() => null) as { message?: string } | null;
       if (!response.ok) throw new Error(data?.message ?? "Não foi possível atualizar o procedimento.");
       setAppointmentStatuses((current) => ({ ...current, [appointment.id as string]: status }));
-      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/appointments", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/patients", "/api/appointments", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     } catch (appointmentError) {
       setError(appointmentError instanceof Error ? appointmentError.message : "Não foi possível atualizar o procedimento.");
     }
@@ -764,7 +764,7 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
         setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, beforePhoto: data.procedure?.beforePhoto ?? "", afterPhoto: data.procedure?.afterPhoto ?? "", status: procedurePhotoStatus(data.procedure?.beforePhoto ?? null, data.procedure?.afterPhoto ?? null) } : item));
         onProcedurePhotoUpdated(procedureId, data.procedure);
       }
-      invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`);
+      invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`, "/api/patients");
     } catch (photoError) {
       setError(photoError instanceof Error ? photoError.message : "Não foi possível atualizar a foto.");
     } finally {
@@ -1279,7 +1279,7 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
       const data = await response.json().catch(() => null) as { message?: string } | null;
       if (!response.ok) throw new Error(data?.message ?? "Não foi possível atualizar o atendimento.");
       setEditedAppointments((current) => ({ ...current, [appointment.id as string]: { ...appointment, status } }));
-      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/appointments", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/appointments", "/api/agenda/bootstrap", "/api/dashboard/bootstrap", ...(status === "Atendido" ? ["/api/patients"] : []));
     } catch (statusError) {
       setReturnError(statusError instanceof Error ? statusError.message : "Não foi possível atualizar o atendimento.");
     } finally {
