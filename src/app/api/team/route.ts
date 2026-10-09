@@ -1,4 +1,5 @@
 import { hash } from "bcryptjs";
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -31,15 +32,27 @@ export async function POST(request: Request) {
   const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
   if (existing) return NextResponse.json({ message: "Já existe uma conta com este e-mail." }, { status: 409 });
 
-  const passwordHash = await hash(password, 12);
-  const member = await prisma.$transaction(async (transaction) => {
-    const createdUser = await transaction.user.create({ data: { name, email, passwordHash, role, emailVerifiedAt: new Date() } });
-    return transaction.clinicMembership.create({
-      data: { userId: createdUser.id, clinicId: user.clinicId, role },
-      select: { id: true, role: true, isOwner: true, user: { select: { id: true, name: true, email: true, createdAt: true } } },
+  try {
+    const passwordHash = await hash(password, 12);
+    const member = await prisma.$transaction(async (transaction) => {
+      const createdUser = await transaction.user.create({ data: { name, email, passwordHash, role, mustChangePassword: true, emailVerifiedAt: new Date() } });
+      return transaction.clinicMembership.create({
+        data: { userId: createdUser.id, clinicId: user.clinicId, role },
+        select: { id: true, role: true, isOwner: true, user: { select: { id: true, name: true, email: true, createdAt: true } } },
+      });
     });
-  });
-  return NextResponse.json({ member }, { status: 201 });
+    return NextResponse.json({ member }, { status: 201 });
+  } catch (error) {
+    console.error("Failed to create clinic collaborator", error);
+    const prismaError = error as { code?: unknown; message?: unknown };
+    const errorMessage = typeof prismaError.message === "string" ? prismaError.message : "";
+    const missingPasswordChangeSchema = (error instanceof Prisma.PrismaClientKnownRequestError && prismaError.code === "P2022")
+      || errorMessage.includes("mustChangePassword");
+    if (missingPasswordChangeSchema) {
+      return NextResponse.json({ message: "O servidor ou o banco ainda não foi atualizado para o primeiro acesso com troca de senha. Reinicie o servidor e aplique a atualização do banco." }, { status: 503 });
+    }
+    return NextResponse.json({ message: "Não foi possível cadastrar o colaborador agora. Tente novamente." }, { status: 500 });
+  }
 }
 
 export async function DELETE(request: Request) {

@@ -1,6 +1,8 @@
 import { Bell, ChevronDown, Clock3, Loader2, LogOut, Menu, Moon, Search, Settings2, Sparkles, Sun } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import type { SectionId } from "@/types/clinic";
 
 type TopbarProps = {
@@ -46,7 +48,6 @@ function formatTrialRemaining(milliseconds: number) {
 export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, user }: TopbarProps) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
-  const [profileOpen, setProfileOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [themeReady, setThemeReady] = useState(false);
@@ -134,6 +135,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
     setDarkMode(nextTheme);
     window.localStorage.setItem("harmonize-theme", nextTheme ? "dark" : "light");
     document.documentElement.classList.toggle("dark", nextTheme);
+    window.dispatchEvent(new Event("harmonize-theme-change"));
   }
 
   useEffect(() => {
@@ -182,7 +184,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
   }
 
   return (
-    <header className="sticky top-0 z-30 border-b border-[#eeeef3] bg-white/95 px-4 py-3 backdrop-blur-xl sm:px-7 lg:px-9">
+    <header className="sticky top-0 z-30 border-b border-border bg-background/95 px-4 py-3 text-foreground backdrop-blur-xl sm:px-7 lg:px-9">
       <div className="flex items-center gap-3">
         <Button
           className="lg:hidden"
@@ -195,12 +197,13 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
         </Button>
         <div className="min-w-0 flex-1" />
 
-        <label className="hidden h-9 min-w-[230px] items-center gap-2 rounded-full border border-[#e6e6ed] bg-[#fafafd] px-4 text-xs text-[#9293a4] transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-[#5147dc] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(81,71,220,0.08)] xl:flex">
+        <label className="hidden h-9 min-w-[230px] items-center gap-2 rounded-full border border-border bg-muted px-4 text-xs text-muted-foreground transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-ring focus-within:bg-background focus-within:shadow-[0_0_0_4px_color-mix(in_srgb,var(--ring)_12%,transparent)] xl:flex">
           <Search className="h-4 w-4" />
-          <input
-            className="w-full bg-transparent outline-none placeholder:text-[#8b93aa]"
+          <Input
+            className="h-auto border-0 bg-transparent p-0 shadow-none focus-visible:border-0 focus-visible:ring-0"
             placeholder="Buscar no Harmonize+"
             onKeyDown={(event) => { if (event.key === "Enter") search(event.currentTarget.value); }}
+            aria-label="Buscar no Harmonize+"
           />
         </label>
 
@@ -214,10 +217,18 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
           <span>{trialExpired ? "Teste grátis encerrado" : <>Teste grátis: <strong>{formatTrialRemaining(trialRemaining)}</strong></>}</span>
         </div> : null}
 
-        <div className="relative"><Button variant="secondary" size="icon" aria-label="Notificações" onClick={() => { primeNotificationAudio(); setNotificationsOpen((open) => !open); }}>
-          <Bell className="h-5 w-5" />
-          {appointmentAlerts.length ? <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#e0647d] px-1 text-[9px] font-black text-white ring-2 ring-white">{appointmentAlerts.length}</span> : null}
-        </Button>{notificationsOpen ? <div className="absolute right-0 top-12 z-40 w-80 rounded-[7px] border border-[#e5e5ee] bg-white p-4 shadow-xl"><p className="text-xs font-bold text-[#303144]">Notificações</p>{appointmentAlerts.length ? appointmentAlerts.map((alert) => <p className="mt-3 rounded-[6px] bg-[#f7f6ff] p-3 text-[11px] leading-5 text-[#5147dc]" key={alert.id}>{alert.message}</p>) : <><p className="mt-3 rounded-[6px] bg-[#f7f6ff] p-3 text-[11px] leading-5 text-[#65667a]">Nenhum atendimento no horário neste momento.</p><p className="mt-2 rounded-[6px] bg-[#fff8e7] p-3 text-[11px] leading-5 text-[#65667a]">As notificações dos próximos atendimentos aparecerão aqui.</p></>}</div> : null}</div>
+        <DropdownMenu open={notificationsOpen} onOpenChange={setNotificationsOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="icon" aria-label="Notificações" onClick={primeNotificationAudio} className="relative">
+              <Bell className="h-5 w-5" />
+              {appointmentAlerts.length ? <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#e0647d] px-1 text-[9px] font-black text-white ring-2 ring-background">{appointmentAlerts.length}</span> : null}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-80 p-4">
+            <p className="text-xs font-semibold">Notificações</p>
+            {appointmentAlerts.length ? appointmentAlerts.map((alert) => <p className="mt-3 rounded-md bg-accent p-3 text-[11px] leading-5 text-accent-foreground" key={alert.id}>{alert.message}</p>) : <><p className="mt-3 rounded-md bg-muted p-3 text-[11px] leading-5 text-muted-foreground">Nenhum atendimento no horário neste momento.</p><p className="mt-2 rounded-md bg-muted p-3 text-[11px] leading-5 text-muted-foreground">As notificações dos próximos atendimentos aparecerão aqui.</p></>}
+          </DropdownMenuContent>
+        </DropdownMenu>
         {user?.role === "ADMIN" ? <Button
           className="hidden sm:inline-flex"
           variant="secondary"
@@ -230,17 +241,27 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
         <Button variant="secondary" size="icon" aria-label={darkMode ? "Ativar tema claro" : "Ativar tema escuro"} title={darkMode ? "Tema claro" : "Tema escuro"} onClick={toggleTheme}>
           {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
         </Button>
-        <button className="hp-pressable relative hidden items-center gap-2 border-l border-[#ececf2] pl-4 sm:flex" disabled={isLoggingOut} onClick={() => setProfileOpen((open) => !open)}>
-          <div className="grid h-8 w-8 place-items-center rounded-full bg-[#eeeaff] text-[11px] font-black text-[#5b4fd2]">
-            {initials}
-          </div>
-          <div className="leading-tight">
-            <p className="text-xs font-bold text-[#2c2d41]">{userName}</p>
-            <p className="text-[9px] text-[#9495a5]">{roleLabel}</p>
-          </div>
-          <ChevronDown className="h-3.5 w-3.5 text-[#9293a4]" />
-          {profileOpen ? <div className="absolute right-0 top-11 w-48 rounded-[7px] border border-[#e5e5ee] bg-white p-2 text-left shadow-xl"><span className="block rounded-[5px] px-3 py-2 text-xs font-semibold text-[#555668] hover:bg-[#f5f4ff]" onClick={onSettings}>Meu perfil</span><span className="block rounded-[5px] px-3 py-2 text-xs font-semibold text-[#555668] hover:bg-[#f5f4ff]">Ajuda e suporte</span><span className="mt-1 flex items-center gap-2 rounded-[5px] border-t border-[#eeeef3] px-3 py-2 pt-3 text-xs font-bold text-[#b42318] hover:bg-[#fff5f5]" onClick={handleLogout}>{isLoggingOut ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogOut className="h-3.5 w-3.5" />}{isLoggingOut ? "Saindo..." : "Sair"}</span></div> : null}
-        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="hp-pressable hidden items-center gap-2 border-l border-border pl-4 sm:flex" disabled={isLoggingOut}>
+              <span className="grid h-8 w-8 place-items-center rounded-full bg-accent text-[11px] font-black text-accent-foreground">{initials}</span>
+              <span className="text-left leading-tight">
+                <span className="block text-xs font-bold text-foreground">{userName}</span>
+                <span className="block text-[9px] text-muted-foreground">{roleLabel}</span>
+              </span>
+              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem onSelect={onSettings}>Meu perfil</DropdownMenuItem>
+            <DropdownMenuItem>Ajuda e suporte</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={isLoggingOut} onSelect={() => void handleLogout()}>
+              {isLoggingOut ? <Loader2 className="animate-spin" /> : <LogOut />}
+              {isLoggingOut ? "Saindo..." : "Sair"}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );

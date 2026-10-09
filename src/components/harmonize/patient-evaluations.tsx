@@ -11,8 +11,8 @@ import { LoadingSkeleton } from "./shared";
 
 const NEW_EVALUATION_ID = "__new__";
 
-export function PatientEvaluations({ patientId, patientName }: { patientId: string; patientName: string }) {
-  const listCacheKey = `/api/patients/${patientId}/evaluation?list=1`;
+export function PatientEvaluations({ patientId, patientName, journeyId, onEvaluationSaved }: { patientId: string; patientName: string; journeyId?: string; onEvaluationSaved?: () => void }) {
+  const listCacheKey = `/api/patients/${patientId}/evaluation?list=1${journeyId ? `&journeyId=${encodeURIComponent(journeyId)}` : ""}`;
   const cached = readClientCache<{ evaluations?: SavedEvaluation[] }>(listCacheKey);
   const [evaluations, setEvaluations] = useState<SavedEvaluation[]>(cached?.evaluations ?? []);
   const [loading, setLoading] = useState(!cached);
@@ -34,6 +34,7 @@ export function PatientEvaluations({ patientId, patientName }: { patientId: stri
 
   function handleSaved(evaluation: SavedEvaluation) {
     setEvaluations((current) => current.some((item) => item.id === evaluation.id) ? current.map((item) => item.id === evaluation.id ? evaluation : item) : [evaluation, ...current]);
+    onEvaluationSaved?.();
     // Depois de salva, a avaliação nova passa a ser um item aberto da lista.
     if (openEvaluationId === NEW_EVALUATION_ID) {
       setCreatingEvaluation(false);
@@ -51,7 +52,7 @@ export function PatientEvaluations({ patientId, patientName }: { patientId: stri
       </div>
       {newEvaluationOpen ? (
         <ListAccordion title="Nova avaliação" subtitle={new Date().toLocaleDateString("pt-BR")} open onToggle={() => { setCreatingEvaluation(false); setOpenEvaluationId(null); }}>
-          <PhotoEditor patientId={patientId} patientName={patientName} onSaved={handleSaved} />
+          <PhotoEditor patientId={patientId} journeyId={journeyId} patientName={patientName} onSaved={handleSaved} />
         </ListAccordion>
       ) : null}
       {loading ? (
@@ -70,7 +71,7 @@ export function PatientEvaluations({ patientId, patientName }: { patientId: stri
             open={openEvaluationId === evaluation.id}
             onToggle={() => { setCreatingEvaluation(false); setOpenEvaluationId((current) => current === evaluation.id ? null : evaluation.id); }}
           >
-            <PhotoEditor patientId={patientId} evaluationId={evaluation.id} patientName={patientName} onSaved={handleSaved} />
+            <PhotoEditor patientId={patientId} journeyId={journeyId} evaluationId={evaluation.id} patientName={patientName} onSaved={handleSaved} />
           </ListAccordion>
         ))
       )}
