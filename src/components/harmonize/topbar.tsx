@@ -207,7 +207,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
           />
         </label>
 
-        {user?.role === "ADMIN" ? <Button className="hidden bg-[#5147dc] lg:inline-flex" size="sm" onClick={onDashboard}>
+        {user?.role === "ADMIN" ? <Button className="hidden lg:inline-flex" size="sm" onClick={onDashboard}>
           <Sparkles className="h-3.5 w-3.5" />
           Resumo do dia
         </Button> : null}

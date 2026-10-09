@@ -23,7 +23,7 @@ type Notice = { tone: "success" | "info"; text: string } | null;
 export type SavedEvaluation = { id: string; professional: string; createdAt: string; updatedAt: string; photoCount: number };
 type ConfirmAction = { type: "photo"; photoId: string; photoName: string } | { type: "clear" } | null;
 
-export function PhotoEditor({ patientId, journeyId, evaluationId, patientName, onSaved }: { patientId: string; journeyId?: string; evaluationId?: string; patientName: string; onSaved?: (evaluation: SavedEvaluation) => void }) {
+export function PhotoEditor({ patientId, evaluationId, patientName, onSaved }: { patientId: string; evaluationId?: string; patientName: string; onSaved?: (evaluation: SavedEvaluation) => void }) {
   const [currentEvaluationId, setCurrentEvaluationId] = useState(evaluationId);
   const evaluationCacheKey = evaluationId ? `/api/patients/${patientId}/evaluation?evaluationId=${encodeURIComponent(evaluationId)}` : null;
   const cachedEvaluation = evaluationCacheKey ? readClientCache<{ evaluation?: { photos?: EvaluationPhoto[] } | null }>(evaluationCacheKey) : null;
@@ -210,7 +210,7 @@ export function PhotoEditor({ patientId, journeyId, evaluationId, patientName, o
       const response = await fetch(`/api/patients/${patientId}/evaluation`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ evaluationId: currentEvaluationId, journeyId, photos }),
+        body: JSON.stringify({ evaluationId: currentEvaluationId, photos }),
       });
       const data = await response.json().catch(() => ({})) as { evaluation?: SavedEvaluation };
       if (!response.ok || !data.evaluation) throw new Error("Não foi possível salvar a avaliação.");

@@ -28,6 +28,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MaskedInput } from "@/components/ui/masked-input";
 import {
   DetailCard,
+  DateRangeFilter,
   EmptyState,
   CountUpValue,
   LoadingSkeleton,
@@ -629,7 +630,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
             ))}
           </div>
           <Button variant="secondary" size="icon" aria-label="Selecionar data" title="Selecionar data"><CalendarDays className="h-4 w-4" /></Button>
-          <select className="min-w-0 flex-1 rounded-[7px] border border-[#dddfea] bg-white px-3 py-2 text-xs font-semibold text-[#555668] outline-none focus:border-[#5147dc] sm:min-w-[170px] sm:flex-none" value={activeProfessional} onChange={(event) => setProfessional(event.target.value)} aria-label="Filtrar por profissional">
+          <select className={cn(fieldClassName, "min-w-0 flex-1 text-xs sm:min-w-[170px] sm:flex-none")} value={activeProfessional} onChange={(event) => setProfessional(event.target.value)} aria-label="Filtrar por profissional">
             {professionalOptions.map((item) => <option key={item}>{item}</option>)}
           </select>
         </div>
@@ -1187,23 +1188,29 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
 }
 
 export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
-  type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null };
+  type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; createdAt?: string; patient?: { name: string } | null };
+  type QuoteRow = Quote & { createdAt?: string };
   type QuoteOptions = { patients?: Array<{ id: string; name: string; cpf: string | null }>; procedures?: Array<{ id: string; name: string; price: number }> };
   const cachedQuotes = readClientCache<{ quotes?: ApiQuote[] }>("/api/quotes");
   const cachedQuoteOptions = readClientCache<QuoteOptions>("/api/quotes/options");
-  const [quoteRows, setQuoteRows] = useState<Quote[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade" })));
+  const [quoteRows, setQuoteRows] = useState<QuoteRow[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
   const [isLoading, setIsLoading] = useState(!cachedQuotes);
   const [isSaving, setIsSaving] = useState(false);
   const [quotePatients, setQuotePatients] = useState(cachedQuoteOptions?.patients ?? []);
   const [quoteProcedures, setQuoteProcedures] = useState(cachedQuoteOptions?.procedures ?? []);
   const [optionsLoading, setOptionsLoading] = useState(!cachedQuoteOptions);
   const [patientQuery, setPatientQuery] = useState("");
+  const [quoteSearch, setQuoteSearch] = useState("");
+  const [itemSearch, setItemSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("Todos");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [selectedPatientId, setSelectedPatientId] = useState("");
   const [selectedProcedureNames, setSelectedProcedureNames] = useState<string[]>([]);
 
   useEffect(() => {
     getCachedJson<{ quotes?: ApiQuote[] }>("/api/quotes").then((data) => {
-      setQuoteRows((data.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade" })));
+      setQuoteRows((data.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
       setIsLoading(false);
     }).catch(() => setIsLoading(false));
   }, []);
@@ -1218,6 +1225,16 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
 
   const matchingQuotePatients = quotePatients.filter((patient) => `${patient.name} ${patient.cpf ?? ""}`.toLowerCase().includes(patientQuery.toLowerCase()));
   const suggestedTotal = selectedProcedureNames.reduce((total, name) => total + (quoteProcedures.find((procedure) => procedure.name === name)?.price ?? 0), 0);
+  const visibleQuotes = quoteRows.filter((quote) => {
+    const normalizedName = quoteSearch.trim().toLocaleLowerCase("pt-BR");
+    const normalizedItems = itemSearch.trim().toLocaleLowerCase("pt-BR");
+    const creationDate = quote.createdAt?.slice(0, 10) ?? "";
+    return (!normalizedName || quote.patient.toLocaleLowerCase("pt-BR").includes(normalizedName))
+      && (!normalizedItems || quote.items.toLocaleLowerCase("pt-BR").includes(normalizedItems))
+      && (statusFilter === "Todos" || quote.status === statusFilter)
+      && (!dateFrom || (creationDate && creationDate >= dateFrom))
+      && (!dateTo || (creationDate && creationDate <= dateTo));
+  });
 
   async function saveQuote(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patient = quotePatients.find((item) => item.id === selectedPatientId)?.name ?? "Paciente";
@@ -1227,16 +1244,15 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     const data = await response.json() as { quote: { id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null } };
     const item = data.quote;
     invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
-    setQuoteRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade" }, ...current]);
+    setQuoteRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: new Date().toISOString() }, ...current]);
     setPatientQuery(""); setSelectedPatientId(""); setSelectedProcedureNames([]);
     onCreateClose(); onSaved?.(`Orçamento de ${patient} foi criado.`);
   }
 
-  async function sendQuote(index: number) {
-    const quote = quoteRows[index];
+  async function sendQuote(quote: QuoteRow) {
     if (!quote.id) return;
     await fetch(`/api/quotes/${quote.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Enviado" }) });
-    setQuoteRows((current) => current.map((item, currentIndex) => currentIndex === index ? { ...item, status: "Enviado" } : item));
+    setQuoteRows((current) => current.map((item) => item.id === quote.id ? { ...item, status: "Enviado" } : item));
     invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
     onSaved?.("Orçamento marcado como enviado.");
   }
@@ -1249,17 +1265,28 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
         action="Novo orçamento"
         onAction={onCreateOpen}
       />
-      {isLoading ? <LoadingTable columns={6} /> : <MiniTable
+      <SearchFilterBar
+          placeholder="Pesquisar por nome do paciente"
+          value={quoteSearch}
+          onChange={setQuoteSearch}
+          showFilter={false}
+          trailing={<DateRangeFilter startDate={dateFrom} endDate={dateTo} onStartDateChange={setDateFrom} onEndDateChange={setDateTo} />}
+      />
+      <div className="mb-4 flex flex-wrap items-end gap-3" aria-label="Filtros de orçamentos">
+        <label className="grid gap-1 text-xs font-semibold text-[#68697b]">Procedimento<select className={fieldClassName} value={itemSearch} onChange={(event) => setItemSearch(event.target.value)}><option value="">Todos os procedimentos</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name}</option>)}</select></label>
+        <label className="grid gap-1 text-xs font-semibold text-[#68697b]">Status<select className={fieldClassName} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option>Todos</option>{[...new Set(quoteRows.map((quote) => quote.status))].sort().map((status) => <option key={status}>{status}</option>)}</select></label>
+      </div>
+      {isLoading ? <LoadingTable columns={6} /> : visibleQuotes.length ? <MiniTable
         columns={["Paciente", "Itens", "Total", "Status", "Validade", "Ação"]}
-        rows={quoteRows.map((quote, index) => [
+        rows={visibleQuotes.map((quote) => [
           <strong className="text-[#121733]" key={quote.patient}>{quote.patient}</strong>,
           quote.items,
           <span className="font-black text-[#1438ff]" key={quote.total}>{quote.total}</span>,
           <StatusBadge key={quote.status} status={quote.status} />,
           quote.expires,
-          <Button key="send" size="sm" variant="secondary" disabled={quote.status === "Enviado"} onClick={() => sendQuote(index)}>{quote.status === "Enviado" ? "Enviado" : "Enviar"}</Button>,
+          <Button key="send" size="sm" variant="secondary" disabled={quote.status === "Enviado"} onClick={() => sendQuote(quote)}>{quote.status === "Enviado" ? "Enviado" : "Enviar"}</Button>,
         ])}
-      />}
+      /> : <EmptyState title="Nenhum orçamento encontrado" description="Ajuste os filtros ou a pesquisa para encontrar orçamentos." />}
       <Modal open={openCreate} onClose={onCreateClose} title="Novo orçamento" description="Crie uma proposta comercial para o cliente.">
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveQuote}>
           <div className="relative sm:col-span-2">
@@ -1340,11 +1367,7 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
             {selected ? <Check className="h-4 w-4" /> : null}
           </button>;
         })}
-        <div className="ml-0 flex flex-wrap items-end gap-3 sm:ml-auto">
-          <label className="flex flex-col gap-1.5 text-xs font-bold uppercase text-[#8c8d9f]">De<input className="h-11 min-w-[180px] rounded-[8px] border border-[#dddfea] bg-white px-3.5 text-sm font-semibold normal-case text-[#65708b] outline-none transition-colors focus:border-[#5147dc] focus:ring-2 focus:ring-[#5147dc]/15" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
-          <label className="flex flex-col gap-1.5 text-xs font-bold uppercase text-[#8c8d9f]">Até<input className="h-11 min-w-[180px] rounded-[8px] border border-[#dddfea] bg-white px-3.5 text-sm font-semibold normal-case text-[#65708b] outline-none transition-colors focus:border-[#5147dc] focus:ring-2 focus:ring-[#5147dc]/15" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>
-          {dateFrom || dateTo ? <button className="hp-pressable h-11 rounded-[8px] px-3 text-xs font-bold text-[#65708b] hover:text-[#5147dc]" type="button" onClick={() => { setDateFrom(""); setDateTo(""); }}>Limpar datas</button> : null}
-        </div>
+        <div className="ml-0 sm:ml-auto"><DateRangeFilter startDate={dateFrom} endDate={dateTo} onStartDateChange={setDateFrom} onEndDateChange={setDateTo} /></div>
       </div>
       {isLoading ? <LoadingTable columns={6} /> : <MiniTable
         columns={["Paciente", "Valor", "Forma", "Data", "Status", "Parcelamento"]}
@@ -1494,7 +1517,7 @@ export function ReportsSection() {
 
 type TeamMember = { id: string; role: string; isOwner: boolean; user: { id: string; name: string; email: string; createdAt: string } };
 
-export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, onClinicNameChange }: { isAdmin?: boolean; isOwner?: boolean; clinicName?: string; onClinicNameChange?: (name: string) => void }) {
+export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, onClinicNameChange, mode = "settings" }: { isAdmin?: boolean; isOwner?: boolean; clinicName?: string; onClinicNameChange?: (name: string) => void; mode?: "settings" | "calculator" }) {
   const [editing, setEditing] = useState<string | null>(null);
   const cachedTeam = readClientCache<{ members?: TeamMember[] }>("/api/team");
   const [members, setMembers] = useState<TeamMember[]>(cachedTeam?.members ?? []);
@@ -1504,7 +1527,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
   const [memberToRemove, setMemberToRemove] = useState<TeamMember | null>(null);
   const [memberRemoving, setMemberRemoving] = useState(false);
   const [memberRemoveError, setMemberRemoveError] = useState("");
-  const cachedCostSettings = readClientCache<{ settings?: { name?: string; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string } }>("/api/clinic/cost-settings");
+  const cachedCostSettings = readClientCache<{ settings?: { name?: string; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings");
   const [costSettings, setCostSettings] = useState(() => ({
     laborCost: cachedCostSettings?.settings?.laborCost ?? 0,
     facilityCost: cachedCostSettings?.settings?.facilityCost ?? 0,
@@ -1512,6 +1535,9 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
     appointmentToleranceMinutes: cachedCostSettings?.settings?.appointmentToleranceMinutes ?? 15,
     openingTime: cachedCostSettings?.settings?.openingTime ?? "08:00",
     closingTime: cachedCostSettings?.settings?.closingTime ?? "19:00",
+    professionalOpeningTime: cachedCostSettings?.settings?.professionalOpeningTime ?? "09:00",
+    professionalClosingTime: cachedCostSettings?.settings?.professionalClosingTime ?? "18:00",
+    professionalHourlyCost: cachedCostSettings?.settings?.professionalHourlyCost ?? 0,
   }));
   const [costSettingsLoading, setCostSettingsLoading] = useState(!cachedCostSettings);
   const [costSettingsSaving, setCostSettingsSaving] = useState(false);
@@ -1519,6 +1545,9 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
   const [appointmentToleranceInput, setAppointmentToleranceInput] = useState(String(costSettings.appointmentToleranceMinutes ?? 15));
   const [openingTimeInput, setOpeningTimeInput] = useState(costSettings.openingTime ?? "08:00");
   const [closingTimeInput, setClosingTimeInput] = useState(costSettings.closingTime ?? "19:00");
+  const [professionalOpeningTimeInput, setProfessionalOpeningTimeInput] = useState(costSettings.professionalOpeningTime);
+  const [professionalClosingTimeInput, setProfessionalClosingTimeInput] = useState(costSettings.professionalClosingTime);
+  const [professionalHourlyCostInput, setProfessionalHourlyCostInput] = useState(String(costSettings.professionalHourlyCost));
   const [clinicNameInput, setClinicNameInput] = useState(cachedCostSettings?.settings?.name ?? clinicName ?? "Harmonize+");
 
   useEffect(() => {
@@ -1529,7 +1558,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
   }, []);
 
   useEffect(() => {
-    getCachedJson<{ settings?: { name?: string; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string } }>("/api/clinic/cost-settings")
+    getCachedJson<{ settings?: { name?: string; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings")
       .then((data) => {
         const settings = data.settings ?? { laborCost: 0, facilityCost: 0, medicationCost: 0, appointmentToleranceMinutes: 15, openingTime: "08:00", closingTime: "19:00" };
         setCostSettings(settings);
@@ -1537,6 +1566,9 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
         setAppointmentToleranceInput(String(settings.appointmentToleranceMinutes));
         setOpeningTimeInput(settings.openingTime ?? "08:00");
         setClosingTimeInput(settings.closingTime ?? "19:00");
+        setProfessionalOpeningTimeInput(settings.professionalOpeningTime ?? "09:00");
+        setProfessionalClosingTimeInput(settings.professionalClosingTime ?? "18:00");
+        setProfessionalHourlyCostInput(String(settings.professionalHourlyCost ?? 0));
       })
       .catch(() => setCostSettingsError("Não foi possível carregar os custos da clínica."))
       .finally(() => setCostSettingsLoading(false));
@@ -1552,6 +1584,9 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       facilityCost: form.has("facilityCost") ? parseCurrency(form.get("facilityCost")) : costSettings.facilityCost,
       medicationCost: form.has("medicationCost") ? parseCurrency(form.get("medicationCost")) : costSettings.medicationCost,
       appointmentToleranceMinutes: parseInteger(appointmentToleranceInput),
+      professionalHourlyCost: form.has("professionalHourlyCost") ? parseCurrency(form.get("professionalHourlyCost")) : costSettings.professionalHourlyCost,
+      professionalOpeningTime: form.has("professionalOpeningTime") ? String(form.get("professionalOpeningTime")) : professionalOpeningTimeInput,
+      professionalClosingTime: form.has("professionalClosingTime") ? String(form.get("professionalClosingTime")) : professionalClosingTimeInput,
       ...(editing === "Clínica" ? { name: clinicNameInput.trim(), openingTime: openingTimeInput, closingTime: closingTimeInput } : {}),
     };
     const response = await fetch("/api/clinic/cost-settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(nextSettings) });
@@ -1575,15 +1610,22 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       facilityCost: data.settings?.facilityCost ?? current.facilityCost,
       medicationCost: data.settings?.medicationCost ?? current.medicationCost,
       appointmentToleranceMinutes: data.settings?.appointmentToleranceMinutes ?? current.appointmentToleranceMinutes,
+      professionalHourlyCost: data.settings?.professionalHourlyCost ?? current.professionalHourlyCost,
+      professionalOpeningTime: data.settings?.professionalOpeningTime ?? current.professionalOpeningTime,
+      professionalClosingTime: data.settings?.professionalClosingTime ?? current.professionalClosingTime,
       openingTime: data.settings?.openingTime ?? current.openingTime,
       closingTime: data.settings?.closingTime ?? current.closingTime,
     }));
+    setProfessionalHourlyCostInput(String(data.settings.professionalHourlyCost ?? costSettings.professionalHourlyCost));
     if (data.settings.name) {
       setClinicNameInput(data.settings.name);
       onClinicNameChange?.(data.settings.name);
     }
     invalidateClientCache("/api/clinic/cost-settings", "/api/quotes/options");
   }
+
+  const professionalShiftMinutes = Math.max(0, (Number(professionalClosingTimeInput.slice(0, 2)) * 60 + Number(professionalClosingTimeInput.slice(3, 5))) - (Number(professionalOpeningTimeInput.slice(0, 2)) * 60 + Number(professionalOpeningTimeInput.slice(3, 5))));
+  const professionalShiftCost = (professionalShiftMinutes / 60) * (Number(professionalHourlyCostInput) || 0);
 
   async function saveCollaborator(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1640,6 +1682,58 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
     setMemberToRemove(null);
   }
 
+  if (mode === "calculator") {
+    return (
+      <div className="mx-auto w-full max-w-3xl space-y-6">
+        <header className="rounded-xl bg-gradient-to-br from-[#101a43] via-[#18285a] to-[#5147dc] px-6 py-8 text-center text-white shadow-[0_16px_36px_rgba(27,39,93,0.18)] sm:px-10 sm:py-10">
+          <div className="mx-auto grid h-12 w-12 place-items-center rounded-xl border border-white/20 bg-white/10">
+            <CircleDollarSign className="h-6 w-6" />
+          </div>
+          <h2 className="mt-4 text-2xl font-black tracking-tight">Calculadora de custos</h2>
+          <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-white/80">Defina os custos dos seus procedimentos para maior margem de lucro e autonomia nos seus atendimentos.</p>
+        </header>
+        <Card className="overflow-hidden border-[#e6e9f2] shadow-[0_12px_32px_rgba(27,39,93,0.07)]">
+          <div className="border-b border-[#eceef5] px-5 py-5 sm:px-7">
+            <h3 className="font-bold text-[#171b35]">Custos e parâmetros</h3>
+            <p className="mt-1 text-sm text-[#73778d]">Os valores abaixo são aplicados automaticamente aos novos orçamentos.</p>
+          </div>
+          <form className="grid gap-5 p-5 sm:grid-cols-2 sm:p-7" onSubmit={saveCostSettings}>
+            <div className="space-y-4 rounded-lg border border-[#e9ebf3] p-4 sm:col-span-2 sm:p-5">
+              <div>
+                <h4 className="text-sm font-bold text-[#171b35]">Horário e custo do profissional</h4>
+                <p className="mt-1 text-xs leading-5 text-[#73778d]">Informe a jornada diária e o valor da hora para acompanhar o custo estimado do profissional.</p>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <FormField label="Início do expediente"><input className={fieldClassName} name="professionalOpeningTime" type="time" value={professionalOpeningTimeInput} onChange={(event) => setProfessionalOpeningTimeInput(event.target.value)} required /></FormField>
+                <FormField label="Fim do expediente"><input className={fieldClassName} name="professionalClosingTime" type="time" value={professionalClosingTimeInput} onChange={(event) => setProfessionalClosingTimeInput(event.target.value)} required /></FormField>
+                <FormField label="Custo por hora do profissional"><input className={fieldClassName} name="professionalHourlyCost" type="number" min="0" step="0.01" value={professionalHourlyCostInput} onChange={(event) => setProfessionalHourlyCostInput(event.target.value)} placeholder="0,00" /></FormField>
+                <div className="flex items-end">
+                  <div className="w-full rounded-md bg-[#f5f6ff] px-4 py-3">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#73778d]">Custo estimado por expediente</p>
+                    <p className="mt-1 text-lg font-black text-[#5147dc]">{currency.format(professionalShiftCost)}</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="rounded-lg bg-[#f7f8fc] p-4 sm:col-span-2">
+              <FormField label="Tolerância para marcar falta (minutos)">
+                <input className={fieldClassName} name="appointmentToleranceMinutes" type="number" min="0" max="180" value={appointmentToleranceInput} onChange={(event) => setAppointmentToleranceInput(event.target.value)} required />
+              </FormField>
+              <p className="mt-2 text-xs leading-5 text-[#73778d]">O atendimento só será marcado como falta depois desse período.</p>
+            </div>
+            {costSettingsLoading ? <div className="space-y-3 sm:col-span-2"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : <>
+              <FormField label="Mão de obra / Honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField>
+              <FormField label="Sala / Estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField>
+              <FormField label="Anestésico / Medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField>
+            </>}
+            {costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{costSettingsError}</p> : null}
+            <div className="flex justify-end border-t border-[#eceef5] pt-5 sm:col-span-2"><Button className="min-w-36" disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div>
+          </form>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div>
       <SectionIntro
@@ -1650,7 +1744,6 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
         {[
           ["Clínica", "Nome, CNPJ, endereço e dados comerciais."],
           ["Profissionais", "Perfis, agenda, permissões e assinatura visual."],
-          ["Cálculo de custos", "Unidades, arredondamentos e regras de margem."],
         ].map(([title, description]) => (
           <button className={cn("settings-option hp-pressable text-left", title === "Profissionais" && !isAdmin && "cursor-not-allowed opacity-60")} key={title} onClick={() => { if (title === "Profissionais" && !isAdmin) return; setEditing(title); }}><Card className="settings-option-card h-full p-5 transition-colors">
             <Sparkles className="mb-4 h-5 w-5 text-[#1438ff]" />

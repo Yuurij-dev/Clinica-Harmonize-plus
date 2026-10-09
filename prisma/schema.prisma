@@ -37,6 +37,9 @@ model Clinic {
   appointmentToleranceMinutes Int                @default(15)
   openingTime                 String             @default("08:00")
   closingTime                 String             @default("19:00")
+  professionalOpeningTime     String             @default("09:00")
+  professionalClosingTime     String             @default("18:00")
+  professionalHourlyCost      Float              @default(0)
   trialStartedAt              DateTime?          @db.Timestamptz(6)
   trialEndsAt                 DateTime?          @db.Timestamptz(6)
   createdAt                   DateTime           @default(now()) @db.Timestamptz(6)
@@ -173,7 +176,7 @@ model Evaluation {
   clinicId  String?
   patientId String
   journeyId String?
-  professional String          @default("")
+  professional String        @default("")
   createdAt DateTime          @default(now()) @db.Timestamptz(6)
   updatedAt DateTime          @default(now()) @updatedAt @db.Timestamptz(6)
   patient   Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
