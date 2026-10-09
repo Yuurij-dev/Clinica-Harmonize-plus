@@ -33,6 +33,7 @@ const sectionPaths: Record<SectionId, string> = {
   pagamentos: "/pagamentos",
   financeiro: "/financeiro",
   relatorios: "/relatorios",
+  calculadora: "/calculadora",
   configuracoes: "/configuracoes",
 };
 
@@ -134,6 +135,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
           {active === "pagamentos" && isAdmin ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => openCreate("pagamentos", "payment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {active === "financeiro" && isAdmin ? <FinanceSection /> : null}
           {active === "relatorios" && isAdmin ? <ReportsSection /> : null}
+          {active === "calculadora" && isAdmin ? <SettingsSection mode="calculator" /> : null}
           {active === "configuracoes" && isAdmin ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
         </main>
       </div>

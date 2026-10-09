@@ -1,4 +1,4 @@
-import { CalendarDays, CreditCard, FileText, Home, Sparkles, Users } from "lucide-react";
+import { Calculator, CalendarDays, CreditCard, FileText, Home, Users } from "lucide-react";
 import type { SectionId } from "@/types/clinic";
 import { cn } from "@/lib/utils";
 
@@ -7,7 +7,7 @@ const mobileItems: { id: SectionId; label: string; icon: typeof Home }[] = [
   { id: "agenda", label: "Agenda", icon: CalendarDays },
   { id: "clientes", label: "Clientes", icon: Users },
   { id: "orcamentos", label: "Orçamentos", icon: FileText },
-  { id: "procedimentos", label: "Custos", icon: Sparkles },
+  { id: "calculadora", label: "Calculadora", icon: Calculator },
   { id: "pagamentos", label: "Pagto.", icon: CreditCard },
 ];
 

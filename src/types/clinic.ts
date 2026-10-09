@@ -9,6 +9,7 @@ export type SectionId =
   | "pagamentos"
   | "financeiro"
   | "relatorios"
+  | "calculadora"
   | "configuracoes";
 
 export type NavItem = {
