@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, CirclePlus, FileDown, Info, LoaderCircle, Plus, Save, WalletCards } from "lucide-react";
+import { CalendarPlus, Check, ChevronDown, CirclePlus, FileDown, Info, LoaderCircle, Save, WalletCards } from "lucide-react";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -65,7 +65,7 @@ export function PatientExpenses({ patientId, journeyId, onPaid, onPaymentUndone 
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><h3 className="text-sm font-bold text-[#27283b]">Orçamentos</h3><p className="mt-0.5 text-[10px] text-[#858696]">Clique em um orçamento para abrir a calculadora.</p></div>
-        <Button type="button" disabled={creatingQuote || !patientId} onClick={startNewQuote}><Plus className="h-4 w-4" />Adicionar orçamento</Button>
+        <Button type="button" variant="outline" disabled={creatingQuote || !patientId} onClick={startNewQuote}><CalendarPlus className="h-4 w-4" />Adicionar orçamento</Button>
       </div>
       {creatingQuote ? (
         <ListAccordion title="Novo orçamento" subtitle={new Date().toLocaleDateString("pt-BR")} open onToggle={() => { setCreatingQuote(false); setOpenQuoteId(null); }}>
