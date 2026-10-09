@@ -618,15 +618,17 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
           <h3 className="ml-2 truncate text-base font-bold capitalize text-[#303144]">{calendarPeriodLabel(calendarDate, activeView)}</h3>
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
-          <div className="flex w-full min-w-0 basis-full flex-1 items-center rounded-[7px] border border-[#e1e2ec] bg-white p-0.5 sm:w-auto sm:basis-auto sm:flex-none">
+          <div className="flex w-full min-w-0 basis-full flex-1 flex-wrap items-center gap-2 sm:w-auto sm:basis-auto sm:flex-none">
             {["Semana", "Dia", "Mês"].map((view) => (
-              <button
-                className={cn("hp-pressable min-w-0 flex-1 rounded-[5px] px-3 py-2 text-xs font-semibold transition-colors sm:flex-none sm:px-4", activeView === view ? "bg-[#5147dc] text-white shadow-sm" : "text-[#77798c] hover:text-[#5147dc]")}
+              <Button
+                className="min-w-0 flex-1 sm:flex-none"
                 key={view}
                 onClick={() => setActiveView(view as "Dia" | "Semana" | "Mês")}
+                size="sm"
+                variant={activeView === view ? "primary" : "secondary"}
               >
                 {view}
-              </button>
+              </Button>
             ))}
           </div>
           <Button variant="secondary" size="icon" aria-label="Selecionar data" title="Selecionar data"><CalendarDays className="h-4 w-4" /></Button>
@@ -1355,17 +1357,19 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
       <div className="mb-4 flex flex-wrap items-end gap-3" aria-label="Filtros de pagamentos">
         {['Pix', 'Cartão de crédito', 'Cartão de débito', 'Dinheiro'].map((method) => {
           const selected = methodFilter === method;
-          return <button
+          return <Button
             aria-pressed={selected}
-            className={`hp-pressable flex items-center gap-2 rounded-full border px-4 py-2.5 text-sm font-bold transition-colors ${selected ? "border-[#5147dc] bg-[#5147dc] text-white" : "border-[#dddfea] bg-white text-[#65708b] hover:border-[#5147dc] hover:text-[#5147dc]"}`}
+            className="h-10"
             key={method}
             onClick={() => setMethodFilter(selected ? "Todos" : method)}
+            size="default"
             type="button"
+            variant={selected ? "primary" : "secondary"}
           >
             <CircleDollarSign className="h-4 w-4" />
             {method}
             {selected ? <Check className="h-4 w-4" /> : null}
-          </button>;
+          </Button>;
         })}
         <div className="ml-0 sm:ml-auto"><DateRangeFilter startDate={dateFrom} endDate={dateTo} onStartDateChange={setDateFrom} onEndDateChange={setDateTo} /></div>
       </div>
@@ -1410,7 +1414,7 @@ export function FinanceSection() {
       />
       <div className="mb-6 flex flex-wrap gap-2">
         {["Hoje", "Semana", "Mês", "Período personalizado"].map((period) => (
-          <Button key={period} variant={activePeriod === period ? "dark" : "secondary"} onClick={() => setActivePeriod(period)}>
+          <Button key={period} variant={activePeriod === period ? "primary" : "secondary"} onClick={() => setActivePeriod(period)}>
             {period}
           </Button>
         ))}
