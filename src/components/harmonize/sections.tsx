@@ -1192,7 +1192,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
 export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
   type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; createdAt?: string; patient?: { name: string } | null };
   type QuoteRow = Quote & { createdAt?: string };
-  type QuoteOptions = { patients?: Array<{ id: string; name: string; cpf: string | null }>; procedures?: Array<{ id: string; name: string; price: number }> };
+  type QuoteOptions = { patients?: Array<{ id: string; name: string; cpf: string | null }>; procedures?: Array<{ id: string; name: string; price: number }>; costs?: { laborCost: number; facilityCost: number; medicationCost: number } };
   const cachedQuotes = readClientCache<{ quotes?: ApiQuote[] }>("/api/quotes");
   const cachedQuoteOptions = readClientCache<QuoteOptions>("/api/quotes/options");
   const [quoteRows, setQuoteRows] = useState<QuoteRow[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
@@ -1200,6 +1200,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
   const [isSaving, setIsSaving] = useState(false);
   const [quotePatients, setQuotePatients] = useState(cachedQuoteOptions?.patients ?? []);
   const [quoteProcedures, setQuoteProcedures] = useState(cachedQuoteOptions?.procedures ?? []);
+  const [quoteCosts, setQuoteCosts] = useState(cachedQuoteOptions?.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
   const [optionsLoading, setOptionsLoading] = useState(!cachedQuoteOptions);
   const [patientQuery, setPatientQuery] = useState("");
   const [quoteSearch, setQuoteSearch] = useState("");
@@ -1221,12 +1222,15 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     getCachedJson<QuoteOptions>("/api/quotes/options").then((data) => {
       setQuotePatients(data.patients ?? []);
       setQuoteProcedures(data.procedures ?? []);
+      setQuoteCosts(data.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
       setOptionsLoading(false);
     }).catch(() => setOptionsLoading(false));
   }, []);
 
   const matchingQuotePatients = quotePatients.filter((patient) => `${patient.name} ${patient.cpf ?? ""}`.toLowerCase().includes(patientQuery.toLowerCase()));
-  const suggestedTotal = selectedProcedureNames.reduce((total, name) => total + (quoteProcedures.find((procedure) => procedure.name === name)?.price ?? 0), 0);
+  const procedureSubtotal = selectedProcedureNames.reduce((total, name) => total + (quoteProcedures.find((procedure) => procedure.name === name)?.price ?? 0), 0);
+  const clinicCostsTotal = quoteCosts.laborCost + quoteCosts.facilityCost + quoteCosts.medicationCost;
+  const suggestedTotal = procedureSubtotal + clinicCostsTotal;
   const visibleQuotes = quoteRows.filter((quote) => {
     const normalizedName = quoteSearch.trim().toLocaleLowerCase("pt-BR");
     const normalizedItems = itemSearch.trim().toLocaleLowerCase("pt-BR");
@@ -1263,7 +1267,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     <div>
       <SectionIntro
         title="Orçamentos"
-        description="Propostas associadas ao paciente com status comercial e total calculado por procedimento."
+        description="Propostas associadas ao paciente, com os preços dos procedimentos e os custos padrão definidos na Calculadora."
         action="Novo orçamento"
         onAction={onCreateOpen}
       />
@@ -1302,7 +1306,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
           </div>
           <FormField label="Validade"><MaskedInput className={fieldClassName} formatter={formatDate} name="expires" inputMode="numeric" maxLength={10} placeholder="30/09/2026" required /></FormField>
           <div className="sm:col-span-2"><FormField label="Procedimentos"><div className="flex min-h-10 flex-wrap gap-1.5 rounded-[7px] border border-[#dddfea] bg-white p-2">{selectedProcedureNames.map((name) => <span className="flex items-center gap-1 rounded-full bg-[#f0efff] px-2 py-1 text-[10px] font-bold text-[#5147dc]" key={name}>{name}<button className="text-[#5147dc] hover:text-[#b42318]" type="button" onClick={() => setSelectedProcedureNames((current) => current.filter((item) => item !== name))}>×</button></span>)}<select className="min-w-[150px] flex-1 bg-transparent text-xs font-semibold text-[#858696] outline-none" value="" disabled={optionsLoading || !quoteProcedures.length} onChange={(event) => { if (event.target.value) setSelectedProcedureNames((current) => current.includes(event.target.value) ? current : [...current, event.target.value]); }}><option value="">{optionsLoading ? "Carregando procedimentos..." : quoteProcedures.length ? "Adicionar procedimento" : "Nenhum procedimento cadastrado"}</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name} · {currency.format(procedure.price)}</option>)}</select></div><input className="sr-only" name="items" value={selectedProcedureNames.join(", ")} readOnly required /></FormField></div>
-          <div className="sm:col-span-2"><FormField label="Valor total"><MaskedInput key={selectedProcedureNames.join("|")} className={fieldClassName} formatter={formatCurrency} name="total" inputMode="decimal" defaultValue={suggestedTotal ? currency.format(suggestedTotal) : ""} placeholder="R$ 0,00" required /></FormField></div>
+          <div className="sm:col-span-2"><FormField label="Valor total"><MaskedInput key={selectedProcedureNames.join("|")} className={fieldClassName} formatter={formatCurrency} name="total" inputMode="decimal" defaultValue={suggestedTotal ? currency.format(suggestedTotal) : ""} placeholder="R$ 0,00" required /></FormField><p className="mt-1 text-[10px] text-[#858696]">Inclui {currency.format(procedureSubtotal)} em procedimentos e {currency.format(clinicCostsTotal)} em custos padrão da Calculadora.</p></div>
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || optionsLoading || !selectedPatientId || !selectedProcedureNames.length} type="submit">{isSaving ? "Salvando..." : "Salvar orçamento"}</Button></div>
         </form>
       </Modal>
@@ -1637,11 +1641,11 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       onClinicNameChange?.(data.settings.name);
     }
     invalidateClientCache("/api/clinic/cost-settings", "/api/quotes/options");
+    if (editing === "Agenda") setEditing(null);
   }
 
   const professionalShiftMinutes = Math.max(0, (Number(professionalClosingTimeInput.slice(0, 2)) * 60 + Number(professionalClosingTimeInput.slice(3, 5))) - (Number(professionalOpeningTimeInput.slice(0, 2)) * 60 + Number(professionalOpeningTimeInput.slice(3, 5))));
   const professionalShiftCost = (professionalShiftMinutes / 60) * (Number(professionalHourlyCostInput) || 0);
-
   async function saveCollaborator(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setTeamSaving(true);
@@ -1699,52 +1703,59 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
 
   if (mode === "calculator") {
     return (
-      <div className="mx-auto w-full max-w-3xl space-y-6">
-        <header className="rounded-xl bg-gradient-to-br from-[#101a43] via-[#18285a] to-[#5147dc] px-6 py-8 text-center text-white shadow-[0_16px_36px_rgba(27,39,93,0.18)] sm:px-10 sm:py-10">
-          <div className="mx-auto grid h-12 w-12 place-items-center rounded-xl border border-white/20 bg-white/10">
-            <CircleDollarSign className="h-6 w-6" />
-          </div>
-          <h2 className="mt-4 text-2xl font-black tracking-tight">Calculadora de custos</h2>
-          <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-white/80">Defina os custos dos seus procedimentos para maior margem de lucro e autonomia nos seus atendimentos.</p>
+      <div className="mx-auto flex min-h-[calc(100vh-9rem)] w-full max-w-4xl flex-col justify-center gap-5">
+        <header className="hp-page-enter mb-1 text-center">
+          <h2 className="text-lg font-bold text-primary">Calculadora de custos</h2>
+          <p className="mx-auto mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">Defina os custos dos seus procedimentos. Esses valores serão considerados nos novos orçamentos.</p>
         </header>
-        <Card className="overflow-hidden border-[#e6e9f2] shadow-[0_12px_32px_rgba(27,39,93,0.07)]">
-          <div className="border-b border-[#eceef5] px-5 py-5 sm:px-7">
-            <h3 className="font-bold text-[#171b35]">Custos e parâmetros</h3>
-            <p className="mt-1 text-sm text-[#73778d]">Os valores abaixo são aplicados automaticamente aos novos orçamentos.</p>
-          </div>
-          <form className="grid gap-5 p-5 sm:grid-cols-2 sm:p-7" onSubmit={saveCostSettings}>
-            <div className="space-y-4 rounded-lg border border-[#e9ebf3] p-4 sm:col-span-2 sm:p-5">
+        <form className="space-y-4" onSubmit={saveCostSettings}>
+          <Card>
+            <CardHeader className="border-b border-border/70 text-center">
               <div>
-                <h4 className="text-sm font-bold text-[#171b35]">Horário e custo do profissional</h4>
-                <p className="mt-1 text-xs leading-5 text-[#73778d]">Informe a jornada diária e o valor da hora para acompanhar o custo estimado do profissional.</p>
+                <CardTitle>Custo do profissional</CardTitle>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">Informe o horário de trabalho e o valor da hora para estimar o custo diário.</p>
               </div>
-              <div className="grid gap-4 sm:grid-cols-2">
+            </CardHeader>
+            <CardContent className="mx-auto w-full max-w-3xl space-y-4 pt-4">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <FormField label="Início do expediente"><input className={fieldClassName} name="professionalOpeningTime" type="time" value={professionalOpeningTimeInput} onChange={(event) => setProfessionalOpeningTimeInput(event.target.value)} required /></FormField>
                 <FormField label="Fim do expediente"><input className={fieldClassName} name="professionalClosingTime" type="time" value={professionalClosingTimeInput} onChange={(event) => setProfessionalClosingTimeInput(event.target.value)} required /></FormField>
-                <FormField label="Custo por hora do profissional"><input className={fieldClassName} name="professionalHourlyCost" type="number" min="0" step="0.01" value={professionalHourlyCostInput} onChange={(event) => setProfessionalHourlyCostInput(event.target.value)} placeholder="0,00" /></FormField>
-                <div className="flex items-end">
-                  <div className="w-full rounded-md bg-[#f5f6ff] px-4 py-3">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#73778d]">Custo estimado por expediente</p>
-                    <p className="mt-1 text-lg font-black text-[#5147dc]">{currency.format(professionalShiftCost)}</p>
-                  </div>
-                </div>
+                <FormField label="Custo por hora (R$)"><input className={fieldClassName} name="professionalHourlyCost" type="number" min="0" step="0.01" value={professionalHourlyCostInput} onChange={(event) => setProfessionalHourlyCostInput(event.target.value)} placeholder="0,00" /></FormField>
               </div>
-            </div>
-            <div className="rounded-lg bg-[#f7f8fc] p-4 sm:col-span-2">
-              <FormField label="Tolerância para marcar falta (minutos)">
-                <input className={fieldClassName} name="appointmentToleranceMinutes" type="number" min="0" max="180" value={appointmentToleranceInput} onChange={(event) => setAppointmentToleranceInput(event.target.value)} required />
-              </FormField>
-              <p className="mt-2 text-xs leading-5 text-[#73778d]">O atendimento só será marcado como falta depois desse período.</p>
-            </div>
-            {costSettingsLoading ? <div className="space-y-3 sm:col-span-2"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : <>
-              <FormField label="Mão de obra / Honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField>
-              <FormField label="Sala / Estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField>
-              <FormField label="Anestésico / Medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField>
-            </>}
-            {costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{costSettingsError}</p> : null}
-            <div className="flex justify-end border-t border-[#eceef5] pt-5 sm:col-span-2"><Button className="min-w-36" disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div>
-          </form>
-        </Card>
+              <div className="flex flex-col gap-1 rounded-md bg-muted/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Custo estimado por expediente</p>
+                  <p className="text-xs text-muted-foreground">Horas trabalhadas × custo por hora</p>
+                </div>
+                <strong className="text-lg font-bold text-primary">{currency.format(professionalShiftCost)}</strong>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="border-b border-border/70 text-center">
+              <div>
+                <CardTitle>Custos por atendimento</CardTitle>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">Valores padrão adicionados aos novos orçamentos.</p>
+              </div>
+            </CardHeader>
+            <CardContent className="mx-auto w-full max-w-3xl pt-4">
+              {costSettingsLoading ? <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : (
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <FormField label="Mão de obra / honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField>
+                  <FormField label="Sala / estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField>
+                  <FormField label="Anestésico / medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {costSettingsError ? <p className="mx-auto w-full max-w-3xl rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{costSettingsError}</p> : null}
+          <div className="flex justify-center border-t border-border pt-4">
+            <Button className="min-w-36" disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button>
+          </div>
+        </form>
+
       </div>
     );
   }
@@ -1759,6 +1770,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
         {[
           ["Clínica", "Nome, CNPJ, endereço e dados comerciais."],
           ["Profissionais", "Perfis, agenda, permissões e assinatura visual."],
+          ["Agenda", "Defina a tolerância para marcar atrasos como falta."],
         ].map(([title, description]) => (
           <button className={cn("settings-option hp-pressable text-left", title === "Profissionais" && !isAdmin && "cursor-not-allowed opacity-60")} key={title} onClick={() => { if (title === "Profissionais" && !isAdmin) return; setEditing(title); }}><Card className="settings-option-card h-full p-5 transition-colors">
             <Sparkles className="mb-4 h-5 w-5 text-[#1438ff]" />
@@ -1777,7 +1789,20 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
           {teamLoading ? <div className="space-y-3 py-3">{[0, 1, 2].map((item) => <div className="flex items-center justify-between gap-4" key={item}><div className="flex-1 space-y-2"><LoadingSkeleton className="h-3 w-40" /><LoadingSkeleton className="h-2.5 w-56" /></div><LoadingSkeleton className="h-6 w-20 rounded-full" /></div>)}</div> : members.length ? members.map((member) => <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between" key={member.id}><div><p className="text-sm font-bold text-[#303144]">{member.user.name}</p><p className="text-xs text-[#858696]">{member.user.email}</p></div><div className="flex items-center gap-2"><Badge variant={member.isOwner ? "purple" : member.role === "ADMIN" ? "purple" : "green"}>{member.isOwner ? "Administrador principal" : member.role === "PROFESSIONAL" ? "Profissional" : member.role === "STAFF" ? "Equipe" : "Administrador"}</Badge>{isOwner && !member.isOwner ? <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-[#b42318] hover:bg-[#fff1f0] hover:text-[#b42318]" aria-label={`Remover ${member.user.name}`} title="Remover colaborador" onClick={() => { setMemberRemoveError(""); setMemberToRemove(member); }}><Trash2 className="h-3.5 w-3.5" /></Button> : null}</div></div>) : <p className="py-5 text-sm text-[#65708b]">Nenhum colaborador cadastrado.</p>}
         </div>
       </Card>
-      <Modal open={Boolean(editing)} onClose={() => setEditing(null)} title={`Configurar ${editing ?? ""}`} description="Essas preferências ficam salvas durante esta sessão.">
+      <Modal open={Boolean(editing)} onClose={() => setEditing(null)} title={`Configurar ${editing ?? ""}`} description="Essas preferências ficam salvas para a clínica.">
+        {editing === "Agenda" ? <form className="grid gap-4" onSubmit={saveCostSettings}>
+          <div>
+            <FormField label="Tolerância para marcar falta (minutos)">
+              <input className={fieldClassName} name="appointmentToleranceMinutes" type="number" min="0" max="180" value={appointmentToleranceInput} onChange={(event) => setAppointmentToleranceInput(event.target.value)} required />
+            </FormField>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">O atendimento só será marcado como falta depois desse período.</p>
+          </div>
+          {costSettingsError ? <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{costSettingsError}</p> : null}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button>
+            <Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar"}</Button>
+          </div>
+        </form> : null}
         {editing === "Clínica" ? <form className="grid gap-4" onSubmit={saveCostSettings}><p className="text-xs leading-5 text-[#65708b]">Configure o nome e o horário em que a clínica está aberta para novos atendimentos.</p><FormField label="Nome de exibição"><input className={fieldClassName} name="name" value={clinicNameInput} onChange={(event) => setClinicNameInput(event.target.value)} required /></FormField><div className="grid gap-4 sm:grid-cols-2"><FormField label="Início do funcionamento"><input className={fieldClassName} name="openingTime" type="time" value={openingTimeInput} onChange={(event) => setOpeningTimeInput(event.target.value)} required /></FormField><FormField label="Fim do funcionamento"><input className={fieldClassName} name="closingTime" type="time" value={closingTimeInput} onChange={(event) => setClosingTimeInput(event.target.value)} required /></FormField></div>{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar alterações"}</Button></div></form> : null}
         {editing === "Novo colaborador" ? <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveCollaborator}><div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div><FormField label="E-mail de acesso"><input className={fieldClassName} name="email" type="email" required /></FormField><FormField label="Senha inicial"><input className={fieldClassName} name="password" type="password" minLength={6} required /></FormField><FormField label="Perfil"><select className={fieldClassName} name="role"><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Equipe</option><option value="ADMIN">Administrador</option></select></FormField>{teamError ? <p className="sm:col-span-2 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{teamError}</p> : null}<div className="flex justify-end gap-2 sm:col-span-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div></form> : editing === "Cálculo de custos" ? <form className="grid gap-4" onSubmit={saveCostSettings}><div className="sm:col-span-2"><FormField label="Tolerância para marcar falta (minutos)"><input className={fieldClassName} name="appointmentToleranceMinutes" type="number" min="0" max="180" value={appointmentToleranceInput} onChange={(event) => setAppointmentToleranceInput(event.target.value)} required /></FormField><p className="mt-1 text-[10px] text-[#858696]">O atendimento só será marcado como faltou depois desse período.</p></div><p className="text-xs leading-5 text-[#65708b]">Defina os valores padrão que serão adicionados automaticamente aos orçamentos desta clínica.</p>{costSettingsLoading ? <div className="space-y-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : <><FormField label="Mão de obra / Honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField><FormField label="Sala / Estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField><FormField label="Anestésico / Medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField></>}{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div></form> : null}
       </Modal>
