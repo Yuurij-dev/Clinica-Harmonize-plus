@@ -24,6 +24,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     } else {
       await prisma.patientProcedure.create({ data: { clinicId: user.clinicId, patientId: quote.patientId, journeyId: quote.journeyId, name: quote.items, professional: user.name, performedAt: new Date(), notes: quoteMarker } });
     }
+  } else if (quote && body?.status && quote.patientId) {
+    // Pagamento desfeito: remove o procedimento gerado pelo orçamento, desde que ainda não tenha fotos.
+    await prisma.patientProcedure.deleteMany({ where: { clinicId: user.clinicId, patientId: quote.patientId, notes: `__quote:${quote.id}`, beforePhoto: null, afterPhoto: null, photoSessions: { none: {} } } });
   }
   return NextResponse.json({ quote });
 }
