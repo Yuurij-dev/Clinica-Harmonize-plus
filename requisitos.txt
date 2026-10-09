@@ -8,10 +8,10 @@ O que nosso CRM vai ter?
 🔔 Lembretes e confirmações de consultas *
 👥 Cadastro completo de pacientes *
 📊 Evolução e acompanhamento de resultados (Terminando)
-💰 Precificação de procedimentos
-🧾 Controle de valores e serviços realizados
+💰 Precificação de procedimentos 
+🧾 Controle de valores e serviços realizados 
 📦 Controle de produtos e estoque
-💳 Controle financeiro e formas de pagamento
+💳 Controle financeiro e formas de pagamento 
 📈 Relatórios e indicadores da clínica (Falta ajustes)
 📱 Histórico de atendimento e comunicação
 📑 Termos, documentos e registros do paciente

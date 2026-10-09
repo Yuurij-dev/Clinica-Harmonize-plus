@@ -41,12 +41,10 @@ export function CustomerJourney({
   journey,
   onOpenStage,
   compact = false,
-  title = "Jornada do cliente",
 }: {
   journey: CustomerJourneyStage[];
   onOpenStage?: (stageId: JourneyStageId) => void;
   compact?: boolean;
-  title?: string;
 }) {
   const initial = journey.find((stage) => stage.status === "current") ?? journey[0];
   const [selectedId, setSelectedId] = useState<JourneyStageId>(initial.id);
@@ -69,12 +67,12 @@ export function CustomerJourney({
       <section className="min-w-0 flex-1">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <p className="text-[9px] font-bold uppercase text-[#9a9baa]">{title}</p>
+            <p className="text-[9px] font-bold uppercase text-[#9a9baa]">Jornada do cliente</p>
             <p className="mt-1 text-[10px] text-[#858696]">Selecione uma etapa para abrir o contexto relacionado</p>
           </div>
           <span className="hidden items-center gap-1.5 text-[9px] font-semibold text-[#818294] xl:flex"><span className="h-1.5 w-1.5 rounded-full bg-[#2f9b67]" />Atualização automática</span>
         </div>
-        <div className="hidden md:grid" style={{ gridTemplateColumns: `repeat(${journey.length}, minmax(0, 1fr))` }}>
+        <div className="hidden grid-cols-6 md:grid">
           {journey.map((stage, index) => (
             <CompactJourneyStep
               key={stage.id}
@@ -120,7 +118,7 @@ export function CustomerJourney({
       </div>
 
       <div className="p-4 sm:p-6">
-        <div className="hidden md:grid" style={{ gridTemplateColumns: `repeat(${journey.length}, minmax(0, 1fr))` }}>
+        <div className="hidden grid-cols-6 md:grid">
           {journey.map((stage, index) => (
             <JourneyStep
               key={stage.id}

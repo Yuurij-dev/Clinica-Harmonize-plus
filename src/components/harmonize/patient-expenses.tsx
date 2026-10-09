@@ -1,13 +1,12 @@
 "use client";
 
-import { Check, ChevronDown, CirclePlus, FileDown, Info, LoaderCircle, Plus, Save, WalletCards } from "lucide-react";
+import { Check, ChevronDown, CirclePlus, FileDown, Info, LoaderCircle, Save, WalletCards } from "lucide-react";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { getCachedJson, readClientCache, invalidateClientCache } from "@/lib/client-cache";
 import { cn } from "@/lib/utils";
-import { ListAccordion } from "./list-accordion";
 import { LoadingSkeleton } from "./shared";
 
 type ProcedureOption = {
@@ -21,110 +20,34 @@ type ProcedureOption = {
 type ProductOption = { name: string; unit: string };
 type CostSettings = { laborCost: number; facilityCost: number; medicationCost: number };
 type QuoteOptionsResponse = { procedures: ProcedureOption[]; products: ProductOption[]; costs: CostSettings };
-type PatientQuote = { id: string; items: string; total: number; status: string; paymentMethod?: string | null; createdAt?: string };
+type PatientQuote = { id: string; items: string; total: number; status: string; paymentMethod?: string | null };
 type SelectedProcedure = ProcedureOption & { quantity: number; unit: string };
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
-const NEW_QUOTE_ID = "__new__";
 
-export function PatientExpenses({ patientId, journeyId, onPaid, onPaymentUndone }: { patientId: string; journeyId?: string; onPaid?: () => void; onPaymentUndone?: () => void }) {
-  const quoteCacheKey = `/api/quotes?patientId=${encodeURIComponent(patientId)}&journeyId=${encodeURIComponent(journeyId ?? "")}`;
-  const cachedQuotes = readClientCache<{ quotes?: PatientQuote[] }>(quoteCacheKey);
-  const [quotes, setQuotes] = useState<PatientQuote[]>(cachedQuotes?.quotes ?? []);
-  const [quotesLoading, setQuotesLoading] = useState(!cachedQuotes && Boolean(patientId));
-  const [quotesError, setQuotesError] = useState(false);
-  const [openQuoteId, setOpenQuoteId] = useState<string | null>(null);
-  const [creatingQuote, setCreatingQuote] = useState(false);
-
-  useEffect(() => {
-    if (!patientId) return;
-    getCachedJson<{ quotes?: PatientQuote[] }>(quoteCacheKey)
-      .then((data) => setQuotes(data.quotes ?? []))
-      .catch(() => setQuotesError(true))
-      .finally(() => setQuotesLoading(false));
-  }, [patientId, quoteCacheKey]);
-
-  function startNewQuote() {
-    setCreatingQuote(true);
-    setOpenQuoteId(NEW_QUOTE_ID);
-  }
-
-  function handleSaved(quote: PatientQuote) {
-    setQuotes((current) => current.some((item) => item.id === quote.id) ? current.map((item) => item.id === quote.id ? { ...item, ...quote } : item) : [quote, ...current]);
-    if (openQuoteId === NEW_QUOTE_ID) {
-      setCreatingQuote(false);
-      setOpenQuoteId(quote.id);
-    }
-  }
-
-  function handleStatusChange(quoteId: string, status: string) {
-    setQuotes((current) => current.map((item) => item.id === quoteId ? { ...item, status } : item));
-  }
-
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h3 className="text-sm font-bold text-[#27283b]">Orçamentos</h3><p className="mt-0.5 text-[10px] text-[#858696]">Clique em um orçamento para abrir a calculadora.</p></div>
-        <Button type="button" disabled={creatingQuote || !patientId} onClick={startNewQuote}><Plus className="h-4 w-4" />Adicionar orçamento</Button>
-      </div>
-      {creatingQuote ? (
-        <ListAccordion title="Novo orçamento" subtitle={new Date().toLocaleDateString("pt-BR")} open onToggle={() => { setCreatingQuote(false); setOpenQuoteId(null); }}>
-          <QuoteCalculator patientId={patientId} journeyId={journeyId} onSaved={handleSaved} onPaid={onPaid} onPaymentUndone={onPaymentUndone} onStatusChange={handleStatusChange} />
-        </ListAccordion>
-      ) : null}
-      {quotesLoading ? (
-        <Card className="space-y-3 p-4"><LoadingSkeleton className="h-6 w-1/2" /><LoadingSkeleton className="h-6 w-1/3" /></Card>
-      ) : quotesError ? (
-        <Card className="p-6 text-center text-xs text-[#b42318]">Não foi possível carregar os orçamentos.</Card>
-      ) : quotes.length === 0 && !creatingQuote ? (
-        <Card className="p-6 text-center text-xs text-[#77788a]">Nenhum orçamento cadastrado nesta jornada. Clique em “Adicionar orçamento” para criar o primeiro.</Card>
-      ) : (
-        quotes.map((quote) => (
-          <ListAccordion key={quote.id} title={formatQuoteTitle(quote.items)} subtitle={quote.createdAt ? new Date(quote.createdAt).toLocaleDateString("pt-BR") : undefined} meta={<QuoteStatusMeta status={quote.status} total={quote.total} />} open={openQuoteId === quote.id} onToggle={() => setOpenQuoteId((current) => current === quote.id ? null : quote.id)}>
-            <QuoteCalculator patientId={patientId} journeyId={journeyId} quote={quote} onSaved={handleSaved} onPaid={onPaid} onPaymentUndone={onPaymentUndone} onStatusChange={handleStatusChange} />
-          </ListAccordion>
-        ))
-      )}
-    </div>
-  );
-}
-
-function QuoteStatusMeta({ status, total }: { status: string; total: number }) {
-  const paid = ["Aprovado", "Pago"].includes(status);
-  return (
-    <>
-      <span className={cn("rounded-full px-2 py-1 text-[10px] font-bold", paid ? "bg-[#eaf8ef] text-[#16805d]" : "bg-[#fff6e5] text-[#a15c07]")}>{paid ? "Pago" : status}</span>
-      <strong className="hidden text-xs text-[#424355] sm:inline">{currency.format(total)}</strong>
-    </>
-  );
-}
-
-function formatQuoteTitle(items: string) {
-  return items.replace(/\((\d+)x\)/g, "($1X)");
-}
-
-function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPaymentUndone, onStatusChange }: { patientId: string; journeyId?: string; quote?: PatientQuote; onSaved: (quote: PatientQuote) => void; onPaid?: () => void; onPaymentUndone?: () => void; onStatusChange: (quoteId: string, status: string) => void }) {
+export function PatientExpenses({ patientId, journeyId, onPaid }: { patientId: string; journeyId?: string; onPaid?: () => void }) {
   const cached = readClientCache<QuoteOptionsResponse>("/api/quotes/options");
   const cachedCostSettings = readClientCache<{ settings?: CostSettings }>("/api/clinic/cost-settings");
   const [procedures, setProcedures] = useState<ProcedureOption[]>(cached?.procedures ?? []);
   const [products, setProducts] = useState<ProductOption[]>(cached?.products ?? []);
   const [costs, setCosts] = useState<CostSettings>(cachedCostSettings?.settings ?? cached?.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
-  const [editedSelection, setSelected] = useState<Record<string, number> | null>(null);
+  const [selected, setSelected] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(!cached);
+  const [quoteLoading, setQuoteLoading] = useState(Boolean(patientId));
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [saveError, setSaveError] = useState(false);
   const [saveShake, setSaveShake] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState(quote?.paymentMethod ?? "Cartão de crédito");
+  const [paymentMethod, setPaymentMethod] = useState("Cartão de crédito");
   const [confirmPayment, setConfirmPayment] = useState(false);
   const [paymentSaving, setPaymentSaving] = useState(false);
   const [paymentNotice, setPaymentNotice] = useState(false);
   const [paymentNoticeLeaving, setPaymentNoticeLeaving] = useState(false);
   const [createdPaymentId, setCreatedPaymentId] = useState<string | null>(null);
-  const [latestQuoteId, setLatestQuoteId] = useState<string | null>(quote?.id ?? null);
-  const [savedQuoteSignature, setSavedQuoteSignature] = useState<string | null>(quote ? `${quote.items}|${quote.total}|${quote.paymentMethod ?? "Cartão de crédito"}` : null);
-  const [paymentConfirmed, setPaymentConfirmed] = useState(quote ? ["Aprovado", "Pago"].includes(quote.status) : false);
-  const quoteItems = quote?.items;
+  const [latestQuoteId, setLatestQuoteId] = useState<string | null>(null);
+  const quoteCacheKey = `/api/quotes?patientId=${encodeURIComponent(patientId)}&journeyId=${encodeURIComponent(journeyId ?? "")}`;
+  const [savedQuoteSignature, setSavedQuoteSignature] = useState<string | null>(null);
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false);
 
   useEffect(() => {
     if (cached) return;
@@ -145,16 +68,37 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
       .catch(() => undefined);
   }, [cachedCostSettings]);
 
-  const restoredSelection = useMemo(() => {
-    if (!quoteItems) return {};
-    return procedures.reduce<Record<string, number>>((selection, procedure) => {
-      const item = quoteItems.split(", ").find((entry) => entry.startsWith(`${procedure.name} (`));
-      const quantity = item?.match(/\((\d+)x\)/)?.[1];
-      if (quantity) selection[procedure.id] = Number(quantity);
-      return selection;
-    }, {});
-  }, [procedures, quoteItems]);
-  const selected = editedSelection ?? restoredSelection;
+  useEffect(() => {
+    if (!patientId) return;
+    getCachedJson<{ quotes?: PatientQuote[] }>(quoteCacheKey)
+      .then((data) => {
+        const quote = data.quotes?.[0];
+        if (!quote) {
+          setLatestQuoteId(null);
+          return;
+        }
+
+        const restoredSelection = procedures.reduce<Record<string, number>>((selection, procedure) => {
+          const item = quote.items.split(", ").find((entry) => entry.startsWith(`${procedure.name} (`));
+          const quantity = item?.match(/\((\d+)x\)/)?.[1];
+          if (quantity) selection[procedure.id] = Number(quantity);
+          return selection;
+        }, {});
+
+        setLatestQuoteId(quote.id);
+        setSelected(restoredSelection);
+        if (quote.paymentMethod) setPaymentMethod(quote.paymentMethod);
+        setSavedQuoteSignature(`${quote.items}|${quote.total}|${quote.paymentMethod ?? "Cartão de crédito"}`);
+        setPaymentConfirmed(["Aprovado", "Pago"].includes(quote.status));
+      })
+      .catch(() => {
+        setLatestQuoteId(null);
+        setSavedQuoteSignature(null);
+        setSelected({});
+        setPaymentConfirmed(false);
+      })
+      .finally(() => setQuoteLoading(false));
+  }, [patientId, journeyId, procedures, quoteCacheKey]);
 
   const selectedItems = useMemo<SelectedProcedure[]>(
     () => procedures.filter((procedure) => selected[procedure.id]).map((procedure) => ({ ...procedure, quantity: selected[procedure.id], unit: procedureUnit(procedure, products) })),
@@ -167,8 +111,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
   const quoteSaved = Boolean(latestQuoteId && savedQuoteSignature === currentQuoteSignature);
 
   function toggleProcedure(id: string) {
-    setSelected((edited) => {
-      const current = edited ?? restoredSelection;
+    setSelected((current) => {
       const next = { ...current };
       if (next[id]) delete next[id];
       else next[id] = 1;
@@ -179,7 +122,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
   }
 
   function updateQuantity(id: string, quantity: number) {
-    setSelected((edited) => ({ ...(edited ?? restoredSelection), [id]: quantity }));
+    setSelected((current) => ({ ...current, [id]: quantity }));
     setSaveError(false);
     setNotice(null);
   }
@@ -202,10 +145,10 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
         body: JSON.stringify({ patientId, journeyId, items: selectedItems.map((item) => `${item.name} (${item.quantity}x)`).join(", "), total, paymentMethod }),
       });
       const responseText = await response.text();
-      let data: { quote?: PatientQuote; message?: string } = {};
+      let data: { quote?: { id: string }; message?: string } = {};
       if (responseText.trim()) {
         try {
-          data = JSON.parse(responseText) as { quote?: PatientQuote; message?: string };
+          data = JSON.parse(responseText) as { quote?: { id: string }; message?: string };
         } catch {
           throw new Error("O servidor retornou uma resposta inválida ao salvar o orçamento.");
         }
@@ -215,7 +158,6 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
       invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
       setLatestQuoteId(data.quote.id);
       setSavedQuoteSignature(currentQuoteSignature);
-      onSaved(data.quote);
       setNotice("Orçamento salvo com sucesso.");
     } catch (error) {
       setSaveError(true);
@@ -248,7 +190,6 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
       invalidateClientCache("/api/payments", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
       invalidateClientCache("/api/quotes");
       setPaymentConfirmed(true);
-      onStatusChange(latestQuoteId, "Aprovado");
       onPaid?.();
       setCreatedPaymentId(data.payment.id);
       setConfirmPayment(false);
@@ -285,21 +226,13 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
   async function undoPayment() {
     if (!createdPaymentId) return;
     const response = await fetch(`/api/payments/${createdPaymentId}`, { method: "DELETE" });
-    if (!response.ok) return;
-    const quoteResponse = latestQuoteId ? await fetch(`/api/quotes/${latestQuoteId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Pendente" }) }) : null;
-    invalidateClientCache("/api/payments", "/api/quotes", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
-    setPaymentNotice(false);
-    setPaymentNoticeLeaving(false);
-    setCreatedPaymentId(null);
-    if (quoteResponse && !quoteResponse.ok) {
-      setSaveError(true);
-      setNotice("Pagamento removido, mas não foi possível reabrir o orçamento.");
-      onPaymentUndone?.();
-      return;
+    if (response.ok) {
+      invalidateClientCache("/api/payments", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
+      setPaymentNotice(false);
+      setPaymentNoticeLeaving(false);
+      setCreatedPaymentId(null);
+      setPaymentConfirmed(false);
     }
-    setPaymentConfirmed(false);
-    if (latestQuoteId) onStatusChange(latestQuoteId, "Pendente");
-    onPaymentUndone?.();
   }
 
   return (
@@ -352,8 +285,8 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
           </div>
           <div className="mt-4 border-t border-[#ececf2] pt-3"><div className="flex items-center justify-between text-xs"><span className="font-bold text-[#393a4d]">Subtotal dos materiais</span><strong className="text-[#424355]">{currency.format(materialsTotal)}</strong></div><p className="mt-4 text-[10px] font-bold text-[#4a4b5d]">Outros custos</p><div className="mt-2 space-y-2 text-[10px] text-[#68697b]"><SummaryLine label="Mão de obra / Honorários" value={currency.format(costs.laborCost)} /><SummaryLine label="Sala / Estrutura" value={currency.format(costs.facilityCost)} /><SummaryLine label="Anestésico / Medicamentos" value={currency.format(costs.medicationCost)} /></div><div className="mt-4 flex items-center justify-between border-t border-[#ececf2] pt-3 text-xs"><span className="font-bold text-[#393a4d]">Total do orçamento</span><strong className="text-base text-[#5147dc]">{currency.format(total)}</strong></div></div>
           <div className="mt-4"><p className="text-[9px] font-bold uppercase text-[#8f90a0]">Forma de pagamento</p><div className="relative mt-2"><select disabled={paymentConfirmed} className="h-10 w-full appearance-none rounded-[6px] border border-[#dfdfe7] bg-white px-3 pr-9 text-xs font-semibold text-[#505164] outline-none transition focus:border-[#5147dc] focus:ring-2 focus:ring-[#5147dc]/10 disabled:cursor-not-allowed disabled:bg-[#f4f4f8]" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option>Cartão de crédito</option><option>Cartão de débito</option><option>Pix</option></select><ChevronDown className="pointer-events-none absolute right-3 top-3 h-3.5 w-3.5 text-[#77788a]" /></div></div>
-          <Button className={cn("mt-4 w-full transition-colors", (paymentConfirmed || quoteSaved) && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:bg-[#eaf8ef] hover:text-[#16805d]", !paymentConfirmed && !quoteSaved && saveError && "bg-[#d92d20] hover:bg-[#b42318]", !paymentConfirmed && !quoteSaved && saveShake && "animate-[hp-shake_0.42s_ease-in-out]")} disabled={saving || loading || paymentConfirmed || quoteSaved} onClick={saveQuote}><Save className="h-4 w-4" />{paymentConfirmed ? "Pagamento confirmado" : saving ? "Salvando..." : quoteSaved ? "Orçamento salvo" : "Salvar orçamento"}</Button>
-          <Button className={cn("mt-2 w-full transition-colors", paymentConfirmed && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:bg-[#eaf8ef] hover:text-[#16805d]", !paymentConfirmed && saveError && "border-[#d92d20] text-[#b42318]", !paymentConfirmed && saveShake && "animate-[hp-shake_0.42s_ease-in-out]")} variant="secondary" type="button" disabled={paymentSaving || loading || paymentConfirmed} onClick={openPaymentConfirmation}><WalletCards className="h-4 w-4" />{paymentConfirmed ? "Pagamento confirmado" : "Registrar pagamento"}</Button>
+          <Button className={cn("mt-4 w-full transition-colors", (paymentConfirmed || quoteSaved) && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:bg-[#eaf8ef] hover:text-[#16805d]", !paymentConfirmed && !quoteSaved && saveError && "bg-[#d92d20] hover:bg-[#b42318]", !paymentConfirmed && !quoteSaved && saveShake && "animate-[hp-shake_0.42s_ease-in-out]")} disabled={saving || loading || quoteLoading || paymentConfirmed || quoteSaved} onClick={saveQuote}><Save className="h-4 w-4" />{paymentConfirmed ? "Pagamento confirmado" : saving ? "Salvando..." : quoteSaved ? "Orçamento salvo" : "Salvar orçamento"}</Button>
+          <Button className={cn("mt-2 w-full transition-colors", paymentConfirmed && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:bg-[#eaf8ef] hover:text-[#16805d]", !paymentConfirmed && saveError && "border-[#d92d20] text-[#b42318]", !paymentConfirmed && saveShake && "animate-[hp-shake_0.42s_ease-in-out]")} variant="secondary" type="button" disabled={paymentSaving || loading || quoteLoading || paymentConfirmed} onClick={openPaymentConfirmation}><WalletCards className="h-4 w-4" />{paymentConfirmed ? "Pagamento confirmado" : "Registrar pagamento"}</Button>
           <Button className="mt-2 w-full" variant="secondary" type="button"><FileDown className="h-4 w-4" />Gerar PDF</Button>
           {notice ? <p className={cn("mt-3 rounded-[6px] px-3 py-2 text-[10px] font-semibold", saveError ? "bg-[#fff1f0] text-[#b42318]" : "bg-[#eef8f2] text-[#287a50]")}>{notice}</p> : null}
           <div className="mt-4 rounded-[6px] border border-[#e8e8ef] bg-[#fafafd] p-3"><p className="flex items-center gap-2 text-[10px] font-bold text-[#454659]"><Info className="h-3.5 w-3.5 text-[#5147dc]" />Observações</p><p className="mt-2 text-[10px] leading-4 text-[#77788a]">Os valores são carregados dos procedimentos cadastrados pela clínica.</p></div>
