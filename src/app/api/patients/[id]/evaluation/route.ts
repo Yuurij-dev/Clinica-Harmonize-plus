@@ -17,13 +17,23 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
 
   const patientId = (await params).id;
-  const journeyId = new URL(request.url).searchParams.get("journeyId");
+  const searchParams = new URL(request.url).searchParams;
+  const evaluationId = searchParams.get("evaluationId");
   const patient = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true } });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
-  const journey = await ensurePatientJourney(patientId, user.clinicId, journeyId);
 
+  if (searchParams.get("list")) {
+    const evaluations = await prisma.evaluation.findMany({
+      where: { patientId, clinicId: user.clinicId },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, professional: true, createdAt: true, updatedAt: true, _count: { select: { photos: true } } },
+    });
+    return NextResponse.json({ evaluations: evaluations.map(({ _count, ...evaluation }) => ({ ...evaluation, photoCount: _count.photos })) });
+  }
+
+  // Sem avaliação informada, retorna a mais recente do paciente.
   const evaluation = await prisma.evaluation.findFirst({
-    where: { patientId, clinicId: user.clinicId, journeyId: journey.id },
+    where: { patientId, clinicId: user.clinicId, ...(evaluationId ? { id: evaluationId } : {}) },
     orderBy: { updatedAt: "desc" },
     include: { photos: { orderBy: { createdAt: "asc" } } },
   });
@@ -31,6 +41,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   return NextResponse.json({
     evaluation: evaluation ? {
       id: evaluation.id,
+      professional: evaluation.professional,
+      createdAt: evaluation.createdAt,
       photos: evaluation.photos.map((photo) => ({
         id: photo.id,
         name: photo.name,
@@ -51,10 +63,13 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const patient = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true } });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
 
-  const body = await request.json().catch(() => null) as { journeyId?: string; photos?: EvaluationPhotoPayload[] } | null;
+  const body = await request.json().catch(() => null) as { evaluationId?: string; photos?: EvaluationPhotoPayload[] } | null;
   const photos = body?.photos;
   if (!Array.isArray(photos)) return NextResponse.json({ message: "Envie as fotos da avaliação." }, { status: 400 });
-  const journey = await ensurePatientJourney(patientId, user.clinicId, body?.journeyId);
+  if (body?.evaluationId && !await prisma.evaluation.findFirst({ where: { id: body.evaluationId, patientId, clinicId: user.clinicId }, select: { id: true } })) {
+    return NextResponse.json({ message: "Avaliação não encontrada." }, { status: 404 });
+  }
+  const journey = body?.evaluationId ? null : await ensurePatientJourney(patientId, user.clinicId);
 
   const validPhotos = photos.filter((photo) => (
     photo && typeof photo.name === "string" && typeof photo.imageUrl === "string" &&
@@ -63,10 +78,10 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   ));
 
   const savedEvaluation = await prisma.$transaction(async (transaction) => {
-    const current = await transaction.evaluation.findFirst({ where: { patientId, clinicId: user.clinicId, journeyId: journey.id }, select: { id: true } });
-    const evaluation = current
-      ? await transaction.evaluation.update({ where: { id: current.id }, data: {} })
-      : await transaction.evaluation.create({ data: { patientId, clinicId: user.clinicId, journeyId: journey.id } });
+    // Sem evaluationId, cria uma nova avaliação em nome do usuário logado.
+    const evaluation = body?.evaluationId
+      ? await transaction.evaluation.update({ where: { id: body.evaluationId }, data: {} })
+      : await transaction.evaluation.create({ data: { patientId, clinicId: user.clinicId, journeyId: journey?.id, professional: user.name } });
 
     await transaction.evaluationPhoto.deleteMany({ where: { evaluationId: evaluation.id } });
     if (validPhotos.length) {
@@ -85,7 +100,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     return evaluation;
   });
 
-  return NextResponse.json({ evaluation: { id: savedEvaluation.id, photoCount: validPhotos.length } });
+  return NextResponse.json({ evaluation: { id: savedEvaluation.id, professional: savedEvaluation.professional, createdAt: savedEvaluation.createdAt, updatedAt: savedEvaluation.updatedAt, photoCount: validPhotos.length } });
 }
 
 function parseAnnotations(value: string) {

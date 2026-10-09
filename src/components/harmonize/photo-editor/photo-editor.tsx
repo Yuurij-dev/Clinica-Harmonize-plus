@@ -20,11 +20,13 @@ const EditorCanvas = dynamic(
 );
 
 type Notice = { tone: "success" | "info"; text: string } | null;
+export type SavedEvaluation = { id: string; professional: string; createdAt: string; updatedAt: string; photoCount: number };
 type ConfirmAction = { type: "photo"; photoId: string; photoName: string } | { type: "clear" } | null;
 
-export function PhotoEditor({ patientId, journeyId, patientName, onSaved }: { patientId: string; journeyId?: string; patientName: string; onSaved?: () => void }) {
-  const evaluationCacheKey = `/api/patients/${patientId}/evaluation?journeyId=${encodeURIComponent(journeyId ?? "")}`;
-  const cachedEvaluation = readClientCache<{ evaluation?: { photos?: EvaluationPhoto[] } | null }>(evaluationCacheKey);
+export function PhotoEditor({ patientId, evaluationId, patientName, onSaved }: { patientId: string; evaluationId?: string; patientName: string; onSaved?: (evaluation: SavedEvaluation) => void }) {
+  const [currentEvaluationId, setCurrentEvaluationId] = useState(evaluationId);
+  const evaluationCacheKey = evaluationId ? `/api/patients/${patientId}/evaluation?evaluationId=${encodeURIComponent(evaluationId)}` : null;
+  const cachedEvaluation = evaluationCacheKey ? readClientCache<{ evaluation?: { photos?: EvaluationPhoto[] } | null }>(evaluationCacheKey) : null;
   const [photos, setPhotos] = useState<EvaluationPhoto[]>(cachedEvaluation?.evaluation?.photos ?? []);
   const [activePhotoId, setActivePhotoId] = useState<string | null>(null);
   const [tool, setTool] = useState<EditorTool>("select");
@@ -35,7 +37,7 @@ export function PhotoEditor({ patientId, journeyId, patientName, onSaved }: { pa
   const [future, setFuture] = useState<Record<string, AnnotationSnapshot[]>>({});
   const [notice, setNotice] = useState<Notice>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
-  const [isLoading, setIsLoading] = useState(!cachedEvaluation || Boolean(cachedEvaluation.evaluation?.photos?.length));
+  const [isLoading, setIsLoading] = useState(Boolean(evaluationCacheKey) && (!cachedEvaluation || Boolean(cachedEvaluation.evaluation?.photos?.length)));
   const [isSaving, setIsSaving] = useState(false);
   const [showResult, setShowResult] = useState(false);
   const [savedPreviews, setSavedPreviews] = useState<Array<{ photo: EvaluationPhoto; dataUrl: string }>>([]);
@@ -48,6 +50,7 @@ export function PhotoEditor({ patientId, journeyId, patientName, onSaved }: { pa
   const canRedo = Boolean(activePhotoId && future[activePhotoId]?.length);
 
   useEffect(() => {
+    if (!evaluationCacheKey) return;
     let active = true;
     getCachedJson<{ evaluation?: { photos?: EvaluationPhoto[] } | null }>(evaluationCacheKey)
       .then(async (data) => {
@@ -207,14 +210,16 @@ export function PhotoEditor({ patientId, journeyId, patientName, onSaved }: { pa
       const response = await fetch(`/api/patients/${patientId}/evaluation`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ journeyId, photos }),
+        body: JSON.stringify({ evaluationId: currentEvaluationId, photos }),
       });
-      if (!response.ok) throw new Error("Não foi possível salvar a avaliação.");
-      invalidateClientCache(evaluationCacheKey, `/api/patients/${patientId}/history`);
+      const data = await response.json().catch(() => ({})) as { evaluation?: SavedEvaluation };
+      if (!response.ok || !data.evaluation) throw new Error("Não foi possível salvar a avaliação.");
+      setCurrentEvaluationId(data.evaluation.id);
+      invalidateClientCache(`/api/patients/${patientId}/evaluation`, `/api/patients/${patientId}/history`);
       const previews = await Promise.all(photos.map(async (photo) => ({ photo, dataUrl: await renderExport(photo) })));
       setSavedPreviews(previews);
       setShowResult(true);
-      onSaved?.();
+      onSaved?.(data.evaluation);
       showNotice("Avaliação salva com as fotos originais e as marcações separadas.");
     } catch {
       showNotice("Não foi possível salvar as fotos da avaliação.", "info");
