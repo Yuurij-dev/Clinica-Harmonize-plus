@@ -28,6 +28,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { MaskedInput } from "@/components/ui/masked-input";
 import {
   DetailCard,
+  DateRangeFilter,
   EmptyState,
   CountUpValue,
   LoadingSkeleton,
@@ -629,7 +630,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
             ))}
           </div>
           <Button variant="secondary" size="icon" aria-label="Selecionar data" title="Selecionar data"><CalendarDays className="h-4 w-4" /></Button>
-          <select className="min-w-0 flex-1 rounded-[7px] border border-[#dddfea] bg-white px-3 py-2 text-xs font-semibold text-[#555668] outline-none focus:border-[#5147dc] sm:min-w-[170px] sm:flex-none" value={activeProfessional} onChange={(event) => setProfessional(event.target.value)} aria-label="Filtrar por profissional">
+          <select className={cn(fieldClassName, "min-w-0 flex-1 text-xs sm:min-w-[170px] sm:flex-none")} value={activeProfessional} onChange={(event) => setProfessional(event.target.value)} aria-label="Filtrar por profissional">
             {professionalOptions.map((item) => <option key={item}>{item}</option>)}
           </select>
         </div>
@@ -1187,23 +1188,29 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
 }
 
 export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
-  type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null };
+  type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; createdAt?: string; patient?: { name: string } | null };
+  type QuoteRow = Quote & { createdAt?: string };
   type QuoteOptions = { patients?: Array<{ id: string; name: string; cpf: string | null }>; procedures?: Array<{ id: string; name: string; price: number }> };
   const cachedQuotes = readClientCache<{ quotes?: ApiQuote[] }>("/api/quotes");
   const cachedQuoteOptions = readClientCache<QuoteOptions>("/api/quotes/options");
-  const [quoteRows, setQuoteRows] = useState<Quote[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade" })));
+  const [quoteRows, setQuoteRows] = useState<QuoteRow[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
   const [isLoading, setIsLoading] = useState(!cachedQuotes);
   const [isSaving, setIsSaving] = useState(false);
   const [quotePatients, setQuotePatients] = useState(cachedQuoteOptions?.patients ?? []);
   const [quoteProcedures, setQuoteProcedures] = useState(cachedQuoteOptions?.procedures ?? []);
   const [optionsLoading, setOptionsLoading] = useState(!cachedQuoteOptions);
   const [patientQuery, setPatientQuery] = useState("");
+  const [quoteSearch, setQuoteSearch] = useState("");
+  const [itemSearch, setItemSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("Todos");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [selectedPatientId, setSelectedPatientId] = useState("");
   const [selectedProcedureNames, setSelectedProcedureNames] = useState<string[]>([]);
 
   useEffect(() => {
     getCachedJson<{ quotes?: ApiQuote[] }>("/api/quotes").then((data) => {
-      setQuoteRows((data.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade" })));
+      setQuoteRows((data.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
       setIsLoading(false);
     }).catch(() => setIsLoading(false));
   }, []);
@@ -1218,6 +1225,16 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
 
   const matchingQuotePatients = quotePatients.filter((patient) => `${patient.name} ${patient.cpf ?? ""}`.toLowerCase().includes(patientQuery.toLowerCase()));
   const suggestedTotal = selectedProcedureNames.reduce((total, name) => total + (quoteProcedures.find((procedure) => procedure.name === name)?.price ?? 0), 0);
+  const visibleQuotes = quoteRows.filter((quote) => {
+    const normalizedName = quoteSearch.trim().toLocaleLowerCase("pt-BR");
+    const normalizedItems = itemSearch.trim().toLocaleLowerCase("pt-BR");
+    const creationDate = quote.createdAt?.slice(0, 10) ?? "";
+    return (!normalizedName || quote.patient.toLocaleLowerCase("pt-BR").includes(normalizedName))
+      && (!normalizedItems || quote.items.toLocaleLowerCase("pt-BR").includes(normalizedItems))
+      && (statusFilter === "Todos" || quote.status === statusFilter)
+      && (!dateFrom || (creationDate && creationDate >= dateFrom))
+      && (!dateTo || (creationDate && creationDate <= dateTo));
+  });
 
   async function saveQuote(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patient = quotePatients.find((item) => item.id === selectedPatientId)?.name ?? "Paciente";
@@ -1227,16 +1244,15 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     const data = await response.json() as { quote: { id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null } };
     const item = data.quote;
     invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
-    setQuoteRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade" }, ...current]);
+    setQuoteRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: new Date().toISOString() }, ...current]);
     setPatientQuery(""); setSelectedPatientId(""); setSelectedProcedureNames([]);
     onCreateClose(); onSaved?.(`Orçamento de ${patient} foi criado.`);
   }
 
-  async function sendQuote(index: number) {
-    const quote = quoteRows[index];
+  async function sendQuote(quote: QuoteRow) {
     if (!quote.id) return;
     await fetch(`/api/quotes/${quote.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Enviado" }) });
-    setQuoteRows((current) => current.map((item, currentIndex) => currentIndex === index ? { ...item, status: "Enviado" } : item));
+    setQuoteRows((current) => current.map((item) => item.id === quote.id ? { ...item, status: "Enviado" } : item));
     invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
     onSaved?.("Orçamento marcado como enviado.");
   }
@@ -1249,17 +1265,28 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
         action="Novo orçamento"
         onAction={onCreateOpen}
       />
-      {isLoading ? <LoadingTable columns={6} /> : <MiniTable
+      <SearchFilterBar
+          placeholder="Pesquisar por nome do paciente"
+          value={quoteSearch}
+          onChange={setQuoteSearch}
+          showFilter={false}
+          trailing={<DateRangeFilter startDate={dateFrom} endDate={dateTo} onStartDateChange={setDateFrom} onEndDateChange={setDateTo} />}
+      />
+      <div className="mb-4 flex flex-wrap items-end gap-3" aria-label="Filtros de orçamentos">
+        <label className="grid gap-1 text-xs font-semibold text-[#68697b]">Procedimento<select className={fieldClassName} value={itemSearch} onChange={(event) => setItemSearch(event.target.value)}><option value="">Todos os procedimentos</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name}</option>)}</select></label>
+        <label className="grid gap-1 text-xs font-semibold text-[#68697b]">Status<select className={fieldClassName} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option>Todos</option>{[...new Set(quoteRows.map((quote) => quote.status))].sort().map((status) => <option key={status}>{status}</option>)}</select></label>
+      </div>
+      {isLoading ? <LoadingTable columns={6} /> : visibleQuotes.length ? <MiniTable
         columns={["Paciente", "Itens", "Total", "Status", "Validade", "Ação"]}
-        rows={quoteRows.map((quote, index) => [
+        rows={visibleQuotes.map((quote) => [
           <strong className="text-[#121733]" key={quote.patient}>{quote.patient}</strong>,
           quote.items,
           <span className="font-black text-[#1438ff]" key={quote.total}>{quote.total}</span>,
           <StatusBadge key={quote.status} status={quote.status} />,
           quote.expires,
-          <Button key="send" size="sm" variant="secondary" disabled={quote.status === "Enviado"} onClick={() => sendQuote(index)}>{quote.status === "Enviado" ? "Enviado" : "Enviar"}</Button>,
+          <Button key="send" size="sm" variant="secondary" disabled={quote.status === "Enviado"} onClick={() => sendQuote(quote)}>{quote.status === "Enviado" ? "Enviado" : "Enviar"}</Button>,
         ])}
-      />}
+      /> : <EmptyState title="Nenhum orçamento encontrado" description="Ajuste os filtros ou a pesquisa para encontrar orçamentos." />}
       <Modal open={openCreate} onClose={onCreateClose} title="Novo orçamento" description="Crie uma proposta comercial para o cliente.">
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveQuote}>
           <div className="relative sm:col-span-2">
@@ -1340,11 +1367,7 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
             {selected ? <Check className="h-4 w-4" /> : null}
           </button>;
         })}
-        <div className="ml-0 flex flex-wrap items-end gap-3 sm:ml-auto">
-          <label className="flex flex-col gap-1.5 text-xs font-bold uppercase text-[#8c8d9f]">De<input className="h-11 min-w-[180px] rounded-[8px] border border-[#dddfea] bg-white px-3.5 text-sm font-semibold normal-case text-[#65708b] outline-none transition-colors focus:border-[#5147dc] focus:ring-2 focus:ring-[#5147dc]/15" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
-          <label className="flex flex-col gap-1.5 text-xs font-bold uppercase text-[#8c8d9f]">Até<input className="h-11 min-w-[180px] rounded-[8px] border border-[#dddfea] bg-white px-3.5 text-sm font-semibold normal-case text-[#65708b] outline-none transition-colors focus:border-[#5147dc] focus:ring-2 focus:ring-[#5147dc]/15" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>
-          {dateFrom || dateTo ? <button className="hp-pressable h-11 rounded-[8px] px-3 text-xs font-bold text-[#65708b] hover:text-[#5147dc]" type="button" onClick={() => { setDateFrom(""); setDateTo(""); }}>Limpar datas</button> : null}
-        </div>
+        <div className="ml-0 sm:ml-auto"><DateRangeFilter startDate={dateFrom} endDate={dateTo} onStartDateChange={setDateFrom} onEndDateChange={setDateTo} /></div>
       </div>
       {isLoading ? <LoadingTable columns={6} /> : <MiniTable
         columns={["Paciente", "Valor", "Forma", "Data", "Status", "Parcelamento"]}

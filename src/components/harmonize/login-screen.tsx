@@ -170,10 +170,10 @@ function LoginForm({ error, isSubmitting, login, onLoginChange, onOpenRegister, 
         <TextField icon={Mail} label="E-mail ou usuário" onChange={onLoginChange} placeholder="nome@dominio.com ou usuário" value={login} autoComplete="username" />
         <PasswordField onChange={onPasswordChange} password={password} setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="current-password" />
         {error ? <ErrorMessage>{error}</ErrorMessage> : null}
-        <Button className="h-12 w-full bg-[#5947ee] text-sm shadow-[0_12px_26px_rgba(89,71,238,0.24)] hover:bg-[#4635d5]" disabled={isSubmitting} type="submit">{isSubmitting ? "Validando acesso..." : "Acessar painel"}<ArrowRight className="h-4 w-4" /></Button>
+        <Button className="w-full" size="lg" disabled={isSubmitting} type="submit">{isSubmitting ? "Validando acesso..." : "Acessar painel"}<ArrowRight className="h-4 w-4" /></Button>
       </form>
       <div className="my-6 flex items-center gap-3"><span className="h-px flex-1 bg-[#e9edf5]" /><span className="text-[11px] font-bold text-[#9aa5b8]">ou</span><span className="h-px flex-1 bg-[#e9edf5]" /></div>
-      <Button className="h-12 w-full border-[#cfd8ed] bg-white text-sm text-[#5947ee] hover:border-[#5947ee] hover:bg-[#f8f7ff]" disabled={isSubmitting} onClick={onOpenRegister} type="button" variant="secondary"><UserRoundPlus className="h-4 w-4" />Teste grátis por 3 dias</Button>
+      <Button className="w-full" size="lg" disabled={isSubmitting} onClick={onOpenRegister} type="button" variant="secondary"><UserRoundPlus className="h-4 w-4" />Teste grátis por 3 dias</Button>
     </>
   );
 }
@@ -193,7 +193,7 @@ function RegisterForm({ error, isSubmitting, onBack, onChange, onSubmit, values,
         <TextField label="E-mail" onChange={(value) => onChange("email", value)} placeholder="nome@dominio.com" type="email" value={values.email} autoComplete="email" />
         <div className="sm:col-span-2"><PasswordField label="Senha" onChange={(value) => onChange("password", value)} password={values.password} placeholder="Defina uma senha" setShowPassword={setShowPassword} showPassword={showPassword} /></div>
         {error ? <div className="sm:col-span-2"><ErrorMessage>{error}</ErrorMessage></div> : null}
-        <div className="sm:col-span-2"><Button className="h-12 w-full bg-[#5947ee] text-sm shadow-[0_12px_26px_rgba(89,71,238,0.24)] hover:bg-[#4635d5]" disabled={isSubmitting} type="submit">{isSubmitting ? "Criando sua conta..." : "Criar conta grátis"}<ArrowRight className="h-4 w-4" /></Button><p className="mt-4 text-center text-[11px] leading-5 text-[#858da0]">Ao prosseguir, você concorda com os nossos <a className="font-bold text-[#5947ee] underline underline-offset-2" href="#termos">Termos de Uso</a> e <a className="font-bold text-[#5947ee] underline underline-offset-2" href="#privacidade">Política de Privacidade</a>.</p><p className="mt-5 text-center text-sm font-bold text-[#26305a]">Já tem uma conta? <button className="text-[#5947ee] hover:underline" onClick={onBack} type="button">Acessar</button></p></div>
+        <div className="sm:col-span-2"><Button className="w-full" size="lg" disabled={isSubmitting} type="submit">{isSubmitting ? "Criando sua conta..." : "Criar conta grátis"}<ArrowRight className="h-4 w-4" /></Button><p className="mt-4 text-center text-[11px] leading-5 text-[#858da0]">Ao prosseguir, você concorda com os nossos <a className="font-bold text-[#5147dc] underline underline-offset-2" href="#termos">Termos de Uso</a> e <a className="font-bold text-[#5147dc] underline underline-offset-2" href="#privacidade">Política de Privacidade</a>.</p><p className="mt-5 text-center text-sm font-bold text-[#26305a]">Já tem uma conta? <button className="text-[#5147dc] hover:underline" onClick={onBack} type="button">Acessar</button></p></div>
       </form>
     </>
   );
@@ -238,7 +238,7 @@ function FirstAccessPasswordForm({ onSubmit }: { onSubmit: (password: string) =>
       <PasswordField label="Nova senha" onChange={(value) => { setPassword(value); setError(""); }} password={password} placeholder="Crie uma senha com pelo menos 8 caracteres" setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="new-password" minLength={8} />
       <PasswordField label="Confirmar nova senha" onChange={(value) => { setConfirmation(value); setError(""); }} password={confirmation} placeholder="Digite a senha novamente" setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="new-password" minLength={8} />
       {error ? <ErrorMessage>{error}</ErrorMessage> : null}
-      <Button className="h-12 w-full bg-[#5947ee] text-sm shadow-[0_12px_26px_rgba(89,71,238,0.24)] hover:bg-[#4635d5]" disabled={isSubmitting} type="submit">{isSubmitting ? "Salvando nova senha..." : "Salvar senha e acessar"}<ArrowRight className="h-4 w-4" /></Button>
+      <Button className="w-full" size="lg" disabled={isSubmitting} type="submit">{isSubmitting ? "Salvando nova senha..." : "Salvar senha e acessar"}<ArrowRight className="h-4 w-4" /></Button>
     </form>
   </>;
 }
