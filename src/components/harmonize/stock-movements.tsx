@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { fieldClassName, FormField } from "@/components/ui/modal";
 import { getCachedJson, readClientCache } from "@/lib/client-cache";
 import { sendJson } from "@/lib/send-json";
-import { formatQuantity, manualReasons, parseQuantity, type ManualReason } from "@/lib/stock-rules";
+import { attendanceKindLabels, formatQuantity, manualReasons, parseQuantity, type AttendanceKind, type ManualReason } from "@/lib/stock-rules";
 
 export const movementTypeLabels: Record<string, string> = {
   initial: "Saldo inicial",
@@ -18,7 +18,11 @@ export const movementTypeLabels: Record<string, string> = {
   purchase_cancel: "Cancelamento de compra",
 };
 
-type Movement = { id: string; type: string; quantity: number; reason: string | null; notes: string; userName: string; createdAt: string; lotCode: string };
+type Movement = { id: string; type: string; quantity: number; reason: string | null; notes: string; userName: string; createdAt: string; lotCode: string; patientName: string | null; attendanceKind: AttendanceKind | null; attendanceName: string | null; attendanceDate: string | null; reversed: boolean };
+
+function attendanceText(movement: Movement) {
+  return [movement.patientName, movement.attendanceKind ? attendanceKindLabels[movement.attendanceKind] : null, movement.attendanceName, movement.attendanceDate ? new Date(movement.attendanceDate).toLocaleDateString("pt-BR") : null].filter(Boolean).join(" · ");
+}
 type LotOption = { id: string; code: string; balance: number };
 
 export function ManualMovementForm<T>({ productId, unit, lots, initial, onSaved, onCancel }: { productId: string; unit: string; lots: LotOption[]; initial: { lotId: string; reason: ManualReason; quantity?: number }; onSaved: (product: T) => void; onCancel: () => void }) {
@@ -80,6 +84,7 @@ export function MovementHistory({ productId, unit, lotId, lotCode }: { productId
               <div className="min-w-0">
                 <p className="font-bold text-foreground">{movementTypeLabels[movement.type] ?? movement.type}{movement.reason && movement.reason in manualReasons ? ` · ${manualReasons[movement.reason as ManualReason]}` : ""}</p>
                 <p className="text-muted-foreground">Lote {movement.lotCode} · {new Date(movement.createdAt).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}{movement.userName ? ` · ${movement.userName}` : ""}</p>
+                {movement.type === "attendance" ? <p className="text-muted-foreground">{attendanceText(movement)}{movement.reversed ? " · estornada" : ""}</p> : null}
                 {movement.notes ? <p className="text-muted-foreground">{movement.notes}</p> : null}
               </div>
               <strong className={movement.quantity < 0 ? "text-destructive" : "text-success"}>{movement.quantity > 0 ? "+" : ""}{formatQuantity(movement.quantity, unit)}</strong>
@@ -87,6 +92,53 @@ export function MovementHistory({ productId, unit, lotId, lotCode }: { productId
           ))}
         </div>
       ) : <p className="text-xs text-muted-foreground">Nenhuma movimentação ainda.</p>}
+    </div>
+  );
+}
+
+// Uso do lote em pacientes: paciente, tipo e nome do atendimento e data (rastreio de recall).
+export function LotUsage({ productId, unit, lotId, lotCode }: { productId: string; unit: string; lotId: string; lotCode: string }) {
+  const [pages, setPages] = useState<Movement[][]>([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  async function load(page: number) {
+    setLoading(true);
+    const key = `/api/products/${productId}/movements?lotId=${lotId}&type=attendance&page=${page}`;
+    const data = await getCachedJson<{ movements: Movement[]; hasMore: boolean }>(key).catch(() => null);
+    setLoading(false);
+    if (!data) return;
+    setPages((current) => [...current.slice(0, page), data.movements]);
+    setHasMore(data.hasMore);
+  }
+
+  useEffect(() => {
+    let active = true;
+    getCachedJson<{ movements: Movement[]; hasMore: boolean }>(`/api/products/${productId}/movements?lotId=${lotId}&type=attendance&page=0`)
+      .then((data) => { if (active) { setPages([data.movements]); setHasMore(data.hasMore); } })
+      .catch(() => { if (active) setPages([[]]); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [productId, lotId]);
+
+  const movements = pages.flat();
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-bold text-foreground">Pacientes que usaram o lote {lotCode}</h3>
+      {movements.length ? (
+        <div className="max-h-72 divide-y divide-border overflow-y-auto rounded-[8px] border border-border">
+          {movements.map((movement) => (
+            <div className={`flex items-start justify-between gap-3 px-3 py-2 text-xs ${movement.reversed ? "opacity-60" : ""}`} key={movement.id}>
+              <div className="min-w-0">
+                <p className="font-bold text-foreground">{movement.patientName ?? "Paciente removido"}</p>
+                <p className="text-muted-foreground">{[movement.attendanceKind ? attendanceKindLabels[movement.attendanceKind] : null, movement.attendanceName, movement.attendanceDate ? new Date(movement.attendanceDate).toLocaleDateString("pt-BR") : null].filter(Boolean).join(" · ")}{movement.reversed ? " · estornada" : ""}</p>
+              </div>
+              <strong className="text-foreground">{formatQuantity(-movement.quantity, unit)}</strong>
+            </div>
+          ))}
+        </div>
+      ) : loading ? null : <p className="text-xs text-muted-foreground">Este lote ainda não foi usado em pacientes.</p>}
+      {loading ? <div className="grid place-items-center py-4"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div> : hasMore ? <div className="mt-2 flex justify-center"><Button size="sm" variant="secondary" onClick={() => void load(pages.length)}>Carregar mais</Button></div> : null}
     </div>
   );
 }

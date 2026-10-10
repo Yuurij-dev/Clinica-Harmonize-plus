@@ -12,18 +12,31 @@ async function adminUser(requireActiveTrial = false) {
 }
 
 // Histórico de movimentações do material (ou de um lote), da mais recente para a mais antiga.
+// Com type=attendance lista só as saídas em pacientes (rastreio de recall), paginado por ?page.
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { user, error } = await adminUser();
   if (error) return error;
   const productId = (await params).id;
-  const lotId = new URL(request.url).searchParams.get("lotId");
+  const search = new URL(request.url).searchParams;
+  const lotId = search.get("lotId");
+  const onlyAttendance = search.get("type") === "attendance";
+  const page = Math.max(0, Number(search.get("page")) || 0);
+  const pageSize = onlyAttendance ? 50 : 200;
   const movements = await prisma.stockMovement.findMany({
-    where: { clinicId: user.clinicId, productId, ...(lotId ? { lotId } : {}) },
+    where: { clinicId: user.clinicId, productId, ...(lotId ? { lotId } : {}), ...(onlyAttendance ? { type: "attendance" } : {}) },
     orderBy: { createdAt: "desc" },
-    take: 200,
-    select: { id: true, type: true, quantity: true, reason: true, notes: true, userName: true, createdAt: true, lot: { select: { code: true } } },
+    skip: page * pageSize,
+    take: pageSize + 1,
+    select: {
+      id: true, type: true, quantity: true, reason: true, notes: true, userName: true, createdAt: true,
+      attendanceKind: true, attendanceName: true, attendanceDate: true,
+      lot: { select: { code: true } }, patient: { select: { name: true } }, reversedBy: { select: { id: true } },
+    },
   });
-  return NextResponse.json({ movements: movements.map(({ lot, ...movement }) => ({ ...movement, lotCode: lot.code })) });
+  return NextResponse.json({
+    hasMore: movements.length > pageSize,
+    movements: movements.slice(0, pageSize).map(({ lot, patient, reversedBy, ...movement }) => ({ ...movement, lotCode: lot.code, patientName: patient?.name ?? null, reversed: Boolean(reversedBy) })),
+  });
 }
 
 // Saída manual (perda, vencimento, uso interno) ou correção de contagem.

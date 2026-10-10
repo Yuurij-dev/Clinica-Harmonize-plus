@@ -12,7 +12,7 @@ import { sendJson } from "@/lib/send-json";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, readClientCache } from "@/lib/client-cache";
 import { formatCurrency, parseCurrency } from "@/lib/input-masks";
 import { formatQuantity, parseQuantity, stockUnits, validateQuantity, type LotStatus, type ManualReason } from "@/lib/stock-rules";
-import { ManualMovementForm, MovementHistory } from "./stock-movements";
+import { LotUsage, ManualMovementForm, MovementHistory } from "./stock-movements";
 import { PurchasesPanel } from "./purchases-panel";
 import { EmptyState, LoadingTable, MiniTable, SectionIntro } from "./shared";
 import { formatDateOnly, invalidateStockCache, type StockMaterial } from "./stock-shared";
@@ -160,6 +160,7 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
   const [movementForm, setMovementForm] = useState<{ lotId: string; reason: ManualReason; quantity?: number } | null>(null);
   const [history, setHistory] = useState<{ lotId?: string; lotCode?: string } | null>(null);
   const [historyVersion, setHistoryVersion] = useState(0);
+  const [usageLot, setUsageLot] = useState<{ id: string; code: string } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -244,6 +245,7 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
                       {lot.status === "expired" && lot.balance > 0 ? <Button size="sm" variant="secondary" onClick={() => setMovementForm({ lotId: lot.id, reason: "expired", quantity: lot.balance })}>Descartar</Button> : null}
                       {!detail.archivedAt ? <Button size="sm" variant="secondary" onClick={() => setMovementForm({ lotId: lot.id, reason: "loss" })}>Saída</Button> : null}
                       <Button size="sm" variant="ghost" onClick={() => setHistory({ lotId: lot.id, lotCode: lot.code })}>Histórico</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setUsageLot({ id: lot.id, code: lot.code })}>Pacientes</Button>
                     </div>
                   </div>
                 ))}
@@ -253,6 +255,7 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
           </div>
 
           {movementForm ? <ManualMovementForm<StockMaterialDetail> key={`${movementForm.lotId}-${movementForm.reason}`} productId={detail.id} unit={detail.unit} lots={detail.lots} initial={movementForm} onCancel={() => setMovementForm(null)} onSaved={(product) => { setDetail(product); setMovementForm(null); setHistoryVersion((current) => current + 1); onChanged(`Movimentação registrada em ${product.name}.`); }} /> : null}
+          {usageLot ? <LotUsage key={`${usageLot.id}-${historyVersion}`} productId={detail.id} unit={detail.unit} lotId={usageLot.id} lotCode={usageLot.code} /> : null}
           {history ? <MovementHistory key={`${history.lotId ?? "all"}-${historyVersion}`} productId={detail.id} unit={detail.unit} lotId={history.lotId} lotCode={history.lotCode} /> : null}
 
           {!detail.archivedAt ? (
