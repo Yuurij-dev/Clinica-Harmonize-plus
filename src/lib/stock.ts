@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import { clinicToday, dateOnly } from "./clinic-time";
-import { lotBalance, lotStatus, materialBalance } from "./stock-rules";
+import { describeTechnicalSheet, lotBalance, lotStatus, materialBalance, validateQuantity } from "./stock-rules";
 
 export type StockTransaction = Prisma.TransactionClient;
 
@@ -78,3 +78,33 @@ export async function findOrCreateLot(tx: StockTransaction, input: { clinicId: s
 }
 
 export class StockError extends Error {}
+
+export const technicalSheetSelect = {
+  technicalSheet: { orderBy: { product: { name: "asc" } }, select: { productId: true, quantity: true, product: { select: { name: true, unit: true, archivedAt: true } } } },
+} as const;
+
+type TechnicalSheetRow = { productId: string; quantity: number; product: { name: string; unit: string; archivedAt: Date | null } };
+
+export function serializeTechnicalSheet(rows: TechnicalSheetRow[]) {
+  return rows.map((row) => ({ productId: row.productId, name: row.product.name, unit: row.product.unit, quantity: row.quantity, archived: Boolean(row.product.archivedAt) }));
+}
+
+// Valida a ficha técnica recebida: materiais da clínica, sem repetição e quantidade válida para a unidade.
+// Materiais arquivados só são aceitos se já estavam na ficha do procedimento.
+export async function parseTechnicalSheet(clinicId: string, value: unknown, currentProductIds: string[] = []) {
+  if (!Array.isArray(value)) return { error: "Ficha técnica inválida." } as const;
+  const items = value.map((item) => ({ productId: String((item as { productId?: unknown })?.productId ?? ""), quantity: Number((item as { quantity?: unknown })?.quantity) }));
+  if (new Set(items.map((item) => item.productId)).size !== items.length) return { error: "Um material aparece mais de uma vez na ficha técnica." } as const;
+  const products = await prisma.product.findMany({ where: { clinicId, id: { in: items.map((item) => item.productId) } }, select: { id: true, name: true, unit: true, archivedAt: true } });
+  for (const item of items) {
+    const product = products.find((candidate) => candidate.id === item.productId);
+    if (!product || (product.archivedAt && !currentProductIds.includes(product.id))) return { error: "Material da ficha técnica não encontrado." } as const;
+    const quantityError = validateQuantity(item.quantity, product.unit);
+    if (quantityError) return { error: `${product.name}: ${quantityError}` } as const;
+  }
+  const description = describeTechnicalSheet(items.map((item) => {
+    const product = products.find((candidate) => candidate.id === item.productId)!;
+    return { name: product.name, unit: product.unit, quantity: item.quantity };
+  }));
+  return { items, description } as const;
+}

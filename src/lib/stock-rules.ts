@@ -50,6 +50,26 @@ export function formatQuantity(quantity: number, unit: string) {
   return `${value} ${unit}`;
 }
 
+export function normalizeName(value: string) {
+  return value.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLocaleLowerCase("pt-BR").replace(/\s+/g, " ");
+}
+
+// Converte o texto livre antigo ("Toxina botulínica, Agulha") em itens de ficha técnica,
+// comparando nomes sem acento e sem diferença de maiúsculas. Quantidade inicial 1, para revisão.
+export function convertMaterialsText(text: string, products: Array<{ id: string; name: string }>) {
+  const names = text.split(",").map(normalizeName).filter(Boolean);
+  const items: Array<{ productId: string; quantity: number }> = [];
+  for (const name of names) {
+    const product = products.find((candidate) => normalizeName(candidate.name) === name);
+    if (product && !items.some((item) => item.productId === product.id)) items.push({ productId: product.id, quantity: 1 });
+  }
+  return items;
+}
+
+export function describeTechnicalSheet(items: Array<{ name: string; unit: string; quantity: number }>) {
+  return items.map((item) => `${formatQuantity(item.quantity, item.unit)} ${item.name}`).join(", ");
+}
+
 export function validateQuantity(quantity: number, unit: string) {
   if (!Number.isFinite(quantity) || quantity <= 0) return "A quantidade deve ser maior que zero.";
   if (unit !== "ml" && !Number.isInteger(quantity)) return `Use um número inteiro para ${unit}.`;

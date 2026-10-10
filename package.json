@@ -13,7 +13,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:seed": "node prisma/seed.mjs",
-    "db:tenant-seed": "node prisma/tenant-seed.mjs"
+    "db:tenant-seed": "node prisma/tenant-seed.mjs",
+    "db:convert-procedure-materials": "node prisma/convert-procedure-materials.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",

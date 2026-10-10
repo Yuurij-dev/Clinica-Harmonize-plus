@@ -10,7 +10,6 @@ import {
   CheckCircle2,
   Check,
   CircleDollarSign,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock3,
@@ -54,27 +53,15 @@ import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { cn } from "@/lib/utils";
 import { procedureCategories } from "@/data/categories";
+import { sendJson } from "@/lib/send-json";
+import { describeTechnicalSheet } from "@/lib/stock-rules";
+import { readTechnicalSheet, TechnicalSheetEditor, type TechnicalSheetItem } from "./technical-sheet-editor";
 import type { Appointment, JourneyStageId, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
 
 const currency = new Intl.NumberFormat("pt-BR", {
   style: "currency",
   currency: "BRL",
 });
-
-const materialOptions = [
-  "Ácido hialurônico",
-  "Toxina botulínica",
-  "Bioestimulador de colágeno",
-  "Fios de PDO",
-  "Peeling químico",
-  "Anestésico tópico",
-  "Microagulhas",
-  "Antisséptico",
-  "Luvas descartáveis",
-  "Gel condutor",
-  "Protetor solar",
-  "Outro",
-];
 
 const appointmentTypeOptions = ["Consulta / retorno", "Avaliação", "Procedimento", "Outros"];
 
@@ -147,36 +134,6 @@ function mapApiPatient(patient: ApiPatient): Patient {
 
 function displayDate(value: string) {
   return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value));
-}
-
-function MaterialsMultiSelect({ options, defaultValue = [] }: { options: string[]; defaultValue?: string[] }) {
-  const [open, setOpen] = useState(false);
-  const [selected, setSelected] = useState(defaultValue);
-
-  function toggleMaterial(material: string) {
-    setSelected((current) => current.includes(material) ? current.filter((item) => item !== material) : [...current, material]);
-  }
-
-  return (
-    <div className="relative">
-      <button type="button" className={`${fieldClassName} flex min-h-11 w-full items-center justify-between gap-3 text-left`} onClick={() => setOpen((current) => !current)} aria-expanded={open}>
-        <span className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-          {selected.length ? selected.map((material) => <span className="rounded-full bg-[#f0efff] px-2 py-1 text-[10px] font-bold text-[#5147dc]" key={material}>{material}</span>) : <span className="text-[#858696]">Selecione os materiais</span>}
-        </span>
-        <ChevronDown className={`h-4 w-4 shrink-0 text-[#858696] transition-transform ${open ? "rotate-180" : ""}`} />
-      </button>
-      {selected.map((material) => <input key={material} type="hidden" name="materials" value={material} />)}
-      {open ? <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-60 overflow-auto rounded-[8px] border border-[#e2e5f0] bg-white p-1.5 shadow-[0_18px_40px_rgba(31,32,50,0.16)]">
-        {options.map((material) => {
-          const checked = selected.includes(material);
-          return <button type="button" key={material} className="flex w-full items-center gap-3 rounded-[6px] px-3 py-2.5 text-left text-xs font-semibold text-[#3f4054] transition hover:bg-[#f7f6ff]" onClick={() => toggleMaterial(material)}>
-            <span className={`grid h-4 w-4 shrink-0 place-items-center rounded-[4px] border ${checked ? "border-[#5147dc] bg-[#5147dc] text-white" : "border-[#cfd4e2] bg-white"}`}>{checked ? <CheckCircle2 className="h-3 w-3" /> : null}</span>
-            {material}
-          </button>;
-        })}
-      </div> : null}
-    </div>
-  );
 }
 
 function journeyForPatient(patient: Patient) {
@@ -983,43 +940,50 @@ function appointmentTone(appointment: AppointmentRow) {
   return { card: "border-[#e0647d] bg-[#fff0f2] text-[#9b3a4f]", pill: "bg-[#ffe0e5] text-[#a8465b]" };
 }
 
+type ApiProcedure = { id: string; name: string; category: string; price: number; durationMinutes: number; margin: number; materialsNeedReview: boolean; technicalSheet: TechnicalSheetItem[] };
+type ProcedureRow = Procedure & { technicalSheet: TechnicalSheetItem[]; materialsNeedReview: boolean };
+
+function mapApiProcedures(procedures: ApiProcedure[] = []): ProcedureRow[] {
+  return procedures.map((item) => ({
+    id: item.id,
+    name: item.name,
+    category: item.category,
+    price: item.price,
+    duration: `${item.durationMinutes} min`,
+    materials: describeTechnicalSheet(item.technicalSheet),
+    margin: `${item.margin}%`,
+    technicalSheet: item.technicalSheet,
+    materialsNeedReview: item.materialsNeedReview,
+  }));
+}
+
 export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
-  const cachedProcedures = readClientCache<{ procedures?: Array<{ id: string; name: string; category: string; price: number; durationMinutes: number; materials: string; margin: number }> }>("/api/procedures");
+  const cachedProcedures = readClientCache<{ procedures?: ApiProcedure[] }>("/api/procedures");
   const cachedProducts = readClientCache<{ products?: Product[] }>("/api/products");
-  const [procedureRows, setProcedureRows] = useState<Procedure[]>(() => (cachedProcedures?.procedures ?? []).map((item) => ({ id: item.id, name: item.name, category: item.category, price: item.price, duration: `${item.durationMinutes} min`, materials: item.materials, margin: `${item.margin}%` })));
+  const [procedureRows, setProcedureRows] = useState<ProcedureRow[]>(() => mapApiProcedures(cachedProcedures?.procedures));
   const [productRows, setProductRows] = useState<Product[]>(cachedProducts?.products ?? []);
   const [editingProcedureIndex, setEditingProcedureIndex] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(!cachedProcedures);
   const [isSaving, setIsSaving] = useState(false);
+  const [formError, setFormError] = useState("");
   const editingProcedure = editingProcedureIndex === null ? null : procedureRows[editingProcedureIndex];
   const procedureModalOpen = openCreate || editingProcedureIndex !== null;
-
-  function applyProcedureRows(data: { procedures?: Array<{ id: string; name: string; category: string; price: number; durationMinutes: number; materials: string; margin: number }> }) {
-    setProcedureRows((data.procedures ?? []).map((item) => ({
-      id: item.id,
-      name: item.name,
-      category: item.category,
-      price: item.price,
-      duration: `${item.durationMinutes} min`,
-      materials: item.materials,
-      margin: `${item.margin}%`,
-    })));
-  }
+  const materialOptions = productRows.filter((product): product is Product & { id: string } => Boolean(product.id));
 
   async function loadProcedures() {
     setIsLoading(true);
     invalidateClientCache("/api/procedures", "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
-    const data = await getCachedJson<{ procedures?: Array<{ id: string; name: string; category: string; price: number; durationMinutes: number; materials: string; margin: number }> }>("/api/procedures");
-    applyProcedureRows(data);
+    const data = await getCachedJson<{ procedures?: ApiProcedure[] }>("/api/procedures");
+    setProcedureRows(mapApiProcedures(data.procedures));
     setIsLoading(false);
   }
 
   useEffect(() => {
     let active = true;
-    getCachedJson<{ procedures?: Array<{ id: string; name: string; category: string; price: number; durationMinutes: number; materials: string; margin: number }> }>("/api/procedures")
+    getCachedJson<{ procedures?: ApiProcedure[] }>("/api/procedures")
       .then((data) => {
         if (!active) return;
-        applyProcedureRows(data);
+        setProcedureRows(mapApiProcedures(data.procedures));
         setIsLoading(false);
       })
       .catch(() => {
@@ -1029,38 +993,43 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   }, []);
 
   useEffect(() => {
-    getCachedJson<{ products?: Product[] }>("/api/products")
+    // Inclui arquivados para mostrar na ficha técnica os materiais que já estavam nela.
+    getCachedJson<{ products?: Product[] }>("/api/products?archived=1")
       .then((data) => setProductRows(data.products ?? []))
       .catch(() => setProductRows([]));
   }, []);
 
   function closeProcedureModal() {
     setEditingProcedureIndex(null);
+    setFormError("");
     onCreateClose();
   }
 
   async function saveProcedure(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setIsSaving(true);
     const form = new FormData(event.currentTarget);
+    const sheet = readTechnicalSheet(form, materialOptions);
+    if (sheet.error !== undefined) {
+      setFormError(sheet.error);
+      return;
+    }
     const name = String(form.get("name"));
-    const selectedMaterials = form.getAll("materials").map(String).filter(Boolean).join(", ");
     const nextProcedure = {
       name,
       category: String(form.get("category")),
       price: parseCurrency(form.get("price")),
       durationMinutes: parseInteger(form.get("duration")),
-      materials: selectedMaterials,
+      technicalSheet: sheet.items,
       margin: parseInteger(form.get("margin")),
     };
-    const response = await fetch(editingProcedure?.id ? `/api/procedures/${editingProcedure.id}` : "/api/procedures", {
-      method: editingProcedure?.id ? "PATCH" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(nextProcedure),
-    });
+    setIsSaving(true);
+    setFormError("");
+    const { ok, data } = await sendJson(editingProcedure?.id ? `/api/procedures/${editingProcedure.id}` : "/api/procedures", editingProcedure?.id ? "PATCH" : "POST", nextProcedure);
     setIsSaving(false);
-    if (!response.ok) return;
-    invalidateClientCache("/api/procedures", "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+    if (!ok) {
+      setFormError(data?.message ?? "Não foi possível salvar o procedimento.");
+      return;
+    }
     await loadProcedures();
     onSaved?.(`${name} ${editingProcedure ? "foi atualizado" : "foi adicionado aos procedimentos"}.`);
     closeProcedureModal();
@@ -1071,18 +1040,21 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
       <div>
         <SectionIntro
           title="Procedimentos"
-          description="Cadastro de serviços com valor sugerido, tempo estimado e materiais usados para cálculo de custo."
+          description="Cadastro de serviços com valor sugerido, tempo estimado e a ficha técnica de materiais usada no estoque e no orçamento."
           action="Novo procedimento"
           onAction={onCreateOpen}
         />
         {isLoading ? <LoadingTable columns={7} /> : <MiniTable
-          columns={["Nome", "Categoria", "Valor sugerido", "Tempo", "Materiais", "Margem", "Ação"]}
+          columns={["Nome", "Categoria", "Valor sugerido", "Tempo", "Ficha técnica", "Margem", "Ação"]}
           rows={procedureRows.map((procedure, index) => [
             <strong className="text-[#121733]" key={procedure.name}>{procedure.name}</strong>,
             procedure.category,
             currency.format(procedure.price),
             procedure.duration,
-            procedure.materials,
+            <div className="max-w-xs space-y-1" key="sheet">
+              <span className="block text-xs">{procedure.materials || <span className="text-muted-foreground">Sem materiais</span>}</span>
+              {procedure.materialsNeedReview ? <Badge variant="amber" title="Convertida automaticamente do texto antigo. Confira as quantidades e salve.">Revisar ficha</Badge> : null}
+            </div>,
             <Badge key={procedure.margin} variant="green">{procedure.margin}</Badge>,
             <Button key="edit" size="sm" variant="secondary" onClick={() => setEditingProcedureIndex(index)}>
               <PencilLine className="h-3.5 w-3.5" />
@@ -1092,13 +1064,13 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
         />}
       </div>
 
-      <CostCalculator materials={productRows} charged={procedureRows[0]?.price ?? 0} procedureName={procedureRows[0]?.name} />
+      <CostCalculator materials={productRows.filter((product) => !product.archivedAt)} charged={procedureRows[0]?.price ?? 0} procedureName={procedureRows[0]?.name} />
       <Modal
         key={editingProcedure ? `edit-${editingProcedure.name}` : `new-procedure-${openCreate ? "open" : "closed"}`}
         open={procedureModalOpen}
         onClose={closeProcedureModal}
         title={editingProcedure ? "Editar procedimento" : "Novo procedimento"}
-        description="Defina preço, duração e margem do serviço."
+        description="Defina preço, duração, margem e os materiais usados em cada atendimento."
       >
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveProcedure}>
           <div className="sm:col-span-2"><FormField label="Nome"><input className={fieldClassName} name="name" defaultValue={editingProcedure?.name ?? ""} required /></FormField></div>
@@ -1106,7 +1078,11 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
           <FormField label="Valor sugerido"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="price" inputMode="decimal" defaultValue={editingProcedure ? currency.format(editingProcedure.price) : ""} placeholder="R$ 0,00" required /></FormField>
           <FormField label="Duração em minutos"><MaskedInput className={fieldClassName} formatter={(value) => formatInteger(value, 3)} name="duration" inputMode="numeric" defaultValue={editingProcedure?.duration ?? ""} placeholder="60" required /></FormField>
           <FormField label="Margem estimada (%)"><MaskedInput className={fieldClassName} formatter={formatPercent} name="margin" inputMode="numeric" defaultValue={editingProcedure?.margin ?? ""} placeholder="40%" required /></FormField>
-          <div className="sm:col-span-2"><FormField label="Materiais utilizados"><MaterialsMultiSelect options={materialOptions} defaultValue={editingProcedure?.materials ? editingProcedure.materials.split(", ") : []} /><p className="mt-1 text-[10px] text-[#858696]">Selecione um ou mais materiais utilizados neste procedimento.</p></FormField></div>
+          <div className="sm:col-span-2"><FormField label="Ficha técnica" description="Materiais e quantidades usados em cada atendimento deste procedimento.">
+            {editingProcedure?.materialsNeedReview ? <p className="mb-2 rounded-[7px] bg-warning/10 px-3 py-2 text-[11px] font-semibold text-warning">Ficha convertida automaticamente do texto antigo com quantidade 1. Confira e salve para concluir a revisão.</p> : null}
+            <TechnicalSheetEditor materials={materialOptions} defaultValue={editingProcedure?.technicalSheet ?? []} />
+          </FormField></div>
+          {formError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{formError}</p> : null}
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={closeProcedureModal}>Cancelar</Button><Button disabled={isSaving} type="submit">{isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : editingProcedure ? "Salvar alterações" : "Salvar procedimento"}</Button></div>
         </form>
       </Modal>

@@ -95,6 +95,8 @@ export type Product = {
   unit: string;
   costCents: number;
   supplier: string;
+  minStock?: number;
+  archivedAt?: string | null;
 };
 
 export type Procedure = {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatQuantity, lotBalance, lotStatus, materialBalance, parseQuantity, validateQuantity } from "../src/lib/stock-rules.ts";
+import { convertMaterialsText, describeTechnicalSheet, formatQuantity, lotBalance, lotStatus, materialBalance, parseQuantity, validateQuantity } from "../src/lib/stock-rules.ts";
 
 test("lot balance sums signed movements without floating point noise", () => {
   assert.equal(lotBalance([{ quantity: 0.1 }, { quantity: 0.2 }]), 0.3);
@@ -47,4 +47,25 @@ test("quantity text uses the Brazilian decimal comma", () => {
   assert.equal(formatQuantity(2, "unidade"), "2 un");
   assert.equal(formatQuantity(1, "frasco"), "1 frasco");
   assert.equal(formatQuantity(3, "frasco"), "3 frascos");
+});
+
+test("legacy material text converts to a technical sheet with quantity 1", () => {
+  const products = [
+    { id: "p1", name: "Toxina botulínica" },
+    { id: "p2", name: "Agulha" },
+    { id: "p3", name: "Ácido Hialurônico" },
+  ];
+  assert.deepEqual(convertMaterialsText("Toxina botulinica, Agulha", products), [
+    { productId: "p1", quantity: 1 },
+    { productId: "p2", quantity: 1 },
+  ]);
+  assert.deepEqual(convertMaterialsText("ACIDO HIALURONICO, Luvas descartáveis", products), [{ productId: "p3", quantity: 1 }]);
+  assert.deepEqual(convertMaterialsText("Agulha, agulha", products), [{ productId: "p2", quantity: 1 }]);
+  assert.deepEqual(convertMaterialsText("Anestésico tópico", products), []);
+  assert.deepEqual(convertMaterialsText("", products), []);
+});
+
+test("technical sheet is described with quantities and units", () => {
+  assert.equal(describeTechnicalSheet([{ name: "Ácido hialurônico", unit: "ml", quantity: 1 }, { name: "Agulha", unit: "unidade", quantity: 2 }]), "1 ml Ácido hialurônico, 2 un Agulha");
+  assert.equal(describeTechnicalSheet([]), "");
 });
