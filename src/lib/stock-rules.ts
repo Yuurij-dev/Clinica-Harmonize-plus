@@ -79,6 +79,32 @@ export function stockAlerts(input: {
   return [...lotAlerts, ...minimumAlerts];
 }
 
+export type AttendanceKind = "procedure" | "return" | "evaluation";
+export const attendanceKindLabels: Record<AttendanceKind, string> = { procedure: "Procedimento", return: "Retorno", evaluation: "Avaliação" };
+
+// Tipo do atendimento a partir do nome do agendamento ("Avaliação", "Retorno - X", "Consulta / retorno").
+export function attendanceKind(label: string): AttendanceKind {
+  const name = normalizeName(label);
+  if (name.startsWith("avaliacao")) return "evaluation";
+  if (name.startsWith("retorno") || name.includes("/ retorno")) return "return";
+  return "procedure";
+}
+
+// Sugere de quais lotes tirar a quantidade: vence primeiro sai primeiro, ignorando lotes
+// vencidos ou sem saldo. O que faltar vira saída pendente.
+export function allocateLots(quantity: number, lots: Array<{ id: string; expiresOn: string; balance: number }>, today: string) {
+  const usable = lots.filter((lot) => lot.balance > 0 && lot.expiresOn >= today).sort((left, right) => left.expiresOn.localeCompare(right.expiresOn));
+  const allocations: Array<{ lotId: string; quantity: number }> = [];
+  let remaining = roundQuantity(quantity);
+  for (const lot of usable) {
+    if (remaining <= 0) break;
+    const taken = Math.min(remaining, lot.balance);
+    allocations.push({ lotId: lot.id, quantity: roundQuantity(taken) });
+    remaining = roundQuantity(remaining - taken);
+  }
+  return { allocations, pending: remaining };
+}
+
 export const manualReasons = {
   loss: "Perda/quebra",
   expired: "Vencimento",

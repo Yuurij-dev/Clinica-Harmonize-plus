@@ -56,6 +56,7 @@ import { procedureCategories } from "@/data/categories";
 import { sendJson } from "@/lib/send-json";
 import { describeTechnicalSheet } from "@/lib/stock-rules";
 import { readTechnicalSheet, TechnicalSheetEditor, type TechnicalSheetItem } from "./technical-sheet-editor";
+import { MaterialCheckModal } from "./material-check-modal";
 import type { Appointment, JourneyStageId, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
 
 const currency = new Intl.NumberFormat("pt-BR", {
@@ -472,6 +473,8 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     }
   }
 
+  const [materialCheck, setMaterialCheck] = useState<{ id: string; patientId: string } | null>(null);
+
   async function advanceAppointment(target: AppointmentRow) {
     const nextStatus = target.status === "Em atendimento" ? "Atendido" : "Em atendimento";
     setUpdatingId(target.id);
@@ -479,9 +482,10 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     if (!response.ok) { setUpdatingId(null); return; }
     const nextRows = appointmentRows.map((item) => item.id === target.id ? { ...item, status: nextStatus } : item);
     setAppointmentRows(nextRows);
-    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", ...(nextStatus === "Atendido" ? ["/api/patients"] : []));
+    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", ...(nextStatus === "Atendido" ? ["/api/patients", `/api/patients/${target.patientId}/history`] : []));
     setUpdatingId(null);
     onSaved?.(`${target.patient}: ${nextStatus}.`);
+    if (nextStatus === "Atendido") setMaterialCheck({ id: target.id, patientId: target.patientId });
   }
 
   async function markAppointmentAsMissed(target: AppointmentRow) {
@@ -692,6 +696,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
       <Modal open={Boolean(deleteTarget)} onClose={() => { if (!deleteSaving) setDeleteTarget(null); }} title="Excluir agendamento" description="Essa ação removerá o agendamento da agenda.">
         <div className="space-y-4"><p className="rounded-[7px] bg-[#fff7f7] px-3 py-3 text-xs font-semibold leading-5 text-[#7e3b43]">Tem certeza que deseja excluir o agendamento de <strong>{deleteTarget?.patient}</strong> às <strong>{deleteTarget?.time}</strong>? Você poderá desfazer pelo aviso exibido após a exclusão.</p><div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={deleteSaving} onClick={() => setDeleteTarget(null)}>Cancelar</Button><Button type="button" className="bg-[#b42318] hover:bg-[#991b1b]" disabled={deleteSaving} onClick={() => void deleteAppointment()}>{deleteSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{deleteSaving ? "Excluindo..." : "Excluir agendamento"}</Button></div></div>
       </Modal>
+      {materialCheck ? <MaterialCheckModal appointmentId={materialCheck.id} onClose={() => setMaterialCheck(null)} onDone={(message) => { invalidateClientCache(`/api/patients/${materialCheck.patientId}/history`); setMaterialCheck(null); onSaved?.(message); }} /> : null}
     </div>
   );
 }

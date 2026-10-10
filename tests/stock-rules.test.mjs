@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { stockAlerts, convertMaterialsText, manualMovement, describeTechnicalSheet, formatQuantity, lotBalance, lotStatus, materialBalance, parseQuantity, validateQuantity } from "../src/lib/stock-rules.ts";
+import { allocateLots, attendanceKind, stockAlerts, convertMaterialsText, manualMovement, describeTechnicalSheet, formatQuantity, lotBalance, lotStatus, materialBalance, parseQuantity, validateQuantity } from "../src/lib/stock-rules.ts";
 
 test("lot balance sums signed movements without floating point noise", () => {
   assert.equal(lotBalance([{ quantity: 0.1 }, { quantity: 0.2 }]), 0.3);
@@ -103,4 +103,26 @@ test("stock alerts flag low materials and lots close to expiry", () => {
     ["below_minimum", "m1", null, "Ácido hialurônico abaixo do mínimo (2 de 5 ml)"],
   ]);
   assert.deepEqual(stockAlerts({ materials, lots, today: "2026-10-09", warningDays: 0 }).map((alert) => alert.lotId ?? alert.kind), ["l3", "l5", "below_minimum"]);
+});
+
+test("lots are suggested by earliest expiry, skipping expired and empty lots", () => {
+  const lots = [
+    { id: "late", expiresOn: "2027-06-01", balance: 5 },
+    { id: "expired", expiresOn: "2026-10-08", balance: 9 },
+    { id: "soon", expiresOn: "2026-12-01", balance: 1.5 },
+    { id: "empty", expiresOn: "2026-11-01", balance: 0 },
+  ];
+  assert.deepEqual(allocateLots(1, lots, "2026-10-09"), { allocations: [{ lotId: "soon", quantity: 1 }], pending: 0 });
+  assert.deepEqual(allocateLots(2, lots, "2026-10-09"), { allocations: [{ lotId: "soon", quantity: 1.5 }, { lotId: "late", quantity: 0.5 }], pending: 0 });
+  assert.deepEqual(allocateLots(8, lots, "2026-10-09"), { allocations: [{ lotId: "soon", quantity: 1.5 }, { lotId: "late", quantity: 5 }], pending: 1.5 });
+  assert.deepEqual(allocateLots(3, [{ id: "expired", expiresOn: "2026-10-08", balance: 9 }], "2026-10-09"), { allocations: [], pending: 3 });
+  assert.deepEqual(allocateLots(1, [{ id: "today", expiresOn: "2026-10-09", balance: 1 }], "2026-10-09"), { allocations: [{ lotId: "today", quantity: 1 }], pending: 0 });
+});
+
+test("attendance kind comes from the appointment label", () => {
+  assert.equal(attendanceKind("Avaliação"), "evaluation");
+  assert.equal(attendanceKind("Retorno - Botox (1x)"), "return");
+  assert.equal(attendanceKind("Consulta / retorno"), "return");
+  assert.equal(attendanceKind("Preenchimento labial"), "procedure");
+  assert.equal(attendanceKind("Botox (1x)"), "procedure");
 });

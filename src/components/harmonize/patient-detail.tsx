@@ -39,6 +39,8 @@ import { Card } from "@/components/ui/card";
 import { MaskedInput } from "@/components/ui/masked-input";
 import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
+import { MaterialCheckModal } from "./material-check-modal";
 import { PatientExpenses } from "./patient-expenses";
 import { CustomerJourney } from "./customer-journey";
 import { PatientEvaluations } from "./patient-evaluations";
@@ -81,6 +83,7 @@ type PatientAppointmentRecord = {
   professional: string;
   status: string;
   notes?: string;
+  materialsCheck?: string | null;
 };
 
 type PatientPaymentRecord = {
@@ -704,6 +707,7 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
   const [currentTime, setCurrentTime] = useState(() => clinicNowForForm());
   const [schedulePickerKind, setSchedulePickerKind] = useState<"procedure" | "return" | null>(null);
   const [evaluations, setEvaluations] = useState<EvaluationSummary[]>([]);
+  const [checkAppointmentId, setCheckAppointmentId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!patientId) return;
@@ -740,6 +744,7 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
       if (!response.ok) throw new Error(data?.message ?? "Não foi possível atualizar o procedimento.");
       setAppointmentStatuses((current) => ({ ...current, [appointment.id as string]: status }));
       invalidateClientCache(`/api/patients/${patientId}/history`, "/api/patients", "/api/appointments", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+      if (status === "Atendido") setCheckAppointmentId(appointment.id);
     } catch (appointmentError) {
       setError(appointmentError instanceof Error ? appointmentError.message : "Não foi possível atualizar o procedimento.");
     }
@@ -873,6 +878,7 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
           <div className="flex justify-end pt-2"><Button type="button" variant="secondary" onClick={() => setSchedulePickerKind(null)}>Cancelar</Button></div>
         </div>
       </Modal>
+      {checkAppointmentId ? <MaterialCheckModal appointmentId={checkAppointmentId} onClose={() => setCheckAppointmentId(null)} onDone={(message) => { setCheckAppointmentId(null); invalidateClientCache(`/api/patients/${patientId}/history`); toast.success(message); }} /> : null}
     </div>
   );
 }
@@ -944,7 +950,7 @@ function ptBrDateToIso(value: string) {
   return match ? `${match[3]}-${match[2]}-${match[1]}` : null;
 }
 
-type PatientHistoryResponse = { patient?: { appointmentToleranceMinutes?: number; appointments: Array<{ id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string }>; payments: Array<{ id: string; value: number; method: string; status: string; installments: string }>; quotes: Array<{ id: string; items: string; status: string; createdAt?: string }>; procedureRecords: Array<{ id: string; name: string; professional: string; performedAt: string; notes: string; beforePhoto: string | null; afterPhoto: string | null; photoSessions?: Array<{ id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }> }> } };
+type PatientHistoryResponse = { patient?: { appointmentToleranceMinutes?: number; appointments: Array<{ id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string; materialsCheck?: string | null }>; payments: Array<{ id: string; value: number; method: string; status: string; installments: string }>; quotes: Array<{ id: string; items: string; status: string; createdAt?: string }>; procedureRecords: Array<{ id: string; name: string; professional: string; performedAt: string; notes: string; beforePhoto: string | null; afterPhoto: string | null; photoSessions?: Array<{ id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }> }> } };
 
 function mapPatientHistory(data: PatientHistoryResponse) {
   const appointments = data.patient?.appointments ?? [];
@@ -959,7 +965,7 @@ function mapPatientHistory(data: PatientHistoryResponse) {
     : paidQuotes.map((quote): PatientProcedureRecord => ({ name: quote.items, date: quote.createdAt ? new Date(quote.createdAt).toLocaleDateString("pt-BR") : new Date().toLocaleDateString("pt-BR"), professional: "", status: "Aguardando foto", beforePhoto: "", afterPhoto: "", photoSessions: [], notes: "", quoteDate: quote.createdAt }))
       .concat(appointments.filter((item) => ["Atendido", "Finalizado"].includes(item.status)).map((item) => ({ name: item.procedure, date: new Date(item.date).toLocaleDateString("pt-BR"), professional: item.professional, status: item.status, beforePhoto: "", afterPhoto: "", photoSessions: [], notes: item.notes })));
   const history: PatientHistoryRecord = {
-    appointments: appointments.map((item) => ({ id: item.id, date: new Date(item.date).toLocaleDateString("pt-BR"), time: item.time, procedure: item.procedure, professional: item.professional, status: item.status, notes: item.notes })),
+    appointments: appointments.map((item) => ({ id: item.id, date: new Date(item.date).toLocaleDateString("pt-BR"), time: item.time, procedure: item.procedure, professional: item.professional, status: item.status, notes: item.notes, materialsCheck: item.materialsCheck ?? null })),
     appointmentToleranceMinutes: data.patient?.appointmentToleranceMinutes ?? 15,
     procedures,
     payments: payments.map((item) => ({ id: item.id, procedure: "Atendimento", value: new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(item.value), method: item.method, status: item.status, disabled: item.status === "Pago", disabledReason: item.status === "Pago" ? "Pagamento já finalizado" : undefined })),
@@ -1260,6 +1266,8 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
   const [editingAppointment, setEditingAppointment] = useState<PatientAppointmentRecord | null>(null);
   const [editedAppointments, setEditedAppointments] = useState<Record<string, PatientAppointmentRecord>>({});
   const [updatingAppointmentId, setUpdatingAppointmentId] = useState<string | null>(null);
+  const [checkAppointmentId, setCheckAppointmentId] = useState<string | null>(null);
+  const [checkedAppointmentIds, setCheckedAppointmentIds] = useState<string[]>([]);
   const [currentTime, setCurrentTime] = useState(() => clinicNowForForm());
   const primaryProcedure = history?.procedures[0];
   const returnScheduled = Boolean(history?.appointments.some((appointment) => appointment.procedure.toLocaleLowerCase("pt-BR").includes("retorno")));
@@ -1280,6 +1288,7 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
       if (!response.ok) throw new Error(data?.message ?? "Não foi possível atualizar o atendimento.");
       setEditedAppointments((current) => ({ ...current, [appointment.id as string]: { ...appointment, status } }));
       invalidateClientCache(`/api/patients/${patientId}/history`, "/api/appointments", "/api/agenda/bootstrap", "/api/dashboard/bootstrap", ...(status === "Atendido" ? ["/api/patients"] : []));
+      if (status === "Atendido") setCheckAppointmentId(appointment.id);
     } catch (statusError) {
       setReturnError(statusError instanceof Error ? statusError.message : "Não foi possível atualizar o atendimento.");
     } finally {
@@ -1355,7 +1364,7 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
                   <p className="mt-1 text-xs text-[#858696]">{appointment.date} às {appointment.time} · {appointment.professional}</p>
                   {appointment.notes ? <p className="mt-2 text-xs text-[#656678]">{appointment.notes}</p> : null}
                 </div>
-                <div className="flex flex-wrap items-center justify-end gap-2"><Badge variant={appointment.status === "Atendido" ? "green" : appointment.status === "Em atendimento" ? "amber" : "purple"}>{appointment.status}</Badge>{appointment.status === "Agendado" && appointment.id ? <><Button className="h-8 px-2" type="button" variant="secondary" disabled={!appointmentCanStart(appointment, history?.appointmentToleranceMinutes ?? 15, currentTime)} onClick={() => void updateAppointmentStatus(appointment, "Em atendimento")} title={appointmentCanStart(appointment, history?.appointmentToleranceMinutes ?? 15, currentTime) ? "Iniciar atendimento" : "Aguarde o horário do atendimento"}>{updatingAppointmentId === appointment.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock3 className="h-3.5 w-3.5" />}{updatingAppointmentId === appointment.id ? "Atualizando..." : "Iniciar atendimento"}</Button><Button className="h-8 px-2" type="button" variant="secondary" aria-label="Editar retorno" title="Editar retorno" onClick={() => openEditAppointment(appointment)}><PencilLine className="h-3.5 w-3.5" /></Button></> : null}{appointment.status === "Em atendimento" && appointment.id ? <Button className="h-8 px-2" type="button" onClick={() => void updateAppointmentStatus(appointment, "Atendido")}><CheckCircle2 className="h-3.5 w-3.5" />{updatingAppointmentId === appointment.id ? "Atualizando..." : "Finalizar atendimento"}</Button> : null}</div>
+                <div className="flex flex-wrap items-center justify-end gap-2">{appointment.id && appointment.status === "Atendido" && appointment.materialsCheck === "pending" && !checkedAppointmentIds.includes(appointment.id) ? <Button className="h-8 px-2" type="button" variant="secondary" onClick={() => setCheckAppointmentId(appointment.id ?? null)}>Conferir materiais</Button> : null}<Badge variant={appointment.status === "Atendido" ? "green" : appointment.status === "Em atendimento" ? "amber" : "purple"}>{appointment.status}</Badge>{appointment.status === "Agendado" && appointment.id ? <><Button className="h-8 px-2" type="button" variant="secondary" disabled={!appointmentCanStart(appointment, history?.appointmentToleranceMinutes ?? 15, currentTime)} onClick={() => void updateAppointmentStatus(appointment, "Em atendimento")} title={appointmentCanStart(appointment, history?.appointmentToleranceMinutes ?? 15, currentTime) ? "Iniciar atendimento" : "Aguarde o horário do atendimento"}>{updatingAppointmentId === appointment.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock3 className="h-3.5 w-3.5" />}{updatingAppointmentId === appointment.id ? "Atualizando..." : "Iniciar atendimento"}</Button><Button className="h-8 px-2" type="button" variant="secondary" aria-label="Editar retorno" title="Editar retorno" onClick={() => openEditAppointment(appointment)}><PencilLine className="h-3.5 w-3.5" /></Button></> : null}{appointment.status === "Em atendimento" && appointment.id ? <Button className="h-8 px-2" type="button" onClick={() => void updateAppointmentStatus(appointment, "Atendido")}><CheckCircle2 className="h-3.5 w-3.5" />{updatingAppointmentId === appointment.id ? "Atualizando..." : "Finalizar atendimento"}</Button> : null}</div>
               </div>
             ))}
           </div>
@@ -1372,6 +1381,7 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
           <div className="flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" disabled={returnSaving} onClick={() => { setEditingAppointment(null); onReturnAppointmentClose(); }}>Cancelar</Button><Button type="submit" disabled={returnSaving}>{returnSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : editingAppointment ? <PencilLine className="h-3.5 w-3.5" /> : <CalendarPlus className="h-3.5 w-3.5" />}{returnSaving ? "Salvando..." : editingAppointment ? "Salvar alterações" : scheduleKind === "procedure" ? "Confirmar procedimento" : "Confirmar retorno"}</Button></div>
         </form>
       </Modal>
+      {checkAppointmentId ? <MaterialCheckModal appointmentId={checkAppointmentId} onClose={() => setCheckAppointmentId(null)} onDone={(message) => { setCheckedAppointmentIds((current) => [...current, checkAppointmentId]); setCheckAppointmentId(null); invalidateClientCache(`/api/patients/${patientId}/history`); toast.success(message); }} /> : null}
     </div>
   );
 }

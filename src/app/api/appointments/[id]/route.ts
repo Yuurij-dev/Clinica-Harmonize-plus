@@ -21,6 +21,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     ...(body?.notes !== undefined ? { notes: body.notes.trim() } : {}),
   } });
   if (result.count === 0) return NextResponse.json({ message: "Agendamento não encontrado." }, { status: 404 });
+  // Todo atendimento finalizado (na tela ou automaticamente pela agenda) fica com a conferência de materiais pendente.
+  if (body?.status === "Atendido") await prisma.appointment.updateMany({ where: { id, clinicId: user.clinicId, materialsCheck: null }, data: { materialsCheck: "pending" } });
   const appointment = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, include: { patient: { select: { name: true } } } });
   return NextResponse.json({ appointment });
 }
