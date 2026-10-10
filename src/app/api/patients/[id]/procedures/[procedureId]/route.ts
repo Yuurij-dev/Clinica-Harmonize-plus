@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { denyUnless } from "@/lib/api-guards";
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string; procedureId: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user.role, "clinical:write");
+  if (denied) return denied;
 
   const { id: patientId, procedureId } = await params;
   const body = await request.json().catch(() => null) as { photoType?: "beforePhoto" | "afterPhoto"; photo?: string | null; sessionId?: string; name?: string } | null;
@@ -42,6 +45,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 export async function POST(request: Request, { params }: { params: Promise<{ id: string; procedureId: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user.role, "clinical:write");
+  if (denied) return denied;
 
   const { id: patientId, procedureId } = await params;
   const body = await request.json().catch(() => null) as { name?: string } | null;
@@ -55,6 +60,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string; procedureId: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user.role, "clinical:write");
+  if (denied) return denied;
 
   const { id: patientId, procedureId } = await params;
   const sessionId = new URL(request.url).searchParams.get("sessionId");

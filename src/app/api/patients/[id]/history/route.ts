@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { dateOnly } from "@/lib/clinic-time";
-import { observationKindsFor } from "@/lib/permissions";
+import { can, observationKindsFor } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -10,6 +10,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const requestedTab = new URL(request.url).searchParams.get("tab");
   const requestedJourneyId = new URL(request.url).searchParams.get("journeyId");
   const patientId = (await params).id;
+  const clinical = can(user.role, "clinical:read");
   const journeyId = requestedTab === "Histórico" ? undefined : requestedJourneyId || undefined;
   const includeAppointments = ["Procedimentos", "Agendamentos", "Histórico"].includes(requestedTab ?? "");
   const includePayments = ["Pagamentos", "Histórico"].includes(requestedTab ?? "");
@@ -17,7 +18,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const includeProcedureRecords = ["Procedimentos", "Histórico"].includes(requestedTab ?? "");
   const includeAppointmentProcedureNames = ["Procedimentos", "Agendamentos"].includes(requestedTab ?? "") && new URL(request.url).searchParams.get("includeProcedureNames") === "1";
   const includeObservations = requestedTab === "Histórico";
-  const includeProcedurePhotos = requestedTab === "Procedimentos" || requestedTab === "Histórico";
+  const includeProcedurePhotos = clinical && (requestedTab === "Procedimentos" || requestedTab === "Histórico");
   const patient = await prisma.patient.findFirst({
     where: { id: patientId, clinicId: user.clinicId },
     select: { id: true },
@@ -31,11 +32,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     includeAppointments ? prisma.appointment.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: [{ date: "desc" }, { time: "desc" }] }) : Promise.resolve([]),
     includePayments ? prisma.payment.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { date: "desc" } }) : Promise.resolve([]),
     includeQuotes ? prisma.quote.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { createdAt: "desc" }, select: { id: true, items: true, status: true, createdAt: true } }) : Promise.resolve([]),
-    includeProcedureRecords ? prisma.patientProcedure.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { performedAt: "desc" }, select: { id: true, name: true, professional: true, performedAt: true, notes: true, beforePhoto: true, afterPhoto: true, photoSessions: { orderBy: { createdAt: "asc" }, select: { id: true, name: true, beforePhoto: true, afterPhoto: true, createdAt: true } } } }) : Promise.resolve([]),
+    includeProcedureRecords ? prisma.patientProcedure.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { performedAt: "desc" }, select: { id: true, name: true, professional: true, performedAt: true, ...(clinical ? { notes: true } : {}), beforePhoto: true, afterPhoto: true, photoSessions: { orderBy: { createdAt: "asc" }, select: { id: true, name: true, beforePhoto: true, afterPhoto: true, createdAt: true } } } }) : Promise.resolve([]),
     prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { appointmentToleranceMinutes: true } }),
     // Materiais usados no paciente (rastreio): saídas de atendimento, sem custo.
-    includeProcedureRecords ? prisma.stockMovement.findMany({ where: { clinicId: user.clinicId, patientId, type: "attendance" }, orderBy: { attendanceDate: "desc" }, select: { id: true, appointmentId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, unit: true } }, lot: { select: { code: true, expiresOn: true } }, reversedBy: { select: { id: true } } } }) : Promise.resolve([]),
-    includeProcedureRecords ? prisma.pendingStockOutput.findMany({ where: { clinicId: user.clinicId, patientId, status: "pending" }, select: { id: true, appointmentId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, unit: true } } } }) : Promise.resolve([]),
+    includeProcedureRecords && clinical ? prisma.stockMovement.findMany({ where: { clinicId: user.clinicId, patientId, type: "attendance" }, orderBy: { attendanceDate: "desc" }, select: { id: true, appointmentId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, unit: true } }, lot: { select: { code: true, expiresOn: true } }, reversedBy: { select: { id: true } } } }) : Promise.resolve([]),
+    includeProcedureRecords && clinical ? prisma.pendingStockOutput.findMany({ where: { clinicId: user.clinicId, patientId, status: "pending" }, select: { id: true, appointmentId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, unit: true } } } }) : Promise.resolve([]),
     includeObservations ? prisma.patientObservation.findMany({ where: { patientId, clinicId: user.clinicId, kind: { in: observationKindsFor(user.role) } }, orderBy: { createdAt: "desc" }, select: { id: true, text: true, authorName: true, kind: true, createdAt: true } }) : Promise.resolve([]),
     includeAppointmentProcedureNames ? prisma.procedure.findMany({ where: { clinicId: user.clinicId }, select: { name: true } }) : Promise.resolve([]),
   ]);
@@ -49,6 +50,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
   const responseProcedureRecords = procedureRecords.map((procedure) => ({
     ...procedure,
+    notes: clinical ? procedure.notes : "",
     beforePhoto: includeProcedurePhotos ? procedure.beforePhoto : procedure.beforePhoto ? "__photo__" : null,
     afterPhoto: includeProcedurePhotos ? procedure.afterPhoto : procedure.afterPhoto ? "__photo__" : null,
     photoSessions: procedure.photoSessions.map((session) => ({

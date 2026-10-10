@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { denyUnless } from "@/lib/api-guards";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const denied = denyUnless(user.role, "payments:access");
+  if (denied) return denied;
   const payments = await prisma.payment.findMany({ where: { clinicId: user.clinicId }, orderBy: { date: "desc" }, include: { patient: { select: { name: true } } } });
   return NextResponse.json({ payments });
 }
@@ -14,7 +16,8 @@ export async function GET() {
 export async function POST(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const denied = denyUnless(user.role, "payments:access");
+  if (denied) return denied;
   const body = await request.json().catch(() => null) as { patient?: string; patientId?: string; journeyId?: string; value?: number; method?: string; status?: string; installments?: string } | null;
   const patient = body?.patientId ? await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId } }) : body?.patient ? await prisma.patient.findFirst({ where: { name: body.patient, clinicId: user.clinicId } }) : null;
   const value = Number(body?.value);
