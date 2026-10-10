@@ -50,6 +50,26 @@ export function formatQuantity(quantity: number, unit: string) {
   return `${value} ${unit}`;
 }
 
+export const manualReasons = {
+  loss: "Perda/quebra",
+  expired: "Vencimento",
+  internal_use: "Uso interno/amostra",
+  count: "Correção de contagem",
+} as const;
+export type ManualReason = keyof typeof manualReasons;
+
+// Saída manual: observação obrigatória e nunca mais que o saldo do lote.
+// A correção de contagem pode somar (direction "in") ou tirar do saldo.
+export function manualMovement(input: { reason: string; direction?: "in" | "out"; quantity: number; unit: string; lotBalance: number; notes: string }) {
+  if (!(input.reason in manualReasons)) return { error: "Motivo inválido." };
+  if (!input.notes.trim()) return { error: "A observação é obrigatória." };
+  const quantityError = validateQuantity(input.quantity, input.unit);
+  if (quantityError) return { error: quantityError };
+  const adds = input.reason === "count" && input.direction === "in";
+  if (!adds && input.quantity > input.lotBalance) return { error: `A saída é maior que o saldo do lote (${formatQuantity(input.lotBalance, input.unit)}).` };
+  return { type: input.reason === "count" ? "count_adjustment" : "manual_out", quantity: adds ? input.quantity : -input.quantity };
+}
+
 export function normalizeName(value: string) {
   return value.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLocaleLowerCase("pt-BR").replace(/\s+/g, " ");
 }

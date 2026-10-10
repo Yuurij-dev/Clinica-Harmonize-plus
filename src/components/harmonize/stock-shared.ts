@@ -16,7 +16,7 @@ export type StockMaterial = {
 
 // Chaves de cache afetadas por qualquer mudança de material ou saldo.
 export function invalidateStockCache(productId?: string) {
-  invalidateClientCache("/api/products", ...(productId ? [`/api/products/${productId}`] : []), "/api/quotes/options", "/api/stock/alerts");
+  invalidateClientCache("/api/products", ...(productId ? [`/api/products/${productId}`, `/api/products/${productId}/movements`] : []), "/api/quotes/options", "/api/stock/alerts");
 }
 
 export function formatDateOnly(value: string) {

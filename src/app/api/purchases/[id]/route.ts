@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { lotBalances, movementTypes } from "@/lib/stock";
+import { lockLots, lotBalances, movementTypes } from "@/lib/stock";
 import { roundQuantity } from "@/lib/stock-rules";
 
 // Cancelar a compra desfaz as entradas e cancela as despesas ligadas.
@@ -22,6 +22,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     await prisma.$transaction(async (tx) => {
       const addedByLot = new Map<string, number>();
       for (const item of purchase.items) addedByLot.set(item.lotId, roundQuantity((addedByLot.get(item.lotId) ?? 0) + item.quantity));
+      await lockLots(tx, [...addedByLot.keys()]);
       const balances = await lotBalances(user.clinicId, { lotId: { in: [...addedByLot.keys()] } }, tx);
       for (const [lotId, added] of addedByLot) {
         if ((balances.get(lotId) ?? 0) < added) throw new CancelBlocked();

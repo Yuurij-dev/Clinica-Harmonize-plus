@@ -11,7 +11,8 @@ import { procedureCategories } from "@/data/categories";
 import { sendJson } from "@/lib/send-json";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, readClientCache } from "@/lib/client-cache";
 import { formatCurrency, parseCurrency } from "@/lib/input-masks";
-import { formatQuantity, parseQuantity, stockUnits, validateQuantity, type LotStatus } from "@/lib/stock-rules";
+import { formatQuantity, parseQuantity, stockUnits, validateQuantity, type LotStatus, type ManualReason } from "@/lib/stock-rules";
+import { ManualMovementForm, MovementHistory } from "./stock-movements";
 import { PurchasesPanel } from "./purchases-panel";
 import { EmptyState, LoadingTable, MiniTable, SectionIntro } from "./shared";
 import { formatDateOnly, invalidateStockCache, type StockMaterial } from "./stock-shared";
@@ -156,6 +157,9 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
   const [detail, setDetail] = useState<StockMaterialDetail | null>(() => readClientCache<{ product?: StockMaterialDetail }>(detailKey)?.product ?? null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<"initial" | "archive" | "delete" | null>(null);
+  const [movementForm, setMovementForm] = useState<{ lotId: string; reason: ManualReason; quantity?: number } | null>(null);
+  const [history, setHistory] = useState<{ lotId?: string; lotCode?: string } | null>(null);
+  const [historyVersion, setHistoryVersion] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -186,6 +190,7 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
     }
     setDetail(data.product);
     formElement.reset();
+    setHistoryVersion((current) => current + 1);
     onChanged(`Saldo inicial lançado em ${data.product.name}.`);
   }
 
@@ -234,12 +239,21 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
                 {detail.lots.map((lot) => (
                   <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 text-sm" key={lot.id}>
                     <div><p className="font-bold text-foreground">Lote {lot.code}</p><p className="text-xs text-muted-foreground">Validade {formatDateOnly(lot.expiresOn)}</p></div>
-                    <div className="flex items-center gap-2"><strong>{formatQuantity(lot.balance, detail.unit)}</strong><Badge variant={lotStatusBadge[lot.status].variant}>{lotStatusBadge[lot.status].label}</Badge></div>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <strong>{formatQuantity(lot.balance, detail.unit)}</strong><Badge variant={lotStatusBadge[lot.status].variant}>{lotStatusBadge[lot.status].label}</Badge>
+                      {lot.status === "expired" && lot.balance > 0 ? <Button size="sm" variant="secondary" onClick={() => setMovementForm({ lotId: lot.id, reason: "expired", quantity: lot.balance })}>Descartar</Button> : null}
+                      {!detail.archivedAt ? <Button size="sm" variant="secondary" onClick={() => setMovementForm({ lotId: lot.id, reason: "loss" })}>Saída</Button> : null}
+                      <Button size="sm" variant="ghost" onClick={() => setHistory({ lotId: lot.id, lotCode: lot.code })}>Histórico</Button>
+                    </div>
                   </div>
                 ))}
               </div>
             ) : <p className="text-xs text-muted-foreground">Nenhum lote lançado ainda.</p>}
+            {detail.lots.length ? <div className="mt-2 flex justify-end"><Button size="sm" variant="ghost" onClick={() => setHistory({})}>Ver histórico do material</Button></div> : null}
           </div>
+
+          {movementForm ? <ManualMovementForm<StockMaterialDetail> key={`${movementForm.lotId}-${movementForm.reason}`} productId={detail.id} unit={detail.unit} lots={detail.lots} initial={movementForm} onCancel={() => setMovementForm(null)} onSaved={(product) => { setDetail(product); setMovementForm(null); setHistoryVersion((current) => current + 1); onChanged(`Movimentação registrada em ${product.name}.`); }} /> : null}
+          {history ? <MovementHistory key={`${history.lotId ?? "all"}-${historyVersion}`} productId={detail.id} unit={detail.unit} lotId={history.lotId} lotCode={history.lotCode} /> : null}
 
           {!detail.archivedAt ? (
             <form className="grid gap-3 rounded-[8px] border border-dashed border-border p-3 sm:grid-cols-3" onSubmit={addInitialBalance}>

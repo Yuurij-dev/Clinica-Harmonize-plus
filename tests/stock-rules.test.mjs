@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { convertMaterialsText, describeTechnicalSheet, formatQuantity, lotBalance, lotStatus, materialBalance, parseQuantity, validateQuantity } from "../src/lib/stock-rules.ts";
+import { convertMaterialsText, manualMovement, describeTechnicalSheet, formatQuantity, lotBalance, lotStatus, materialBalance, parseQuantity, validateQuantity } from "../src/lib/stock-rules.ts";
 
 test("lot balance sums signed movements without floating point noise", () => {
   assert.equal(lotBalance([{ quantity: 0.1 }, { quantity: 0.2 }]), 0.3);
@@ -68,4 +68,16 @@ test("legacy material text converts to a technical sheet with quantity 1", () =>
 test("technical sheet is described with quantities and units", () => {
   assert.equal(describeTechnicalSheet([{ name: "Ácido hialurônico", unit: "ml", quantity: 1 }, { name: "Agulha", unit: "unidade", quantity: 2 }]), "1 ml Ácido hialurônico, 2 un Agulha");
   assert.equal(describeTechnicalSheet([]), "");
+});
+
+test("manual movements need a note and cannot take more than the lot balance", () => {
+  assert.deepEqual(manualMovement({ reason: "loss", quantity: 1, unit: "ml", lotBalance: 3, notes: "Frasco quebrou" }), { type: "manual_out", quantity: -1 });
+  assert.deepEqual(manualMovement({ reason: "internal_use", quantity: 2, unit: "unidade", lotBalance: 2, notes: "Treino" }), { type: "manual_out", quantity: -2 });
+  assert.deepEqual(manualMovement({ reason: "count", direction: "in", quantity: 0.5, unit: "ml", lotBalance: 0, notes: "Contagem" }), { type: "count_adjustment", quantity: 0.5 });
+  assert.deepEqual(manualMovement({ reason: "count", direction: "out", quantity: 1, unit: "ml", lotBalance: 1, notes: "Contagem" }), { type: "count_adjustment", quantity: -1 });
+  assert.match(manualMovement({ reason: "loss", quantity: 1, unit: "ml", lotBalance: 3, notes: "  " }).error, /observação/);
+  assert.match(manualMovement({ reason: "loss", quantity: 4, unit: "ml", lotBalance: 3, notes: "x" }).error, /saldo/);
+  assert.match(manualMovement({ reason: "count", direction: "out", quantity: 4, unit: "ml", lotBalance: 3, notes: "x" }).error, /saldo/);
+  assert.match(manualMovement({ reason: "loss", quantity: 1.5, unit: "frasco", lotBalance: 3, notes: "x" }).error, /inteiro/);
+  assert.match(manualMovement({ reason: "gift", quantity: 1, unit: "ml", lotBalance: 3, notes: "x" }).error, /Motivo/);
 });

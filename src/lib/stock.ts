@@ -108,3 +108,9 @@ export async function parseTechnicalSheet(clinicId: string, value: unknown, curr
   }));
   return { items, description } as const;
 }
+
+// Trava os lotes até o fim da transação, para duas saídas simultâneas não passarem do saldo.
+export async function lockLots(tx: StockTransaction, lotIds: string[]) {
+  const ids = [...new Set(lotIds)].sort();
+  if (ids.length) await tx.$queryRaw`SELECT "id" FROM "StockLot" WHERE "id" = ANY(${ids}) FOR UPDATE`;
+}
