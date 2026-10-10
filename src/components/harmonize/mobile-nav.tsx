@@ -1,6 +1,7 @@
 import { Calculator, CalendarDays, CreditCard, FileText, Home, Users } from "lucide-react";
 import type { SectionId } from "@/types/clinic";
 import { cn } from "@/lib/utils";
+import { visibleSections } from "@/lib/permissions";
 
 const mobileItems: { id: SectionId; label: string; icon: typeof Home }[] = [
   { id: "dashboard", label: "Início", icon: Home },
@@ -14,15 +15,17 @@ const mobileItems: { id: SectionId; label: string; icon: typeof Home }[] = [
 export function MobileNav({
   active,
   onSelect,
-  isAdmin = false,
+  role,
 }: {
   active: SectionId;
   onSelect: (section: SectionId) => void;
-  isAdmin?: boolean;
+  role?: string | null;
 }) {
-  const visibleItems = isAdmin ? mobileItems : mobileItems.filter((item) => ["agenda", "clientes", "orcamentos"].includes(item.id));
+  const allowed = visibleSections(role);
+  const visibleItems = mobileItems.filter((item) => allowed.includes(item.id));
+  const gridCols = ({ 3: "grid-cols-3", 4: "grid-cols-4", 5: "grid-cols-5" } as Record<number, string>)[Math.min(visibleItems.length, 5)] ?? "grid-cols-3";
   return (
-    <nav className={`hp-topbar-enter fixed inset-x-0 bottom-0 z-30 grid ${isAdmin ? "grid-cols-5" : "grid-cols-3"} border-t border-border bg-card px-2 pb-3 pt-2 text-card-foreground shadow-[0_-12px_35px_rgba(14,23,55,0.1)] lg:hidden`}>
+    <nav className={`hp-topbar-enter fixed inset-x-0 bottom-0 z-30 grid ${gridCols} border-t border-border bg-card px-2 pb-3 pt-2 text-card-foreground shadow-[0_-12px_35px_rgba(14,23,55,0.1)] lg:hidden`}>
       {visibleItems.map((item) => {
         const Icon = item.icon;
         const isActive = active === item.id;
