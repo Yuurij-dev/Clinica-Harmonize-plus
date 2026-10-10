@@ -49,7 +49,8 @@ import { PatientEvaluations } from "./patient-evaluations";
 import { EmptyState, LoadingSkeleton } from "./shared";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { observationKindsFor, type ObservationKind } from "@/lib/permissions";
-import { useCurrentRole } from "./current-user";
+import { useCan, useCurrentRole } from "./current-user";
+import { EvaluationSummaryList } from "./evaluation-summary-list";
 import { appointmentWithinStartWindow, canRequestAppointmentStart, matchesProcedureAppointment } from "@/lib/clinic-time";
 import { assignProcedureAppointmentsToCards, mergePatientAppointments, procedureCardScheduleAction } from "@/lib/patient-appointments";
 import { FormField, fieldClassName } from "@/components/ui/modal";
@@ -291,8 +292,10 @@ export function PatientDetail({
 }
 
 function PatientTabContent({ onOpenTab, pinnedJourneyKey, onPinJourney, patient, activeTab, history, historyLoading, quoteCompleted, returnAppointmentTarget, onReturnAppointmentClose, onAppointmentCreated, onPatientUpdated, onProcedurePhotoUpdated, onScheduleReturn }: { onOpenTab: (tab: string) => void; pinnedJourneyKey?: string; onPinJourney: (journey: PinnedJourney | null) => void; patient: Patient; activeTab: string; history?: PatientHistoryRecord; historyLoading: boolean; quoteCompleted: boolean; returnAppointmentTarget: ReturnAppointmentTarget | null; onReturnAppointmentClose: () => void; onAppointmentCreated: (appointment: PatientAppointmentRecord) => void; onPatientUpdated: (patient: Patient) => void; onProcedurePhotoUpdated: (procedureId: string, photo: { beforePhoto: string | null; afterPhoto: string | null }) => void; onScheduleReturn: (procedure: ReturnAppointmentTarget, kind?: "return" | "procedure") => void }) {
+  const canReadClinical = useCan("clinical:read");
 
   if (activeTab === "Avaliação") {
+    if (!canReadClinical) return patient.id ? <EvaluationSummaryList patientId={patient.id} /> : null;
     return patient.id ? <PatientEvaluations patientId={patient.id} patientName={patient.name} /> : <EmptyState title="Cliente ainda não foi salvo" description="Salve o cliente antes de adicionar fotos à avaliação." />;
   }
 
@@ -585,6 +588,7 @@ function HistoryMetric({ icon: Icon, label, value, tone }: { icon: typeof Sparkl
 }
 
 function HistoryTimelineEventCard({ event, expanded, onToggle, onViewProcedure }: { event: HistoryTimelineEvent; expanded: boolean; onToggle: () => void; onViewProcedure: (procedure: PatientProcedureRecord) => void }) {
+  const canReadClinical = useCan("clinical:read");
   const isProcedure = event.kind === "procedure" && event.procedure;
   const dateParts = formatHistoryDateParts(event.date);
   const statusVariant = event.status === "Realizado" || event.status === "Atendido" || event.status === "Concluído" || event.status === "Pago" ? "green" : event.status === "Em procedimento" ? "amber" : "slate";
@@ -608,13 +612,13 @@ function HistoryTimelineEventCard({ event, expanded, onToggle, onViewProcedure }
               <div className="rounded-[7px] border border-[#e8e9f2] bg-[#fbfbfd] p-3"><p className="text-xs font-bold text-[#3f4053]">Procedimentos realizados</p><p className="mt-2 text-xs text-[#656678]">{event.title}</p></div>
               <div className="rounded-[7px] border border-[#e8e9f2] bg-[#fbfbfd] p-3"><p className="text-xs font-bold text-[#3f4053]">Observações</p><p className="mt-2 text-xs text-[#656678]">{event.details}</p></div>
             </div>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            {canReadClinical ? <div className="mt-3 flex flex-wrap items-center gap-2">
               <Button type="button" size="sm" onClick={() => onViewProcedure(event.procedure as PatientProcedureRecord)}><Eye className="h-3.5 w-3.5" />Ver procedimento</Button>
               <Button type="button" variant="secondary" size="sm" disabled title="Visualização de anexos em breve"><Paperclip className="h-3.5 w-3.5" />Ver anexos ({getProcedurePhotoSessions(event.procedure as PatientProcedureRecord).length})</Button>
               <div className="ml-auto flex -space-x-1.5">{getProcedurePhotoSessions(event.procedure as PatientProcedureRecord).slice(0, 3).flatMap((session) => [session.beforePhoto, session.afterPhoto]).filter((src) => Boolean(src && src !== "__photo__")).slice(0, 3).map((src, index) => <span className="relative h-8 w-8 overflow-hidden rounded-[5px] border-2 border-white bg-[#f1f2f7]" key={`${src}-${index}`}><Image src={src as string} alt="Miniatura do procedimento" fill className="object-cover" sizes="32px" /></span>)}</div>
-            </div>
+            </div> : null}
           </> : <div className="rounded-[7px] border border-[#e8e9f2] bg-[#fbfbfd] p-3 text-xs text-[#656678]">{event.details}</div>}
-          {event.materials?.length ? <div className="mt-3"><MaterialsUsedList items={event.materials} showAttendance={false} /></div> : null}
+          {canReadClinical && event.materials?.length ? <div className="mt-3"><MaterialsUsedList items={event.materials} showAttendance={false} /></div> : null}
         </div> : null}
       </Card>
     </div>
@@ -718,6 +722,7 @@ function HistoryTabSkeleton() {
 }
 
 function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, history, loading, onProcedurePhotoUpdated, onScheduleReturn }: { patientId: string; onOpenTab: (tab: string) => void; pinnedJourneyKey?: string; onPinJourney: (journey: PinnedJourney | null) => void; history?: PatientHistoryRecord; loading: boolean; onProcedurePhotoUpdated: (procedureId: string, photo: { beforePhoto: string | null; afterPhoto: string | null }) => void; onScheduleReturn: (procedure: ReturnAppointmentTarget, kind?: "return" | "procedure") => void }) {
+  const canReadClinical = useCan("clinical:read");
   const [procedures, setProcedures] = useState<PatientProcedureRecord[]>(history?.procedures ?? []);
   const [photoOperations, setPhotoOperations] = useState<Record<string, "upload" | "remove">>({});
   const [deletingPhotoSessionKey, setDeletingPhotoSessionKey] = useState<string>();
@@ -890,6 +895,12 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
       {loading ? <ProcedureCardsSkeleton /> : !visibleProcedures.length ? <EmptyPatientState message="Este cliente ainda não possui procedimentos realizados." /> : <div className="grid gap-4">{(() => {
         const procedureAppointments = assignProcedureAppointmentsToCards(history?.appointments ?? [], visibleProcedures, history?.procedureNames ?? []);
         return visibleProcedures.map((procedure, procedureIndex) => {
+        if (!canReadClinical) {
+          return <Card className="flex flex-wrap items-center justify-between gap-3 p-4" key={procedure.id ?? `${procedure.name}-${procedure.date}`}>
+            <div className="min-w-0"><strong className="block text-sm text-[#303144]">{procedure.name}</strong><span className="mt-1 block text-xs text-[#858696]">{procedure.date}{procedure.professional ? ` · ${procedure.professional}` : ""}</span></div>
+            <Badge variant={procedure.status === "Realizado" ? "green" : procedure.status === "Em procedimento" ? "amber" : "slate"}>{procedure.status}</Badge>
+          </Card>;
+        }
         const beforeKey = `${procedure.id}-beforePhoto`;
         const afterKey = `${procedure.id}-afterPhoto`;
         const appointment = procedureAppointments[procedureIndex];
@@ -1288,6 +1299,7 @@ function PhotoInput({ icon: Icon, label, busyLabel, capture, disabled, blocked, 
 }
 
 function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget, onReturnAppointmentClose, onAppointmentCreated, onScheduleReturn, hidden = false }: { patientId: string; history?: PatientHistoryRecord; loading: boolean; returnAppointmentTarget: ReturnAppointmentTarget | null; onReturnAppointmentClose: () => void; onAppointmentCreated: (appointment: PatientAppointmentRecord) => void; onScheduleReturn: (procedure: ReturnAppointmentTarget, kind?: "return" | "procedure") => void; hidden?: boolean }) {
+  const canRun = useCan("appointment:run");
   const [returnDate, setReturnDate] = useState(() => clinicDateAfterDays(0));
   const [returnTime, setReturnTime] = useState("09:00");
   const [returnReason, setReturnReason] = useState(() => returnAppointmentTarget ? returnAppointmentTarget.kind === "procedure" ? returnAppointmentTarget.name : `Retorno - ${returnAppointmentTarget.name}` : "");
@@ -1426,7 +1438,7 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
                   <p className="mt-1 text-xs text-[#858696]">{appointment.date} às {appointment.time} · {appointment.professional}</p>
                   {appointment.notes ? <p className="mt-2 text-xs text-[#656678]">{appointment.notes}</p> : null}
                 </div>
-                <div className="flex flex-wrap items-center justify-end gap-2">{appointment.id && appointment.status === "Atendido" && appointment.materialsCheck === "pending" && !checkedAppointmentIds.includes(appointment.id) ? <Button className="h-8 px-2" type="button" variant="secondary" onClick={() => setCheckAppointmentId(appointment.id ?? null)}>Conferir materiais</Button> : null}{appointment.status === "Agendado" ? <Button className="h-8 px-2" type="button" variant="secondary" disabled title="Confirmação por WhatsApp em breve"><MessageCircle className="h-3.5 w-3.5" />Confirmar por WhatsApp</Button> : null}<Badge variant={appointment.status === "Atendido" ? "green" : appointment.status === "Em atendimento" ? "amber" : "purple"}>{appointment.status}</Badge>{appointment.status === "Agendado" && appointment.id ? (() => { const withinWindow = appointmentWithinStartWindow(appointment, history?.appointmentToleranceMinutes ?? 15, currentTime); const procedureAppointment = matchesProcedureAppointment(appointment, history?.procedureNames ?? []); const isUpdating = updatingAppointmentId === appointment.id; return <><Button className="h-8 px-2" type="button" variant="secondary" disabled={!canRequestAppointmentStart(appointment, history?.procedureNames ?? [], withinWindow, isUpdating)} onClick={() => { if (procedureAppointment && !withinWindow) setStartConfirmation(appointment); else void updateAppointmentStatus(appointment, "Em atendimento"); }} title={withinWindow ? "Iniciar atendimento" : procedureAppointment ? "Confirmar início fora do horário" : "Aguarde o horário do atendimento"}>{isUpdating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock3 className="h-3.5 w-3.5" />}{isUpdating ? "Atualizando..." : "Iniciar atendimento"}</Button><Button className="h-8 px-2" type="button" variant="secondary" aria-label="Editar retorno" title="Editar retorno" onClick={() => openEditAppointment(appointment)}><PencilLine className="h-3.5 w-3.5" /></Button></>; })() : null}{appointment.status === "Em atendimento" && appointment.id ? <Button className="h-8 px-2" type="button" onClick={() => void updateAppointmentStatus(appointment, "Atendido")}><CheckCircle2 className="h-3.5 w-3.5" />{updatingAppointmentId === appointment.id ? "Atualizando..." : "Finalizar atendimento"}</Button> : null}</div>
+                <div className="flex flex-wrap items-center justify-end gap-2">{canRun && appointment.id && appointment.status === "Atendido" && appointment.materialsCheck === "pending" && !checkedAppointmentIds.includes(appointment.id) ? <Button className="h-8 px-2" type="button" variant="secondary" onClick={() => setCheckAppointmentId(appointment.id ?? null)}>Conferir materiais</Button> : null}{appointment.status === "Agendado" ? <Button className="h-8 px-2" type="button" variant="secondary" disabled title="Confirmação por WhatsApp em breve"><MessageCircle className="h-3.5 w-3.5" />Confirmar por WhatsApp</Button> : null}<Badge variant={appointment.status === "Atendido" ? "green" : appointment.status === "Em atendimento" ? "amber" : "purple"}>{appointment.status}</Badge>{appointment.status === "Agendado" && appointment.id ? (() => { const withinWindow = appointmentWithinStartWindow(appointment, history?.appointmentToleranceMinutes ?? 15, currentTime); const procedureAppointment = matchesProcedureAppointment(appointment, history?.procedureNames ?? []); const isUpdating = updatingAppointmentId === appointment.id; return <>{canRun ? <Button className="h-8 px-2" type="button" variant="secondary" disabled={!canRequestAppointmentStart(appointment, history?.procedureNames ?? [], withinWindow, isUpdating)} onClick={() => { if (procedureAppointment && !withinWindow) setStartConfirmation(appointment); else void updateAppointmentStatus(appointment, "Em atendimento"); }} title={withinWindow ? "Iniciar atendimento" : procedureAppointment ? "Confirmar início fora do horário" : "Aguarde o horário do atendimento"}>{isUpdating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock3 className="h-3.5 w-3.5" />}{isUpdating ? "Atualizando..." : "Iniciar atendimento"}</Button> : null}<Button className="h-8 px-2" type="button" variant="secondary" aria-label="Editar retorno" title="Editar retorno" onClick={() => openEditAppointment(appointment)}><PencilLine className="h-3.5 w-3.5" /></Button></>; })() : null}{canRun && appointment.status === "Em atendimento" && appointment.id ? <Button className="h-8 px-2" type="button" onClick={() => void updateAppointmentStatus(appointment, "Atendido")}><CheckCircle2 className="h-3.5 w-3.5" />{updatingAppointmentId === appointment.id ? "Atualizando..." : "Finalizar atendimento"}</Button> : null}</div>
               </Card>
             ))}
         </div>
