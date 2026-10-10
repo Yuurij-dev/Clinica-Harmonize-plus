@@ -14,6 +14,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const includePayments = ["Pagamentos", "Histórico"].includes(requestedTab ?? "");
   const includeQuotes = ["Procedimentos", "Agendamentos", "Histórico"].includes(requestedTab ?? "");
   const includeProcedureRecords = ["Procedimentos", "Histórico"].includes(requestedTab ?? "");
+  const includeObservations = requestedTab === "Histórico";
   const includeProcedurePhotos = requestedTab === "Procedimentos" || requestedTab === "Histórico";
   const patient = await prisma.patient.findFirst({
     where: { id: patientId, clinicId: user.clinicId },
@@ -24,7 +25,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     return NextResponse.json({ message: "Jornada não encontrada." }, { status: 404 });
   }
 
-  const [appointments, payments, quotes, procedureRecords, clinic, materialMovements, pendingMaterials] = await Promise.all([
+  const [appointments, payments, quotes, procedureRecords, clinic, materialMovements, pendingMaterials, observations] = await Promise.all([
     includeAppointments ? prisma.appointment.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: [{ date: "desc" }, { time: "desc" }] }) : Promise.resolve([]),
     includePayments ? prisma.payment.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { date: "desc" } }) : Promise.resolve([]),
     includeQuotes ? prisma.quote.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { createdAt: "desc" }, select: { id: true, items: true, status: true, createdAt: true } }) : Promise.resolve([]),
@@ -33,6 +34,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // Materiais usados no paciente (rastreio): saídas de atendimento, sem custo.
     includeProcedureRecords ? prisma.stockMovement.findMany({ where: { clinicId: user.clinicId, patientId, type: "attendance" }, orderBy: { attendanceDate: "desc" }, select: { id: true, appointmentId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, unit: true } }, lot: { select: { code: true, expiresOn: true } }, reversedBy: { select: { id: true } } } }) : Promise.resolve([]),
     includeProcedureRecords ? prisma.pendingStockOutput.findMany({ where: { clinicId: user.clinicId, patientId, status: "pending" }, select: { id: true, appointmentId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, unit: true } } } }) : Promise.resolve([]),
+    includeObservations ? prisma.patientObservation.findMany({ where: { patientId, clinicId: user.clinicId }, orderBy: { createdAt: "desc" }, select: { id: true, text: true, authorName: true, createdAt: true } }) : Promise.resolve([]),
   ]);
   const now = clinicNow();
   const toleranceMinutes = clinic?.appointmentToleranceMinutes ?? 15;
@@ -58,7 +60,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     ...pendingMaterials.map((item) => ({ id: item.id, appointmentId: item.appointmentId, name: item.product.name, unit: item.product.unit, quantity: item.quantity, lotCode: null, lotExpiresOn: null, kind: item.attendanceKind, attendanceName: item.attendanceName, date: item.attendanceDate, status: "pending" })),
   ];
 
-  return NextResponse.json({ patient: { id: patient.id, appointments: updatedAppointments, payments, quotes, procedureRecords: responseProcedureRecords, materialsUsed, appointmentToleranceMinutes: toleranceMinutes } });
+  return NextResponse.json({ patient: { id: patient.id, appointments: updatedAppointments, payments, quotes, procedureRecords: responseProcedureRecords, materialsUsed, observations, appointmentToleranceMinutes: toleranceMinutes } });
 }
 
 function clinicNow() {
