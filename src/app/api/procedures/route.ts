@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -32,13 +33,18 @@ export async function POST(request: Request) {
   }
   const sheet = await parseTechnicalSheet(user.clinicId, body?.technicalSheet ?? []);
   if ("error" in sheet) return NextResponse.json({ message: sheet.error }, { status: 400 });
-  const procedure = await prisma.procedure.create({
-    data: {
-      clinicId: user.clinicId, name, category, materials: sheet.description,
-      price: Math.max(0, Math.round(price)), durationMinutes: Math.max(1, durationMinutes), margin: Math.max(0, Math.min(100, margin)),
-      technicalSheet: { create: sheet.items },
-    },
-    select: procedureSelect,
-  });
-  return NextResponse.json({ procedure: serializeProcedure(procedure) }, { status: 201 });
+  try {
+    const procedure = await prisma.procedure.create({
+      data: {
+        clinicId: user.clinicId, name, category, materials: sheet.description,
+        price: Math.max(0, Math.round(price)), durationMinutes: Math.max(1, durationMinutes), margin: Math.max(0, Math.min(100, margin)),
+        technicalSheet: { create: sheet.items },
+      },
+      select: procedureSelect,
+    });
+    return NextResponse.json({ procedure: serializeProcedure(procedure) }, { status: 201 });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return NextResponse.json({ message: "Já existe um procedimento com este nome." }, { status: 409 });
+    throw error;
+  }
 }
