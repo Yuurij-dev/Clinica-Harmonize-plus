@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { can, observationKindsFor, quoteChangeAllowed, quoteProfessional, visibleSections } from "../src/lib/permissions.ts";
+import { appointmentDeleteAllowed, appointmentStatusChangeAllowed, can, observationKindsFor, quoteChangeAllowed, quoteProfessional, visibleSections } from "../src/lib/permissions.ts";
 
 test("dados clínicos são só de administrador e profissional", () => {
   for (const permission of ["clinical:read", "clinical:write", "appointment:run", "quote:edit-closed"]) {
@@ -70,4 +70,43 @@ test("procedimento gerado pelo orçamento: só quem tem papel clínico vira o pr
   assert.equal(quoteProfessional("PROFESSIONAL", "Dra. Ana"), "Dra. Ana");
   assert.equal(quoteProfessional("ADMIN", "Dra. Ana"), "Dra. Ana");
   assert.equal(quoteProfessional("STAFF", "Maria"), "");
+});
+
+const runStates = ["Em atendimento", "Atendido", "Finalizado"];
+
+test("agendamento: atendente nunca inicia, finaliza nem mexe em atendimento em curso ou concluído", () => {
+  for (const next of runStates) assert.equal(appointmentStatusChangeAllowed("STAFF", "Agendado", next), false, `para ${next}`);
+  for (const current of runStates) {
+    for (const next of [undefined, current, "Agendado", "Faltou", "Cancelado", "Qualquer"]) {
+      assert.equal(appointmentStatusChangeAllowed("STAFF", current, next), false, `${current} -> ${next}`);
+    }
+  }
+});
+
+test("agendamento: atendente remarca (sem status), marca falta e cancela o que ainda não rodou", () => {
+  assert.equal(appointmentStatusChangeAllowed("STAFF", "Agendado", undefined), true);
+  assert.equal(appointmentStatusChangeAllowed("STAFF", "Agendado", "Agendado"), true);
+  assert.equal(appointmentStatusChangeAllowed("STAFF", "Agendado", "Faltou"), true);
+  assert.equal(appointmentStatusChangeAllowed("STAFF", "Agendado", "Cancelado"), true);
+  assert.equal(appointmentStatusChangeAllowed("STAFF", "Faltou", "Agendado"), true);
+  assert.equal(appointmentStatusChangeAllowed("STAFF", "Agendado", "Inventado"), false);
+});
+
+test("agendamento: administrador e profissional seguem livres; papel desconhecido nunca", () => {
+  for (const role of ["ADMIN", "PROFESSIONAL"]) {
+    assert.equal(appointmentStatusChangeAllowed(role, "Atendido", "Agendado"), true);
+    assert.equal(appointmentStatusChangeAllowed(role, "Agendado", "Em atendimento"), true);
+    assert.equal(appointmentDeleteAllowed(role, "Atendido"), true);
+  }
+  for (const role of [undefined, null, "", "OUTRO"]) {
+    assert.equal(appointmentStatusChangeAllowed(role, "Agendado", "Faltou"), false);
+    assert.equal(appointmentDeleteAllowed(role, "Agendado"), false);
+  }
+});
+
+test("agendamento: atendente exclui só o que ainda não rodou", () => {
+  assert.equal(appointmentDeleteAllowed("STAFF", "Agendado"), true);
+  assert.equal(appointmentDeleteAllowed("STAFF", "Faltou"), true);
+  assert.equal(appointmentDeleteAllowed("STAFF", "Cancelado"), true);
+  for (const current of runStates) assert.equal(appointmentDeleteAllowed("STAFF", current), false, current);
 });

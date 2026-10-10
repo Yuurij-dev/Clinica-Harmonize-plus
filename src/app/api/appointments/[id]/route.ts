@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { can } from "@/lib/permissions";
+import { appointmentDeleteAllowed, appointmentStatusChangeAllowed } from "@/lib/permissions";
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
@@ -9,10 +9,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   const body = await request.json().catch(() => null) as { status?: string; date?: string; time?: string; procedure?: string; professional?: string; notes?: string } | null;
   if (!body?.status && !body?.date && !body?.time && !body?.procedure && !body?.professional && body?.notes === undefined) return NextResponse.json({ message: "Informe uma alteração para o agendamento." }, { status: 400 });
-  if (body?.status && ["Em atendimento", "Atendido"].includes(body.status) && !can(user.role, "appointment:run")) {
+  const id = (await params).id;
+  const current = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, select: { status: true } });
+  if (!current) return NextResponse.json({ message: "Agendamento não encontrado." }, { status: 404 });
+  if (!appointmentStatusChangeAllowed(user.role, current.status, body?.status)) {
     return NextResponse.json({ message: "O atendimento é conduzido pela equipe clínica." }, { status: 403 });
   }
-  const id = (await params).id;
   const date = body?.date ? new Date(body.date) : null;
   if (date && Number.isNaN(date.getTime())) return NextResponse.json({ message: "Data inválida." }, { status: 400 });
   if (date && body?.time && appointmentDateHasPassed(body.date as string, body.time)) return NextResponse.json({ message: "Não é possível alterar para uma data ou horário que já passou." }, { status: 400 });
@@ -46,6 +48,11 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const id = (await params).id;
+  const current = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, select: { status: true } });
+  if (!current) return NextResponse.json({ message: "Agendamento não encontrado." }, { status: 404 });
+  if (!appointmentDeleteAllowed(user.role, current.status)) {
+    return NextResponse.json({ message: "O atendimento é conduzido pela equipe clínica." }, { status: 403 });
+  }
   const result = await prisma.appointment.deleteMany({ where: { id, clinicId: user.clinicId } });
   if (result.count === 0) return NextResponse.json({ message: "Agendamento não encontrado." }, { status: 404 });
   return NextResponse.json({ ok: true });
