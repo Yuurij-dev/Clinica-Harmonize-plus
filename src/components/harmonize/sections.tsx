@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Clock3,
   Loader2,
+  MessageCircle,
   MoreVertical,
   PencilLine,
   Plus,
@@ -642,6 +643,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
                 {!isCompleted && !isMissed ? (
                   <Button className="border-[#f2c8c3] text-[#b42318] hover:border-[#b42318] hover:text-[#b42318]" key="missed" size="sm" variant="secondary" disabled={updatingId !== null} onClick={() => markAppointmentAsMissed(appointment)}>{updatingId === appointment.id ? <Loader2 className="h-3 w-3 animate-spin" /> : null}{updatingId === appointment.id ? "Salvando..." : "Faltou"}</Button>
                 ) : null}
+                {appointment.status === "Agendado" ? <Button key="whatsapp" size="sm" variant="secondary" disabled title="Confirmação por WhatsApp em breve" aria-label="Confirmar por WhatsApp"><MessageCircle className="h-3 w-3" /></Button> : null}
               </div>
             </div>
           );
