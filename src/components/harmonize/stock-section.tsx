@@ -251,16 +251,16 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
                     <div><p className="font-bold text-foreground">Lote {lot.code}</p><p className="text-xs text-muted-foreground">Validade {formatDateOnly(lot.expiresOn)}</p></div>
                     <div className="flex flex-wrap items-center justify-end gap-2">
                       <strong>{formatQuantity(lot.balance, detail.unit)}</strong><Badge variant={lotStatusBadge[lot.status].variant}>{lotStatusBadge[lot.status].label}</Badge>
-                      {lot.status === "expired" && lot.balance > 0 ? <Button size="sm" variant="secondary" onClick={() => openPanel({ movement: { lotId: lot.id, reason: "expired", quantity: lot.balance } })}>Descartar</Button> : null}
-                      {!detail.archivedAt ? <Button size="sm" variant="secondary" onClick={() => openPanel({ movement: { lotId: lot.id, reason: "loss" } })}>Saída</Button> : null}
-                      <Button size="sm" variant="ghost" onClick={() => openPanel({ history: { lotId: lot.id, lotCode: lot.code } })}>Histórico</Button>
-                      <Button size="sm" variant="ghost" onClick={() => openPanel({ usage: { id: lot.id, code: lot.code } })}>Pacientes</Button>
+                      {lot.status === "expired" && lot.balance > 0 ? <Button size="sm" variant={movementForm?.lotId === lot.id && movementForm.reason === "expired" ? "secondary" : "ghost"} aria-pressed={movementForm?.lotId === lot.id && movementForm.reason === "expired"} onClick={() => openPanel({ movement: { lotId: lot.id, reason: "expired", quantity: lot.balance } })}>Descartar</Button> : null}
+                      {!detail.archivedAt ? <Button size="sm" variant={movementForm?.lotId === lot.id && movementForm.reason !== "expired" ? "secondary" : "ghost"} aria-pressed={movementForm?.lotId === lot.id && movementForm.reason !== "expired"} onClick={() => openPanel({ movement: { lotId: lot.id, reason: "loss" } })}>Saída</Button> : null}
+                      <Button size="sm" variant={history?.lotId === lot.id ? "secondary" : "ghost"} aria-pressed={history?.lotId === lot.id} onClick={() => openPanel({ history: { lotId: lot.id, lotCode: lot.code } })}>Histórico</Button>
+                      <Button size="sm" variant={usageLot?.id === lot.id ? "secondary" : "ghost"} aria-pressed={usageLot?.id === lot.id} onClick={() => openPanel({ usage: { id: lot.id, code: lot.code } })}>Pacientes</Button>
                     </div>
                   </div>
                 ))}
               </div>
             ) : <p className="text-xs text-muted-foreground">Nenhum lote lançado ainda.</p>}
-            {detail.lots.length ? <div className="mt-2 flex justify-end"><Button size="sm" variant="ghost" onClick={() => openPanel({ history: {} })}>Ver histórico do material</Button></div> : null}
+            {detail.lots.length ? <div className="mt-2 flex justify-end"><Button size="sm" variant={history && !history.lotId ? "secondary" : "ghost"} aria-pressed={Boolean(history && !history.lotId)} onClick={() => openPanel({ history: {} })}>Ver histórico do material</Button></div> : null}
           </div>
 
           {movementForm ? <ManualMovementForm<StockMaterialDetail> key={`movement-${movementForm.lotId}-${movementForm.reason}`} productId={detail.id} unit={detail.unit} lots={detail.lots} initial={movementForm} onCancel={() => setMovementForm(null)} onSaved={(product) => { setDetail(product); setMovementForm(null); setHistoryVersion((current) => current + 1); onChanged(`Movimentação registrada em ${product.name}.`); }} /> : null}
