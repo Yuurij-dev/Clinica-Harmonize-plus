@@ -40,6 +40,7 @@ export function PatientDocuments({ patientId, patientName }: { patientId: string
   const [selectedDocument, setSelectedDocument] = useState<PatientDocument | null>(null);
   const [documentToDelete, setDocumentToDelete] = useState<PatientDocument | null>(null);
   const [documentToDownload, setDocumentToDownload] = useState<PatientDocument | null>(null);
+  const [downloading, setDownloading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [expandedDocumentSections, setExpandedDocumentSections] = useState({ terms: false, attachments: false });
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -143,15 +144,30 @@ export function PatientDocuments({ patientId, patientName }: { patientId: string
     }
   }
 
-  function downloadDocument() {
-    if (!documentToDownload) return;
-    const link = window.document.createElement("a");
-    link.href = `/api/patients/${patientId}/documents/${documentToDownload.id}`;
-    link.download = documentToDownload.name;
-    window.document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setDocumentToDownload(null);
+  async function downloadDocument() {
+    if (!documentToDownload || downloading) return;
+    setDownloading(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/patients/${patientId}/documents/${documentToDownload.id}`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => null) as { message?: string } | null;
+        throw new Error(data?.message ?? httpErrorMessage(response, "Não foi possível baixar o anexo"));
+      }
+      const fileUrl = URL.createObjectURL(await response.blob());
+      const link = window.document.createElement("a");
+      link.href = fileUrl;
+      link.download = documentToDownload.name;
+      window.document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(fileUrl), 1000);
+      setDocumentToDownload(null);
+    } catch (cause) {
+      setError(errorMessage(cause, "Não foi possível baixar o anexo."));
+    } finally {
+      setDownloading(false);
+    }
   }
 
   const terms = documents.filter((document) => document.kind === "consent").sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
@@ -189,7 +205,7 @@ export function PatientDocuments({ patientId, patientName }: { patientId: string
       </div>
     </Card>
 
-    <AlertDialog.Root open={Boolean(documentToDownload)} onOpenChange={(open) => { if (!open) setDocumentToDownload(null); }}>
+    <AlertDialog.Root open={Boolean(documentToDownload)} onOpenChange={(open) => { if (!open && !downloading) setDocumentToDownload(null); }}>
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="fixed inset-0 z-[1200] bg-transparent backdrop-blur-[3px] transition-opacity duration-200 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0" />
         <AlertDialog.Content className="fixed left-1/2 top-1/2 z-[1201] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-[#e7e7ef] bg-white p-6 text-[#303144] shadow-[0_24px_80px_rgba(23,24,43,0.28)] outline-none transition-all duration-200 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95">
@@ -199,8 +215,8 @@ export function PatientDocuments({ patientId, patientName }: { patientId: string
             O arquivo <span className="font-semibold text-[#45465a]">“{documentToDownload?.name}”</span> será baixado para este dispositivo.
           </AlertDialog.Description>
           <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-center">
-            <AlertDialog.Cancel asChild><Button variant="secondary" className="sm:min-w-32">Cancelar</Button></AlertDialog.Cancel>
-            <Button className="sm:min-w-32" onClick={downloadDocument}><Download className="h-4 w-4" />Baixar anexo</Button>
+            <AlertDialog.Cancel asChild><Button variant="secondary" disabled={downloading} className="sm:min-w-32">Cancelar</Button></AlertDialog.Cancel>
+            <Button className="sm:min-w-32" disabled={downloading} onClick={() => void downloadDocument()}>{downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}{downloading ? "Baixando..." : "Baixar anexo"}</Button>
           </div>
         </AlertDialog.Content>
       </AlertDialog.Portal>
