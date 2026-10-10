@@ -12,14 +12,18 @@ export async function GET() {
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
 
-  const [products, balances, warningDays] = await Promise.all([
+  const [products, balances, warningDays, pendingOutputs, pendingChecks] = await Promise.all([
     prisma.product.findMany({ where: { clinicId: user.clinicId, archivedAt: null }, select: { id: true, name: true, unit: true, minStock: true, lots: { select: { id: true, code: true, expiresOn: true } } } }),
     lotBalances(user.clinicId),
     clinicWarningDays(user.clinicId),
+    prisma.pendingStockOutput.count({ where: { clinicId: user.clinicId, status: "pending" } }),
+    prisma.appointment.count({ where: { clinicId: user.clinicId, status: "Atendido", materialsCheck: "pending" } }),
   ]);
   const alerts = stockAlerts({
     today: clinicToday(),
     warningDays,
+    pendingOutputs,
+    pendingChecks,
     materials: products.map((product) => ({ id: product.id, name: product.name, unit: product.unit, minStock: product.minStock, balance: materialBalance(product.lots.map((lot) => ({ balance: balances.get(lot.id) ?? 0 })), product.minStock).balance })),
     lots: products.flatMap((product) => product.lots.map((lot) => ({ id: lot.id, productId: product.id, productName: product.name, code: lot.code, expiresOn: dateOnly(lot.expiresOn), balance: balances.get(lot.id) ?? 0 }))),
   });

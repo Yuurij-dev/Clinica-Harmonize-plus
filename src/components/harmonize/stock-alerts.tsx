@@ -55,7 +55,7 @@ export function StockAlertsCard({ onOpen }: { onOpen: () => void }) {
         <span className="text-xs font-bold text-muted-foreground">{alerts.length}</span>
       </CardHeader>
       <CardContent className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {alerts.map((alert) => <StockAlertItem alert={alert} key={`${alert.kind}-${alert.lotId ?? alert.productId}`} onOpen={onOpen} />)}
+        {alerts.map((alert) => <StockAlertItem alert={alert} key={`${alert.kind}-${alert.lotId ?? alert.productId}-${alert.message}`} onOpen={onOpen} />)}
       </CardContent>
     </Card>
   );

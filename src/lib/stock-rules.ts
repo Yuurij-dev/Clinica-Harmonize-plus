@@ -63,6 +63,8 @@ export function stockAlerts(input: {
   lots: Array<{ id: string; productId: string; productName: string; code: string; expiresOn: string; balance: number }>;
   today: string;
   warningDays: number;
+  pendingOutputs?: number;
+  pendingChecks?: number;
 }) {
   const lotAlerts: StockAlert[] = input.lots
     .filter((lot) => lot.balance > 0 && lotStatus(lot.expiresOn, input.today, input.warningDays) !== "valid")
@@ -76,7 +78,12 @@ export function stockAlerts(input: {
   const minimumAlerts: StockAlert[] = input.materials
     .filter((material) => material.balance < material.minStock)
     .map((material) => ({ kind: "below_minimum", productId: material.id, message: `${material.name} abaixo do mínimo (${formatNumber(material.balance)} de ${formatQuantity(material.minStock, material.unit)})` }));
-  return [...lotAlerts, ...minimumAlerts];
+  const pendingAlerts: StockAlert[] = [];
+  const outputs = input.pendingOutputs ?? 0;
+  const checks = input.pendingChecks ?? 0;
+  if (outputs) pendingAlerts.push({ kind: "pending", productId: "", message: outputs === 1 ? "1 saída de estoque pendente por falta de saldo" : `${outputs} saídas de estoque pendentes por falta de saldo` });
+  if (checks) pendingAlerts.push({ kind: "pending", productId: "", message: checks === 1 ? "1 conferência de materiais pendente" : `${checks} conferências de materiais pendentes` });
+  return [...pendingAlerts, ...lotAlerts, ...minimumAlerts];
 }
 
 export type AttendanceKind = "procedure" | "return" | "evaluation";

@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { fieldClassName, FormField } from "@/components/ui/modal";
 import { getCachedJson, readClientCache } from "@/lib/client-cache";
+import { ReverseMovementButton } from "./pending-panel";
 import { sendJson } from "@/lib/send-json";
 import { attendanceKindLabels, formatQuantity, manualReasons, parseQuantity, type AttendanceKind, type ManualReason } from "@/lib/stock-rules";
 
@@ -133,7 +134,10 @@ export function LotUsage({ productId, unit, lotId, lotCode }: { productId: strin
                 <p className="font-bold text-foreground">{movement.patientName ?? "Paciente removido"}</p>
                 <p className="text-muted-foreground">{[movement.attendanceKind ? attendanceKindLabels[movement.attendanceKind] : null, movement.attendanceName, movement.attendanceDate ? new Date(movement.attendanceDate).toLocaleDateString("pt-BR") : null].filter(Boolean).join(" · ")}{movement.reversed ? " · estornada" : ""}</p>
               </div>
-              <strong className="text-foreground">{formatQuantity(-movement.quantity, unit)}</strong>
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                <strong className="text-foreground">{formatQuantity(-movement.quantity, unit)}</strong>
+                {!movement.reversed ? <ReverseMovementButton movementId={movement.id} productId={productId} onReversed={() => setPages((current) => current.map((page) => page.map((item) => item.id === movement.id ? { ...item, reversed: true } : item)))} /> : null}
+              </div>
             </div>
           ))}
         </div>

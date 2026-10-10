@@ -13,6 +13,7 @@ import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, readClientCache } from "
 import { formatCurrency, parseCurrency } from "@/lib/input-masks";
 import { formatQuantity, parseQuantity, stockUnits, validateQuantity, type LotStatus, type ManualReason } from "@/lib/stock-rules";
 import { LotUsage, ManualMovementForm, MovementHistory } from "./stock-movements";
+import { PendingPanel } from "./pending-panel";
 import { PurchasesPanel } from "./purchases-panel";
 import { EmptyState, LoadingTable, MiniTable, SectionIntro } from "./shared";
 import { formatDateOnly, invalidateStockCache, type StockMaterial } from "./stock-shared";
@@ -36,7 +37,7 @@ export function StockSection({ onSaved }: { onSaved?: (message: string) => void 
   const [refreshKey, setRefreshKey] = useState(0);
   const [editing, setEditing] = useState<StockMaterial | "new" | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"materials" | "purchases">("materials");
+  const [tab, setTab] = useState<"materials" | "purchases" | "pending">("materials");
   const [creatingPurchase, setCreatingPurchase] = useState(false);
 
   useEffect(() => {
@@ -61,12 +62,13 @@ export function StockSection({ onSaved }: { onSaved?: (message: string) => void 
 
   return (
     <div>
-      <SectionIntro title="Estoque" description="Materiais, lotes, validades, compras e saldo disponível da clínica." action={tab === "materials" ? "Novo material" : "Nova compra"} onAction={() => tab === "materials" ? setEditing("new") : setCreatingPurchase(true)} />
+      <SectionIntro title="Estoque" description="Materiais, lotes, validades, compras e saldo disponível da clínica." action={tab === "materials" ? "Novo material" : tab === "purchases" ? "Nova compra" : undefined} onAction={() => tab === "materials" ? setEditing("new") : setCreatingPurchase(true)} />
       <div className="mb-4 flex gap-2">
         <Button variant={tab === "materials" ? "primary" : "secondary"} size="sm" onClick={() => setTab("materials")}>Materiais</Button>
         <Button variant={tab === "purchases" ? "primary" : "secondary"} size="sm" onClick={() => setTab("purchases")}>Compras</Button>
+        <Button variant={tab === "pending" ? "primary" : "secondary"} size="sm" onClick={() => setTab("pending")}>Pendências</Button>
       </div>
-      {tab === "purchases" ? <PurchasesPanel materials={materials} creating={creatingPurchase} onCloseCreate={() => setCreatingPurchase(false)} onSaved={onSaved} /> : <>
+      {tab === "pending" ? <PendingPanel onSaved={onSaved} /> : tab === "purchases" ? <PurchasesPanel materials={materials} creating={creatingPurchase} onCloseCreate={() => setCreatingPurchase(false)} onSaved={onSaved} /> : <>
       <label className="mb-4 flex w-fit items-center gap-2 text-xs font-semibold text-muted-foreground">
         <input type="checkbox" checked={showArchived} onChange={(event) => { setLoading(true); setShowArchived(event.target.checked); }} />
         Mostrar arquivados

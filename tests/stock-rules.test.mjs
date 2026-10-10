@@ -126,3 +126,13 @@ test("attendance kind comes from the appointment label", () => {
   assert.equal(attendanceKind("Preenchimento labial"), "procedure");
   assert.equal(attendanceKind("Botox (1x)"), "procedure");
 });
+
+test("pending outputs and material checks become alerts", () => {
+  const base = { materials: [], lots: [], today: "2026-10-09", warningDays: 30 };
+  assert.deepEqual(stockAlerts({ ...base, pendingOutputs: 2, pendingChecks: 1 }).map((alert) => [alert.kind, alert.message]), [
+    ["pending", "2 saídas de estoque pendentes por falta de saldo"],
+    ["pending", "1 conferência de materiais pendente"],
+  ]);
+  assert.deepEqual(stockAlerts({ ...base, pendingOutputs: 1, pendingChecks: 0 }).map((alert) => alert.message), ["1 saída de estoque pendente por falta de saldo"]);
+  assert.deepEqual(stockAlerts(base), []);
+});
