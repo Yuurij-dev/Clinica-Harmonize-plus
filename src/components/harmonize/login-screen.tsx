@@ -109,7 +109,7 @@ export function LoginScreen({ onLogin, onChangePassword, onRegister }: LoginScre
     <main className="grid min-h-screen w-full overflow-hidden bg-white text-[#17134d] lg:grid-cols-[52%_48%]">
       <section className="relative flex min-h-[270px] items-center justify-center overflow-hidden bg-[#4938f4] px-6 py-8 text-center text-white sm:min-h-[360px] sm:px-10 sm:py-12 lg:min-h-screen lg:px-14 lg:py-16">
         <div aria-hidden="true" className="absolute inset-0 bg-center bg-no-repeat" style={{ backgroundImage: "url('/login-brand-background.png')", backgroundSize: "100% 100%" }} />
-        <div className="relative z-10 flex w-full max-w-xl flex-col items-center">
+        <div className="hp-brand-enter relative z-10 flex w-full max-w-xl flex-col items-center">
           <div className="relative mb-2 h-[100px] w-[100px] sm:h-[120px] sm:w-[120px]">
             <Image alt="" className="object-contain" fill priority sizes="120px" src="/harmonize-mark.png" />
           </div>
