@@ -53,6 +53,7 @@ import {
 } from "@/lib/input-masks";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
+import { runningAppointmentStatuses } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import { procedureCategories } from "@/data/categories";
 import { sendJson } from "@/lib/send-json";
@@ -611,7 +612,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         {selectedAppointment ? <div className="space-y-4">
           <div className={cn("rounded-[8px] border-l-4 p-4", appointmentTone(selectedAppointment).card)}><p className="text-xs font-bold text-[#77788a]">{selectedAppointment.time} - {formatEndTime(selectedAppointment.time, selectedAppointment.durationMinutes)}</p><h3 className="mt-1 text-lg font-black text-[#303144]">{selectedAppointment.procedure}</h3><p className="mt-1 text-sm text-[#656678]">{selectedAppointment.patient}</p></div>
           <div className="grid gap-3 sm:grid-cols-2">{[["Data", formatDate(selectedAppointment.date)], ["Profissional", selectedAppointment.professional], ["Tipo", selectedAppointment.category || "Atendimento"], ["Status", selectedAppointment.status]].map(([label, value]) => <div className="rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3" key={label}><p className="text-[9px] font-bold uppercase text-[#9697a7]">{label}</p><p className="mt-1 text-xs font-semibold text-[#4f5062]">{value}</p></div>)}</div>
-          <div className="flex justify-end"><Button type="button" onClick={() => setSelectedAppointment(null)}>Fechar</Button></div>
+          <div className="flex justify-end gap-2">{selectedAppointment.status === "Agendado" ? <Button type="button" variant="secondary" disabled title="Confirmação por WhatsApp em breve"><MessageCircle className="h-3.5 w-3.5" />Confirmar por WhatsApp</Button> : null}<Button type="button" onClick={() => setSelectedAppointment(null)}>Fechar</Button></div>
         </div> : null}
       </Modal>
 
@@ -863,10 +864,13 @@ function CalendarAppointmentCard({ appointment, top, height, column, columns, op
   const isMissed = appointment.status === "Faltou";
   const isCancelled = appointment.status === "Cancelado";
   const canStart = appointment.status !== "Agendado" || appointmentCanStart(appointment, appointmentToleranceMinutes);
+  const showStatusGroup = !isCompleted && !isMissed && !isCancelled && (canRun || !(runningAppointmentStatuses as readonly string[]).includes(appointment.status));
+  const showWhatsapp = appointment.status === "Agendado";
+  const hasMenu = canRun || showStatusGroup || showWhatsapp;
   const primaryLabel = appointment.status === "Em atendimento" ? "Finalizar" : isCompleted ? "Concluído" : isMissed ? "Faltou" : "Atender";
   return <div className={cn("group absolute z-10 cursor-pointer overflow-hidden rounded-[7px] border-l-[3px] p-2 text-[10px] shadow-[0_4px_12px_rgba(38,39,58,0.06)]", tone.card, past && "brightness-[0.84] saturate-[0.78]")} style={{ top, height, left: `calc(${column} * 100% / ${columns} + 4px)`, width: `calc(100% / ${columns} - 8px)` }} aria-label={`${appointment.procedure} - status: ${appointment.status}`} onClick={() => onSelect(appointment)}>
     <span className="pointer-events-none absolute -top-7 left-2 z-40 hidden whitespace-nowrap rounded-[5px] bg-[#303144] px-2 py-1 text-[10px] font-bold text-white shadow-lg group-hover:block">Status: {appointment.status}</span>
-    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><p className="mt-1 truncate text-[11px] font-black">{appointment.procedure}</p><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0"><button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button>{open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}>{canRun ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button> : null}{!isCompleted && !isMissed && !isCancelled ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button></> : null}</div> : null}</div></div>
+    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><p className="mt-1 truncate text-[11px] font-black">{appointment.procedure}</p><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0">{hasMenu ? <button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button> : null}{hasMenu && open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}>{canRun ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button> : null}{showStatusGroup ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button></> : null}{showWhatsapp ? <button type="button" className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] disabled:opacity-50" disabled title="Confirmação por WhatsApp em breve">Confirmar por WhatsApp</button> : null}</div> : null}</div></div>
     <span className={cn("mt-1 inline-flex rounded-full px-2 py-0.5 text-[9px] font-bold", tone.pill)}>{appointment.category || "Atendimento"}</span>
   </div>;
 }
@@ -1529,7 +1533,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
         return;
       }
       setMembers((current) => [...current, data.member as TeamMember].sort((a, b) => a.user.name.localeCompare(b.user.name)));
-      invalidateClientCache("/api/team");
+      invalidateClientCache("/api/team", "/api/team/professionals");
       setEditing(null);
       setTeamError("");
     } catch {
@@ -1554,7 +1558,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       return;
     }
     setMembers((current) => current.filter((member) => member.id !== memberToRemove.id));
-    invalidateClientCache("/api/team", "/api/agenda/bootstrap");
+    invalidateClientCache("/api/team", "/api/team/professionals", "/api/agenda/bootstrap");
     setMemberToRemove(null);
   }
 

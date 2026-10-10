@@ -96,7 +96,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
 
   const userName = user?.name ?? "Usuário";
   const initials = userName.split(" ").map((part) => part[0]).slice(0, 2).join("").toUpperCase();
-  const roleLabel = user?.role === "ADMIN" ? "Administradora" : user?.role === "PROFESSIONAL" ? "Profissional" : "Atendente";
+  const roleLabel = user?.role === "ADMIN" ? "Administradora" : user?.role === "PROFESSIONAL" ? "Profissional" : user?.role === "STAFF" ? "Atendente" : "";
   const trialEndsAt = user?.clinic?.trialEndsAt;
   const trialExpired = trialRemaining !== null && trialRemaining <= 0;
   const trialUrgent = trialRemaining !== null && trialRemaining > 0 && trialRemaining <= 24 * 60 * 60 * 1000;

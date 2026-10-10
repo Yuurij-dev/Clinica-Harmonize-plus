@@ -1381,6 +1381,10 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
   async function saveReturnAppointment(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if ((!returnAppointmentTarget && !editingAppointment) || !returnDate || !returnTime || !returnReason.trim()) return;
+    if (!editingAppointment?.id && !returnProfessional) {
+      setReturnError("Escolha o profissional.");
+      return;
+    }
     const now = clinicNowForForm();
     const invalidFields = new Set<string>();
     if (returnDate < now.date) invalidFields.add("date");
@@ -1447,6 +1451,7 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveReturnAppointment}>
           <div className="sm:col-span-2 rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3 text-xs text-[#555668]">Procedimento: <strong className="text-[#303144]">{editingAppointment?.procedure ?? returnAppointmentTarget?.name}</strong></div>
           <div className="sm:col-span-2"><FormField label="Profissional"><select className={fieldClassName} value={returnProfessional} onChange={(event) => { if (professionalSource) setProfessionalChoice({ source: professionalSource, name: event.target.value }); }} required>
+            {!returnProfessional ? <option value="" disabled>Selecione o profissional</option> : null}
             {returnProfessional && !professionals.some((professional) => professional.name === returnProfessional) ? <option value={returnProfessional}>{returnProfessional}</option> : null}
             {professionals.map((professional) => <option key={professional.id} value={professional.name}>{professional.name}</option>)}
           </select></FormField></div>

@@ -58,19 +58,19 @@ export function quoteProfessional(role: string | null | undefined, userName: str
 }
 
 // Atendimento em curso ou concluído: só quem conduz o atendimento mexe nele.
-const runningAppointmentStatuses = ["Em atendimento", "Atendido", "Finalizado"];
+export const runningAppointmentStatuses = ["Em atendimento", "Atendido", "Finalizado"] as const;
 // Status que o atendente define: falta e cancelamento (agenda) e reabrir como agendado ao remarcar.
 const staffAppointmentStatuses = ["Agendado", "Faltou", "Cancelado"];
 
 export function appointmentStatusChangeAllowed(role: string | null | undefined, current: string, next: string | undefined) {
   if (can(role, "appointment:run")) return true;
   if (role !== "STAFF") return false;
-  if (runningAppointmentStatuses.includes(current)) return false;
+  if ((runningAppointmentStatuses as readonly string[]).includes(current)) return false;
   if (next === undefined || next === current) return true;
   return staffAppointmentStatuses.includes(next);
 }
 
 export function appointmentDeleteAllowed(role: string | null | undefined, current: string) {
   if (can(role, "appointment:run")) return true;
-  return role === "STAFF" && !runningAppointmentStatuses.includes(current);
+  return role === "STAFF" && !(runningAppointmentStatuses as readonly string[]).includes(current);
 }

@@ -29,7 +29,7 @@ test("papel desconhecido ou ausente não tem permissão nenhuma", () => {
 });
 
 test("menu por papel", () => {
-  assert.equal(visibleSections("ADMIN").length, 11);
+  assert.deepEqual(visibleSections("ADMIN"), ["dashboard", "agenda", "clientes", "procedimentos", "estoque", "orcamentos", "pagamentos", "financeiro", "relatorios", "calculadora", "configuracoes"]);
   assert.deepEqual(visibleSections("PROFESSIONAL"), ["agenda", "clientes", "orcamentos"]);
   assert.deepEqual(visibleSections("STAFF"), ["agenda", "clientes", "orcamentos", "pagamentos"]);
   assert.equal(visibleSections("STAFF").includes("financeiro"), false);
@@ -53,6 +53,8 @@ test("orçamento fechado: atendente não edita conteúdo nem reverte, mas pode m
   assert.equal(quoteChangeAllowed("STAFF", { current: "Pago", next: "Pendente", editsContent: false }), false);
   assert.equal(quoteChangeAllowed("STAFF", { current: "Aprovado", next: undefined, editsContent: true }), false);
   assert.equal(quoteChangeAllowed("STAFF", { current: "Pago", next: "Pago", editsContent: false }), true);
+  assert.equal(quoteChangeAllowed("STAFF", { current: "Pago", next: "Aprovado", editsContent: false }), false);
+  assert.equal(quoteChangeAllowed("STAFF", { current: "Aprovado", next: "Aprovado", editsContent: false }), true);
 });
 
 test("orçamento fechado: administrador e profissional alteram tudo", () => {

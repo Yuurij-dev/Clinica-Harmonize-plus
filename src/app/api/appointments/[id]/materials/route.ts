@@ -4,8 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
 
-// Conferência de materiais do atendimento. Qualquer membro da clínica que finaliza o
-// atendimento pode conferir; a resposta não traz custos.
+// Conferência de materiais: só a equipe clínica (appointment:run); a resposta não traz custos.
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });

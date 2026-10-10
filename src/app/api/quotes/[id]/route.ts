@@ -22,8 +22,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     ...(body?.paymentMethod && ["Cartão de crédito", "Cartão de débito", "Pix"].includes(body.paymentMethod) ? { paymentMethod: body.paymentMethod } : {}),
     ...(body?.status ? { status: body.status } : {}),
   };
-  const result = await prisma.quote.updateMany({ where: { id, clinicId: user.clinicId }, data: updateData });
-  if (!result.count) return NextResponse.json({ message: "Orçamento não encontrado." }, { status: 404 });
+  const result = await prisma.quote.updateMany({ where: { id, clinicId: user.clinicId, ...(can(user.role, "quote:edit-closed") ? {} : { status: existing.status }) }, data: updateData });
+  if (!result.count) return NextResponse.json({ message: "O orçamento foi alterado; recarregue a página." }, { status: 409 });
   const quote = await prisma.quote.findFirst({ where: { id, clinicId: user.clinicId }, include: { patient: { select: { name: true } } } });
   if (quote && ["Aprovado", "Pago"].includes(quote.status) && quote.patientId) {
     const quoteMarker = `__quote:${quote.id}`;

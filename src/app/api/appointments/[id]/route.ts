@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { appointmentDeleteAllowed, appointmentStatusChangeAllowed } from "@/lib/permissions";
+import { appointmentDeleteAllowed, appointmentStatusChangeAllowed, can, runningAppointmentStatuses } from "@/lib/permissions";
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
@@ -18,7 +18,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const date = body?.date ? new Date(body.date) : null;
   if (date && Number.isNaN(date.getTime())) return NextResponse.json({ message: "Data inválida." }, { status: 400 });
   if (date && body?.time && appointmentDateHasPassed(body.date as string, body.time)) return NextResponse.json({ message: "Não é possível alterar para uma data ou horário que já passou." }, { status: 400 });
-  const result = await prisma.appointment.updateMany({ where: { id, clinicId: user.clinicId }, data: {
+  const result = await prisma.appointment.updateMany({ where: { id, clinicId: user.clinicId, ...(can(user.role, "appointment:run") ? {} : { status: { notIn: [...runningAppointmentStatuses] } }) }, data: {
     ...(body?.status ? { status: body.status } : {}),
     ...(date ? { date } : {}),
     ...(body?.time ? { time: body.time } : {}),
@@ -26,7 +26,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     ...(body?.professional?.trim() ? { professional: body.professional.trim() } : {}),
     ...(body?.notes !== undefined ? { notes: body.notes.trim() } : {}),
   } });
-  if (result.count === 0) return NextResponse.json({ message: "Agendamento não encontrado." }, { status: 404 });
+  if (result.count === 0) return NextResponse.json({ message: "O atendimento já foi iniciado." }, { status: 409 });
   // Todo atendimento finalizado (na tela ou automaticamente pela agenda) fica com a conferência de materiais pendente.
   if (body?.status === "Atendido") await prisma.appointment.updateMany({ where: { id, clinicId: user.clinicId, materialsCheck: null }, data: { materialsCheck: "pending" } });
   const appointment = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, include: { patient: { select: { name: true } } } });
@@ -53,7 +53,7 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
   if (!appointmentDeleteAllowed(user.role, current.status)) {
     return NextResponse.json({ message: "O atendimento é conduzido pela equipe clínica." }, { status: 403 });
   }
-  const result = await prisma.appointment.deleteMany({ where: { id, clinicId: user.clinicId } });
-  if (result.count === 0) return NextResponse.json({ message: "Agendamento não encontrado." }, { status: 404 });
+  const result = await prisma.appointment.deleteMany({ where: { id, clinicId: user.clinicId, ...(can(user.role, "appointment:run") ? {} : { status: { notIn: [...runningAppointmentStatuses] } }) } });
+  if (result.count === 0) return NextResponse.json({ message: "O atendimento já foi iniciado." }, { status: 409 });
   return NextResponse.json({ ok: true });
 }
