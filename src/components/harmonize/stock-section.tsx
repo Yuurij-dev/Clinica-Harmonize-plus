@@ -1,7 +1,7 @@
 "use client";
 
 import { type FormEvent, useEffect, useState } from "react";
-import { Archive, ArchiveRestore, Loader2, PackagePlus, PencilLine, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, ChevronDown, Loader2, PackagePlus, PencilLine, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -165,6 +165,8 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
   const [usageLot, setUsageLot] = useState<{ id: string; code: string } | null>(null);
 
   // Só um painel por vez abaixo dos lotes: saída, histórico ou pacientes.
+  // Abrir um deles recolhe o "Lançar saldo inicial"; expandir o saldo inicial fecha o painel.
+  const panelOpen = Boolean(movementForm || history || usageLot);
   function openPanel(panel: { movement?: { lotId: string; reason: ManualReason; quantity?: number }; history?: { lotId?: string; lotCode?: string }; usage?: { id: string; code: string } }) {
     setMovementForm(panel.movement ?? null);
     setHistory(panel.history ?? null);
@@ -267,7 +269,12 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
           {usageLot ? <LotUsage key={`usage-${usageLot.id}-${historyVersion}`} productId={detail.id} unit={detail.unit} lotId={usageLot.id} lotCode={usageLot.code} /> : null}
           {history ? <MovementHistory key={`history-${history.lotId ?? "all"}-${historyVersion}`} productId={detail.id} unit={detail.unit} lotId={history.lotId} lotCode={history.lotCode} /> : null}
 
-          {!detail.archivedAt ? (
+          {!detail.archivedAt && panelOpen ? (
+            <button type="button" className="flex w-full items-center justify-between gap-2 rounded-[8px] border border-dashed border-border p-3 text-left text-xs font-bold text-foreground transition hover:bg-muted/40" aria-expanded={false} onClick={() => openPanel({})}>
+              <span className="flex items-center gap-2"><PackagePlus className="h-3.5 w-3.5 text-primary" />Lançar saldo inicial</span>
+              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+            </button>
+          ) : !detail.archivedAt ? (
             <form className="grid gap-3 rounded-[8px] border border-dashed border-border p-3 sm:grid-cols-3" onSubmit={addInitialBalance}>
               <p className="text-xs font-bold text-foreground sm:col-span-3">Lançar saldo inicial <span className="font-medium text-muted-foreground">(o que já está na prateleira, sem gerar despesa)</span></p>
               <FormField label="Lote"><input className={fieldClassName} name="lotCode" required /></FormField>
