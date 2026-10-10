@@ -60,7 +60,6 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const [agendaFocus, setAgendaFocus] = useState<AgendaFocus | null>(null);
   const [undoNotice, setUndoNotice] = useState<UndoNotice>(null);
   const undoNoticeId = useRef(0);
-  const isAdmin = currentUser?.role === "ADMIN";
   const trialExpired = currentUser?.trialExpired === true;
   const allowedSections = visibleSections(currentUser?.role);
 
