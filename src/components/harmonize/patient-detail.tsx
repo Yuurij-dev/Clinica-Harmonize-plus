@@ -1293,6 +1293,21 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
   const [returnError, setReturnError] = useState("");
   const [invalidReturnFields, setInvalidReturnFields] = useState<Set<string>>(new Set());
   const [editingAppointment, setEditingAppointment] = useState<PatientAppointmentRecord | null>(null);
+  const [professionals, setProfessionals] = useState<Array<{ id: string; name: string }>>(() => readClientCache<{ professionals: Array<{ id: string; name: string }> }>("/api/team/professionals")?.professionals ?? []);
+  const [returnProfessional, setReturnProfessional] = useState("");
+
+  useEffect(() => {
+    if (!returnAppointmentTarget && !editingAppointment) return;
+    let active = true;
+    getCachedJson<{ professionals: Array<{ id: string; name: string }> }>("/api/team/professionals")
+      .then((data) => { if (active) setProfessionals(data.professionals); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [returnAppointmentTarget, editingAppointment]);
+
+  useEffect(() => {
+    setReturnProfessional(editingAppointment?.professional ?? returnAppointmentTarget?.professional ?? "");
+  }, [editingAppointment, returnAppointmentTarget]);
   const [editedAppointments, setEditedAppointments] = useState<Record<string, PatientAppointmentRecord>>({});
   const [createdAppointments, setCreatedAppointments] = useState<PatientAppointmentRecord[]>([]);
   const [updatingAppointmentId, setUpdatingAppointmentId] = useState<string | null>(null);
@@ -1370,7 +1385,7 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
         body: JSON.stringify({
           ...(editingAppointment?.id ? {} : { patientId }),
           procedure: returnReason.trim(),
-          professional: editingAppointment?.professional ?? returnAppointmentTarget?.professional,
+          professional: returnProfessional || editingAppointment?.professional || returnAppointmentTarget?.professional,
           date: `${returnDate}T${returnTime}:00-03:00`,
           time: returnTime,
           notes: returnNotes.trim(),
@@ -1416,6 +1431,10 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
       <Modal open={Boolean(returnAppointmentTarget || editingAppointment)} onClose={() => { if (!returnSaving) { setEditingAppointment(null); onReturnAppointmentClose(); } }} title={editingAppointment ? "Editar retorno" : scheduleKind === "procedure" ? "Marcar procedimento" : "Marcar retorno"} description={editingAppointment ? "Atualize os dados do retorno agendado." : scheduleKind === "procedure" ? "O procedimento será incluído na lista de agendamentos da clínica." : "O retorno será incluído na lista de agendamentos da clínica."}>
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveReturnAppointment}>
           <div className="sm:col-span-2 rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3 text-xs text-[#555668]">Procedimento: <strong className="text-[#303144]">{editingAppointment?.procedure ?? returnAppointmentTarget?.name}</strong></div>
+          <div className="sm:col-span-2"><FormField label="Profissional"><select className={fieldClassName} value={returnProfessional} onChange={(event) => setReturnProfessional(event.target.value)} required>
+            {returnProfessional && !professionals.some((professional) => professional.name === returnProfessional) ? <option value={returnProfessional}>{returnProfessional}</option> : null}
+            {professionals.map((professional) => <option key={professional.id} value={professional.name}>{professional.name}</option>)}
+          </select></FormField></div>
           <FormField label="Data"><input className={cn(fieldClassName, invalidReturnFields.has("date") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} type="date" value={returnDate} required onChange={(event) => { setReturnDate(event.target.value); setInvalidReturnFields((current) => { const next = new Set(current); next.delete("date"); return next; }); setReturnError(""); }} /></FormField>
           <FormField label="Horário"><input className={cn(fieldClassName, invalidReturnFields.has("time") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} type="time" value={returnTime} required onChange={(event) => { setReturnTime(event.target.value); setInvalidReturnFields((current) => { const next = new Set(current); next.delete("time"); return next; }); setReturnError(""); }} /></FormField>
           <div className="sm:col-span-2"><FormField label={scheduleKind === "procedure" ? "Procedimento" : "Motivo do retorno"}><input className={fieldClassName} value={returnReason} required placeholder={scheduleKind === "procedure" ? "Ex.: Botox" : "Ex.: avaliação do resultado"} onChange={(event) => setReturnReason(event.target.value)} /></FormField></div>
