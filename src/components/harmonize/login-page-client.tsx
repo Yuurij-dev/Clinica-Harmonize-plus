@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LoginScreen, type RegisterResult, type RegisterValues } from "./login-screen";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
+import { setClientCacheScope } from "@/lib/client-cache";
 
 export function LoginPageClient() {
   const router = useRouter();
@@ -20,8 +21,10 @@ export function LoginPageClient() {
       body: JSON.stringify(credentials),
     });
 
-    const data = await response.json().catch(() => null) as { message?: string; passwordChangeRequired?: boolean; user?: { clinic?: { name?: string } } } | null;
+    const data = await response.json().catch(() => null) as { message?: string; passwordChangeRequired?: boolean; user?: { id?: string; clinic?: { id?: string; name?: string } } } | null;
     if (!response.ok) return { error: data?.message ?? "Usuário ou senha inválidos." };
+    setClientCacheScope(data?.user?.id && data.user.clinic?.id ? `${data.user.id}:${data.user.clinic.id}` : null);
+    window.localStorage.setItem("harmonize-session-change", String(Date.now()));
     if (data?.passwordChangeRequired) return { passwordChangeRequired: true };
     setClinicName(data?.user?.clinic?.name ?? "Sua clínica");
     window.setTimeout(() => {

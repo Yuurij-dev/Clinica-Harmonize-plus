@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus } from "lucide-react";
+import { CalendarPlus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -47,7 +47,7 @@ export function PatientEvaluations({ patientId, patientName }: { patientId: stri
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><h3 className="text-sm font-bold text-[#27283b]">Avaliações</h3><p className="mt-0.5 text-[10px] text-[#858696]">Clique em uma avaliação para abrir as fotos e marcações.</p></div>
-        <Button type="button" disabled={newEvaluationOpen} onClick={startNewEvaluation}><Plus className="h-4 w-4" />Adicionar avaliação</Button>
+        <Button type="button" variant="outline" disabled={newEvaluationOpen} onClick={startNewEvaluation}><CalendarPlus className="h-4 w-4" />Adicionar avaliação</Button>
       </div>
       {newEvaluationOpen ? (
         <ListAccordion title="Nova avaliação" subtitle={new Date().toLocaleDateString("pt-BR")} open onToggle={() => { setCreatingEvaluation(false); setOpenEvaluationId(null); }}>

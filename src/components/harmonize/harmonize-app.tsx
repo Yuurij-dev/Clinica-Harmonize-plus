@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { AppToaster } from "./app-toaster";
 import { Dashboard } from "./dashboard";
 import { Sidebar } from "./sidebar";
+import { StockSection } from "./stock-section";
+import { FinanceSection } from "./finance-section";
+import { StockSettingsCard } from "./stock-alerts";
 import { Topbar } from "./topbar";
 import {
   ClientsSection,
-  FinanceSection,
   PaymentsSection,
   ProceduresSection,
   QuotesSection,
@@ -18,17 +20,20 @@ import {
   SettingsSection,
 } from "./sections";
 import type { SectionId } from "@/types/clinic";
+import { CLIENT_CACHE_UNAUTHORIZED_EVENT, setClientCacheScope } from "@/lib/client-cache";
 
-type CurrentUser = { name: string; role: string; isOwner?: boolean; trialExpired?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
+type CurrentUser = { id: string; clinicId: string; name: string; role: string; isOwner?: boolean; trialExpired?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
 type AgendaFocus = { date: string; time: string };
 type CreateDialog = "appointment" | "client" | "procedure" | "quote" | "payment";
 type HarmonizeAppProps = { initialCreate?: CreateDialog };
+type UndoNotice = { id: number; message: string; undo: () => void; leaving: boolean } | null;
 
 const sectionPaths: Record<SectionId, string> = {
   dashboard: "/dashboard",
   agenda: "/",
   clientes: "/clientes",
   procedimentos: "/procedimentos",
+  estoque: "/estoque",
   orcamentos: "/orcamentos",
   pagamentos: "/pagamentos",
   financeiro: "/financeiro",
@@ -51,9 +56,19 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const [createDialog, setCreateDialog] = useState<CreateDialog | null>(initialCreate ?? null);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [agendaFocus, setAgendaFocus] = useState<AgendaFocus | null>(null);
+  const [undoNotice, setUndoNotice] = useState<UndoNotice>(null);
+  const undoNoticeId = useRef(0);
   const isAdmin = currentUser?.role === "ADMIN";
   const trialExpired = currentUser?.trialExpired === true;
   const restrictedSections: SectionId[] = ["agenda", "clientes", "orcamentos"];
+
+  const activeUndoNoticeId = undoNotice?.id;
+  useEffect(() => {
+    if (activeUndoNoticeId === undefined) return;
+    const leaveTimer = window.setTimeout(() => setUndoNotice((current) => current?.id === activeUndoNoticeId ? { ...current, leaving: true } : current), 6260);
+    const dismissTimer = window.setTimeout(() => setUndoNotice((current) => current?.id === activeUndoNoticeId ? null : current), 6500);
+    return () => { window.clearTimeout(leaveTimer); window.clearTimeout(dismissTimer); };
+  }, [activeUndoNoticeId]);
 
   function selectSection(section: SectionId, focus?: AgendaFocus) {
     if (!isAdmin && !restrictedSections.includes(section)) {
@@ -66,18 +81,49 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   }
 
   useEffect(() => {
+    let active = true;
     fetch("/api/auth/me")
       .then(async (response) => {
         if (!response.ok) {
-          router.replace("/login");
+          if (active) {
+            setClientCacheScope(null);
+            router.replace("/login");
+          }
           return null;
         }
         return response.json() as Promise<{ user: CurrentUser }>;
       })
-      .then((data) => setCurrentUser(data?.user ?? null))
+      .then((data) => {
+        if (!active || !data?.user) return;
+        setClientCacheScope(`${data.user.id}:${data.user.clinicId}`);
+        setCurrentUser(data.user);
+      })
       .catch(() => {
-        router.replace("/login");
+        if (active) {
+          setClientCacheScope(null);
+          router.replace("/login");
+        }
       });
+    return () => { active = false; };
+  }, [router]);
+
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      setCurrentUser(null);
+      router.replace("/login");
+    };
+    const handleSessionChange = (event: StorageEvent) => {
+      if (event.key !== "harmonize-session-change") return;
+      setClientCacheScope(null);
+      setCurrentUser(null);
+      window.location.reload();
+    };
+    window.addEventListener(CLIENT_CACHE_UNAUTHORIZED_EVENT, handleUnauthorized);
+    window.addEventListener("storage", handleSessionChange);
+    return () => {
+      window.removeEventListener(CLIENT_CACHE_UNAUTHORIZED_EVENT, handleUnauthorized);
+      window.removeEventListener("storage", handleSessionChange);
+    };
   }, [router]);
 
   function openCreate(section: SectionId, dialog: NonNullable<typeof createDialog>) {
@@ -96,18 +142,26 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   }
 
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    setMobileOpen(false);
-    setCreateDialog(null);
-    router.replace("/login");
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      setClientCacheScope(null);
+      setCurrentUser(null);
+      window.localStorage.setItem("harmonize-session-change", String(Date.now()));
+      setMobileOpen(false);
+      setCreateDialog(null);
+      router.replace("/login");
+    }
   }
 
   function showNotice(message: string, undo?: () => void, tone: "success" | "warning" = "success") {
+    if (undo) {
+      undoNoticeId.current += 1;
+      setUndoNotice({ id: undoNoticeId.current, message, undo, leaving: false });
+      return;
+    }
     const notify = tone === "warning" ? toast.warning : toast.success;
-    notify(message, {
-      duration: undo ? 6500 : 3600,
-      action: undo ? { label: "Desfazer", onClick: undo } : undefined,
-    });
+    notify(message, { duration: 3600 });
   }
 
   return (
@@ -124,22 +178,25 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       <div className="lg:pl-[220px]">
         <Topbar user={currentUser} onMenu={() => setMobileOpen(true)} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onLogout={logout} />
         <main className={`mx-auto w-full ${active === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-10 pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
-          {active === "dashboard" && isAdmin ? <Dashboard userName={currentUser?.name} onAction={(action) => {
+          {currentUser && active === "dashboard" && isAdmin ? <Dashboard userName={currentUser?.name} onAction={(action) => {
             const target = { client: ["clientes", "client"], appointment: ["agenda", "appointment"], quote: ["orcamentos", "quote"], payment: ["pagamentos", "payment"] }[action] as [SectionId, NonNullable<typeof createDialog>];
             openCreate(target[0], target[1]);
           }} onNavigate={selectSection} /> : null}
-          {active === "agenda" ? <ScheduleSection focus={agendaFocus} openCreate={createDialog === "appointment"} onCreateOpen={() => openCreate("agenda", "appointment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {active === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => openCreate("clientes", "client")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {active === "procedimentos" && isAdmin ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => openCreate("procedimentos", "procedure")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {active === "orcamentos" ? <QuotesSection openCreate={createDialog === "quote"} onCreateOpen={() => openCreate("orcamentos", "quote")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {active === "pagamentos" && isAdmin ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => openCreate("pagamentos", "payment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {active === "financeiro" && isAdmin ? <FinanceSection /> : null}
-          {active === "relatorios" && isAdmin ? <ReportsSection /> : null}
-          {active === "calculadora" && isAdmin ? <SettingsSection mode="calculator" /> : null}
-          {active === "configuracoes" && isAdmin ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
+          {currentUser && active === "agenda" ? <ScheduleSection focus={agendaFocus} openCreate={createDialog === "appointment"} onCreateOpen={() => openCreate("agenda", "appointment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && active === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => openCreate("clientes", "client")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && active === "procedimentos" && isAdmin ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => openCreate("procedimentos", "procedure")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && active === "estoque" && isAdmin ? <StockSection onSaved={showNotice} /> : null}
+          {currentUser && active === "orcamentos" ? <QuotesSection openCreate={createDialog === "quote"} onCreateOpen={() => openCreate("orcamentos", "quote")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && active === "pagamentos" && isAdmin ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => openCreate("pagamentos", "payment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && active === "financeiro" && isAdmin ? <FinanceSection /> : null}
+          {currentUser && active === "relatorios" && isAdmin ? <ReportsSection /> : null}
+          {currentUser && active === "calculadora" && isAdmin ? <SettingsSection mode="calculator" /> : null}
+          {currentUser && active === "configuracoes" && isAdmin ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
+          {currentUser && active === "configuracoes" && isAdmin ? <StockSettingsCard onSaved={showNotice} /> : null}
         </main>
       </div>
       <AppToaster />
+      {undoNotice ? <div className={`${undoNotice.leaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-6 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] border border-border bg-card px-4 py-3 text-xs font-bold text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.18)]`} role="status"><div className="flex items-center gap-3"><span className="min-w-0 flex-1">{undoNotice.message}</span><button className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-[11px] font-black text-foreground transition hover:bg-muted/80" onClick={() => { const undo = undoNotice.undo; setUndoNotice(null); undo(); }}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-success" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
     </div>
   );
 }

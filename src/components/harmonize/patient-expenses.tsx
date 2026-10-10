@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, CirclePlus, FileDown, Info, LoaderCircle, Plus, Save, WalletCards } from "lucide-react";
+import { CalendarPlus, Check, ChevronDown, CirclePlus, FileDown, Info, LoaderCircle, Save, WalletCards } from "lucide-react";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -15,12 +15,12 @@ type ProcedureOption = {
   name: string;
   category: string;
   materials?: string;
+  unit?: string | null;
   price: number;
 };
 
-type ProductOption = { name: string; unit: string };
 type CostSettings = { laborCost: number; facilityCost: number; medicationCost: number };
-type QuoteOptionsResponse = { procedures: ProcedureOption[]; products: ProductOption[]; costs: CostSettings };
+type QuoteOptionsResponse = { procedures: ProcedureOption[]; costs: CostSettings };
 type PatientQuote = { id: string; items: string; total: number; status: string; paymentMethod?: string | null; createdAt?: string };
 type SelectedProcedure = ProcedureOption & { quantity: number; unit: string };
 
@@ -65,7 +65,7 @@ export function PatientExpenses({ patientId, journeyId, onPaid, onPaymentUndone 
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div><h3 className="text-sm font-bold text-[#27283b]">Orçamentos</h3><p className="mt-0.5 text-[10px] text-[#858696]">Clique em um orçamento para abrir a calculadora.</p></div>
-        <Button type="button" disabled={creatingQuote || !patientId} onClick={startNewQuote}><Plus className="h-4 w-4" />Adicionar orçamento</Button>
+        <Button type="button" variant="outline" disabled={creatingQuote || !patientId} onClick={startNewQuote}><CalendarPlus className="h-4 w-4" />Adicionar orçamento</Button>
       </div>
       {creatingQuote ? (
         <ListAccordion title="Novo orçamento" subtitle={new Date().toLocaleDateString("pt-BR")} open onToggle={() => { setCreatingQuote(false); setOpenQuoteId(null); }}>
@@ -107,7 +107,6 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
   const cached = readClientCache<QuoteOptionsResponse>("/api/quotes/options");
   const cachedCostSettings = readClientCache<{ settings?: CostSettings }>("/api/clinic/cost-settings");
   const [procedures, setProcedures] = useState<ProcedureOption[]>(cached?.procedures ?? []);
-  const [products, setProducts] = useState<ProductOption[]>(cached?.products ?? []);
   const [costs, setCosts] = useState<CostSettings>(cachedCostSettings?.settings ?? cached?.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
   const [editedSelection, setSelected] = useState<Record<string, number> | null>(null);
   const [loading, setLoading] = useState(!cached);
@@ -131,7 +130,6 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
     getCachedJson<QuoteOptionsResponse>("/api/quotes/options")
       .then((data) => {
         setProcedures(data.procedures ?? []);
-        setProducts(data.products ?? []);
         setCosts(data.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
       })
       .catch(() => setNotice("Não foi possível carregar os procedimentos cadastrados."))
@@ -157,8 +155,8 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
   const selected = editedSelection ?? restoredSelection;
 
   const selectedItems = useMemo<SelectedProcedure[]>(
-    () => procedures.filter((procedure) => selected[procedure.id]).map((procedure) => ({ ...procedure, quantity: selected[procedure.id], unit: procedureUnit(procedure, products) })),
-    [procedures, products, selected],
+    () => procedures.filter((procedure) => selected[procedure.id]).map((procedure) => ({ ...procedure, quantity: selected[procedure.id], unit: procedureUnit(procedure) })),
+    [procedures, selected],
   );
   const materialsTotal = selectedItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const extraCosts = costs.laborCost + costs.facilityCost + costs.medicationCost;
@@ -212,7 +210,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
       }
       if (!response.ok) throw new Error(data.message ?? `Não foi possível salvar o orçamento (${response.status}).`);
       if (!data.quote?.id) throw new Error("O orçamento foi processado, mas não retornou um identificador válido.");
-      invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
+      invalidateClientCache("/api/quotes", "/api/patients", "/api/dashboard/bootstrap");
       setLatestQuoteId(data.quote.id);
       setSavedQuoteSignature(currentQuoteSignature);
       onSaved(data.quote);
@@ -246,7 +244,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
       const quoteResponse = await fetch(`/api/quotes/${latestQuoteId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Aprovado" }) });
       if (!quoteResponse.ok) throw new Error("Pagamento registrado, mas não foi possível concluir o orçamento.");
       invalidateClientCache("/api/payments", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
-      invalidateClientCache("/api/quotes");
+      invalidateClientCache("/api/quotes", "/api/patients");
       setPaymentConfirmed(true);
       onStatusChange(latestQuoteId, "Aprovado");
       onPaid?.();
@@ -287,7 +285,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
     const response = await fetch(`/api/payments/${createdPaymentId}`, { method: "DELETE" });
     if (!response.ok) return;
     const quoteResponse = latestQuoteId ? await fetch(`/api/quotes/${latestQuoteId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Pendente" }) }) : null;
-    invalidateClientCache("/api/payments", "/api/quotes", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
+    invalidateClientCache("/api/payments", "/api/quotes", "/api/patients", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
     setPaymentNotice(false);
     setPaymentNoticeLeaving(false);
     setCreatedPaymentId(null);
@@ -328,7 +326,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
                     </button>
                     <label className="relative block w-[82px]">
                       <select aria-label={`Quantidade de ${procedure.name}`} disabled={paymentConfirmed} className="h-8 w-full appearance-none rounded-[5px] border border-[#dddde6] bg-white px-2 pr-6 text-[10px] font-semibold text-[#555668] outline-none focus:border-[#5147dc] disabled:cursor-not-allowed disabled:bg-[#f4f4f8] focus:border-[#5147dc]" value={quantity || 1} onChange={(event) => updateQuantity(procedure.id, Number(event.target.value))}>
-                        {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{formatQuantity(value, procedureUnit(procedure, products))}</option>)}
+                        {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{formatQuantity(value, procedureUnit(procedure))}</option>)}
                       </select><ChevronDown className="pointer-events-none absolute right-2 top-2.5 h-3 w-3 text-[#77788a]" />
                     </label>
                     <span className="font-semibold text-[#555668]">{currency.format(procedure.price)}</span>
@@ -371,14 +369,9 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
   );
 }
 
-function procedureUnit(procedure: ProcedureOption, products: ProductOption[]) {
-  const materialNames = (procedure.materials ?? "").toLocaleLowerCase("pt-BR");
-  const matchedProduct = products.find((product) => materialNames.includes(product.name.toLocaleLowerCase("pt-BR")));
-  const matchedUnit = (matchedProduct?.unit ?? "").toLocaleLowerCase("pt-BR");
-  if (matchedUnit.includes("ml")) return "ml";
-  if (matchedUnit.includes("frasco")) return "frasco";
-  if (materialNames.includes("ácido hialurônico") || materialNames.includes("poli-l-láctico") || materialNames.includes("hidroxiapatita")) return "ml";
-  return "unidade";
+// A unidade vem do primeiro material da ficha técnica do procedimento.
+function procedureUnit(procedure: ProcedureOption) {
+  return procedure.unit ?? "unidade";
 }
 
 function formatQuantity(quantity: number, unit: string) {

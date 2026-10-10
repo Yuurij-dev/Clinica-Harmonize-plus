@@ -10,12 +10,12 @@ export async function GET() {
     prisma.appointment.findMany({
       where: { clinicId: user.clinicId },
       orderBy: [{ date: "asc" }, { time: "asc" }],
-      include: { patient: { select: { name: true } } },
+      select: { id: true, patientId: true, date: true, time: true, procedure: true, professional: true, status: true, patient: { select: { name: true } } },
     }),
     prisma.patient.findMany({
       where: { clinicId: user.clinicId },
       orderBy: { name: "asc" },
-      include: { _count: { select: { appointments: true, evaluations: true } } },
+      select: { id: true, name: true, cpf: true, phone: true, age: true, status: true, lastVisit: true, nextReturn: true, totalValue: true },
     }),
     prisma.procedure.findMany({
       where: { clinicId: user.clinicId },
