@@ -1,7 +1,7 @@
 import { clinicToday, dateOnly } from "./clinic-time";
 import { prisma } from "./prisma";
 import { lockLots, lotBalances, movementTypes, type StockTransaction } from "./stock";
-import { allocateLots, attendanceKind, roundQuantity, validateQuantity } from "./stock-rules";
+import { allocateLots, attendanceKind, procedureSelectionsFromAppointment, roundQuantity, validateQuantity } from "./stock-rules";
 
 export class AttendanceMaterialsError extends Error {}
 
@@ -22,14 +22,22 @@ export async function attendanceCheckData(clinicId: string, appointmentId: strin
   const attendance = await findAttendance(clinicId, appointmentId);
   if (!attendance) return null;
   const today = clinicToday();
-  const [procedure, products, balances] = await Promise.all([
-    attendance.kind === "procedure" ? prisma.procedure.findFirst({ where: { clinicId, name: attendance.procedure }, select: { technicalSheet: { select: { productId: true, quantity: true } } } }) : null,
+  const [procedures, products, balances] = await Promise.all([
+    attendance.kind === "procedure" ? prisma.procedure.findMany({ where: { clinicId }, select: { name: true, technicalSheet: { select: { productId: true, quantity: true } } } }) : Promise.resolve([]),
     prisma.product.findMany({ where: { clinicId, archivedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true, unit: true, lots: { where: { expiresOn: { gte: new Date(`${today}T00:00:00Z`) } }, orderBy: { expiresOn: "asc" }, select: { id: true, code: true, expiresOn: true } } } }),
     lotBalances(clinicId),
   ]);
+  const selectedProcedures = procedureSelectionsFromAppointment(attendance.procedure, procedures.map((procedure) => procedure.name));
+  const suggestionQuantities = new Map<string, number>();
+  for (const procedure of procedures) {
+    const selected = selectedProcedures.find(({ name }) => name === procedure.name);
+    if (!selected) continue;
+    for (const item of procedure.technicalSheet) suggestionQuantities.set(item.productId, roundQuantity((suggestionQuantities.get(item.productId) ?? 0) + item.quantity * selected.quantity));
+  }
+
   return {
     appointment: { id: attendance.id, kind: attendance.kind, name: attendance.procedure, date: attendance.date, status: attendance.status, materialsCheck: attendance.materialsCheck, patientName: attendance.patient.name },
-    suggestions: (procedure?.technicalSheet ?? []).filter((item) => products.some((product) => product.id === item.productId)),
+    suggestions: [...suggestionQuantities].filter(([productId]) => products.some((product) => product.id === productId)).map(([productId, quantity]) => ({ productId, quantity })),
     materials: products.map((product) => ({
       id: product.id, name: product.name, unit: product.unit,
       lots: product.lots.map((lot) => ({ id: lot.id, code: lot.code, expiresOn: dateOnly(lot.expiresOn), balance: balances.get(lot.id) ?? 0 })).filter((lot) => lot.balance > 0),

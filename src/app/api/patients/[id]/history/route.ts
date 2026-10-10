@@ -14,7 +14,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const includePayments = ["Pagamentos", "Histórico"].includes(requestedTab ?? "");
   const includeQuotes = ["Procedimentos", "Agendamentos", "Histórico"].includes(requestedTab ?? "");
   const includeProcedureRecords = ["Procedimentos", "Histórico"].includes(requestedTab ?? "");
-  const includeAppointmentProcedureNames = requestedTab === "Agendamentos" && new URL(request.url).searchParams.get("includeProcedureNames") === "1";
+  const includeAppointmentProcedureNames = ["Procedimentos", "Agendamentos"].includes(requestedTab ?? "") && new URL(request.url).searchParams.get("includeProcedureNames") === "1";
   const includeObservations = requestedTab === "Histórico";
   const includeProcedurePhotos = requestedTab === "Procedimentos" || requestedTab === "Histórico";
   const patient = await prisma.patient.findFirst({

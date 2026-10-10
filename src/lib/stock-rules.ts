@@ -136,6 +136,18 @@ export function normalizeName(value: string) {
   return value.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLocaleLowerCase("pt-BR").replace(/\s+/g, " ");
 }
 
+export function procedureSelectionsFromAppointment(label: string, procedureNames: string[]) {
+  const selectedNames = label.split(",").map((value) => {
+    const match = value.match(/\s*\((\d+)\s*x\)\s*$/i);
+    return { name: normalizeName(value.replace(/\s*\(\d+\s*x\)\s*$/i, "")), quantity: match ? Number(match[1]) : 1 };
+  }).filter((selection) => selection.name && selection.quantity > 0);
+  const normalizedCatalog = new Map(procedureNames.map((name) => [normalizeName(name), name]));
+  return [...new Set(selectedNames.flatMap((name) => {
+    const matchedName = normalizedCatalog.get(name.name);
+    return matchedName ? [{ name: matchedName, quantity: name.quantity }] : [];
+  }))];
+}
+
 // Converte o texto livre antigo ("Toxina botulínica, Agulha") em itens de ficha técnica,
 // comparando nomes sem acento e sem diferença de maiúsculas. Quantidade inicial 1, para revisão.
 export function convertMaterialsText(text: string, products: Array<{ id: string; name: string }>) {

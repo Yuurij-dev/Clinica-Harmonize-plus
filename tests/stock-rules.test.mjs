@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { allocateLots, attendanceKind, stockAlerts, convertMaterialsText, manualMovement, describeTechnicalSheet, formatQuantity, lotBalance, lotStatus, materialBalance, parseQuantity, validateQuantity } from "../src/lib/stock-rules.ts";
+import { allocateLots, attendanceKind, procedureSelectionsFromAppointment, stockAlerts, convertMaterialsText, manualMovement, describeTechnicalSheet, formatQuantity, lotBalance, lotStatus, materialBalance, parseQuantity, validateQuantity } from "../src/lib/stock-rules.ts";
 
 test("lot balance sums signed movements without floating point noise", () => {
   assert.equal(lotBalance([{ quantity: 0.1 }, { quantity: 0.2 }]), 0.3);
@@ -125,6 +125,13 @@ test("attendance kind comes from the appointment label", () => {
   assert.equal(attendanceKind("Consulta / retorno"), "return");
   assert.equal(attendanceKind("Preenchimento labial"), "procedure");
   assert.equal(attendanceKind("Botox (1x)"), "procedure");
+});
+
+test("appointment procedure labels map back to selected quote procedures and quantities", () => {
+  const procedures = ["Botox preventivo", "Botox", "Preenchimento"];
+  assert.deepEqual(procedureSelectionsFromAppointment("Preenchimento (1x)", procedures), [{ name: "Preenchimento", quantity: 1 }]);
+  assert.deepEqual(procedureSelectionsFromAppointment("Botox (1x), Preenchimento (2x)", procedures), [{ name: "Botox", quantity: 1 }, { name: "Preenchimento", quantity: 2 }]);
+  assert.deepEqual(procedureSelectionsFromAppointment("Botox preventivo (1x)", procedures), [{ name: "Botox preventivo", quantity: 1 }]);
 });
 
 test("pending outputs and material checks become alerts", () => {
