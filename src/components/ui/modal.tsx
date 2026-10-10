@@ -20,7 +20,7 @@ export function Modal({ open, title, description, children, onClose, overlayCont
   return (
     <DialogPrimitive.Root open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-[1000] bg-[#202136]/48 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-[1000] bg-transparent backdrop-blur-[3px] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <DialogPrimitive.Content
           className="pointer-events-none fixed inset-0 z-[1001] grid min-h-dvh place-items-center p-3 outline-none sm:p-4"
           onInteractOutside={(event) => { if (!closeOnOverlayClick) event.preventDefault(); }}

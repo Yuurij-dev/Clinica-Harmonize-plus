@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ensurePatientJourney } from "@/lib/patient-journey";
+import { withSaveErrors } from "@/lib/save-errors";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -11,7 +12,7 @@ export async function GET() {
   return NextResponse.json({ payments });
 }
 
-export async function POST(request: Request) {
+export const POST = withSaveErrors("registrar o pagamento", async (request: Request) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
@@ -22,4 +23,4 @@ export async function POST(request: Request) {
   const journey = await ensurePatientJourney(patient.id, user.clinicId, body.journeyId);
   const payment = await prisma.payment.create({ data: { clinicId: user.clinicId, patientId: patient.id, journeyId: journey.id, value: Math.max(0, Math.round(value)), method: body.method, status: body.status || "Pago", installments: body.installments }, include: { patient: { select: { name: true } } } });
   return NextResponse.json({ payment }, { status: 201 });
-}
+});

@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { withSaveErrors } from "@/lib/save-errors";
 
-export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+export const PATCH = withSaveErrors("atualizar o orçamento", async (request: Request, { params }: { params: Promise<{ id: string }> }) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const body = await request.json().catch(() => null) as { status?: string; items?: string; total?: number; paymentMethod?: string } | null;
@@ -29,4 +30,4 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     await prisma.patientProcedure.deleteMany({ where: { clinicId: user.clinicId, patientId: quote.patientId, notes: `__quote:${quote.id}`, beforePhoto: null, afterPhoto: null, photoSessions: { none: {} } } });
   }
   return NextResponse.json({ quote });
-}
+});

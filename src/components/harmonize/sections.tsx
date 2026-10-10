@@ -55,6 +55,7 @@ import {
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { cn } from "@/lib/utils";
+import { errorMessage, fetchForSave, httpErrorMessage, responseErrorMessage } from "@/lib/client-errors";
 import type { Appointment, JourneyStageId, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
 
 const currency = new Intl.NumberFormat("pt-BR", {
@@ -96,7 +97,7 @@ type CreateProps = {
   openCreate?: boolean;
   onCreateOpen?: () => void;
   onCreateClose?: () => void;
-  onSaved?: (message: string, undo?: () => void) => void;
+  onSaved?: (message: string, undo?: () => void, tone?: "success" | "warning") => void;
 };
 
 type ScheduleFocus = { date: string; time: string };
@@ -270,7 +271,7 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
     setSaveError("");
     setIsSaving(true);
     try {
-      const response = await fetch("/api/patients", {
+      const response = await fetchForSave("/api/patients", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -279,11 +280,11 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
           phone: String(form.get("phone") || ""),
           age: parseInteger(form.get("age")),
         }),
-      });
+      }, "Não foi possível salvar o paciente");
 
       if (!response.ok) {
         const data = await response.json().catch(() => null) as { message?: string } | null;
-        setSaveError(data?.message ?? "Não foi possível salvar o cliente.");
+        setSaveError(data?.message ?? httpErrorMessage(response, "Não foi possível salvar o cliente"));
         return;
       }
 
@@ -293,8 +294,8 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
       invalidateClientCache("/api/patients", "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
       onCreateClose();
       onSaved?.(`${savedPatient.name} foi adicionado aos clientes.`);
-    } catch {
-      setSaveError("Não foi possível conectar ao servidor.");
+    } catch (error) {
+      setSaveError(errorMessage(error, "Não foi possível conectar ao servidor."));
     } finally {
       setIsSaving(false);
     }
@@ -442,11 +443,11 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
       missed.forEach((appointment) => autoMissedIds.current.add(appointment.id));
       completed.forEach((appointment) => autoCompletedIds.current.add(appointment.id));
       const results = await Promise.all(transitions.map(async ({ appointment, status }) => {
-        const response = await fetch(`/api/appointments/${appointment.id}`, {
+        const response = await fetchForSave(`/api/appointments/${appointment.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ status }),
-        });
+        }, "Não foi possível atualizar o agendamento");
         return response.ok ? { id: appointment.id, status } : null;
       }));
       const updated = new Map(results.filter((result): result is { id: string; status: string } => Boolean(result)).map((result) => [result.id, result.status]));
@@ -502,7 +503,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     setAppointmentFormError("");
     setIsSaving(true);
     try {
-      const response = await fetch("/api/appointments", {
+      const response = await fetchForSave("/api/appointments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -513,8 +514,11 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
           professional: String(form.get("professional")),
           date: `${String(form.get("date"))}T00:00:00`,
         }),
-      });
-      if (!response.ok) return;
+      }, "Não foi possível salvar o agendamento");
+      if (!response.ok) {
+        setAppointmentFormError(await responseErrorMessage(response, "Não foi possível salvar o agendamento"));
+        return;
+      }
       const data = await response.json() as { appointment: ApiAppointment };
       setAppointmentRows((current) => [...current, mapApiAppointment(data.appointment, procedureCatalog)].sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`)));
       invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
@@ -532,8 +536,8 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   async function advanceAppointment(target: AppointmentRow) {
     const nextStatus = target.status === "Em atendimento" ? "Atendido" : "Em atendimento";
     setUpdatingId(target.id);
-    const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: nextStatus }) });
-    if (!response.ok) { setUpdatingId(null); return; }
+    const response = await fetchForSave(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: nextStatus }) }, "Não foi possível atualizar o agendamento");
+    if (!response.ok) { setUpdatingId(null); onSaved?.(await responseErrorMessage(response, "Não foi possível atualizar o agendamento"), undefined, "warning"); return; }
     const nextRows = appointmentRows.map((item) => item.id === target.id ? { ...item, status: nextStatus } : item);
     setAppointmentRows(nextRows);
     invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
@@ -546,8 +550,8 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
 
     const nextRows = appointmentRows.map((item) => item.id === target.id ? { ...item, status: "Faltou" } : item);
     setUpdatingId(target.id);
-    const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Faltou" }) });
-    if (!response.ok) { setUpdatingId(null); return; }
+    const response = await fetchForSave(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Faltou" }) }, "Não foi possível atualizar o agendamento");
+    if (!response.ok) { setUpdatingId(null); onSaved?.(await responseErrorMessage(response, "Não foi possível atualizar o agendamento"), undefined, "warning"); return; }
     setAppointmentRows(nextRows);
     invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     setUpdatingId(null);
@@ -560,8 +564,8 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
 
   async function cancelAppointment(target: AppointmentRow) {
     setUpdatingId(target.id);
-    const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Cancelado" }) });
-    if (!response.ok) { setUpdatingId(null); return; }
+    const response = await fetchForSave(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Cancelado" }) }, "Não foi possível cancelar o agendamento");
+    if (!response.ok) { setUpdatingId(null); onSaved?.(await responseErrorMessage(response, "Não foi possível cancelar o agendamento"), undefined, "warning"); return; }
     setAppointmentRows((current) => current.map((item) => item.id === target.id ? { ...item, status: "Cancelado" } : item));
     invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     setUpdatingId(null);
@@ -572,19 +576,19 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     if (!deleteTarget) return;
     const target = deleteTarget;
     setDeleteSaving(true);
-    const response = await fetch(`/api/appointments/${target.id}`, { method: "DELETE" });
-    if (!response.ok) { setDeleteSaving(false); return; }
+    const response = await fetchForSave(`/api/appointments/${target.id}`, { method: "DELETE" }, "Não foi possível excluir o agendamento");
+    if (!response.ok) { setDeleteSaving(false); onSaved?.(await responseErrorMessage(response, "Não foi possível excluir o agendamento"), undefined, "warning"); return; }
     setAppointmentRows((current) => current.filter((item) => item.id !== target.id));
     setDeleteTarget(null);
     setDeleteSaving(false);
     invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     onSaved?.(`${target.patient}: agendamento excluído.`, () => {
-      void fetch("/api/appointments", {
+      void fetchForSave("/api/appointments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ patientId: target.patientId, time: target.time, procedure: target.procedure, professional: target.professional, date: target.date }),
-      }).then(async (restoreResponse) => {
-        if (!restoreResponse.ok) return;
+      }, "Não foi possível restaurar o agendamento").then(async (restoreResponse) => {
+        if (!restoreResponse.ok) { onSaved?.(await responseErrorMessage(restoreResponse, "Não foi possível restaurar o agendamento"), undefined, "warning"); return; }
         const data = await restoreResponse.json() as { appointment: ApiAppointment };
         setAppointmentRows((current) => [...current, mapApiAppointment(data.appointment, procedureCatalog)].sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`)));
         invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
@@ -1068,13 +1072,13 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
       materials: selectedMaterials,
       margin: parseInteger(form.get("margin")),
     };
-    const response = await fetch(editingProcedure?.id ? `/api/procedures/${editingProcedure.id}` : "/api/procedures", {
+    const response = await fetchForSave(editingProcedure?.id ? `/api/procedures/${editingProcedure.id}` : "/api/procedures", {
       method: editingProcedure?.id ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(nextProcedure),
-    });
+    }, "Não foi possível salvar o procedimento");
     setIsSaving(false);
-    if (!response.ok) return;
+    if (!response.ok) { onSaved?.(await responseErrorMessage(response, "Não foi possível salvar o procedimento"), undefined, "warning"); return; }
     invalidateClientCache("/api/procedures", "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     await loadProcedures();
     onSaved?.(`${name} ${editingProcedure ? "foi atualizado" : "foi adicionado aos procedimentos"}.`);
@@ -1085,8 +1089,8 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name"));
-    const response = await fetch("/api/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, category: String(form.get("category")), unit: String(form.get("unit")), cost: parseCurrency(form.get("cost")), supplier: String(form.get("supplier")) }) });
-    if (!response.ok) return;
+    const response = await fetchForSave("/api/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, category: String(form.get("category")), unit: String(form.get("unit")), cost: parseCurrency(form.get("cost")), supplier: String(form.get("supplier")) }) }, "Não foi possível salvar o material");
+    if (!response.ok) { onSaved?.(await responseErrorMessage(response, "Não foi possível salvar o material"), undefined, "warning"); return; }
     invalidateClientCache("/api/products", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     const data = await response.json() as { product: Product };
     setProductRows((current) => [...current, data.product]);
@@ -1240,9 +1244,9 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
 
   async function saveQuote(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patient = quotePatients.find((item) => item.id === selectedPatientId)?.name ?? "Paciente";
-    const response = await fetch("/api/quotes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId: selectedPatientId, items: String(form.get("items")), total: parseCurrency(form.get("total")), expires: String(form.get("expires")) }) });
+    const response = await fetchForSave("/api/quotes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId: selectedPatientId, items: String(form.get("items")), total: parseCurrency(form.get("total")), expires: String(form.get("expires")) }) }, "Não foi possível salvar o orçamento");
     setIsSaving(false);
-    if (!response.ok) return;
+    if (!response.ok) { onSaved?.(await responseErrorMessage(response, "Não foi possível salvar o orçamento"), undefined, "warning"); return; }
     const data = await response.json() as { quote: { id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null } };
     const item = data.quote;
     invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
@@ -1253,7 +1257,8 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
 
   async function sendQuote(quote: QuoteRow) {
     if (!quote.id) return;
-    await fetch(`/api/quotes/${quote.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Enviado" }) });
+    const response = await fetchForSave(`/api/quotes/${quote.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Enviado" }) }, "Não foi possível atualizar o orçamento");
+    if (!response.ok) { onSaved?.(await responseErrorMessage(response, "Não foi possível atualizar o orçamento"), undefined, "warning"); return; }
     setQuoteRows((current) => current.map((item) => item.id === quote.id ? { ...item, status: "Enviado" } : item));
     invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
     onSaved?.("Orçamento marcado como enviado.");
@@ -1336,9 +1341,9 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
 
   async function savePayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patient = String(form.get("patient"));
-    const response = await fetch("/api/payments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patient, value: parseCurrency(form.get("value")), method: String(form.get("method")), status: String(form.get("status")), installments: String(form.get("installments")) }) });
+    const response = await fetchForSave("/api/payments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patient, value: parseCurrency(form.get("value")), method: String(form.get("method")), status: String(form.get("status")), installments: String(form.get("installments")) }) }, "Não foi possível registrar o pagamento");
     setIsSaving(false);
-    if (!response.ok) return;
+    if (!response.ok) { onSaved?.(await responseErrorMessage(response, "Não foi possível registrar o pagamento"), undefined, "warning"); return; }
     const data = await response.json() as { payment: { id: string; value: number; method: string; date: string; status: string; installments: string; patient?: { name: string } | null } };
     const item = data.payment;
     invalidateClientCache("/api/payments", "/api/dashboard/bootstrap");
@@ -1604,7 +1609,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       professionalClosingTime: form.has("professionalClosingTime") ? String(form.get("professionalClosingTime")) : professionalClosingTimeInput,
       ...(editing === "Clínica" ? { name: clinicNameInput.trim(), openingTime: openingTimeInput, closingTime: closingTimeInput } : {}),
     };
-    const response = await fetch("/api/clinic/cost-settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(nextSettings) });
+    const response = await fetchForSave("/api/clinic/cost-settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(nextSettings) }, "Não foi possível salvar os custos da clínica");
     const responseText = await response.text();
     let data: { settings?: typeof nextSettings; message?: string } = {};
     if (responseText) {
@@ -1616,7 +1621,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
     }
     setCostSettingsSaving(false);
     if (!response.ok || !data.settings) {
-      setCostSettingsError(data.message ?? "Não foi possível salvar os custos da clínica.");
+      setCostSettingsError(data.message ?? httpErrorMessage(response, "Não foi possível salvar os custos da clínica"));
       return;
     }
     setCostSettings((current) => ({
@@ -1648,11 +1653,11 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
     setTeamError("");
     const form = new FormData(event.currentTarget);
     try {
-      const response = await fetch("/api/team", {
+      const response = await fetchForSave("/api/team", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: form.get("name"), email: form.get("email"), password: form.get("password"), role: form.get("role") }),
-      });
+      }, "Não foi possível cadastrar o colaborador");
       const responseText = await response.text();
       let data: { member?: TeamMember; message?: string } | null = null;
       if (responseText) {
@@ -1664,16 +1669,16 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       }
       setTeamSaving(false);
       if (!response.ok || !data?.member) {
-        setTeamError(data?.message ?? "Não foi possível cadastrar o colaborador. Tente novamente.");
+        setTeamError(data?.message ?? httpErrorMessage(response, "Não foi possível cadastrar o colaborador"));
         return;
       }
       setMembers((current) => [...current, data.member as TeamMember].sort((a, b) => a.user.name.localeCompare(b.user.name)));
       invalidateClientCache("/api/team");
       setEditing(null);
       setTeamError("");
-    } catch {
+    } catch (error) {
       setTeamSaving(false);
-      setTeamError("Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente.");
+      setTeamError(errorMessage(error, "Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente."));
     }
   }
 
@@ -1681,11 +1686,11 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
     if (!memberToRemove) return;
     setMemberRemoving(true);
     setMemberRemoveError("");
-    const response = await fetch("/api/team", {
+    const response = await fetchForSave("/api/team", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ membershipId: memberToRemove.id }),
-    });
+    }, "Não foi possível remover o colaborador");
     const data = await response.json().catch(() => ({})) as { message?: string };
     setMemberRemoving(false);
     if (!response.ok) {

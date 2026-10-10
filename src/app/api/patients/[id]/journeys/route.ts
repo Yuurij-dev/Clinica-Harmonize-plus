@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { withSaveErrors } from "@/lib/save-errors";
 
 async function getPatient(patientId: string, clinicId: string) {
   return prisma.patient.findFirst({ where: { id: patientId, clinicId }, select: { id: true, clinicId: true } });
@@ -71,7 +72,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   return NextResponse.json({ journeys: journeys.map(serializeJourney) });
 }
 
-export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+export const POST = withSaveErrors("criar a jornada do paciente", async (request: Request, { params }: { params: Promise<{ id: string }> }) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const patientId = (await params).id;
@@ -80,9 +81,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const count = await prisma.patientJourney.count({ where: { patientId, clinicId: user.clinicId } });
   const journey = await prisma.patientJourney.create({ data: { patientId, clinicId: user.clinicId, name: body?.name?.trim() || `Jornada ${count + 1}` }, select: journeyProgressSelect });
   return NextResponse.json({ journey: serializeJourney(journey) }, { status: 201 });
-}
+});
 
-export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+export const PATCH = withSaveErrors("atualizar a jornada do paciente", async (request: Request, { params }: { params: Promise<{ id: string }> }) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const patientId = (await params).id;
@@ -94,4 +95,4 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (!result.count) return NextResponse.json({ message: "Jornada não encontrada." }, { status: 404 });
   const journey = await prisma.patientJourney.findFirst({ where: { id: body.journeyId, patientId, clinicId: user.clinicId }, select: journeyProgressSelect });
   return NextResponse.json({ journey: journey ? serializeJourney(journey) : null });
-}
+});

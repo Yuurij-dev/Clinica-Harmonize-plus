@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { getCachedJson, readClientCache, invalidateClientCache } from "@/lib/client-cache";
 import { cn } from "@/lib/utils";
+import { fetchForSave, httpErrorMessage } from "@/lib/client-errors";
 import { ListAccordion } from "./list-accordion";
 import { LoadingSkeleton } from "./shared";
 
@@ -196,11 +197,11 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
     setSaveError(false);
     setNotice(null);
     try {
-      const response = await fetch(latestQuoteId ? `/api/quotes/${latestQuoteId}` : "/api/quotes", {
+      const response = await fetchForSave(latestQuoteId ? `/api/quotes/${latestQuoteId}` : "/api/quotes", {
         method: latestQuoteId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ patientId, journeyId, items: selectedItems.map((item) => `${item.name} (${item.quantity}x)`).join(", "), total, paymentMethod }),
-      });
+      }, "Não foi possível salvar o orçamento");
       const responseText = await response.text();
       let data: { quote?: PatientQuote; message?: string } = {};
       if (responseText.trim()) {
@@ -210,7 +211,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
           throw new Error("O servidor retornou uma resposta inválida ao salvar o orçamento.");
         }
       }
-      if (!response.ok) throw new Error(data.message ?? `Não foi possível salvar o orçamento (${response.status}).`);
+      if (!response.ok) throw new Error(data.message ?? httpErrorMessage(response, "Não foi possível salvar o orçamento"));
       if (!data.quote?.id) throw new Error("O orçamento foi processado, mas não retornou um identificador válido.");
       invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
       setLatestQuoteId(data.quote.id);
@@ -240,11 +241,14 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
     }
     setPaymentSaving(true);
     try {
-      const response = await fetch("/api/payments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, journeyId, value: total, method: paymentMethod, status: "Pago", installments: "A vista" }) });
-      const data = await response.json() as { payment?: { id: string }; message?: string };
-      if (!response.ok || !data.payment) throw new Error(data.message ?? "Não foi possível registrar o pagamento.");
-      const quoteResponse = await fetch(`/api/quotes/${latestQuoteId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Aprovado" }) });
-      if (!quoteResponse.ok) throw new Error("Pagamento registrado, mas não foi possível concluir o orçamento.");
+      const response = await fetchForSave("/api/payments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, journeyId, value: total, method: paymentMethod, status: "Pago", installments: "A vista" }) }, "Não foi possível registrar o pagamento");
+      const data = await response.json().catch(() => null) as { payment?: { id: string }; message?: string } | null;
+      if (!response.ok || !data?.payment) throw new Error(data?.message ?? httpErrorMessage(response, "Não foi possível registrar o pagamento"));
+      const quoteResponse = await fetchForSave(`/api/quotes/${latestQuoteId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Aprovado" }) }, "Não foi possível atualizar o orçamento");
+      if (!quoteResponse.ok) {
+        const quoteData = await quoteResponse.json().catch(() => null) as { message?: string } | null;
+        throw new Error(quoteData?.message ?? httpErrorMessage(quoteResponse, "O pagamento foi registrado, mas não foi possível concluir o orçamento"));
+      }
       invalidateClientCache("/api/payments", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
       invalidateClientCache("/api/quotes");
       setPaymentConfirmed(true);

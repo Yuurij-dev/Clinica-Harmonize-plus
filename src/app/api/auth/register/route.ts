@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { hash } from "bcryptjs";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { saveErrorReason } from "@/lib/save-errors";
 
 function slugPart(value: string) {
   return value
@@ -71,6 +72,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ created: true }, { status: 201 });
   } catch (error) {
     console.error("[register]", error);
-    return NextResponse.json({ message: "Não foi possível criar a conta agora. Tente novamente." }, { status: 500 });
+    return NextResponse.json({ message: `Não foi possível criar a conta. Motivo: ${saveErrorReason(error)}` }, { status: 500 });
   }
 }

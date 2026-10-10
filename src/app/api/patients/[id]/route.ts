@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { withSaveErrors } from "@/lib/save-errors";
 
-export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+export const PATCH = withSaveErrors("atualizar o paciente", async (request: Request, { params }: { params: Promise<{ id: string }> }) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
 
@@ -32,4 +33,4 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   const updated = await prisma.patient.findFirst({ where: { id, clinicId: user.clinicId } });
   return NextResponse.json({ patient: updated });
-}
+});

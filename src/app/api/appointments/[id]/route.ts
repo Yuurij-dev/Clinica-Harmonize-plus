@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { withSaveErrors } from "@/lib/save-errors";
 
-export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+export const PATCH = withSaveErrors("atualizar o agendamento", async (request: Request, { params }: { params: Promise<{ id: string }> }) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
 
@@ -23,7 +24,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (result.count === 0) return NextResponse.json({ message: "Agendamento não encontrado." }, { status: 404 });
   const appointment = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, include: { patient: { select: { name: true } } } });
   return NextResponse.json({ appointment });
-}
+});
 
 function appointmentDateHasPassed(dateValue: string, time: string) {
   const nowParts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
@@ -36,11 +37,11 @@ function appointmentDateHasPassed(dateValue: string, time: string) {
   return hours * 60 + minutes <= Number(nowValues.hour) * 60 + Number(nowValues.minute);
 }
 
-export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export const DELETE = withSaveErrors("excluir o agendamento", async (_request: Request, { params }: { params: Promise<{ id: string }> }) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const id = (await params).id;
   const result = await prisma.appointment.deleteMany({ where: { id, clinicId: user.clinicId } });
   if (result.count === 0) return NextResponse.json({ message: "Agendamento não encontrado." }, { status: 404 });
   return NextResponse.json({ ok: true });
-}
+});

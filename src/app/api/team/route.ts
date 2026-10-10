@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { saveErrorReason, withSaveErrors } from "@/lib/save-errors";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -51,11 +52,11 @@ export async function POST(request: Request) {
     if (missingPasswordChangeSchema) {
       return NextResponse.json({ message: "O servidor ou o banco ainda não foi atualizado para o primeiro acesso com troca de senha. Reinicie o servidor e aplique a atualização do banco." }, { status: 503 });
     }
-    return NextResponse.json({ message: "Não foi possível cadastrar o colaborador agora. Tente novamente." }, { status: 500 });
+    return NextResponse.json({ message: `Não foi possível cadastrar o colaborador. Motivo: ${saveErrorReason(error)}` }, { status: 500 });
   }
 }
 
-export async function DELETE(request: Request) {
+export const DELETE = withSaveErrors("remover o colaborador", async (request: Request) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (user.role !== "ADMIN" || !user.isOwner) return NextResponse.json({ message: "Apenas o administrador principal pode remover colaboradores." }, { status: 403 });
@@ -80,4 +81,4 @@ export async function DELETE(request: Request) {
   });
 
   return NextResponse.json({ removed: true });
-}
+});

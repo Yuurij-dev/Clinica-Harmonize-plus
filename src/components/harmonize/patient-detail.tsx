@@ -40,14 +40,16 @@ import { MaskedInput } from "@/components/ui/masked-input";
 import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 import { PatientExpenses } from "./patient-expenses";
+import { PatientDocuments } from "./patient-documents";
 import { CustomerJourney } from "./customer-journey";
 import { PatientEvaluations } from "./patient-evaluations";
 import { EmptyState, LoadingSkeleton } from "./shared";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache } from "@/lib/client-cache";
 import { FormField, fieldClassName } from "@/components/ui/modal";
 import { formatCpf, formatInteger, formatPhone } from "@/lib/input-masks";
+import { fetchForSave, httpErrorMessage } from "@/lib/client-errors";
 
-const tabs = ["Dados", "Avaliação", "Orçamento", "Procedimentos", "Agendamentos", "Observações", "Histórico", "Pagamentos"];
+const tabs = ["Dados", "Avaliação", "Orçamento", "Procedimentos", "Agendamentos", "Documentos", "Observações", "Histórico", "Pagamentos"];
 
 type PatientProcedureRecord = {
   id?: string;
@@ -277,6 +279,10 @@ export function PatientDetail({
 
 function PatientTabContent({ onOpenTab, pinnedJourneyKey, onPinJourney, patient, activeTab, history, historyLoading, quoteCompleted, returnAppointmentTarget, onReturnAppointmentClose, onPatientUpdated, onProcedurePhotoUpdated, onScheduleReturn }: { onOpenTab: (tab: string) => void; pinnedJourneyKey?: string; onPinJourney: (journey: PinnedJourney | null) => void; patient: Patient; activeTab: string; history?: PatientHistoryRecord; historyLoading: boolean; quoteCompleted: boolean; returnAppointmentTarget: ReturnAppointmentTarget | null; onReturnAppointmentClose: () => void; onPatientUpdated: (patient: Patient) => void; onProcedurePhotoUpdated: (procedureId: string, photo: { beforePhoto: string | null; afterPhoto: string | null }) => void; onScheduleReturn: (procedure: ReturnAppointmentTarget, kind?: "return" | "procedure") => void }) {
 
+  if (activeTab === "Documentos") {
+    return patient.id ? <PatientDocuments patientId={patient.id} patientName={patient.name} /> : <EmptyState title="Cliente ainda não foi salvo" description="Salve o cliente antes de adicionar documentos ao prontuário." />;
+  }
+
   if (activeTab === "Avaliação") {
     return patient.id ? <PatientEvaluations patientId={patient.id} patientName={patient.name} /> : <EmptyState title="Cliente ainda não foi salvo" description="Salve o cliente antes de adicionar fotos à avaliação." />;
   }
@@ -332,7 +338,7 @@ function PatientDataTab({ patient, onUpdated }: { patient: Patient; onUpdated: (
     }
     setSaving(true);
     setError("");
-    const response = await fetch(`/api/patients/${patient.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, cpf, phone, age }) });
+    const response = await fetchForSave(`/api/patients/${patient.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, cpf, phone, age }) }, "Não foi possível atualizar os dados do paciente");
     const data = await response.json().catch(() => null) as { patient?: Patient; message?: string } | null;
     setSaving(false);
     if (!response.ok || !data?.patient) {
@@ -735,9 +741,9 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
     if (!appointment.id) return;
     setError("");
     try {
-      const response = await fetch(`/api/appointments/${appointment.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
+      const response = await fetchForSave(`/api/appointments/${appointment.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) }, "Não foi possível atualizar o atendimento");
       const data = await response.json().catch(() => null) as { message?: string } | null;
-      if (!response.ok) throw new Error(data?.message ?? "Não foi possível atualizar o procedimento.");
+      if (!response.ok) throw new Error(data?.message ?? httpErrorMessage(response, "Não foi possível atualizar o procedimento"));
       setAppointmentStatuses((current) => ({ ...current, [appointment.id as string]: status }));
       invalidateClientCache(`/api/patients/${patientId}/history`, "/api/appointments", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     } catch (appointmentError) {
@@ -751,13 +757,13 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
     setPhotoOperations((current) => ({ ...current, [operationKey]: operation }));
     setError("");
     try {
-      const response = await fetch(`/api/patients/${patientId}/procedures/${procedureId}`, {
+      const response = await fetchForSave(`/api/patients/${patientId}/procedures/${procedureId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ photoType, photo, ...(sessionId ? { sessionId } : {}) }),
-      });
+      }, "Não foi possível atualizar a foto");
       const data = await response.json() as { procedure?: { beforePhoto: string | null; afterPhoto: string | null }; session?: { id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }; message?: string };
-      if (!response.ok || (!data.procedure && !data.session)) throw new Error(data.message ?? "Não foi possível atualizar a foto.");
+      if (!response.ok || (!data.procedure && !data.session)) throw new Error(data.message ?? httpErrorMessage(response, "Não foi possível atualizar a foto"));
       if (data.session) {
         setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, photoSessions: item.photoSessions.map((session) => session.id === data.session?.id ? { ...session, beforePhoto: data.session?.beforePhoto ?? "", afterPhoto: data.session?.afterPhoto ?? "" } : session) } : item));
       } else if (data.procedure) {
@@ -789,9 +795,9 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
     if (!procedureId) return null;
     setError("");
     try {
-      const response = await fetch(`/api/patients/${patientId}/procedures/${procedureId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+      const response = await fetchForSave(`/api/patients/${patientId}/procedures/${procedureId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }, "Não foi possível criar a sessão de fotos");
       const data = await response.json() as { session?: { id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }; message?: string };
-      if (!response.ok || !data.session) throw new Error(data.message ?? "Não foi possível criar a sessão de fotos.");
+      if (!response.ok || !data.session) throw new Error(data.message ?? httpErrorMessage(response, "Não foi possível criar a sessão de fotos"));
       const session = { id: data.session.id, name: data.session.name, beforePhoto: data.session.beforePhoto ?? "", afterPhoto: data.session.afterPhoto ?? "" };
       setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, photoSessions: [...item.photoSessions, session] } : item));
       invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`);
@@ -808,9 +814,9 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
     setDeletingPhotoSessionKey(operationKey);
     setError("");
     try {
-      const response = await fetch(`/api/patients/${patientId}/procedures/${procedureId}?sessionId=${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+      const response = await fetchForSave(`/api/patients/${patientId}/procedures/${procedureId}?sessionId=${encodeURIComponent(sessionId)}`, { method: "DELETE" }, "Não foi possível excluir a sessão de fotos");
       const data = await response.json().catch(() => null) as { message?: string } | null;
-      if (!response.ok) throw new Error(data?.message ?? "Não foi possível excluir a sessão de fotos.");
+      if (!response.ok) throw new Error(data?.message ?? httpErrorMessage(response, "Não foi possível excluir a sessão de fotos"));
       setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, photoSessions: item.photoSessions.filter((session) => session.id !== sessionId) } : item));
       invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`);
       return true;
@@ -826,9 +832,9 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
     if (!procedureId || !name.trim()) return false;
     setError("");
     try {
-      const response = await fetch(`/api/patients/${patientId}/procedures/${procedureId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId, name: name.trim() }) });
+      const response = await fetchForSave(`/api/patients/${patientId}/procedures/${procedureId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId, name: name.trim() }) }, "Não foi possível renomear a sessão de fotos");
       const data = await response.json().catch(() => null) as { session?: { id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }; message?: string } | null;
-      if (!response.ok || !data?.session) throw new Error(data?.message ?? "Não foi possível renomear a sessão de fotos.");
+      if (!response.ok || !data?.session) throw new Error(data?.message ?? httpErrorMessage(response, "Não foi possível renomear a sessão de fotos"));
       setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, photoSessions: item.photoSessions.map((session) => session.id === sessionId ? { ...session, name: data.session?.name ?? name.trim() } : session) } : item));
       invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`);
       return true;
@@ -1275,9 +1281,9 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
     if (!appointment.id) return;
     setUpdatingAppointmentId(appointment.id);
     try {
-      const response = await fetch(`/api/appointments/${appointment.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
+      const response = await fetchForSave(`/api/appointments/${appointment.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) }, "Não foi possível atualizar o atendimento");
       const data = await response.json().catch(() => null) as { message?: string } | null;
-      if (!response.ok) throw new Error(data?.message ?? "Não foi possível atualizar o atendimento.");
+      if (!response.ok) throw new Error(data?.message ?? httpErrorMessage(response, "Não foi possível atualizar o atendimento"));
       setEditedAppointments((current) => ({ ...current, [appointment.id as string]: { ...appointment, status } }));
       invalidateClientCache(`/api/patients/${patientId}/history`, "/api/appointments", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     } catch (statusError) {
@@ -1313,7 +1319,7 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
     setReturnSaving(true);
     setReturnError("");
     try {
-      const response = await fetch(editingAppointment?.id ? `/api/appointments/${editingAppointment.id}` : "/api/appointments", {
+      const response = await fetchForSave(editingAppointment?.id ? `/api/appointments/${editingAppointment.id}` : "/api/appointments", {
         method: editingAppointment?.id ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1324,10 +1330,10 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
           time: returnTime,
           notes: returnNotes.trim(),
         }),
-      });
+      }, "Não foi possível salvar o agendamento");
       const data = await response.json().catch(() => null) as { appointment?: { id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string }; message?: string } | null;
       const updatedAppointment = data?.appointment;
-      if (!response.ok || (editingAppointment?.id && !updatedAppointment)) throw new Error(data?.message ?? "Não foi possível salvar o retorno.");
+      if (!response.ok || (editingAppointment?.id && !updatedAppointment)) throw new Error(data?.message ?? httpErrorMessage(response, "Não foi possível salvar o retorno"));
       if (editingAppointment?.id && updatedAppointment) {
         setEditedAppointments((current) => ({ ...current, [editingAppointment.id as string]: { ...editingAppointment, date: formatAppointmentDisplayDate(updatedAppointment.date), time: updatedAppointment.time, procedure: updatedAppointment.procedure, professional: updatedAppointment.professional, status: updatedAppointment.status, notes: updatedAppointment.notes } }));
       }

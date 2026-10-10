@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { saveErrorReason, withSaveErrors } from "@/lib/save-errors";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -37,7 +38,7 @@ export async function GET() {
   }
 }
 
-export async function PATCH(request: Request) {
+export const PATCH = withSaveErrors("salvar os custos e horários da clínica", async (request: Request) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
@@ -85,10 +86,11 @@ export async function PATCH(request: Request) {
       // Costs can still be saved while the tolerance migration is pending.
     }
     return NextResponse.json({ settings: { ...settings, appointmentToleranceMinutes: savedTolerance, openingTime: savedOpeningTime, closingTime: savedClosingTime } });
-  } catch {
-    return NextResponse.json({ message: "As colunas de custos ainda não foram criadas no banco da clínica." }, { status: 500 });
+  } catch (error) {
+    console.error("Failed to save clinic cost settings", error);
+    return NextResponse.json({ message: `Não foi possível salvar os custos e horários. Motivo: ${saveErrorReason(error)}` }, { status: 500 });
   }
-}
+});
 
 function parseClockMinutes(value: string) {
   const match = /^(\d{2}):(\d{2})$/.exec(value);

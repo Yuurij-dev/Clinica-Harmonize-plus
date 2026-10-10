@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { withSaveErrors } from "@/lib/save-errors";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -13,7 +14,7 @@ export async function GET() {
   return NextResponse.json({ procedures });
 }
 
-export async function POST(request: Request) {
+export const POST = withSaveErrors("salvar o procedimento", async (request: Request) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
@@ -31,4 +32,4 @@ export async function POST(request: Request) {
     data: { clinicId: user.clinicId, name, category, materials, price: Math.max(0, Math.round(price)), durationMinutes: Math.max(1, durationMinutes), margin: Math.max(0, Math.min(100, margin)) },
   });
   return NextResponse.json({ procedure }, { status: 201 });
-}
+});

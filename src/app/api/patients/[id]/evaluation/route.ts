@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ensurePatientJourney } from "@/lib/patient-journey";
+import { withSaveErrors } from "@/lib/save-errors";
 
 type EvaluationPhotoPayload = {
   id?: string;
@@ -55,7 +56,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   });
 }
 
-export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
+export const PUT = withSaveErrors("salvar a avaliação", async (request: Request, { params }: { params: Promise<{ id: string }> }) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
 
@@ -101,7 +102,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   });
 
   return NextResponse.json({ evaluation: { id: savedEvaluation.id, professional: savedEvaluation.professional, createdAt: savedEvaluation.createdAt, updatedAt: savedEvaluation.updatedAt, photoCount: validPhotos.length } });
-}
+});
 
 function parseAnnotations(value: string) {
   try {

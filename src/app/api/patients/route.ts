@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { withSaveErrors } from "@/lib/save-errors";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -29,7 +30,7 @@ function resolveCurrentStage(patient: { evaluations: Array<{ photos: Array<{ id:
   return "evaluation";
 }
 
-export async function POST(request: Request) {
+export const POST = withSaveErrors("salvar o paciente", async (request: Request) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
 
@@ -66,7 +67,7 @@ export async function POST(request: Request) {
     },
   });
   return NextResponse.json({ patient }, { status: 201 });
-}
+});
 
 function parseDate(value?: string) {
   if (!value) return undefined;

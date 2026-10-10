@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
+import { errorMessage, fetchForSave, httpErrorMessage } from "@/lib/client-errors";
 import { LoadingSkeleton } from "../shared";
 import { EditorToolbar } from "./editor-toolbar";
 import { EvaluationResult } from "./evaluation-result";
@@ -207,13 +208,13 @@ export function PhotoEditor({ patientId, evaluationId, patientName, onSaved }: {
     }
     setIsSaving(true);
     try {
-      const response = await fetch(`/api/patients/${patientId}/evaluation`, {
+      const response = await fetchForSave(`/api/patients/${patientId}/evaluation`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ evaluationId: currentEvaluationId, photos }),
-      });
-      const data = await response.json().catch(() => ({})) as { evaluation?: SavedEvaluation };
-      if (!response.ok || !data.evaluation) throw new Error("Não foi possível salvar a avaliação.");
+      }, "Não foi possível salvar a avaliação");
+      const data = await response.json().catch(() => null) as { evaluation?: SavedEvaluation; message?: string } | null;
+      if (!response.ok || !data?.evaluation) throw new Error(data?.message ?? httpErrorMessage(response, "Não foi possível salvar a avaliação"));
       setCurrentEvaluationId(data.evaluation.id);
       invalidateClientCache(`/api/patients/${patientId}/evaluation`, `/api/patients/${patientId}/history`);
       const previews = await Promise.all(photos.map(async (photo) => ({ photo, dataUrl: await renderExport(photo) })));
@@ -221,8 +222,8 @@ export function PhotoEditor({ patientId, evaluationId, patientName, onSaved }: {
       setShowResult(true);
       onSaved?.(data.evaluation);
       showNotice("Avaliação salva com as fotos originais e as marcações separadas.");
-    } catch {
-      showNotice("Não foi possível salvar as fotos da avaliação.", "info");
+    } catch (error) {
+      showNotice(errorMessage(error, "Não foi possível salvar as fotos da avaliação."), "info");
     } finally {
       setIsSaving(false);
     }

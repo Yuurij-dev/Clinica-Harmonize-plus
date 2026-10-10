@@ -4,12 +4,13 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createSession, invalidateUserAuthCache, sessionCookieName } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { withSaveErrors } from "@/lib/save-errors";
 
 function getSecret() {
   return new TextEncoder().encode(process.env.AUTH_SECRET ?? "harmonize-local-development-secret");
 }
 
-export async function POST(request: Request) {
+export const POST = withSaveErrors("alterar a senha", async (request: Request) => {
   const body = await request.json().catch(() => null) as { password?: string } | null;
   const password = body?.password ?? "";
   if (password.length < 8) {
@@ -56,4 +57,4 @@ export async function POST(request: Request) {
     path: "/",
   });
   return response;
-}
+});

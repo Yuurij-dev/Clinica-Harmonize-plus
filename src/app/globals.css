@@ -115,6 +115,16 @@ button:not(:disabled).cursor-not-allowed {
   }
 }
 
+@keyframes hp-select-open {
+  from { opacity: 0; scale: 0.98; }
+  to { opacity: 1; scale: 1; }
+}
+
+@keyframes hp-select-close {
+  from { opacity: 1; scale: 1; }
+  to { opacity: 0; scale: 0.98; }
+}
+
 @keyframes hp-slide-left {
   from {
     opacity: 0;

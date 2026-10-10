@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LoginScreen, type RegisterResult, type RegisterValues } from "./login-screen";
+import { fetchForSave, httpErrorMessage } from "@/lib/client-errors";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
 
 export function LoginPageClient() {
@@ -32,13 +33,13 @@ export function LoginPageClient() {
   }
 
   async function handlePasswordChange(password: string) {
-    const response = await fetch("/api/auth/change-password", {
+    const response = await fetchForSave("/api/auth/change-password", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password }),
-    });
+    }, "Não foi possível salvar a nova senha");
     const data = await response.json().catch(() => null) as { message?: string; clinicName?: string } | null;
-    if (!response.ok) return { error: data?.message ?? "Não foi possível salvar a nova senha." };
+    if (!response.ok) return { error: data?.message ?? httpErrorMessage(response, "Não foi possível salvar a nova senha") };
     setClinicName(data?.clinicName ?? "Sua clínica");
     window.setTimeout(() => {
       router.replace("/");
@@ -48,15 +49,15 @@ export function LoginPageClient() {
   }
 
   async function handleRegister(values: RegisterValues) {
-    const response = await fetch("/api/auth/register", {
+      const response = await fetchForSave("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(values),
-    });
+      }, "Não foi possível criar a conta");
 
     if (!response.ok) {
       const data = await response.json().catch(() => null) as { message?: string } | null;
-      return { error: data?.message ?? "Não foi possível criar a conta agora. Tente novamente." } satisfies RegisterResult;
+      return { error: data?.message ?? httpErrorMessage(response, "Não foi possível criar a conta") } satisfies RegisterResult;
     }
     const result = await handleLogin({ login: values.email, password: values.password });
     return { error: result.error } satisfies RegisterResult;

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { withSaveErrors } from "@/lib/save-errors";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
@@ -12,7 +13,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   return NextResponse.json({ procedures });
 }
 
-export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+export const POST = withSaveErrors("salvar o procedimento do paciente", async (request: Request, { params }: { params: Promise<{ id: string }> }) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const patientId = (await params).id;
@@ -29,4 +30,4 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     data: { clinicId: user.clinicId, patientId, name, professional, performedAt, notes: body?.notes?.trim() ?? "", beforePhoto: body?.beforePhoto || null, afterPhoto: body?.afterPhoto || null },
   });
   return NextResponse.json({ procedure }, { status: 201 });
-}
+});

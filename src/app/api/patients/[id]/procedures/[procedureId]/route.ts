@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { withSaveErrors } from "@/lib/save-errors";
 
-export async function PATCH(request: Request, { params }: { params: Promise<{ id: string; procedureId: string }> }) {
+export const PATCH = withSaveErrors("atualizar o procedimento", async (request: Request, { params }: { params: Promise<{ id: string; procedureId: string }> }) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
 
@@ -37,9 +38,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   const updated = await prisma.patientProcedure.update({ where: { id: procedure.id }, data: { [body.photoType]: body.photo } });
   return NextResponse.json({ procedure: updated });
-}
+});
 
-export async function POST(request: Request, { params }: { params: Promise<{ id: string; procedureId: string }> }) {
+export const POST = withSaveErrors("salvar a sessão de fotos", async (request: Request, { params }: { params: Promise<{ id: string; procedureId: string }> }) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
 
@@ -50,9 +51,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const name = body?.name?.trim() || "Nova sessão";
   const session = await prisma.patientProcedurePhotoSession.create({ data: { procedureId: procedure.id, name } });
   return NextResponse.json({ session }, { status: 201 });
-}
+});
 
-export async function DELETE(request: Request, { params }: { params: Promise<{ id: string; procedureId: string }> }) {
+export const DELETE = withSaveErrors("excluir a sessão de fotos", async (request: Request, { params }: { params: Promise<{ id: string; procedureId: string }> }) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
 
@@ -66,4 +67,4 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   const deleted = await prisma.patientProcedurePhotoSession.deleteMany({ where: { id: sessionId, procedureId: procedure.id } });
   if (!deleted.count) return NextResponse.json({ message: "Sessão de fotos não encontrada." }, { status: 404 });
   return NextResponse.json({ deleted: true });
-}
+});

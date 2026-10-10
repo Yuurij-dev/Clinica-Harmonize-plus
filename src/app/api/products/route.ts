@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { withSaveErrors } from "@/lib/save-errors";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -9,7 +10,7 @@ export async function GET() {
   return NextResponse.json({ products: await prisma.product.findMany({ where: { clinicId: user.clinicId }, orderBy: { name: "asc" } }) });
 }
 
-export async function POST(request: Request) {
+export const POST = withSaveErrors("salvar o material", async (request: Request) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
@@ -18,4 +19,4 @@ export async function POST(request: Request) {
   if (!body?.name?.trim() || !body.category?.trim() || !body.unit?.trim() || !body.supplier?.trim() || !Number.isFinite(cost)) return NextResponse.json({ message: "Preencha os dados do material." }, { status: 400 });
   const product = await prisma.product.create({ data: { clinicId: user.clinicId, name: body.name.trim(), category: body.category.trim(), unit: body.unit.trim(), cost: Math.max(0, Math.round(cost)), supplier: body.supplier.trim() } });
   return NextResponse.json({ product }, { status: 201 });
-}
+});

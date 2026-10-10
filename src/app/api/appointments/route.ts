@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { ensurePatientJourney } from "@/lib/patient-journey";
+import { withSaveErrors } from "@/lib/save-errors";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -15,7 +16,7 @@ export async function GET() {
   return NextResponse.json({ appointments });
 }
 
-export async function POST(request: Request) {
+export const POST = withSaveErrors("salvar o agendamento", async (request: Request) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
 
@@ -92,7 +93,7 @@ export async function POST(request: Request) {
     include: { patient: { select: { name: true } } },
   });
   return NextResponse.json({ appointment }, { status: 201 });
-}
+});
 
 function parseClockMinutes(value: string | undefined) {
   const match = /^(\d{2}):(\d{2})$/.exec(value ?? "");
