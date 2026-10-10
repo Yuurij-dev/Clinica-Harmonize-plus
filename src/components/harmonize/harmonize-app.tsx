@@ -7,10 +7,10 @@ import { AppToaster } from "./app-toaster";
 import { Dashboard } from "./dashboard";
 import { Sidebar } from "./sidebar";
 import { StockSection } from "./stock-section";
+import { FinanceSection } from "./finance-section";
 import { Topbar } from "./topbar";
 import {
   ClientsSection,
-  FinanceSection,
   PaymentsSection,
   ProceduresSection,
   QuotesSection,

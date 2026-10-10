@@ -30,11 +30,9 @@ import {
   DetailCard,
   DateRangeFilter,
   EmptyState,
-  CountUpValue,
   LoadingSkeleton,
   LoadingTable,
   MiniTable,
-  ProgressBar,
   SearchFilterBar,
   SectionIntro,
   StatusBadge,
@@ -1325,60 +1323,6 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving} type="submit">{isSaving ? "Salvando..." : "Registrar pagamento"}</Button></div>
         </form>
       </Modal>
-    </div>
-  );
-}
-
-export function FinanceSection() {
-  const [activePeriod, setActivePeriod] = useState("Mês");
-  const data = useFinancialData();
-  const received = data?.payments.filter((item) => item.status === "Pago").reduce((sum, item) => sum + item.value, 0) ?? 0;
-  const pending = data?.payments.filter((item) => item.status !== "Pago").reduce((sum, item) => sum + item.value, 0) ?? 0;
-  const values = [received, 0, received, pending, received];
-  const procedureTotals = Object.entries((data?.appointments ?? []).reduce<Record<string, number>>((result, item) => { result[item.procedure] = (result[item.procedure] ?? 0) + 1; return result; }, {}));
-
-  return (
-    <div>
-      <SectionIntro
-        title="Financeiro"
-        description="Dashboard de receita, despesas, resultado, pendências e performance por procedimento."
-      />
-      <div className="mb-6 flex flex-wrap gap-2">
-        {["Hoje", "Semana", "Mês", "Período personalizado"].map((period) => (
-          <Button key={period} variant={activePeriod === period ? "primary" : "secondary"} onClick={() => setActivePeriod(period)}>
-            {period}
-          </Button>
-        ))}
-      </div>
-      <div className="hp-list-stagger grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        {["Receita", "Despesas", "Resultado", "Valores pendentes", "Recebidos"].map((label, index) => (
-          <Card className="p-5" key={label}>
-            <p className="text-sm font-semibold text-[#65708b]">{label}</p>
-            <p className="mt-3 text-2xl font-black text-[#121733]">
-              <CountUpValue value={values[index]} format={(currentValue) => currency.format(Math.round(currentValue))} />
-            </p>
-          </Card>
-        ))}
-      </div>
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle>Resultado por procedimento</CardTitle>
-          <Badge variant="green">Margem real</Badge>
-        </CardHeader>
-        <CardContent className="hp-list-stagger space-y-5">
-          {procedureTotals.length ? procedureTotals.map(([name, count], index) => (
-            <div key={name}>
-              <div className="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                <p className="font-black text-[#121733]">{name}</p>
-                <p className="text-sm text-[#65708b]">
-                  Atendimentos realizados: <strong>{count}</strong>
-                </p>
-              </div>
-              <ProgressBar value={Math.min(100, count * 20)} tone={index === 2 ? "purple" : "green"} />
-            </div>
-          )) : <p className="text-sm text-[#65708b]">Ainda não há atendimentos para calcular resultados.</p>}
-        </CardContent>
-      </Card>
     </div>
   );
 }

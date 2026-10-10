@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { MaskedInput } from "@/components/ui/masked-input";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
 import { procedureCategories } from "@/data/categories";
+import { sendJson } from "@/lib/send-json";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { formatCurrency, parseCurrency } from "@/lib/input-masks";
 import { formatQuantity, parseQuantity, stockUnits, validateQuantity, type LotStatus } from "@/lib/stock-rules";
@@ -127,10 +128,9 @@ function MaterialFormModal({ material, onClose, onSaved }: { material: StockMate
     };
     setSaving(true);
     setError("");
-    const response = await fetch(material ? `/api/products/${material.id}` : "/api/products", { method: material ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    const data = await response.json().catch(() => null) as { product?: StockMaterial; message?: string } | null;
+    const { ok, data } = await sendJson<{ product?: StockMaterial }>(material ? `/api/products/${material.id}` : "/api/products", material ? "PATCH" : "POST", payload);
     setSaving(false);
-    if (!response.ok || !data?.product) {
+    if (!ok || !data?.product) {
       setError(data?.message ?? "Não foi possível salvar o material.");
       return;
     }
@@ -186,10 +186,9 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
     }
     setBusy("initial");
     setError("");
-    const response = await fetch(`${detailKey}/initial-balance`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lotCode: String(form.get("lotCode") ?? ""), expiresOn: String(form.get("expiresOn") ?? ""), quantity }) });
-    const data = await response.json().catch(() => null) as { product?: StockMaterialDetail; message?: string } | null;
+    const { ok, data } = await sendJson<{ product?: StockMaterialDetail }>(`${detailKey}/initial-balance`, "POST", { lotCode: String(form.get("lotCode") ?? ""), expiresOn: String(form.get("expiresOn") ?? ""), quantity });
     setBusy(null);
-    if (!response.ok || !data?.product) {
+    if (!ok || !data?.product) {
       setError(data?.message ?? "Não foi possível lançar o saldo.");
       return;
     }
@@ -202,10 +201,9 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
     if (!detail) return;
     setBusy("archive");
     setError("");
-    const response = await fetch(detailKey, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ archived: !detail.archivedAt }) });
-    const data = await response.json().catch(() => null) as { product?: StockMaterialDetail; message?: string } | null;
+    const { ok, data } = await sendJson<{ product?: StockMaterialDetail }>(detailKey, "PATCH", { archived: !detail.archivedAt });
     setBusy(null);
-    if (!response.ok || !data?.product) {
+    if (!ok || !data?.product) {
       setError(data?.message ?? "Não foi possível atualizar o material.");
       return;
     }
@@ -217,10 +215,9 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
     if (!detail) return;
     setBusy("delete");
     setError("");
-    const response = await fetch(detailKey, { method: "DELETE" });
-    const data = await response.json().catch(() => null) as { message?: string } | null;
+    const { ok, data } = await sendJson<{ message?: string }>(detailKey, "DELETE");
     setBusy(null);
-    if (!response.ok) {
+    if (!ok) {
       setError(data?.message ?? "Não foi possível apagar o material.");
       return;
     }
