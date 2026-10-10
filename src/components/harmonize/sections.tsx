@@ -1085,7 +1085,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name"));
-    const response = await fetch("/api/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, category: String(form.get("category")), unit: String(form.get("unit")), cost: parseCurrency(form.get("cost")), supplier: String(form.get("supplier")) }) });
+    const response = await fetch("/api/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, category: String(form.get("category")), unit: String(form.get("unit")), costCents: Math.round(parseCurrency(form.get("cost")) * 100), supplier: String(form.get("supplier")) }) });
     if (!response.ok) return;
     invalidateClientCache("/api/products", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     const data = await response.json() as { product: Product };
@@ -1150,7 +1150,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
                   <Badge variant="purple">{product.unit}</Badge>
                 </div>
                 <p className="mt-3 text-lg font-black text-[#1438ff]">
-                  {currency.format(product.cost)} / {product.unit}
+                  {currency.format(product.costCents / 100)} / {product.unit}
                 </p>
               </div>
             ))}

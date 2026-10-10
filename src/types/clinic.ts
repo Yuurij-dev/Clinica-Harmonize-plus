@@ -92,7 +92,7 @@ export type Product = {
   name: string;
   category: string;
   unit: string;
-  cost: number;
+  costCents: number;
   supplier: string;
 };
 

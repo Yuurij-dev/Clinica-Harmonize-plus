@@ -195,7 +195,7 @@ model Product {
   name      String
   category  String
   unit      String
-  cost      Int
+  costCents Int
   supplier  String
   createdAt DateTime @default(now()) @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(6)
