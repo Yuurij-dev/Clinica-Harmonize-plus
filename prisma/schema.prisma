@@ -59,6 +59,7 @@ model Clinic {
   stockMovements              StockMovement[]
   expenses                    Expense[]
   purchases                   Purchase[]
+  recurringExpenses           RecurringExpense[]
 }
 
 model ClinicMembership {
@@ -338,24 +339,28 @@ model StockMovement {
 }
 
 model Expense {
-  id                String    @id @default(cuid())
-  clinicId          String
-  description       String
-  category          String
-  amountCents       Int
-  dueOn             DateTime  @db.Date
-  paymentMethod     String
-  status            String    @default("open")
-  paidOn            DateTime? @db.Date
-  source            String    @default("manual")
-  createdById       String?
-  purchaseId        String?
-  installmentNumber Int?
-  purchase          Purchase? @relation(fields: [purchaseId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  createdAt         DateTime  @default(now()) @db.Timestamptz(6)
-  updatedAt         DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
-  clinic            Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                 String            @id @default(cuid())
+  clinicId           String
+  description        String
+  category           String
+  amountCents        Int
+  dueOn              DateTime          @db.Date
+  paymentMethod      String
+  status             String            @default("open")
+  paidOn             DateTime?         @db.Date
+  source             String            @default("manual")
+  createdById        String?
+  purchaseId         String?
+  installmentNumber  Int?
+  purchase           Purchase?         @relation(fields: [purchaseId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  recurringExpenseId String?
+  occurrenceOn       DateTime?         @db.Date
+  recurringExpense   RecurringExpense? @relation(fields: [recurringExpenseId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  createdAt          DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime          @default(now()) @updatedAt @db.Timestamptz(6)
+  clinic             Clinic            @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
+  @@unique([recurringExpenseId, occurrenceOn])
   @@index([clinicId, dueOn])
   @@index([clinicId, paidOn])
 }
@@ -408,6 +413,27 @@ model PurchaseItem {
   @@index([purchaseId])
   @@index([productId])
   @@index([lotId])
+}
+
+model RecurringExpense {
+  id            String    @id @default(cuid())
+  clinicId      String
+  description   String
+  category      String
+  amountCents   Int
+  paymentMethod String
+  frequency     String
+  weekday       Int?
+  dayOfMonth    Int?
+  month         Int?
+  startsOn      DateTime  @db.Date
+  endsOn        DateTime? @db.Date
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  clinic        Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  expenses      Expense[]
+
+  @@index([clinicId])
 }
 
 enum UserRole {

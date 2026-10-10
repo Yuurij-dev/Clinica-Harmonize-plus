@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addMonths, financeTotals, periodRange, splitInstallments } from "../src/lib/finance-rules.ts";
+import { recurringOccurrences, addMonths, financeTotals, periodRange, splitInstallments } from "../src/lib/finance-rules.ts";
 
 test("period ranges follow the clinic calendar with weeks starting on Monday", () => {
   assert.deepEqual(periodRange("today", "2026-10-09"), { start: "2026-10-09", end: "2026-10-09" });
@@ -68,4 +68,29 @@ test("installments add up to the exact total with the remainder on the first", (
   assert.equal(parts.reduce((sum, part) => sum + part.amountCents, 0), 100);
   assert.deepEqual(parts.map((part) => part.dueOn), ["2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30", "2026-05-31", "2026-06-30", "2026-07-31"]);
   assert.deepEqual(parts.map((part) => part.amountCents), [16, 14, 14, 14, 14, 14, 14]);
+});
+
+test("weekly fixed expenses repeat on the chosen weekday", () => {
+  const schedule = { frequency: "weekly", weekday: 5, startsOn: "2026-10-01", endsOn: null };
+  assert.deepEqual(recurringOccurrences(schedule, "2026-10-31"), ["2026-10-02", "2026-10-09", "2026-10-16", "2026-10-23", "2026-10-30"]);
+  assert.deepEqual(recurringOccurrences({ ...schedule, startsOn: "2026-10-02" }, "2026-10-09"), ["2026-10-02", "2026-10-09"]);
+});
+
+test("monthly fixed expenses fall on the last day when the month is shorter", () => {
+  const schedule = { frequency: "monthly", dayOfMonth: 31, startsOn: "2027-01-15", endsOn: null };
+  assert.deepEqual(recurringOccurrences(schedule, "2027-04-30"), ["2027-01-31", "2027-02-28", "2027-03-31", "2027-04-30"]);
+  assert.deepEqual(recurringOccurrences({ ...schedule, startsOn: "2028-02-01" }, "2028-02-29"), ["2028-02-29"]);
+  assert.deepEqual(recurringOccurrences({ frequency: "monthly", dayOfMonth: 10, startsOn: "2026-10-15", endsOn: null }, "2026-12-31"), ["2026-11-10", "2026-12-10"]);
+});
+
+test("yearly fixed expenses move 29/02 to 28/02 in common years", () => {
+  const schedule = { frequency: "yearly", dayOfMonth: 29, month: 2, startsOn: "2027-01-01", endsOn: null };
+  assert.deepEqual(recurringOccurrences(schedule, "2029-12-31"), ["2027-02-28", "2028-02-29", "2029-02-28"]);
+});
+
+test("fixed expenses respect the end date and skip occurrences that already exist", () => {
+  const schedule = { frequency: "monthly", dayOfMonth: 5, startsOn: "2026-08-01", endsOn: "2026-10-04" };
+  assert.deepEqual(recurringOccurrences(schedule, "2026-12-31"), ["2026-08-05", "2026-09-05"]);
+  assert.deepEqual(recurringOccurrences(schedule, "2026-12-31", ["2026-08-05"]), ["2026-09-05"]);
+  assert.deepEqual(recurringOccurrences(schedule, "2026-07-31"), []);
 });

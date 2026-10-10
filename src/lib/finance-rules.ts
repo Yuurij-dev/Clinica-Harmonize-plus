@@ -97,3 +97,35 @@ export function financeTotals({ range, payments, expenses }: { range: DateRange;
     payableCents,
   };
 }
+
+export const recurringFrequencies = ["weekly", "monthly", "yearly"] as const;
+export type RecurringFrequency = (typeof recurringFrequencies)[number];
+export type RecurringSchedule = { frequency: string; weekday?: number | null; dayOfMonth?: number | null; month?: number | null; startsOn: string; endsOn: string | null };
+
+// Datas de vencimento de uma despesa fixa entre o início e min(fim, até), sem as que já existem.
+// Semanal: dia da semana (0 = domingo). Mensal: dia do mês, ou o último dia se o mês for menor.
+// Anual: dia e mês; 29/02 vira 28/02 nos anos sem esse dia.
+export function recurringOccurrences(schedule: RecurringSchedule, until: string, existing: string[] = []) {
+  const last = schedule.endsOn && schedule.endsOn < until ? schedule.endsOn : until;
+  const dates: string[] = [];
+  if (schedule.frequency === "weekly") {
+    const startWeekday = new Date(toUtc(schedule.startsOn)).getUTCDay();
+    for (let date = addDays(schedule.startsOn, ((schedule.weekday ?? 0) - startWeekday + 7) % 7); date <= last; date = addDays(date, 7)) dates.push(date);
+  } else if (schedule.frequency === "monthly") {
+    const monthStart = `${schedule.startsOn.slice(0, 7)}-01`;
+    for (let index = 0; ; index += 1) {
+      const date = addMonths(monthStart, index, schedule.dayOfMonth ?? 1);
+      if (date > last) break;
+      if (date >= schedule.startsOn) dates.push(date);
+    }
+  } else if (schedule.frequency === "yearly") {
+    const month = String(schedule.month ?? 1).padStart(2, "0");
+    for (let year = Number(schedule.startsOn.slice(0, 4)); ; year += 1) {
+      const date = addMonths(`${year}-${month}-01`, 0, schedule.dayOfMonth ?? 1);
+      if (date > last) break;
+      if (date >= schedule.startsOn) dates.push(date);
+    }
+  }
+  const skip = new Set(existing);
+  return dates.filter((date) => !skip.has(date));
+}

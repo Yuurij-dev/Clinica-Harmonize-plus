@@ -12,6 +12,7 @@ import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, r
 import { clinicToday } from "@/lib/clinic-time";
 import { expenseCategories, type FinancePeriod } from "@/lib/finance-rules";
 import { formatCurrency, parseCurrency } from "@/lib/input-masks";
+import { RecurringExpensesCard } from "./recurring-expenses";
 import { CountUpValue, EmptyState, ProgressBar, SectionIntro } from "./shared";
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
@@ -91,6 +92,7 @@ export function FinanceSection() {
         ))}
       </div>
       <ExpensesCard period={period} />
+      <RecurringExpensesCard paymentMethods={paymentMethods} onChanged={invalidateFinanceCache} />
       <ProcedureResultsCard />
     </div>
   );

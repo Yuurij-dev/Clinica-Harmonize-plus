@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { clinicToday, parseDateOnly } from "@/lib/clinic-time";
-import { dateBounds, expenseSelect, isExpenseCategory, rangeFor, requestedPeriod, serializeExpense } from "@/lib/finance";
+import { dateBounds, ensureRecurringOccurrences, expenseSelect, isExpenseCategory, rangeFor, requestedPeriod, serializeExpense } from "@/lib/finance";
 import { prisma } from "@/lib/prisma";
 
 export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  await ensureRecurringOccurrences(user.clinicId);
   const bounds = dateBounds(rangeFor(requestedPeriod(request)));
   const expenses = await prisma.expense.findMany({
     where: { clinicId: user.clinicId, OR: [{ dueOn: bounds }, { paidOn: bounds }] },

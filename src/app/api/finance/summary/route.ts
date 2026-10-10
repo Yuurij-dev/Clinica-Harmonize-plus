@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { clinicToday, dateOnly } from "@/lib/clinic-time";
-import { dateBounds, rangeFor, requestedPeriod } from "@/lib/finance";
+import { dateBounds, ensureRecurringOccurrences, rangeFor, requestedPeriod } from "@/lib/finance";
 import { addDays, financeTotals } from "@/lib/finance-rules";
 import { prisma } from "@/lib/prisma";
 
@@ -10,6 +10,7 @@ export async function GET(request: Request) {
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
 
+  await ensureRecurringOccurrences(user.clinicId);
   const period = requestedPeriod(request);
   const range = rangeFor(period);
   // Pagamentos são timestamptz: busca com folga de um dia e filtra pela data da clínica nas regras.
