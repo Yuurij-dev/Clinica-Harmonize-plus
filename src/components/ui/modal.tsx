@@ -27,7 +27,7 @@ export function Modal({ open, title, description, children, onClose, overlayCont
           onEscapeKeyDown={(event) => { if (!open) event.preventDefault(); }}
         >
           {overlayContent}
-          <section className="hp-panel-enter pointer-events-auto my-3 max-h-[calc(100dvh-1.5rem)] w-full max-w-xl overflow-y-auto rounded-lg border border-border bg-card text-card-foreground shadow-[0_24px_80px_rgba(32,33,54,0.24)] sm:my-4 sm:max-h-[calc(100dvh-2rem)]">
+          <section className="hp-panel-enter pointer-events-auto my-3 max-h-[calc(100dvh-1.5rem)] w-full max-w-xl overflow-y-auto [scrollbar-gutter:stable] rounded-lg border border-border bg-card text-card-foreground shadow-[0_24px_80px_rgba(32,33,54,0.24)] sm:my-4 sm:max-h-[calc(100dvh-2rem)]">
             <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-border bg-card px-5 py-4 sm:px-6 sm:py-5">
               <div className="min-w-0">
                 <DialogPrimitive.Title className="text-base font-semibold text-foreground sm:text-lg">{title}</DialogPrimitive.Title>

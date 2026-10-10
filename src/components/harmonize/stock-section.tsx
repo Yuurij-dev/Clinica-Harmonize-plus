@@ -249,14 +249,14 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
             {detail.lots.length ? (
               <div className="divide-y divide-border rounded-[8px] border border-border">
                 {detail.lots.map((lot) => (
-                  <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 text-sm" key={lot.id}>
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3 py-2.5 text-sm" key={lot.id}>
                     <div><p className="font-bold text-foreground">Lote {lot.code}</p><p className="text-xs text-muted-foreground">Validade {formatDateOnly(lot.expiresOn)}</p></div>
-                    <div className="flex flex-wrap items-center justify-end gap-2">
-                      <strong>{formatQuantity(lot.balance, detail.unit)}</strong><Badge variant={lotStatusBadge[lot.status].variant}>{lotStatusBadge[lot.status].label}</Badge>
-                      {lot.status === "expired" && lot.balance > 0 ? <Button size="sm" variant={movementForm?.lotId === lot.id && movementForm.reason === "expired" ? "secondary" : "ghost"} aria-pressed={movementForm?.lotId === lot.id && movementForm.reason === "expired"} onClick={() => openPanel({ movement: { lotId: lot.id, reason: "expired", quantity: lot.balance } })}>Descartar</Button> : null}
-                      {!detail.archivedAt ? <Button size="sm" variant={movementForm?.lotId === lot.id && movementForm.reason !== "expired" ? "secondary" : "ghost"} aria-pressed={movementForm?.lotId === lot.id && movementForm.reason !== "expired"} onClick={() => openPanel({ movement: { lotId: lot.id, reason: "loss" } })}>Saída</Button> : null}
-                      <Button size="sm" variant={history?.lotId === lot.id ? "secondary" : "ghost"} aria-pressed={history?.lotId === lot.id} onClick={() => openPanel({ history: { lotId: lot.id, lotCode: lot.code } })}>Histórico</Button>
-                      <Button size="sm" variant={usageLot?.id === lot.id ? "secondary" : "ghost"} aria-pressed={usageLot?.id === lot.id} onClick={() => openPanel({ usage: { id: lot.id, code: lot.code } })}>Pacientes</Button>
+                    <div className="flex flex-wrap items-center justify-end gap-1">
+                      <strong className="mr-1">{formatQuantity(lot.balance, detail.unit)}</strong><Badge variant={lotStatusBadge[lot.status].variant}>{lotStatusBadge[lot.status].label}</Badge>
+                      {lot.status === "expired" && lot.balance > 0 ? <Button className="h-8 px-2.5" size="sm" variant={movementForm?.lotId === lot.id && movementForm.reason === "expired" ? "secondary" : "ghost"} aria-pressed={movementForm?.lotId === lot.id && movementForm.reason === "expired"} onClick={() => openPanel({ movement: { lotId: lot.id, reason: "expired", quantity: lot.balance } })}>Descartar</Button> : null}
+                      {!detail.archivedAt ? <Button className="h-8 px-2.5" size="sm" variant={movementForm?.lotId === lot.id && movementForm.reason !== "expired" ? "secondary" : "ghost"} aria-pressed={movementForm?.lotId === lot.id && movementForm.reason !== "expired"} onClick={() => openPanel({ movement: { lotId: lot.id, reason: "loss" } })}>Saída</Button> : null}
+                      <Button className="h-8 px-2.5" size="sm" variant={history?.lotId === lot.id ? "secondary" : "ghost"} aria-pressed={history?.lotId === lot.id} onClick={() => openPanel({ history: { lotId: lot.id, lotCode: lot.code } })}>Histórico</Button>
+                      <Button className="h-8 px-2.5" size="sm" variant={usageLot?.id === lot.id ? "secondary" : "ghost"} aria-pressed={usageLot?.id === lot.id} onClick={() => openPanel({ usage: { id: lot.id, code: lot.code } })}>Pacientes</Button>
                     </div>
                   </div>
                 ))}
