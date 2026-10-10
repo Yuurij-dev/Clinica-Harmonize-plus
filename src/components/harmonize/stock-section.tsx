@@ -256,9 +256,9 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
             {detail.lots.length ? <div className="mt-2 flex justify-end"><Button size="sm" variant="ghost" onClick={() => setHistory({})}>Ver histórico do material</Button></div> : null}
           </div>
 
-          {movementForm ? <ManualMovementForm<StockMaterialDetail> key={`${movementForm.lotId}-${movementForm.reason}`} productId={detail.id} unit={detail.unit} lots={detail.lots} initial={movementForm} onCancel={() => setMovementForm(null)} onSaved={(product) => { setDetail(product); setMovementForm(null); setHistoryVersion((current) => current + 1); onChanged(`Movimentação registrada em ${product.name}.`); }} /> : null}
-          {usageLot ? <LotUsage key={`${usageLot.id}-${historyVersion}`} productId={detail.id} unit={detail.unit} lotId={usageLot.id} lotCode={usageLot.code} /> : null}
-          {history ? <MovementHistory key={`${history.lotId ?? "all"}-${historyVersion}`} productId={detail.id} unit={detail.unit} lotId={history.lotId} lotCode={history.lotCode} /> : null}
+          {movementForm ? <ManualMovementForm<StockMaterialDetail> key={`movement-${movementForm.lotId}-${movementForm.reason}`} productId={detail.id} unit={detail.unit} lots={detail.lots} initial={movementForm} onCancel={() => setMovementForm(null)} onSaved={(product) => { setDetail(product); setMovementForm(null); setHistoryVersion((current) => current + 1); onChanged(`Movimentação registrada em ${product.name}.`); }} /> : null}
+          {usageLot ? <LotUsage key={`usage-${usageLot.id}-${historyVersion}`} productId={detail.id} unit={detail.unit} lotId={usageLot.id} lotCode={usageLot.code} /> : null}
+          {history ? <MovementHistory key={`history-${history.lotId ?? "all"}-${historyVersion}`} productId={detail.id} unit={detail.unit} lotId={history.lotId} lotCode={history.lotCode} /> : null}
 
           {!detail.archivedAt ? (
             <form className="grid gap-3 rounded-[8px] border border-dashed border-border p-3 sm:grid-cols-3" onSubmit={addInitialBalance}>
