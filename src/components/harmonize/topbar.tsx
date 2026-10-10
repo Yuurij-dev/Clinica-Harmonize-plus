@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import type { SectionId } from "@/types/clinic";
+import { StockAlertItem, useStockAlerts } from "./stock-alerts";
 
 type TopbarProps = {
   onMenu: () => void;
@@ -54,6 +55,8 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
   const [trialRemaining, setTrialRemaining] = useState<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const previousAlertIdsRef = useRef<string[] | null>(null);
+  const stockAlerts = useStockAlerts(user?.role === "ADMIN");
+  const notificationCount = appointmentAlerts.length + stockAlerts.length;
 
   function primeNotificationAudio() {
     if (!audioContextRef.current) audioContextRef.current = new AudioContext();
@@ -222,12 +225,16 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="icon" aria-label="Notificações" onClick={primeNotificationAudio} className="relative">
               <Bell className="h-5 w-5" />
-              {appointmentAlerts.length ? <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#e0647d] px-1 text-[9px] font-black text-white ring-2 ring-background">{appointmentAlerts.length}</span> : null}
+              {notificationCount ? <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#e0647d] px-1 text-[9px] font-black text-white ring-2 ring-background">{notificationCount}</span> : null}
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-80 p-4">
+          <DropdownMenuContent align="end" className="max-h-[70vh] w-80 overflow-y-auto p-4">
             <p className="text-xs font-semibold">Notificações</p>
             {appointmentAlerts.length ? appointmentAlerts.map((alert) => <p className="mt-3 rounded-md bg-accent p-3 text-[11px] leading-5 text-accent-foreground" key={alert.id}>{alert.message}</p>) : <><p className="mt-3 rounded-md bg-muted p-3 text-[11px] leading-5 text-muted-foreground">Nenhum atendimento no horário neste momento.</p><p className="mt-2 rounded-md bg-muted p-3 text-[11px] leading-5 text-muted-foreground">As notificações dos próximos atendimentos aparecerão aqui.</p></>}
+            {stockAlerts.length ? <>
+              <p className="mt-4 text-xs font-semibold">Estoque</p>
+              <div className="mt-2 space-y-2">{stockAlerts.map((alert) => <StockAlertItem alert={alert} key={`${alert.kind}-${alert.lotId ?? alert.productId}`} onOpen={() => { setNotificationsOpen(false); onNavigate("estoque"); }} />)}</div>
+            </> : null}
           </DropdownMenuContent>
         </DropdownMenu>
         {user?.role === "ADMIN" ? <Button

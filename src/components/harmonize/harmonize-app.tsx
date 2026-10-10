@@ -8,6 +8,7 @@ import { Dashboard } from "./dashboard";
 import { Sidebar } from "./sidebar";
 import { StockSection } from "./stock-section";
 import { FinanceSection } from "./finance-section";
+import { StockSettingsCard } from "./stock-alerts";
 import { Topbar } from "./topbar";
 import {
   ClientsSection,
@@ -178,6 +179,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
           {currentUser && active === "relatorios" && isAdmin ? <ReportsSection /> : null}
           {currentUser && active === "calculadora" && isAdmin ? <SettingsSection mode="calculator" /> : null}
           {currentUser && active === "configuracoes" && isAdmin ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
+          {currentUser && active === "configuracoes" && isAdmin ? <StockSettingsCard onSaved={showNotice} /> : null}
         </main>
       </div>
       <AppToaster />

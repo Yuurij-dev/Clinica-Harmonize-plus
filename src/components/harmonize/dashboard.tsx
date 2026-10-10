@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { inputVariants } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { CountUpValue, DetailCard, LoadingSkeleton, PageContainer, ProgressBar, StatCard, StatusBadge } from "./shared";
+import { StockAlertsCard } from "./stock-alerts";
 import type { SectionId } from "@/types/clinic";
 import { getCachedJson, readClientCache } from "@/lib/client-cache";
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -111,6 +112,8 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
           </div>
         </div>
       </div>
+
+      <StockAlertsCard onOpen={() => onNavigate("estoque")} />
 
       <div className="hp-list-stagger grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         {stats.map((stat) => (

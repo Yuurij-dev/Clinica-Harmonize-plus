@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { convertMaterialsText, manualMovement, describeTechnicalSheet, formatQuantity, lotBalance, lotStatus, materialBalance, parseQuantity, validateQuantity } from "../src/lib/stock-rules.ts";
+import { stockAlerts, convertMaterialsText, manualMovement, describeTechnicalSheet, formatQuantity, lotBalance, lotStatus, materialBalance, parseQuantity, validateQuantity } from "../src/lib/stock-rules.ts";
 
 test("lot balance sums signed movements without floating point noise", () => {
   assert.equal(lotBalance([{ quantity: 0.1 }, { quantity: 0.2 }]), 0.3);
@@ -80,4 +80,27 @@ test("manual movements need a note and cannot take more than the lot balance", (
   assert.match(manualMovement({ reason: "count", direction: "out", quantity: 4, unit: "ml", lotBalance: 3, notes: "x" }).error, /saldo/);
   assert.match(manualMovement({ reason: "loss", quantity: 1.5, unit: "frasco", lotBalance: 3, notes: "x" }).error, /inteiro/);
   assert.match(manualMovement({ reason: "gift", quantity: 1, unit: "ml", lotBalance: 3, notes: "x" }).error, /Motivo/);
+});
+
+test("stock alerts flag low materials and lots close to expiry", () => {
+  const materials = [
+    { id: "m1", name: "Ácido hialurônico", unit: "ml", balance: 2, minStock: 5 },
+    { id: "m2", name: "Agulha", unit: "unidade", balance: 10, minStock: 10 },
+    { id: "m3", name: "Toxina", unit: "frasco", balance: 0, minStock: 0 },
+  ];
+  const lots = [
+    { id: "l1", productId: "m1", productName: "Ácido hialurônico", code: "AH1", expiresOn: "2026-11-08", balance: 1 },
+    { id: "l2", productId: "m1", productName: "Ácido hialurônico", code: "AH2", expiresOn: "2026-11-09", balance: 1 },
+    { id: "l3", productId: "m2", productName: "Agulha", code: "AG1", expiresOn: "2026-10-01", balance: 10 },
+    { id: "l4", productId: "m3", productName: "Toxina", code: "TX1", expiresOn: "2026-10-10", balance: 0 },
+    { id: "l5", productId: "m2", productName: "Agulha", code: "AG2", expiresOn: "2026-10-09", balance: 3 },
+  ];
+  const alerts = stockAlerts({ materials, lots, today: "2026-10-09", warningDays: 30 });
+  assert.deepEqual(alerts.map((alert) => [alert.kind, alert.productId, alert.lotId ?? null, alert.message]), [
+    ["expired", "m2", "l3", "Lote AG1 de Agulha venceu em 01/10/2026"],
+    ["expiring", "m2", "l5", "Lote AG2 de Agulha vence hoje"],
+    ["expiring", "m1", "l1", "Lote AH1 de Ácido hialurônico vence em 30 dias"],
+    ["below_minimum", "m1", null, "Ácido hialurônico abaixo do mínimo (2 de 5 ml)"],
+  ]);
+  assert.deepEqual(stockAlerts({ materials, lots, today: "2026-10-09", warningDays: 0 }).map((alert) => alert.lotId ?? alert.kind), ["l3", "l5", "below_minimum"]);
 });

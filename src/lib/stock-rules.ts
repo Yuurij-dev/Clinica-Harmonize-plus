@@ -43,11 +43,40 @@ export function parseQuantity(text: string) {
   return /^-?\d+(\.\d+)?$/.test(normalized) ? Number(normalized) : Number.NaN;
 }
 
+function formatNumber(quantity: number) {
+  return roundQuantity(quantity).toLocaleString("pt-BR", { maximumFractionDigits: 3 });
+}
+
 export function formatQuantity(quantity: number, unit: string) {
-  const value = roundQuantity(quantity).toLocaleString("pt-BR", { maximumFractionDigits: 3 });
+  const value = formatNumber(quantity);
   if (unit === "unidade") return `${value} un`;
   if (unit === "frasco") return `${value} ${Math.abs(quantity) === 1 ? "frasco" : "frascos"}`;
   return `${value} ${unit}`;
+}
+
+export type StockAlert = { kind: "expired" | "expiring" | "below_minimum" | "pending"; productId: string; lotId?: string; message: string };
+
+// Avisos de estoque: lotes vencidos ou vencendo (com saldo) e materiais abaixo do mínimo.
+// Recebe só materiais e lotes ativos (não arquivados). Ordem: vencidos, vencendo, mínimo.
+export function stockAlerts(input: {
+  materials: Array<{ id: string; name: string; unit: string; balance: number; minStock: number }>;
+  lots: Array<{ id: string; productId: string; productName: string; code: string; expiresOn: string; balance: number }>;
+  today: string;
+  warningDays: number;
+}) {
+  const lotAlerts: StockAlert[] = input.lots
+    .filter((lot) => lot.balance > 0 && lotStatus(lot.expiresOn, input.today, input.warningDays) !== "valid")
+    .sort((left, right) => left.expiresOn.localeCompare(right.expiresOn))
+    .map((lot) => {
+      const days = daysUntil(lot.expiresOn, input.today);
+      const prefix = `Lote ${lot.code} de ${lot.productName}`;
+      if (days < 0) return { kind: "expired", productId: lot.productId, lotId: lot.id, message: `${prefix} venceu em ${lot.expiresOn.split("-").reverse().join("/")}` };
+      return { kind: "expiring", productId: lot.productId, lotId: lot.id, message: days === 0 ? `${prefix} vence hoje` : `${prefix} vence em ${days} ${days === 1 ? "dia" : "dias"}` };
+    });
+  const minimumAlerts: StockAlert[] = input.materials
+    .filter((material) => material.balance < material.minStock)
+    .map((material) => ({ kind: "below_minimum", productId: material.id, message: `${material.name} abaixo do mínimo (${formatNumber(material.balance)} de ${formatQuantity(material.minStock, material.unit)})` }));
+  return [...lotAlerts, ...minimumAlerts];
 }
 
 export const manualReasons = {
