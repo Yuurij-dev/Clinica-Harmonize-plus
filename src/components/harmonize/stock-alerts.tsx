@@ -34,11 +34,12 @@ export function useStockAlerts(enabled: boolean) {
   return enabled ? alerts : [];
 }
 
-export function StockAlertItem({ alert, onOpen }: { alert: StockAlert; onOpen?: () => void }) {
+export function StockAlertItem({ alert, onOpen, variant = "boxed" }: { alert: StockAlert; onOpen?: () => void; variant?: "boxed" | "plain" }) {
   const Icon = alert.kind === "below_minimum" ? PackageX : AlertTriangle;
-  const tone = alert.kind === "expired" ? "bg-destructive/10 text-destructive" : "bg-warning/10 text-warning";
+  const tone = alert.kind === "expired" ? "text-destructive" : "text-warning";
+  const boxTone = alert.kind === "expired" ? "bg-destructive/10" : "bg-warning/10";
   return (
-    <button type="button" className={`flex w-full items-start gap-2 rounded-md p-3 text-left text-[11px] font-semibold leading-5 ${tone}`} onClick={onOpen}>
+    <button type="button" className={`flex items-start gap-2 text-left text-[11px] font-semibold leading-5 ${tone} ${variant === "boxed" ? `w-full rounded-md p-3 ${boxTone}` : "w-fit"}`} onClick={onOpen}>
       <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
       <span>{alert.message}</span>
     </button>
@@ -49,15 +50,10 @@ export function StockAlertsCard({ onOpen }: { onOpen: () => void }) {
   const alerts = useStockAlerts(true);
   if (!alerts.length) return null;
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Avisos de estoque</CardTitle>
-        <span className="text-xs font-bold text-muted-foreground">{alerts.length}</span>
-      </CardHeader>
-      <CardContent className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {alerts.map((alert) => <StockAlertItem alert={alert} key={`${alert.kind}-${alert.lotId ?? alert.productId}-${alert.message}`} onOpen={onOpen} />)}
-      </CardContent>
-    </Card>
+    <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center" aria-label={`${alerts.length} ${alerts.length === 1 ? "aviso de estoque" : "avisos de estoque"}`}>
+      <span className="text-xs font-bold text-muted-foreground">{alerts.length} {alerts.length === 1 ? "aviso" : "avisos"}</span>
+      {alerts.map((alert) => <StockAlertItem alert={alert} key={`${alert.kind}-${alert.lotId ?? alert.productId}-${alert.message}`} onOpen={onOpen} variant="plain" />)}
+    </div>
   );
 }
 

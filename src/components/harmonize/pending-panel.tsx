@@ -23,6 +23,7 @@ export function PendingPanel({ onSaved }: { onSaved?: (message: string) => void 
   const [selectedLots, setSelectedLots] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [pendingFilter, setPendingFilter] = useState<"all" | "checks" | "outputs" | AttendanceKind>("all");
 
   useEffect(() => {
     let active = true;
@@ -48,10 +49,18 @@ export function PendingPanel({ onSaved }: { onSaved?: (message: string) => void 
   }
 
   if (!data) return <div className="grid place-items-center py-10"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>;
+  const showChecks = pendingFilter === "all" || pendingFilter === "checks";
+  const showOutputs = pendingFilter === "all" || pendingFilter === "outputs" || pendingFilter === "procedure" || pendingFilter === "return" || pendingFilter === "evaluation";
+  const visibleOutputs = data.outputs.filter((output) => pendingFilter === "all" || pendingFilter === "outputs" || output.attendanceKind === pendingFilter);
   return (
     <div className="space-y-6">
+      <label className="flex w-fit flex-col gap-1 text-[11px] font-semibold text-muted-foreground">Tipo de pendência
+        <select className={`${fieldClassName} h-9 min-w-[220px] py-1 text-xs`} value={pendingFilter} onChange={(event) => setPendingFilter(event.target.value as typeof pendingFilter)}>
+          <option value="all">Todas as pendências</option><option value="checks">Conferências de materiais</option><option value="outputs">Saídas pendentes</option><option value="procedure">Saídas · Procedimentos</option><option value="return">Saídas · Retornos</option><option value="evaluation">Saídas · Avaliações</option>
+        </select>
+      </label>
       {error ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{error}</p> : null}
-      <section>
+      {showChecks ? <section>
         <h3 className="mb-2 text-sm font-bold text-foreground">Conferências de materiais pendentes</h3>
         <p className="mb-3 text-xs text-muted-foreground">Atendimentos finalizados (inclusive automaticamente pela agenda) cujos materiais ainda não foram conferidos.</p>
         {data.checks.length ? (
@@ -64,14 +73,14 @@ export function PendingPanel({ onSaved }: { onSaved?: (message: string) => void 
             ))}
           </div>
         ) : <EmptyState title="Nenhuma conferência pendente" description="Todos os atendimentos finalizados já tiveram os materiais conferidos." />}
-      </section>
+      </section> : null}
 
-      <section>
+      {showOutputs ? <section>
         <h3 className="mb-2 text-sm font-bold text-foreground">Saídas pendentes</h3>
         <p className="mb-3 text-xs text-muted-foreground">Materiais usados em atendimentos quando não havia saldo. Registre a compra ou o ajuste e conclua a saída aqui.</p>
-        {data.outputs.length ? (
+        {visibleOutputs.length ? (
           <div className="divide-y divide-border rounded-lg border border-border bg-card">
-            {data.outputs.map((output) => (
+            {visibleOutputs.map((output) => (
               <div className="flex flex-col gap-2 p-3 text-sm sm:flex-row sm:items-center sm:justify-between" key={output.id}>
                 <div className="min-w-0">
                   <p className="font-bold text-foreground">{formatQuantity(output.quantity, output.product.unit)} {output.product.name}</p>
@@ -87,8 +96,8 @@ export function PendingPanel({ onSaved }: { onSaved?: (message: string) => void 
               </div>
             ))}
           </div>
-        ) : <EmptyState title="Nenhuma saída pendente" description="Quando faltar saldo numa conferência, a saída aparece aqui para ser concluída depois." />}
-      </section>
+        ) : <EmptyState title={pendingFilter === "all" || pendingFilter === "outputs" ? "Nenhuma saída pendente" : `Nenhuma saída pendente de ${attendanceKindLabels[pendingFilter]}`} description="Quando faltar saldo numa conferência, a saída aparece aqui para ser concluída depois." />}
+      </section> : null}
       {checkId ? <MaterialCheckModal appointmentId={checkId} onClose={() => setCheckId(null)} onDone={(message) => { setCheckId(null); invalidateClientCache(pendingKey); onSaved?.(message); }} /> : null}
     </div>
   );

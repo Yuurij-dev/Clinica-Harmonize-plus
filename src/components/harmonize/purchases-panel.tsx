@@ -30,11 +30,14 @@ type PurchaseRow = {
 };
 type ItemRow = { key: number; productId: string; lotCode: string; expiresOn: string; quantity: string; price: string };
 
-export function PurchasesPanel({ materials, creating, onCloseCreate, onSaved }: { materials: StockMaterial[]; creating: boolean; onCloseCreate: () => void; onSaved?: (message: string) => void }) {
+export function PurchasesPanel({ materials, creating, onCloseCreate, onSaved }: { materials: StockMaterial[]; creating: boolean; onCloseCreate: () => void; onSaved?: (message: string, undo?: () => void) => void }) {
   const [purchases, setPurchases] = useState<PurchaseRow[] | null>(() => readClientCache<{ purchases: PurchaseRow[] }>("/api/purchases")?.purchases ?? null);
   const [version, setVersion] = useState(0);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<PurchaseRow | null>(null);
   const [error, setError] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "cancelled">("all");
+  const visiblePurchases = purchases?.filter((purchase) => statusFilter === "all" || purchase.status === statusFilter) ?? [];
 
   useEffect(() => {
     let active = true;
@@ -48,8 +51,13 @@ export function PurchasesPanel({ materials, creating, onCloseCreate, onSaved }: 
     return () => window.removeEventListener(CLIENT_CACHE_INVALIDATED_EVENT, handle);
   }, []);
 
+  function invalidatePurchaseViews() {
+    invalidateClientCache("/api/purchases");
+    invalidateStockCache();
+    invalidateFinanceCache();
+  }
+
   async function cancelPurchase(purchase: PurchaseRow) {
-    if (!window.confirm(`Cancelar a compra de ${purchase.supplier}? As entradas serão desfeitas e as despesas canceladas.`)) return;
     setBusyId(purchase.id);
     setError("");
     const { ok, data } = await sendJson(`/api/purchases/${purchase.id}`, "PATCH", { action: "cancel" });
@@ -58,18 +66,36 @@ export function PurchasesPanel({ materials, creating, onCloseCreate, onSaved }: 
       setError(data?.message ?? "Não foi possível cancelar a compra.");
       return;
     }
-    invalidateClientCache("/api/purchases");
-    invalidateStockCache();
-    invalidateFinanceCache();
-    onSaved?.(`Compra de ${purchase.supplier} cancelada.`);
+    setCancelTarget(null);
+    invalidatePurchaseViews();
+    onSaved?.(`Compra de ${purchase.supplier} cancelada.`, () => { void restorePurchase(purchase); });
+  }
+
+  async function restorePurchase(purchase: PurchaseRow) {
+    setBusyId(purchase.id);
+    setError("");
+    const { ok, data } = await sendJson(`/api/purchases/${purchase.id}`, "PATCH", { action: "restore" });
+    setBusyId(null);
+    if (!ok) {
+      setError(data?.message ?? "Não foi possível desfazer o cancelamento.");
+      return;
+    }
+    invalidatePurchaseViews();
+    onSaved?.(`Cancelamento da compra de ${purchase.supplier} desfeito.`);
   }
 
   return (
     <div>
       {error ? <p className="mb-3 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{error}</p> : null}
-      {!purchases ? <div className="grid place-items-center py-10"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div> : purchases.length ? (
+      {!purchases ? <div className="grid place-items-center py-10"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div> : <>
+        <label className="mb-3 flex w-fit flex-col gap-1 text-[11px] font-semibold text-muted-foreground">Situação da compra
+          <select className={`${fieldClassName} h-9 min-w-[170px] py-1 text-xs`} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
+            <option value="all">Todas</option><option value="active">Ativas</option><option value="cancelled">Canceladas</option>
+          </select>
+        </label>
+        {!purchases.length ? <EmptyState title="Nenhuma compra registrada" description="Registre as notas de compra para dar entrada nos lotes e lançar as despesas." /> : visiblePurchases.length ? (
         <div className="divide-y divide-border rounded-lg border border-border bg-card">
-          {purchases.map((purchase) => (
+          {visiblePurchases.map((purchase) => (
             <div className={`flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between ${purchase.status === "cancelled" ? "opacity-60" : ""}`} key={purchase.id}>
               <div className="min-w-0">
                 <p className="font-bold text-foreground">{purchase.supplier}{purchase.invoiceNumber ? <span className="font-medium text-muted-foreground"> · NF {purchase.invoiceNumber}</span> : null}</p>
@@ -80,14 +106,32 @@ export function PurchasesPanel({ materials, creating, onCloseCreate, onSaved }: 
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <strong className="text-foreground">{currency.format(purchase.totalCents / 100)}</strong>
-                {purchase.status === "cancelled" ? <Badge variant="slate">Cancelada</Badge> : <Button size="sm" variant="secondary" disabled={busyId === purchase.id} onClick={() => void cancelPurchase(purchase)}>{busyId === purchase.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}Cancelar</Button>}
+                {purchase.status === "cancelled" ? <Badge variant="slate">Cancelada</Badge> : <Button size="sm" variant="secondary" disabled={busyId === purchase.id} onClick={() => setCancelTarget(purchase)}>{busyId === purchase.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}Cancelar</Button>}
               </div>
             </div>
           ))}
         </div>
-      ) : <EmptyState title="Nenhuma compra registrada" description="Registre as notas de compra para dar entrada nos lotes e lançar as despesas." />}
+        ) : <EmptyState title={`Nenhuma compra ${statusFilter === "active" ? "ativa" : "cancelada"}`} description="Não há compras nessa situação. Escolha outra opção para ver o restante." />}
+      </>}
       {creating ? <PurchaseFormModal materials={materials.filter((material) => !material.archivedAt)} onClose={onCloseCreate} onSaved={(message) => { onCloseCreate(); invalidateClientCache("/api/purchases"); invalidateStockCache(); invalidateFinanceCache(); onSaved?.(message); }} /> : null}
+      {cancelTarget ? <CancelPurchaseModal purchase={cancelTarget} saving={busyId === cancelTarget.id} onClose={() => { if (busyId !== cancelTarget.id) setCancelTarget(null); }} onConfirm={() => void cancelPurchase(cancelTarget)} /> : null}
     </div>
+  );
+}
+
+function CancelPurchaseModal({ purchase, saving, onClose, onConfirm }: { purchase: PurchaseRow; saving: boolean; onClose: () => void; onConfirm: () => void }) {
+  return (
+    <Modal open onClose={onClose} title="Cancelar compra" description={`Compra de ${purchase.supplier}${purchase.invoiceNumber ? ` · NF ${purchase.invoiceNumber}` : ""}`}>
+      <div className="space-y-4">
+        <p className="purchase-cancel-warning rounded-[7px] px-3 py-3 text-xs font-semibold leading-5">
+          As entradas de estoque serão desfeitas e as despesas desta compra serão canceladas. Se tudo der certo, você poderá desfazer o cancelamento pelo aviso exibido em seguida.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="secondary" disabled={saving} onClick={onClose}>Manter compra</Button>
+          <Button type="button" className="purchase-cancel-button" disabled={saving} onClick={onConfirm}>{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ban className="h-3.5 w-3.5" />}{saving ? "Cancelando..." : "Cancelar compra"}</Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

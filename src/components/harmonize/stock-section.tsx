@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { Archive, ArchiveRestore, ChevronDown, Loader2, PackagePlus, PencilLine, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,16 +29,35 @@ const lotStatusBadge: Record<LotStatus, { label: string; variant: "green" | "amb
   expired: { label: "Vencido", variant: "red" },
 };
 
-export function StockSection({ onSaved }: { onSaved?: (message: string) => void }) {
+export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: () => void) => void }) {
   const [showArchived, setShowArchived] = useState(false);
   const listKey = showArchived ? "/api/products?archived=1" : "/api/products";
   const [materials, setMaterials] = useState<StockMaterial[]>(() => readClientCache<{ products?: StockMaterial[] }>(listKey)?.products ?? []);
   const [loading, setLoading] = useState(!readClientCache(listKey));
+  const [loadError, setLoadError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
   const [editing, setEditing] = useState<StockMaterial | "new" | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [tab, setTab] = useState<"materials" | "purchases" | "pending">("materials");
   const [creatingPurchase, setCreatingPurchase] = useState(false);
+  const [materialStatus, setMaterialStatus] = useState<"all" | "below" | "ok" | "archived">("all");
+  const [materialSort, setMaterialSort] = useState("default");
+
+  const visibleMaterials = useMemo(() => {
+    const filtered = materials.map((material, index) => ({ material, index })).filter(({ material }) => {
+      if (materialStatus === "archived") return Boolean(material.archivedAt);
+      if (material.archivedAt) return materialStatus === "all" && showArchived;
+      if (materialStatus === "below") return material.belowMinimum;
+      if (materialStatus === "ok") return !material.belowMinimum;
+      return true;
+    });
+    const [field, direction] = materialSort.split("-");
+    if (field === "cost" || field === "balance") {
+      const multiplier = direction === "desc" ? -1 : 1;
+      filtered.sort((a, b) => (a.material[field === "cost" ? "costCents" : "balance"] - b.material[field === "cost" ? "costCents" : "balance"]) * multiplier || a.index - b.index);
+    }
+    return filtered.map(({ material }) => material);
+  }, [materials, materialSort, materialStatus, showArchived]);
 
   useEffect(() => {
     // Compras, saídas e conferências mudam saldos: recarrega quando o cache de materiais é invalidado.
@@ -50,8 +69,8 @@ export function StockSection({ onSaved }: { onSaved?: (message: string) => void 
   useEffect(() => {
     let active = true;
     getCachedJson<{ products?: StockMaterial[] }>(listKey)
-      .then((data) => { if (active) setMaterials(data.products ?? []); })
-      .catch(() => undefined)
+      .then((data) => { if (active) { setMaterials(data.products ?? []); setLoadError(""); } })
+      .catch(() => { if (active) setLoadError("Não foi possível carregar os materiais. Tente atualizar a página."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [listKey, refreshKey]);
@@ -69,15 +88,29 @@ export function StockSection({ onSaved }: { onSaved?: (message: string) => void 
         <Button variant={tab === "pending" ? "primary" : "secondary"} size="sm" onClick={() => setTab("pending")}>Pendências</Button>
       </div>
       {tab === "pending" ? <PendingPanel onSaved={onSaved} /> : tab === "purchases" ? <PurchasesPanel materials={materials} creating={creatingPurchase} onCloseCreate={() => setCreatingPurchase(false)} onSaved={onSaved} /> : <>
-      <label className="mb-4 flex w-fit items-center gap-2 text-xs font-semibold text-muted-foreground">
-        <input type="checkbox" checked={showArchived} onChange={(event) => { setLoading(true); setShowArchived(event.target.checked); }} />
-        Mostrar arquivados
-      </label>
-      {loading ? <LoadingTable columns={7} /> : materials.length ? (
+      {!loading && !loadError ? <div className="mb-4 flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1 text-[11px] font-semibold text-muted-foreground">Situação
+          <select className={`${fieldClassName} h-9 min-w-[170px] py-1 text-xs`} value={materialStatus} onChange={(event) => { const next = event.target.value as typeof materialStatus; setMaterialStatus(next); if (next === "archived" && !showArchived) { setLoading(true); setShowArchived(true); } }}>
+            <option value="all">Todas as situações</option><option value="below">Abaixo do mínimo</option><option value="ok">OK</option><option value="archived">Arquivado</option>
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-[11px] font-semibold text-muted-foreground">Ordenar por
+          <select className={`${fieldClassName} h-9 min-w-[185px] py-1 text-xs`} value={materialSort} onChange={(event) => setMaterialSort(event.target.value)}>
+            <option value="default">Nome</option><option value="cost-asc">Custo: menor primeiro</option><option value="cost-desc">Custo: maior primeiro</option><option value="balance-asc">Saldo: menor primeiro</option><option value="balance-desc">Saldo: maior primeiro</option>
+          </select>
+        </label>
+        <label className="flex h-9 items-center gap-2 text-xs font-semibold text-muted-foreground">
+          <input type="checkbox" checked={showArchived} onChange={(event) => { setLoading(true); setShowArchived(event.target.checked); if (!event.target.checked && materialStatus === "archived") setMaterialStatus("all"); }} />
+          Mostrar arquivados
+        </label>
+      </div> : null}
+      {loading ? <LoadingTable columns={7} /> : loadError ? (
+        <EmptyState title="Erro ao carregar materiais" description={loadError} />
+      ) : materials.length && visibleMaterials.length ? (
         <div className="overflow-x-auto">
           <MiniTable
             columns={["Material", "Unidade", "Saldo", "Mínimo", "Custo", "Situação", "Ação"]}
-            rows={materials.map((material) => [
+            rows={visibleMaterials.map((material) => [
               <div key="name"><p className="font-bold text-foreground">{material.name}</p><p className="text-xs text-muted-foreground">{material.category} · {material.supplier}</p></div>,
               material.unit,
               <strong key="balance">{formatQuantity(material.balance, material.unit)}</strong>,
@@ -88,7 +121,7 @@ export function StockSection({ onSaved }: { onSaved?: (message: string) => void 
             ])}
           />
         </div>
-      ) : <EmptyState title="Nenhum material cadastrado" description="Cadastre os materiais da clínica para controlar saldo, lotes e validades." />}
+      ) : materials.length ? <EmptyState title="Nenhum material encontrado" description="Nenhum material corresponde à situação selecionada. Ajuste o filtro para ver outros resultados." /> : <EmptyState title="Nenhum material cadastrado" description="Cadastre os materiais da clínica para controlar saldo, lotes e validades." />}
       </>}
 
       {editing ? <MaterialFormModal material={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={(material, created) => {
