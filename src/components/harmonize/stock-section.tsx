@@ -165,8 +165,9 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
   const [usageLot, setUsageLot] = useState<{ id: string; code: string } | null>(null);
 
   // Só um painel por vez abaixo dos lotes: saída, histórico ou pacientes.
-  // Abrir um deles recolhe o "Lançar saldo inicial"; expandir o saldo inicial fecha o painel.
-  const panelOpen = Boolean(movementForm || history || usageLot);
+  // O "Lançar saldo inicial" começa recolhido e só abre quando pedido; abrir um painel o recolhe
+  // e expandir o saldo inicial fecha o painel.
+  const [initialBalanceOpen, setInitialBalanceOpen] = useState(false);
 
   // Lista de lotes enxuta: recolhível, só os 3 primeiros a vencer e sem os zerados,
   // mas sempre mostrando o lote que está com painel aberto.
@@ -184,6 +185,7 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
     setMovementForm(panel.movement ?? null);
     setHistory(panel.history ?? null);
     setUsageLot(panel.usage ?? null);
+    setInitialBalanceOpen(false);
   }
 
   useEffect(() => {
@@ -215,6 +217,7 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
     }
     setDetail(data.product);
     formElement.reset();
+    setInitialBalanceOpen(false);
     setHistoryVersion((current) => current + 1);
     onChanged(`Saldo inicial lançado em ${data.product.name}.`);
   }
@@ -292,14 +295,17 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
           {usageLot ? <LotUsage key={`usage-${usageLot.id}-${historyVersion}`} productId={detail.id} unit={detail.unit} lotId={usageLot.id} lotCode={usageLot.code} /> : null}
           {history ? <MovementHistory key={`history-${history.lotId ?? "all"}-${historyVersion}`} productId={detail.id} unit={detail.unit} lotId={history.lotId} lotCode={history.lotCode} /> : null}
 
-          {!detail.archivedAt && panelOpen ? (
-            <button type="button" className="flex w-full items-center justify-between gap-2 rounded-[8px] border border-dashed border-border p-3 text-left text-xs font-bold text-foreground transition hover:bg-muted/40" aria-expanded={false} onClick={() => openPanel({})}>
+          {!detail.archivedAt && !initialBalanceOpen ? (
+            <button type="button" className="flex w-full items-center justify-between gap-2 rounded-[8px] border border-dashed border-border p-3 text-left text-xs font-bold text-foreground transition hover:bg-muted/40" aria-expanded={false} onClick={() => { openPanel({}); setInitialBalanceOpen(true); }}>
               <span className="flex items-center gap-2"><PackagePlus className="h-3.5 w-3.5 text-primary" />Lançar saldo inicial</span>
               <ChevronDown className="h-4 w-4 text-muted-foreground" />
             </button>
           ) : !detail.archivedAt ? (
             <form className="grid gap-3 rounded-[8px] border border-dashed border-border p-3 sm:grid-cols-3" onSubmit={addInitialBalance}>
-              <p className="text-xs font-bold text-foreground sm:col-span-3">Lançar saldo inicial <span className="font-medium text-muted-foreground">(o que já está na prateleira, sem gerar despesa)</span></p>
+              <button type="button" className="flex items-center justify-between gap-2 text-left text-xs font-bold text-foreground sm:col-span-3" aria-expanded onClick={() => setInitialBalanceOpen(false)}>
+                <span>Lançar saldo inicial <span className="font-medium text-muted-foreground">(o que já está na prateleira, sem gerar despesa)</span></span>
+                <ChevronDown className="h-4 w-4 shrink-0 rotate-180 text-muted-foreground" />
+              </button>
               <FormField label="Lote"><input className={fieldClassName} name="lotCode" required /></FormField>
               <FormField label="Validade"><input className={fieldClassName} name="expiresOn" type="date" required /></FormField>
               <FormField label={`Quantidade (${detail.unit})`}><input className={fieldClassName} name="quantity" inputMode="decimal" required /></FormField>
