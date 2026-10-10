@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { financeTotals, periodRange } from "../src/lib/finance-rules.ts";
+import { addMonths, financeTotals, periodRange, splitInstallments } from "../src/lib/finance-rules.ts";
 
 test("period ranges follow the clinic calendar with weeks starting on Monday", () => {
   assert.deepEqual(periodRange("today", "2026-10-09"), { start: "2026-10-09", end: "2026-10-09" });
@@ -47,4 +47,25 @@ test("result can be negative when expenses exceed revenue", () => {
     expenses: [{ amountCents: 1_000, status: "paid", dueOn: "2026-10-09", paidOn: "2026-10-09" }],
   });
   assert.equal(totals.resultCents, -1_000);
+});
+
+test("adding months keeps the day or falls back to the last day of the month", () => {
+  assert.equal(addMonths("2026-01-31", 1), "2026-02-28");
+  assert.equal(addMonths("2028-01-31", 1), "2028-02-29");
+  assert.equal(addMonths("2026-01-31", 2), "2026-03-31");
+  assert.equal(addMonths("2026-11-15", 2), "2027-01-15");
+  assert.equal(addMonths("2026-10-09", 0), "2026-10-09");
+});
+
+test("installments add up to the exact total with the remainder on the first", () => {
+  assert.deepEqual(splitInstallments(10_000, 3, "2026-11-30"), [
+    { number: 1, amountCents: 3_334, dueOn: "2026-11-30" },
+    { number: 2, amountCents: 3_333, dueOn: "2026-12-30" },
+    { number: 3, amountCents: 3_333, dueOn: "2027-01-30" },
+  ]);
+  assert.deepEqual(splitInstallments(12_345, 1, "2026-10-09"), [{ number: 1, amountCents: 12_345, dueOn: "2026-10-09" }]);
+  const parts = splitInstallments(100, 7, "2026-01-31");
+  assert.equal(parts.reduce((sum, part) => sum + part.amountCents, 0), 100);
+  assert.deepEqual(parts.map((part) => part.dueOn), ["2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30", "2026-05-31", "2026-06-30", "2026-07-31"]);
+  assert.deepEqual(parts.map((part) => part.amountCents), [16, 14, 14, 14, 14, 14, 14]);
 });

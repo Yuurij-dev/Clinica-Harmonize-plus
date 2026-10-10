@@ -9,26 +9,14 @@ import { MaskedInput } from "@/components/ui/masked-input";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
 import { procedureCategories } from "@/data/categories";
 import { sendJson } from "@/lib/send-json";
-import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
+import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, readClientCache } from "@/lib/client-cache";
 import { formatCurrency, parseCurrency } from "@/lib/input-masks";
 import { formatQuantity, parseQuantity, stockUnits, validateQuantity, type LotStatus } from "@/lib/stock-rules";
+import { PurchasesPanel } from "./purchases-panel";
 import { EmptyState, LoadingTable, MiniTable, SectionIntro } from "./shared";
+import { formatDateOnly, invalidateStockCache, type StockMaterial } from "./stock-shared";
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
-
-export type StockMaterial = {
-  id: string;
-  name: string;
-  category: string;
-  unit: string;
-  costCents: number;
-  supplier: string;
-  minStock: number;
-  archivedAt: string | null;
-  balance: number;
-  belowMinimum: boolean;
-  hasMovements: boolean;
-};
 
 type StockLotRow = { id: string; code: string; expiresOn: string; balance: number; status: LotStatus };
 type StockMaterialDetail = StockMaterial & { lots: StockLotRow[]; warningDays: number };
@@ -39,15 +27,6 @@ const lotStatusBadge: Record<LotStatus, { label: string; variant: "green" | "amb
   expired: { label: "Vencido", variant: "red" },
 };
 
-// Chaves de cache afetadas por qualquer mudança de material ou saldo.
-export function invalidateStockCache(productId?: string) {
-  invalidateClientCache("/api/products", ...(productId ? [`/api/products/${productId}`] : []), "/api/quotes/options");
-}
-
-export function formatDateOnly(value: string) {
-  return value.split("-").reverse().join("/");
-}
-
 export function StockSection({ onSaved }: { onSaved?: (message: string) => void }) {
   const [showArchived, setShowArchived] = useState(false);
   const listKey = showArchived ? "/api/products?archived=1" : "/api/products";
@@ -56,6 +35,15 @@ export function StockSection({ onSaved }: { onSaved?: (message: string) => void 
   const [refreshKey, setRefreshKey] = useState(0);
   const [editing, setEditing] = useState<StockMaterial | "new" | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [tab, setTab] = useState<"materials" | "purchases">("materials");
+  const [creatingPurchase, setCreatingPurchase] = useState(false);
+
+  useEffect(() => {
+    // Compras, saídas e conferências mudam saldos: recarrega quando o cache de materiais é invalidado.
+    const handle = (event: Event) => { if ((event as CustomEvent<string[]>).detail?.includes("/api/products")) setRefreshKey((current) => current + 1); };
+    window.addEventListener(CLIENT_CACHE_INVALIDATED_EVENT, handle);
+    return () => window.removeEventListener(CLIENT_CACHE_INVALIDATED_EVENT, handle);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -68,13 +56,16 @@ export function StockSection({ onSaved }: { onSaved?: (message: string) => void 
 
   function refresh(productId?: string) {
     invalidateStockCache(productId);
-    invalidateClientCache("/api/products?archived=1");
-    setRefreshKey((current) => current + 1);
   }
 
   return (
     <div>
-      <SectionIntro title="Estoque" description="Materiais, lotes, validades e saldo disponível da clínica." action="Novo material" onAction={() => setEditing("new")} />
+      <SectionIntro title="Estoque" description="Materiais, lotes, validades, compras e saldo disponível da clínica." action={tab === "materials" ? "Novo material" : "Nova compra"} onAction={() => tab === "materials" ? setEditing("new") : setCreatingPurchase(true)} />
+      <div className="mb-4 flex gap-2">
+        <Button variant={tab === "materials" ? "primary" : "secondary"} size="sm" onClick={() => setTab("materials")}>Materiais</Button>
+        <Button variant={tab === "purchases" ? "primary" : "secondary"} size="sm" onClick={() => setTab("purchases")}>Compras</Button>
+      </div>
+      {tab === "purchases" ? <PurchasesPanel materials={materials} creating={creatingPurchase} onCloseCreate={() => setCreatingPurchase(false)} onSaved={onSaved} /> : <>
       <label className="mb-4 flex w-fit items-center gap-2 text-xs font-semibold text-muted-foreground">
         <input type="checkbox" checked={showArchived} onChange={(event) => { setLoading(true); setShowArchived(event.target.checked); }} />
         Mostrar arquivados
@@ -95,6 +86,7 @@ export function StockSection({ onSaved }: { onSaved?: (message: string) => void 
           />
         </div>
       ) : <EmptyState title="Nenhum material cadastrado" description="Cadastre os materiais da clínica para controlar saldo, lotes e validades." />}
+      </>}
 
       {editing ? <MaterialFormModal material={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={(material, created) => {
         setEditing(null);
