@@ -159,16 +159,22 @@ function PurchaseFormModal({ materials, onClose, onSaved }: { materials: StockMa
           {rows.map((row) => {
             const unit = materials.find((material) => material.id === row.productId)?.unit;
             return (
-              <div className="grid gap-2 rounded-[8px] border border-border p-3 sm:grid-cols-[1.4fr_1fr_1fr_auto]" key={row.key}>
-                <select className={`${fieldClassName} sm:col-span-3`} aria-label="Material" value={row.productId} onChange={(event) => update(row.key, { productId: event.target.value })}>
-                  <option value="">Selecione o material</option>
-                  {materials.map((material) => <option key={material.id} value={material.id}>{material.name} ({material.unit})</option>)}
-                </select>
-                <Button className="justify-self-end" type="button" variant="ghost" size="icon" aria-label="Remover item" disabled={rows.length === 1} onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))}><Trash2 className="h-3.5 w-3.5" /></Button>
-                <input className={fieldClassName} aria-label="Lote" placeholder="Lote" value={row.lotCode} onChange={(event) => update(row.key, { lotCode: event.target.value })} />
-                <input className={fieldClassName} aria-label="Validade" type="date" value={row.expiresOn} onChange={(event) => update(row.key, { expiresOn: event.target.value })} />
-                <input className={fieldClassName} aria-label="Quantidade" inputMode="decimal" placeholder={`Qtd.${unit ? ` (${unit})` : ""}`} value={row.quantity} onChange={(event) => update(row.key, { quantity: event.target.value })} />
-                <input className={fieldClassName} aria-label="Preço unitário" inputMode="decimal" placeholder="R$ 0,00 / un." value={row.price} onChange={(event) => update(row.key, { price: formatCurrency(event.target.value) })} />
+              <div className="space-y-3 rounded-[8px] border border-border p-3" key={row.key}>
+                <div className="flex items-end gap-2">
+                  <div className="min-w-0 flex-1"><FormField label="Material">
+                    <select className={fieldClassName} value={row.productId} onChange={(event) => update(row.key, { productId: event.target.value })}>
+                      <option value="">Selecione o material</option>
+                      {materials.map((material) => <option key={material.id} value={material.id}>{material.name} ({material.unit})</option>)}
+                    </select>
+                  </FormField></div>
+                  <Button type="button" variant="ghost" size="icon" aria-label="Remover item" disabled={rows.length === 1} onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))}><Trash2 className="h-3.5 w-3.5" /></Button>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <FormField label="Lote" description="Código impresso na embalagem."><input className={fieldClassName} placeholder="Ex.: AH123" value={row.lotCode} onChange={(event) => update(row.key, { lotCode: event.target.value })} /></FormField>
+                  <FormField label="Validade do lote" description="Usada nos avisos de vencimento."><input className={fieldClassName} type="date" value={row.expiresOn} onChange={(event) => update(row.key, { expiresOn: event.target.value })} /></FormField>
+                  <FormField label={`Quantidade${unit ? ` (${unit})` : ""}`}><input className={fieldClassName} inputMode="decimal" placeholder="Ex.: 10" value={row.quantity} onChange={(event) => update(row.key, { quantity: event.target.value })} /></FormField>
+                  <FormField label={`Preço por ${unit ?? "unidade"}`}><input className={fieldClassName} inputMode="decimal" placeholder="R$ 0,00" value={row.price} onChange={(event) => update(row.key, { price: formatCurrency(event.target.value) })} /></FormField>
+                </div>
               </div>
             );
           })}
