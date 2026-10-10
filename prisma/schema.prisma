@@ -40,6 +40,7 @@ model Clinic {
   professionalOpeningTime     String             @default("09:00")
   professionalClosingTime     String             @default("18:00")
   professionalHourlyCost      Float              @default(0)
+  expiryWarningDays           Int                @default(30)
   trialStartedAt              DateTime?          @db.Timestamptz(6)
   trialEndsAt                 DateTime?          @db.Timestamptz(6)
   createdAt                   DateTime           @default(now()) @db.Timestamptz(6)
@@ -54,6 +55,8 @@ model Clinic {
   products                    Product[]
   patientProcedures           PatientProcedure[]
   journeys                    PatientJourney[]
+  stockLots                   StockLot[]
+  stockMovements              StockMovement[]
 }
 
 model ClinicMembership {
@@ -90,9 +93,9 @@ model Patient {
   journeys         PatientJourney[]
   clinic           Clinic?            @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
+  @@unique([clinicId, cpf])
   @@index([clinicId])
   @@index([clinicId, name])
-  @@unique([clinicId, cpf])
 }
 
 model Appointment {
@@ -131,8 +134,8 @@ model Procedure {
   updatedAt       DateTime @default(now()) @updatedAt @db.Timestamptz(6)
   clinic          Clinic?  @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  @@index([clinicId])
   @@unique([clinicId, name])
+  @@index([clinicId])
 }
 
 model PatientProcedure {
@@ -172,17 +175,17 @@ model PatientProcedurePhotoSession {
 }
 
 model Evaluation {
-  id        String            @id @default(cuid())
-  clinicId  String?
-  patientId String
-  journeyId String?
-  professional String        @default("")
-  createdAt DateTime          @default(now()) @db.Timestamptz(6)
-  updatedAt DateTime          @default(now()) @updatedAt @db.Timestamptz(6)
-  patient   Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  journey   PatientJourney?   @relation(fields: [journeyId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  photos    EvaluationPhoto[]
-  clinic    Clinic?           @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id           String            @id @default(cuid())
+  clinicId     String?
+  patientId    String
+  journeyId    String?
+  professional String            @default("")
+  createdAt    DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime          @default(now()) @updatedAt @db.Timestamptz(6)
+  patient      Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  journey      PatientJourney?   @relation(fields: [journeyId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  photos       EvaluationPhoto[]
+  clinic       Clinic?           @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([patientId])
   @@index([clinicId])
@@ -190,19 +193,23 @@ model Evaluation {
 }
 
 model Product {
-  id        String   @id @default(cuid())
-  clinicId  String?
-  name      String
-  category  String
-  unit      String
-  costCents Int
-  supplier  String
-  createdAt DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(6)
-  clinic    Clinic?  @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id         String          @id @default(cuid())
+  clinicId   String?
+  name       String
+  category   String
+  unit       String
+  costCents  Int
+  minStock   Float           @default(0)
+  archivedAt DateTime?       @db.Timestamptz(6)
+  supplier   String
+  createdAt  DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime        @default(now()) @updatedAt @db.Timestamptz(6)
+  clinic     Clinic?         @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  lots       StockLot[]
+  movements  StockMovement[]
 
-  @@index([clinicId])
   @@unique([clinicId, name])
+  @@index([clinicId])
 }
 
 model Quote {
@@ -282,6 +289,43 @@ model PatientJourney {
 
   @@index([patientId, createdAt])
   @@index([clinicId])
+}
+
+model StockLot {
+  id        String          @id @default(cuid())
+  clinicId  String
+  productId String
+  code      String
+  expiresOn DateTime        @db.Date
+  createdAt DateTime        @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime        @default(now()) @updatedAt @db.Timestamptz(6)
+  clinic    Clinic          @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  product   Product         @relation(fields: [productId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  movements StockMovement[]
+
+  @@unique([productId, code])
+  @@index([clinicId])
+}
+
+model StockMovement {
+  id        String   @id @default(cuid())
+  clinicId  String
+  productId String
+  lotId     String
+  type      String
+  quantity  Float
+  reason    String?
+  notes     String   @default("")
+  userId    String?
+  userName  String   @default("")
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  clinic    Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  lot       StockLot @relation(fields: [lotId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([lotId])
+  @@index([clinicId, createdAt])
+  @@index([productId, createdAt])
 }
 
 enum UserRole {

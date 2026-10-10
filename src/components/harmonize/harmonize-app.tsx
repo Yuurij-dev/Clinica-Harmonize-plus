@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { AppToaster } from "./app-toaster";
 import { Dashboard } from "./dashboard";
 import { Sidebar } from "./sidebar";
+import { StockSection } from "./stock-section";
 import { Topbar } from "./topbar";
 import {
   ClientsSection,
@@ -30,6 +31,7 @@ const sectionPaths: Record<SectionId, string> = {
   agenda: "/",
   clientes: "/clientes",
   procedimentos: "/procedimentos",
+  estoque: "/estoque",
   orcamentos: "/orcamentos",
   pagamentos: "/pagamentos",
   financeiro: "/financeiro",
@@ -169,6 +171,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
           {currentUser && active === "agenda" ? <ScheduleSection focus={agendaFocus} openCreate={createDialog === "appointment"} onCreateOpen={() => openCreate("agenda", "appointment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && active === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => openCreate("clientes", "client")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && active === "procedimentos" && isAdmin ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => openCreate("procedimentos", "procedure")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && active === "estoque" && isAdmin ? <StockSection onSaved={showNotice} /> : null}
           {currentUser && active === "orcamentos" ? <QuotesSection openCreate={createDialog === "quote"} onCreateOpen={() => openCreate("orcamentos", "quote")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && active === "pagamentos" && isAdmin ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => openCreate("pagamentos", "payment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && active === "financeiro" && isAdmin ? <FinanceSection /> : null}

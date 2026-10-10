@@ -5,6 +5,7 @@ export type SectionId =
   | "agenda"
   | "clientes"
   | "procedimentos"
+  | "estoque"
   | "orcamentos"
   | "pagamentos"
   | "financeiro"

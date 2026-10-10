@@ -55,25 +55,13 @@ import {
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { cn } from "@/lib/utils";
+import { procedureCategories } from "@/data/categories";
 import type { Appointment, JourneyStageId, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
 
 const currency = new Intl.NumberFormat("pt-BR", {
   style: "currency",
   currency: "BRL",
 });
-
-const procedureCategories = [
-  "Preenchimento",
-  "Toxina botulínica",
-  "Bioestimulação",
-  "Fios de sustentação",
-  "Peeling",
-  "Microagulhamento",
-  "Limpeza de pele",
-  "Laser e tecnologias",
-  "Skinbooster e mesoterapia",
-  "Outro",
-];
 
 const materialOptions = [
   "Ácido hialurônico",
@@ -1002,7 +990,6 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   const cachedProducts = readClientCache<{ products?: Product[] }>("/api/products");
   const [procedureRows, setProcedureRows] = useState<Procedure[]>(() => (cachedProcedures?.procedures ?? []).map((item) => ({ id: item.id, name: item.name, category: item.category, price: item.price, duration: `${item.durationMinutes} min`, materials: item.materials, margin: `${item.margin}%` })));
   const [productRows, setProductRows] = useState<Product[]>(cachedProducts?.products ?? []);
-  const [materialOpen, setMaterialOpen] = useState(false);
   const [editingProcedureIndex, setEditingProcedureIndex] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(!cachedProcedures);
   const [isSaving, setIsSaving] = useState(false);
@@ -1081,18 +1068,6 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
     closeProcedureModal();
   }
 
-  async function saveMaterial(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const name = String(form.get("name"));
-    const response = await fetch("/api/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, category: String(form.get("category")), unit: String(form.get("unit")), costCents: Math.round(parseCurrency(form.get("cost")) * 100), supplier: String(form.get("supplier")) }) });
-    if (!response.ok) return;
-    invalidateClientCache("/api/products", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
-    const data = await response.json() as { product: Product };
-    setProductRows((current) => [...current, data.product]);
-    setMaterialOpen(false); onSaved?.(`${name} foi adicionado aos materiais.`);
-  }
-
   return (
     <div className="space-y-8">
       <div>
@@ -1119,45 +1094,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
         />}
       </div>
 
-      <div className="hp-list-stagger grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-        <Card>
-          <CardHeader>
-            <div>
-              <CardTitle>Materiais e custos</CardTitle>
-              <p className="mt-1 text-sm text-[#65708b]">
-                Cadastro usado somente para cálculo. Sem quantidade disponível,
-                entrada, baixa ou estoque neste MVP.
-              </p>
-            </div>
-            <Button variant="secondary" size="sm" onClick={() => setMaterialOpen(true)}>
-              <Plus className="h-4 w-4" />
-              Material
-            </Button>
-          </CardHeader>
-          <CardContent className="hp-list-stagger space-y-3">
-            {productRows.map((product) => (
-              <div
-                className="rounded-[8px] border border-[#e5e9f4] p-4 transition-colors duration-200 hover:border-[#dce5ff]"
-                key={product.name}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-black text-[#121733]">{product.name}</p>
-                    <p className="text-sm text-[#65708b]">
-                      {product.category} · {product.supplier}
-                    </p>
-                  </div>
-                  <Badge variant="purple">{product.unit}</Badge>
-                </div>
-                <p className="mt-3 text-lg font-black text-[#1438ff]">
-                  {currency.format(product.costCents / 100)} / {product.unit}
-                </p>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-        <CostCalculator materials={productRows} charged={procedureRows[0]?.price ?? 0} procedureName={procedureRows[0]?.name} />
-      </div>
+      <CostCalculator materials={productRows} charged={procedureRows[0]?.price ?? 0} procedureName={procedureRows[0]?.name} />
       <Modal
         key={editingProcedure ? `edit-${editingProcedure.name}` : `new-procedure-${openCreate ? "open" : "closed"}`}
         open={procedureModalOpen}
@@ -1173,16 +1110,6 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
           <FormField label="Margem estimada (%)"><MaskedInput className={fieldClassName} formatter={formatPercent} name="margin" inputMode="numeric" defaultValue={editingProcedure?.margin ?? ""} placeholder="40%" required /></FormField>
           <div className="sm:col-span-2"><FormField label="Materiais utilizados"><MaterialsMultiSelect options={materialOptions} defaultValue={editingProcedure?.materials ? editingProcedure.materials.split(", ") : []} /><p className="mt-1 text-[10px] text-[#858696]">Selecione um ou mais materiais utilizados neste procedimento.</p></FormField></div>
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={closeProcedureModal}>Cancelar</Button><Button disabled={isSaving} type="submit">{isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : editingProcedure ? "Salvar alterações" : "Salvar procedimento"}</Button></div>
-        </form>
-      </Modal>
-      <Modal open={materialOpen} onClose={() => setMaterialOpen(false)} title="Novo material">
-        <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveMaterial}>
-          <div className="sm:col-span-2"><FormField label="Nome"><input className={fieldClassName} name="name" required /></FormField></div>
-          <FormField label="Categoria"><select className={fieldClassName} name="category" required><option value="">Selecione uma categoria</option>{procedureCategories.map((category) => <option key={category}>{category}</option>)}</select></FormField>
-          <FormField label="Fornecedor"><input className={fieldClassName} name="supplier" required /></FormField>
-          <FormField label="Unidade"><select className={fieldClassName} name="unit"><option>ml</option><option>unidade</option><option>frasco</option></select></FormField>
-          <FormField label="Custo unitário"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="cost" inputMode="decimal" placeholder="R$ 0,00" required /></FormField>
-          <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" onClick={() => setMaterialOpen(false)}>Cancelar</Button><Button type="submit">Salvar material</Button></div>
         </form>
       </Modal>
     </div>
