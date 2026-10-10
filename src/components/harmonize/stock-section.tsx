@@ -167,6 +167,19 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
   // Só um painel por vez abaixo dos lotes: saída, histórico ou pacientes.
   // Abrir um deles recolhe o "Lançar saldo inicial"; expandir o saldo inicial fecha o painel.
   const panelOpen = Boolean(movementForm || history || usageLot);
+
+  // Lista de lotes enxuta: recolhível, só os 3 primeiros a vencer e sem os zerados,
+  // mas sempre mostrando o lote que está com painel aberto.
+  const [lotsOpen, setLotsOpen] = useState(true);
+  const [showAllLots, setShowAllLots] = useState(false);
+  const [showEmptyLots, setShowEmptyLots] = useState(false);
+  const visibleLotLimit = 3;
+  const activeLotId = movementForm?.lotId ?? history?.lotId ?? usageLot?.id;
+  const allLots = detail?.lots ?? [];
+  const emptyLotCount = allLots.filter((lot) => lot.balance <= 0).length;
+  const listedLots = allLots.filter((lot) => lot.balance > 0 || showEmptyLots || lot.id === activeLotId);
+  const visibleLots = showAllLots ? listedLots : listedLots.filter((lot, index) => index < visibleLotLimit || lot.id === activeLotId);
+  const hiddenLotCount = listedLots.length - visibleLots.length;
   function openPanel(panel: { movement?: { lotId: string; reason: ManualReason; quantity?: number }; history?: { lotId?: string; lotCode?: string }; usage?: { id: string; code: string } }) {
     setMovementForm(panel.movement ?? null);
     setHistory(panel.history ?? null);
@@ -245,10 +258,13 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
           {detail.belowMinimum && !detail.archivedAt ? <p className="rounded-[7px] bg-warning/10 px-3 py-2 text-xs font-semibold text-warning">Saldo abaixo do estoque mínimo.</p> : null}
 
           <div>
-            <h3 className="mb-2 text-sm font-bold text-foreground">Lotes</h3>
-            {detail.lots.length ? (
+            <button type="button" className="mb-2 flex w-full items-center justify-between gap-2 text-left" aria-expanded={lotsOpen} onClick={() => setLotsOpen((current) => !current)}>
+              <span className="text-sm font-bold text-foreground">Lotes <span className="font-medium text-muted-foreground">({allLots.length}{allLots.length ? ` · ${formatQuantity(detail.balance, detail.unit)}` : ""})</span></span>
+              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${lotsOpen ? "rotate-180" : ""}`} />
+            </button>
+            {!lotsOpen ? null : visibleLots.length ? (
               <div className="divide-y divide-border rounded-[8px] border border-border">
-                {detail.lots.map((lot) => (
+                {visibleLots.map((lot) => (
                   <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3 py-2.5 text-sm" key={lot.id}>
                     <div><p className="font-bold text-foreground">Lote {lot.code}</p><p className="text-xs text-muted-foreground">Validade {formatDateOnly(lot.expiresOn)}</p></div>
                     <div className="flex flex-wrap items-center justify-end gap-1">
@@ -261,7 +277,14 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
                   </div>
                 ))}
               </div>
-            ) : <p className="text-xs text-muted-foreground">Nenhum lote lançado ainda.</p>}
+            ) : <p className="text-xs text-muted-foreground">{detail.lots.length ? "Todos os lotes estão zerados." : "Nenhum lote lançado ainda."}</p>}
+            {lotsOpen && (hiddenLotCount > 0 || showAllLots || emptyLotCount > 0) ? (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {hiddenLotCount > 0 ? <Button size="sm" variant="ghost" onClick={() => setShowAllLots(true)}>Ver todos os {listedLots.length} lotes</Button> : null}
+                {showAllLots && listedLots.length > visibleLotLimit ? <Button size="sm" variant="ghost" onClick={() => setShowAllLots(false)}>Mostrar menos</Button> : null}
+                {emptyLotCount > 0 ? <Button size="sm" variant="ghost" onClick={() => setShowEmptyLots((current) => !current)}>{showEmptyLots ? "Esconder lotes zerados" : `Mostrar lotes zerados (${emptyLotCount})`}</Button> : null}
+              </div>
+            ) : null}
             {detail.lots.length ? <div className="mt-2 flex justify-end"><Button size="sm" variant={history && !history.lotId ? "secondary" : "ghost"} aria-pressed={Boolean(history && !history.lotId)} onClick={() => openPanel({ history: {} })}>Ver histórico do material</Button></div> : null}
           </div>
 
