@@ -48,6 +48,8 @@ import { CustomerJourney } from "./customer-journey";
 import { PatientEvaluations } from "./patient-evaluations";
 import { EmptyState, LoadingSkeleton } from "./shared";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
+import { observationKindsFor, type ObservationKind } from "@/lib/permissions";
+import { useCurrentRole } from "./current-user";
 import { appointmentWithinStartWindow, canRequestAppointmentStart, matchesProcedureAppointment } from "@/lib/clinic-time";
 import { assignProcedureAppointmentsToCards, mergePatientAppointments, procedureCardScheduleAction } from "@/lib/patient-appointments";
 import { FormField, fieldClassName } from "@/components/ui/modal";
@@ -111,7 +113,7 @@ type PatientHistoryRecord = {
   materialsUsed: MaterialUsed[];
 };
 
-type PatientObservation = { id: string; text: string; authorName: string; createdAt: string };
+type PatientObservation = { id: string; text: string; authorName: string; createdAt: string; kind: "clinical" | "administrative" };
 
 type HistoryEventKind = "procedure" | "appointment" | "payment" | "observation";
 type HistoryTimelineEvent = {
@@ -552,7 +554,7 @@ function buildHistoryTimeline(history: PatientHistoryRecord): HistoryTimelineEve
     kind: "observation" as const,
     title: "Observação registrada",
     date: new Date(observation.createdAt).toLocaleDateString("pt-BR"),
-    subtitle: `${new Date(observation.createdAt).toLocaleDateString("pt-BR")} · ${observation.authorName}`,
+    subtitle: `${new Date(observation.createdAt).toLocaleDateString("pt-BR")} · ${observation.authorName}${observation.kind === "administrative" ? " · Administrativa" : ""}`,
     status: "Registrada",
     details: observation.text,
   }));
@@ -1462,6 +1464,9 @@ function AppointmentListSkeleton() {
 function ObservationsTab({ patientId }: { patientId: string }) {
   const url = `/api/patients/${patientId}/observations`;
   const [observations, setObservations] = useState<PatientObservation[] | null>(() => readClientCache<{ observations: PatientObservation[] }>(url)?.observations ?? null);
+  const kinds = observationKindsFor(useCurrentRole());
+  const [kind, setKind] = useState<ObservationKind>("clinical");
+  const effectiveKind = kinds.includes(kind) ? kind : kinds[0];
   const [adding, setAdding] = useState(false);
   const [text, setText] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1480,7 +1485,7 @@ function ObservationsTab({ patientId }: { patientId: string }) {
     setSaving(true);
     setError("");
     try {
-      const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+      const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, kind: effectiveKind }) });
       const data = await response.json().catch(() => null) as { observation?: PatientObservation; message?: string } | null;
       if (!response.ok || !data?.observation) { setError(data?.message ?? "Não foi possível salvar a observação."); return; }
       invalidateClientCache(url, `/api/patients/${patientId}/history`);
@@ -1504,6 +1509,7 @@ function ObservationsTab({ patientId }: { patientId: string }) {
       {adding ? (
         <Card className="p-4">
           <form className="space-y-3" onSubmit={save}>
+            {kinds.length > 1 ? <FormField label="Tipo"><select className={fieldClassName} value={effectiveKind} onChange={(event) => setKind(event.target.value as ObservationKind)}><option value="clinical">Clínica</option><option value="administrative">Administrativa</option></select></FormField> : null}
             <FormField label="Observação"><textarea className={`${fieldClassName} h-24 resize-none py-2`} value={text} maxLength={2000} autoFocus placeholder="Escreva a observação" onChange={(event) => { setText(event.target.value); setError(""); }} /></FormField>
             {error ? <p className="rounded-[7px] bg-[#fff1f0] px-3 py-2 text-xs font-semibold text-[#b42318]">{error}</p> : null}
             <div className="flex justify-end gap-2">
@@ -1519,6 +1525,7 @@ function ObservationsTab({ patientId }: { patientId: string }) {
           <Card className="p-4" key={observation.id}>
             <p className="whitespace-pre-wrap text-sm leading-6 text-[#555668]">{observation.text}</p>
             <p className="mt-2 text-[10px] text-[#858696]">{new Date(observation.createdAt).toLocaleDateString("pt-BR")} · {observation.authorName}</p>
+            {observation.kind === "administrative" ? <div className="mt-2"><Badge variant="slate">Administrativa</Badge></div> : null}
           </Card>
         ))}</div>}
     </div>

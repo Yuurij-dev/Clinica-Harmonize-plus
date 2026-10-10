@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { dateOnly } from "@/lib/clinic-time";
+import { observationKindsFor } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -35,7 +36,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // Materiais usados no paciente (rastreio): saídas de atendimento, sem custo.
     includeProcedureRecords ? prisma.stockMovement.findMany({ where: { clinicId: user.clinicId, patientId, type: "attendance" }, orderBy: { attendanceDate: "desc" }, select: { id: true, appointmentId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, unit: true } }, lot: { select: { code: true, expiresOn: true } }, reversedBy: { select: { id: true } } } }) : Promise.resolve([]),
     includeProcedureRecords ? prisma.pendingStockOutput.findMany({ where: { clinicId: user.clinicId, patientId, status: "pending" }, select: { id: true, appointmentId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, unit: true } } } }) : Promise.resolve([]),
-    includeObservations ? prisma.patientObservation.findMany({ where: { patientId, clinicId: user.clinicId }, orderBy: { createdAt: "desc" }, select: { id: true, text: true, authorName: true, createdAt: true } }) : Promise.resolve([]),
+    includeObservations ? prisma.patientObservation.findMany({ where: { patientId, clinicId: user.clinicId, kind: { in: observationKindsFor(user.role) } }, orderBy: { createdAt: "desc" }, select: { id: true, text: true, authorName: true, kind: true, createdAt: true } }) : Promise.resolve([]),
     includeAppointmentProcedureNames ? prisma.procedure.findMany({ where: { clinicId: user.clinicId }, select: { name: true } }) : Promise.resolve([]),
   ]);
   const now = clinicNow();
