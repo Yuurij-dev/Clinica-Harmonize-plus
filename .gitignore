@@ -44,3 +44,9 @@ next-env.d.ts
 
 *.db
 *.db-journal
+
+# planejamento local das skills (to-spec / to-tickets)
+.scratch/
+
+# configuração pessoal do Claude Code
+.claude/settings.local.json
