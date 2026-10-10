@@ -17,3 +17,20 @@ export function parseDateOnly(value: unknown) {
   const date = new Date(`${value}T00:00:00Z`);
   return Number.isNaN(date.getTime()) || dateOnly(date) !== value ? null : date;
 }
+
+export function appointmentWithinStartWindow(appointment: { date: string; time: string }, toleranceMinutes: number, now: { date: string; time: string }) {
+  const [day, month, year] = appointment.date.split("/");
+  if (`${year}-${month}-${day}` !== now.date || !/^\d{2}:\d{2}$/.test(appointment.time)) return false;
+  const [hours, minutes] = appointment.time.split(":").map(Number);
+  const startMinutes = hours * 60 + minutes;
+  const nowMinutes = Number(now.time.slice(0, 2)) * 60 + Number(now.time.slice(3));
+  return nowMinutes >= startMinutes && nowMinutes < startMinutes + toleranceMinutes;
+}
+
+export function matchesProcedureAppointment(appointment: { procedure: string }, procedures: Array<{ name: string }>) {
+  return procedures.some((procedure) => procedure.name === appointment.procedure);
+}
+
+export function canRequestAppointmentStart(appointment: { procedure: string; status: string }, procedures: Array<{ name: string }>, withinWindow: boolean, updating: boolean) {
+  return appointment.status === "Agendado" && !updating && (withinWindow || matchesProcedureAppointment(appointment, procedures));
+}
