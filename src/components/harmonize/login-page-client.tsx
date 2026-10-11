@@ -6,7 +6,7 @@ import { LoginScreen, type RegisterResult, type RegisterValues } from "./login-s
 import { ClinicEntryTransition } from "./clinic-entry-transition";
 import { setClientCacheScope } from "@/lib/client-cache";
 
-export function LoginPageClient() {
+export function LoginPageClient({ initialMode }: { initialMode: "login" | "register" }) {
   const router = useRouter();
   const [clinicName, setClinicName] = useState<string | null>(null);
 
@@ -65,5 +65,5 @@ export function LoginPageClient() {
     return { error: result.error } satisfies RegisterResult;
   }
 
-  return clinicName ? <ClinicEntryTransition clinicName={clinicName} /> : <LoginScreen onLogin={handleLogin} onChangePassword={handlePasswordChange} onRegister={handleRegister} />;
+  return clinicName ? <ClinicEntryTransition clinicName={clinicName} /> : <LoginScreen initialMode={initialMode} onLogin={handleLogin} onChangePassword={handlePasswordChange} onRegister={handleRegister} />;
 }

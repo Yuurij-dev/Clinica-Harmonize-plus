@@ -31,6 +31,7 @@ export type RegisterResult = {
 };
 
 type LoginScreenProps = {
+  initialMode?: "login" | "register";
   onLogin: (credentials: { login: string; password: string }) => Promise<{ error?: string; passwordChangeRequired?: boolean }>;
   onChangePassword: (password: string) => Promise<{ error?: string }>;
   onRegister: (values: RegisterValues) => Promise<RegisterResult>;
@@ -50,8 +51,8 @@ const initialRegisterValues: RegisterValues = {
 const professionOptions = ["Médico(a)", "Dentista", "Biomédico(a)", "Esteticista", "Outro"];
 const practiceAreaOptions = ["Harmonização facial", "Dermatologia", "Odontologia estética", "Estética corporal", "Outra área"];
 
-export function LoginScreen({ onLogin, onChangePassword, onRegister }: LoginScreenProps) {
-  const [mode, setMode] = useState<"login" | "register" | "change-password">("login");
+export function LoginScreen({ initialMode = "login", onLogin, onChangePassword, onRegister }: LoginScreenProps) {
+  const [mode, setMode] = useState<"login" | "register" | "change-password">(initialMode);
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
