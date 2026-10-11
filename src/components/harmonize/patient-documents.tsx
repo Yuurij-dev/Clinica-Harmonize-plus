@@ -8,6 +8,9 @@ import { Card } from "@/components/ui/card";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { errorMessage, fetchForSave, httpErrorMessage } from "@/lib/client-errors";
+import { getCachedJson, invalidateClientCache } from "@/lib/client-cache";
+
+type DocumentsResponse = { documents?: PatientDocument[]; consentTemplate?: string | null };
 
 type PatientDocument = {
   id: string;
@@ -46,20 +49,29 @@ export function PatientDocuments({ patientId, patientName }: { patientId: string
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
 
-  const refresh = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/patients/${patientId}/documents`);
-      const data = await response.json().catch(() => null) as { documents?: PatientDocument[]; consentTemplate?: string | null; message?: string } | null;
-      if (!response.ok) throw new Error(data?.message ?? httpErrorMessage(response, "Não foi possível carregar os documentos"));
-      if (!data) throw new Error("O servidor retornou uma resposta inválida ao carregar os documentos.");
-      setDocuments(data.documents ?? []);
-      if (data.consentTemplate) setConsentText(data.consentTemplate);
-    } catch (cause) {
-      setError(errorMessage(cause, "Não foi possível carregar os documentos."));
-    } finally { setLoading(false); }
-  }, [patientId]);
+  const documentsKey = `/api/patients/${patientId}/documents`;
+  const applyDocuments = useCallback((data: DocumentsResponse) => {
+    setDocuments(data.documents ?? []);
+    if (data.consentTemplate) setConsentText(data.consentTemplate);
+  }, []);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  const refresh = useCallback(async () => {
+    invalidateClientCache(documentsKey);
+    try {
+      applyDocuments(await getCachedJson<DocumentsResponse>(documentsKey));
+    } catch {
+      setError("Não foi possível carregar os documentos.");
+    }
+  }, [documentsKey, applyDocuments]);
+
+  useEffect(() => {
+    let active = true;
+    getCachedJson<DocumentsResponse>(documentsKey)
+      .then((data) => { if (active) applyDocuments(data); })
+      .catch(() => { if (active) setError("Não foi possível carregar os documentos."); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [documentsKey, applyDocuments]);
 
   function canvasPoint(event: ReactPointerEvent<HTMLCanvasElement>) {
     const canvas = event.currentTarget;
@@ -133,6 +145,7 @@ export function PatientDocuments({ patientId, patientName }: { patientId: string
       const response = await fetchForSave(`/api/patients/${patientId}/documents`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ documentId: documentToDelete.id }) }, "Não foi possível excluir o documento");
       const data = await response.json().catch(() => null) as { message?: string } | null;
       if (!response.ok) { setError(data?.message ?? httpErrorMessage(response, "Não foi possível excluir o documento")); return; }
+      invalidateClientCache(documentsKey);
       setDocuments((current) => current.filter((item) => item.id !== documentToDelete.id)); setNotice("Documento excluído.");
       if (documents.length <= 1) setExpandedDocumentSections({ terms: false, attachments: false });
       if (selectedDocument?.id === documentToDelete.id) setSelectedDocument(null);
