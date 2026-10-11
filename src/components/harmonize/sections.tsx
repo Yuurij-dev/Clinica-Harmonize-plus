@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Clock3,
   Loader2,
+  MessageCircle,
   MoreVertical,
   PencilLine,
   Plus,
@@ -37,6 +38,7 @@ import {
   StatusBadge,
 } from "./shared";
 import { CostCalculator } from "./cost-calculator";
+import { useCan } from "./current-user";
 import { PatientDetail } from "./patient-detail";
 import { buildCustomerJourney } from "@/lib/customer-journey";
 import {
@@ -51,6 +53,7 @@ import {
 } from "@/lib/input-masks";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
+import { runningAppointmentStatuses } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import { procedureCategories } from "@/data/categories";
 import { sendJson } from "@/lib/send-json";
@@ -337,6 +340,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   const [deleteSaving, setDeleteSaving] = useState(false);
   const autoMissedIds = useRef(new Set<string>());
   const autoCompletedIds = useRef(new Set<string>());
+  const canRun = useCan("appointment:run");
   const professionalOptions = useMemo(() => ["Todos", ...new Set(appointmentRows.map((item) => item.professional))], [appointmentRows]);
   const activeProfessional = professionalOptions.includes(professional) ? professional : "Todos";
   const filteredAppointments = appointmentRows.filter((appointment) => activeProfessional === "Todos" || appointment.professional === activeProfessional);
@@ -375,11 +379,11 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         && appointmentHasPassed(appointment, now, appointmentToleranceMinutes)
         && !autoMissedIds.current.has(appointment.id)
       ));
-      const completed = appointmentRows.filter((appointment) => (
+      const completed = canRun ? appointmentRows.filter((appointment) => (
         appointment.status === "Em atendimento"
         && appointmentHasPassed(appointment, now, appointment.durationMinutes)
         && !autoCompletedIds.current.has(appointment.id)
-      ));
+      )) : [];
       const transitions = [...missed.map((appointment) => ({ appointment, status: "Faltou" })), ...completed.map((appointment) => ({ appointment, status: "Atendido" }))];
       if (!transitions.length) return;
 
@@ -402,7 +406,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     void markExpiredAppointments();
     const timer = window.setInterval(() => { void markExpiredAppointments(); }, 30_000);
     return () => window.clearInterval(timer);
-  }, [appointmentRows, appointmentToleranceMinutes, isLoading]);
+  }, [appointmentRows, appointmentToleranceMinutes, isLoading, canRun]);
 
   const matchingPatients = patientOptions.filter((patient) =>
     `${patient.name} ${patient.cpf ?? ""}`.toLowerCase().includes(patientQuery.toLowerCase()),
@@ -608,7 +612,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         {selectedAppointment ? <div className="space-y-4">
           <div className={cn("rounded-[8px] border-l-4 p-4", appointmentTone(selectedAppointment).card)}><p className="text-xs font-bold text-[#77788a]">{selectedAppointment.time} - {formatEndTime(selectedAppointment.time, selectedAppointment.durationMinutes)}</p><h3 className="mt-1 text-lg font-black text-[#303144]">{selectedAppointment.procedure}</h3><p className="mt-1 text-sm text-[#656678]">{selectedAppointment.patient}</p></div>
           <div className="grid gap-3 sm:grid-cols-2">{[["Data", formatDate(selectedAppointment.date)], ["Profissional", selectedAppointment.professional], ["Tipo", selectedAppointment.category || "Atendimento"], ["Status", selectedAppointment.status]].map(([label, value]) => <div className="rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3" key={label}><p className="text-[9px] font-bold uppercase text-[#9697a7]">{label}</p><p className="mt-1 text-xs font-semibold text-[#4f5062]">{value}</p></div>)}</div>
-          <div className="flex justify-end"><Button type="button" onClick={() => setSelectedAppointment(null)}>Fechar</Button></div>
+          <div className="flex justify-end gap-2">{selectedAppointment.status === "Agendado" ? <Button type="button" variant="secondary" disabled title="Confirmação por WhatsApp em breve"><MessageCircle className="h-3.5 w-3.5" />Confirmar por WhatsApp</Button> : null}<Button type="button" onClick={() => setSelectedAppointment(null)}>Fechar</Button></div>
         </div> : null}
       </Modal>
 
@@ -638,10 +642,11 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
               <div className="flex items-center gap-2"><span className="grid h-6 w-6 place-items-center rounded-full bg-[#f0efff] text-[8px] font-black text-[#5147dc]">{appointment.professional.replace("Dra. ", "").replace("Dr. ", "").slice(0, 2).toUpperCase()}</span><strong className="text-[#5a5b6e]">{appointment.professional}</strong></div>
               <div><strong className="block uppercase text-[#444557]">{appointment.patient}</strong><span className="mt-1 block text-[9px] text-[#aaaab7]">Paciente</span></div>
               <div className="flex justify-end gap-2">
-                <Button className="border-[#5147dc] text-[#5147dc]" key="action" size="sm" variant="secondary" disabled={isCompleted || isMissed || updatingId !== null} onClick={() => advanceAppointment(appointment)}>{updatingId === appointment.id ? <Loader2 className="h-3 w-3 animate-spin" /> : null}{updatingId === appointment.id ? "Atualizando..." : primaryLabel} {updatingId === appointment.id ? null : <ArrowRight className="h-3 w-3" />}</Button>
+                {canRun ? <Button className="border-[#5147dc] text-[#5147dc]" key="action" size="sm" variant="secondary" disabled={isCompleted || isMissed || updatingId !== null} onClick={() => advanceAppointment(appointment)}>{updatingId === appointment.id ? <Loader2 className="h-3 w-3 animate-spin" /> : null}{updatingId === appointment.id ? "Atualizando..." : primaryLabel} {updatingId === appointment.id ? null : <ArrowRight className="h-3 w-3" />}</Button> : null}
                 {!isCompleted && !isMissed ? (
                   <Button className="border-[#f2c8c3] text-[#b42318] hover:border-[#b42318] hover:text-[#b42318]" key="missed" size="sm" variant="secondary" disabled={updatingId !== null} onClick={() => markAppointmentAsMissed(appointment)}>{updatingId === appointment.id ? <Loader2 className="h-3 w-3 animate-spin" /> : null}{updatingId === appointment.id ? "Salvando..." : "Faltou"}</Button>
                 ) : null}
+                {appointment.status === "Agendado" ? <Button key="whatsapp" size="sm" variant="secondary" disabled title="Confirmação por WhatsApp em breve" aria-label="Confirmar por WhatsApp"><MessageCircle className="h-3 w-3" /></Button> : null}
               </div>
             </div>
           );
@@ -852,16 +857,20 @@ function getCalendarAppointmentLayouts(appointments: AppointmentRow[]) {
 }
 
 function CalendarAppointmentCard({ appointment, top, height, column, columns, open, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, appointmentToleranceMinutes, updating }: { appointment: AppointmentRow; top: number; height: number; column: number; columns: number; open: boolean; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; appointmentToleranceMinutes: number; updating: boolean }) {
+  const canRun = useCan("appointment:run");
   const tone = appointmentTone(appointment);
   const past = appointmentHasPassed(appointment);
   const isCompleted = appointment.status === "Atendido";
   const isMissed = appointment.status === "Faltou";
   const isCancelled = appointment.status === "Cancelado";
   const canStart = appointment.status !== "Agendado" || appointmentCanStart(appointment, appointmentToleranceMinutes);
+  const showStatusGroup = !isCompleted && !isMissed && !isCancelled && (canRun || !(runningAppointmentStatuses as readonly string[]).includes(appointment.status));
+  const showWhatsapp = appointment.status === "Agendado";
+  const hasMenu = canRun || showStatusGroup || showWhatsapp;
   const primaryLabel = appointment.status === "Em atendimento" ? "Finalizar" : isCompleted ? "Concluído" : isMissed ? "Faltou" : "Atender";
   return <div className={cn("group absolute z-10 cursor-pointer overflow-hidden rounded-[7px] border-l-[3px] p-2 text-[10px] shadow-[0_4px_12px_rgba(38,39,58,0.06)]", tone.card, past && "brightness-[0.84] saturate-[0.78]")} style={{ top, height, left: `calc(${column} * 100% / ${columns} + 4px)`, width: `calc(100% / ${columns} - 8px)` }} aria-label={`${appointment.procedure} - status: ${appointment.status}`} onClick={() => onSelect(appointment)}>
     <span className="pointer-events-none absolute -top-7 left-2 z-40 hidden whitespace-nowrap rounded-[5px] bg-[#303144] px-2 py-1 text-[10px] font-bold text-white shadow-lg group-hover:block">Status: {appointment.status}</span>
-    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><p className="mt-1 truncate text-[11px] font-black">{appointment.procedure}</p><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0"><button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button>{open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button>{!isCompleted && !isMissed && !isCancelled ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button></> : null}</div> : null}</div></div>
+    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><p className="mt-1 truncate text-[11px] font-black">{appointment.procedure}</p><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0">{hasMenu ? <button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button> : null}{hasMenu && open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}>{canRun ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button> : null}{showStatusGroup ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button></> : null}{showWhatsapp ? <button type="button" className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] disabled:opacity-50" disabled title="Confirmação por WhatsApp em breve">Confirmar por WhatsApp</button> : null}</div> : null}</div></div>
     <span className={cn("mt-1 inline-flex rounded-full px-2 py-0.5 text-[9px] font-bold", tone.pill)}>{appointment.category || "Atendimento"}</span>
   </div>;
 }
@@ -1524,7 +1533,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
         return;
       }
       setMembers((current) => [...current, data.member as TeamMember].sort((a, b) => a.user.name.localeCompare(b.user.name)));
-      invalidateClientCache("/api/team");
+      invalidateClientCache("/api/team", "/api/team/professionals");
       setEditing(null);
       setTeamError("");
     } catch {
@@ -1549,7 +1558,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       return;
     }
     setMembers((current) => current.filter((member) => member.id !== memberToRemove.id));
-    invalidateClientCache("/api/team", "/api/agenda/bootstrap");
+    invalidateClientCache("/api/team", "/api/team/professionals", "/api/agenda/bootstrap");
     setMemberToRemove(null);
   }
 
@@ -1656,7 +1665,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
           </div>
         </form> : null}
         {editing === "Clínica" ? <form className="grid gap-4" onSubmit={saveCostSettings}><p className="text-xs leading-5 text-[#65708b]">Configure o nome e o horário em que a clínica está aberta para novos atendimentos.</p><FormField label="Nome de exibição"><input className={fieldClassName} name="name" value={clinicNameInput} onChange={(event) => setClinicNameInput(event.target.value)} required /></FormField><div className="grid gap-4 sm:grid-cols-2"><FormField label="Início do funcionamento"><input className={fieldClassName} name="openingTime" type="time" value={openingTimeInput} onChange={(event) => setOpeningTimeInput(event.target.value)} required /></FormField><FormField label="Fim do funcionamento"><input className={fieldClassName} name="closingTime" type="time" value={closingTimeInput} onChange={(event) => setClosingTimeInput(event.target.value)} required /></FormField></div>{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar alterações"}</Button></div></form> : null}
-        {editing === "Novo colaborador" ? <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveCollaborator}><div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div><FormField label="E-mail de acesso"><input className={fieldClassName} name="email" type="email" required /></FormField><FormField label="Senha inicial"><input className={fieldClassName} name="password" type="password" minLength={6} required /></FormField><FormField label="Perfil"><select className={fieldClassName} name="role"><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Equipe</option><option value="ADMIN">Administrador</option></select></FormField>{teamError ? <p className="sm:col-span-2 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{teamError}</p> : null}<div className="flex justify-end gap-2 sm:col-span-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div></form> : editing === "Cálculo de custos" ? <form className="grid gap-4" onSubmit={saveCostSettings}><div className="sm:col-span-2"><FormField label="Tolerância para marcar falta (minutos)"><input className={fieldClassName} name="appointmentToleranceMinutes" type="number" min="0" max="180" value={appointmentToleranceInput} onChange={(event) => setAppointmentToleranceInput(event.target.value)} required /></FormField><p className="mt-1 text-[10px] text-[#858696]">O atendimento só será marcado como faltou depois desse período.</p></div><p className="text-xs leading-5 text-[#65708b]">Defina os valores padrão que serão adicionados automaticamente aos orçamentos desta clínica.</p>{costSettingsLoading ? <div className="space-y-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : <><FormField label="Mão de obra / Honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField><FormField label="Sala / Estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField><FormField label="Anestésico / Medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField></>}{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div></form> : null}
+        {editing === "Novo colaborador" ? <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveCollaborator}><div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div><FormField label="E-mail de acesso"><input className={fieldClassName} name="email" type="email" required /></FormField><FormField label="Senha inicial"><input className={fieldClassName} name="password" type="password" minLength={6} required /></FormField><FormField label="Perfil"><select className={fieldClassName} name="role"><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Atendente</option><option value="ADMIN">Administrador</option></select></FormField>{teamError ? <p className="sm:col-span-2 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{teamError}</p> : null}<div className="flex justify-end gap-2 sm:col-span-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div></form> : editing === "Cálculo de custos" ? <form className="grid gap-4" onSubmit={saveCostSettings}><div className="sm:col-span-2"><FormField label="Tolerância para marcar falta (minutos)"><input className={fieldClassName} name="appointmentToleranceMinutes" type="number" min="0" max="180" value={appointmentToleranceInput} onChange={(event) => setAppointmentToleranceInput(event.target.value)} required /></FormField><p className="mt-1 text-[10px] text-[#858696]">O atendimento só será marcado como faltou depois desse período.</p></div><p className="text-xs leading-5 text-[#65708b]">Defina os valores padrão que serão adicionados automaticamente aos orçamentos desta clínica.</p>{costSettingsLoading ? <div className="space-y-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : <><FormField label="Mão de obra / Honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField><FormField label="Sala / Estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField><FormField label="Anestésico / Medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField></>}{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div></form> : null}
       </Modal>
       <Modal open={Boolean(memberToRemove)} onClose={() => { if (!memberRemoving) setMemberToRemove(null); }} title="Remover colaborador" description="Essa ação remove o acesso do colaborador à clínica.">
         <div className="space-y-4">

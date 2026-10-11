@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { denyUnless } from "@/lib/api-guards";
+import { can } from "@/lib/permissions";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 
 type EvaluationPhotoPayload = {
@@ -21,6 +23,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const evaluationId = searchParams.get("evaluationId");
   const patient = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true } });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
+  const clinical = can(user.role, "clinical:read");
 
   if (searchParams.get("list")) {
     const evaluations = await prisma.evaluation.findMany({
@@ -28,8 +31,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       orderBy: { createdAt: "desc" },
       select: { id: true, professional: true, createdAt: true, updatedAt: true, _count: { select: { photos: true } } },
     });
-    return NextResponse.json({ evaluations: evaluations.map(({ _count, ...evaluation }) => ({ ...evaluation, photoCount: _count.photos })) });
+    return NextResponse.json({ evaluations: evaluations.map(({ _count, ...evaluation }) => clinical ? { ...evaluation, photoCount: _count.photos } : { id: evaluation.id, professional: evaluation.professional, createdAt: evaluation.createdAt }) });
   }
+  if (!clinical) return NextResponse.json({ message: "Acesso restrito à equipe clínica." }, { status: 403 });
 
   // Sem avaliação informada, retorna a mais recente do paciente.
   const evaluation = await prisma.evaluation.findFirst({
@@ -58,6 +62,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user.role, "clinical:write");
+  if (denied) return denied;
 
   const patientId = (await params).id;
   const patient = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true } });
