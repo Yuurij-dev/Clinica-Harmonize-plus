@@ -51,3 +51,6 @@ next-env.d.ts
 
 # configuração pessoal do Claude Code
 .claude/settings.local.json
+
+# backups do banco (dados de pacientes)
+/backups

@@ -17,12 +17,12 @@ export async function GET(request: Request) {
   const paymentWindow = { gte: new Date(`${addDays(range.start, -1)}T00:00:00Z`), lte: new Date(`${addDays(range.end, 2)}T00:00:00Z`) };
   const bounds = dateBounds(range);
   const [payments, expenses] = await Promise.all([
-    prisma.payment.findMany({ where: { clinicId: user.clinicId, date: paymentWindow }, select: { value: true, status: true, date: true } }),
+    prisma.payment.findMany({ where: { clinicId: user.clinicId, date: paymentWindow }, select: { valueCents: true, status: true, date: true } }),
     prisma.expense.findMany({ where: { clinicId: user.clinicId, status: { not: "cancelled" }, OR: [{ dueOn: bounds }, { paidOn: bounds }] }, select: { amountCents: true, status: true, dueOn: true, paidOn: true } }),
   ]);
   const totals = financeTotals({
     range,
-    payments: payments.map((payment) => ({ value: payment.value, status: payment.status, date: clinicToday(payment.date) })),
+    payments: payments.map((payment) => ({ valueCents: payment.valueCents, status: payment.status, date: clinicToday(payment.date) })),
     expenses: expenses.map((expense) => ({ amountCents: expense.amountCents, status: expense.status, dueOn: dateOnly(expense.dueOn), paidOn: expense.paidOn ? dateOnly(expense.paidOn) : null })),
   });
   return NextResponse.json({ period, range, totals });

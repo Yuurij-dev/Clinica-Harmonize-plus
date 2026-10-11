@@ -17,10 +17,10 @@ test("finance totals use cash basis inside the period", () => {
   const totals = financeTotals({
     range,
     payments: [
-      { value: 500, status: "Pago", date: "2026-10-01" },
-      { value: 250, status: "Pago", date: "2026-10-31" },
-      { value: 999, status: "Pago", date: "2026-09-30" },
-      { value: 300, status: "Pendente", date: "2026-10-15" },
+      { valueCents: 50_000, status: "Pago", date: "2026-10-01" },
+      { valueCents: 25_050, status: "Pago", date: "2026-10-31" },
+      { valueCents: 99_900, status: "Pago", date: "2026-09-30" },
+      { valueCents: 30_000, status: "Pendente", date: "2026-10-15" },
     ],
     expenses: [
       { amountCents: 12_050, status: "paid", dueOn: "2026-09-20", paidOn: "2026-10-02" },
@@ -31,11 +31,11 @@ test("finance totals use cash basis inside the period", () => {
     ],
   });
   assert.deepEqual(totals, {
-    revenueCents: 75_000,
-    receivedCents: 75_000,
+    revenueCents: 75_050,
+    receivedCents: 75_050,
     pendingReceivableCents: 30_000,
     expensesCents: 12_050,
-    resultCents: 62_950,
+    resultCents: 63_000,
     payableCents: 8_000,
   });
 });

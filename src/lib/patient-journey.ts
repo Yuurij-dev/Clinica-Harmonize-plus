@@ -1,15 +1,16 @@
 import { prisma } from "@/lib/prisma";
 
+// Jornada ativa pedida, ou a ativa mais antiga. Sem nenhuma, cria a primeira e passa para ela os registros sem jornada.
 export async function ensurePatientJourney(patientId: string, clinicId: string, requestedJourneyId?: string | null) {
   if (requestedJourneyId) {
     const requested = await prisma.patientJourney.findFirst({
-      where: { id: requestedJourneyId, patientId, clinicId },
+      where: { id: requestedJourneyId, patientId, clinicId, archivedAt: null },
     });
     if (requested) return requested;
   }
 
   const existing = await prisma.patientJourney.findFirst({
-    where: { patientId, clinicId },
+    where: { patientId, clinicId, archivedAt: null },
     orderBy: { createdAt: "asc" },
   });
   if (existing) return existing;

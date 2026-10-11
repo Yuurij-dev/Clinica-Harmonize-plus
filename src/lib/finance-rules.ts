@@ -1,7 +1,7 @@
 // Regras financeiras puras (sem banco). Importadas direto pelo node:test,
 // por isso não usam o atalho "@/" nem sintaxe que exija compilação.
 // Datas no formato YYYY-MM-DD, já no fuso da clínica. Despesas em centavos;
-// pagamentos de pacientes ainda são guardados em reais inteiros.
+// pagamentos de pacientes também em centavos.
 
 export const financePeriods = ["today", "week", "month"] as const;
 export type FinancePeriod = (typeof financePeriods)[number];
@@ -79,13 +79,13 @@ export function inRange(date: string | null | undefined, range: DateRange) {
   return Boolean(date) && (date as string) >= range.start && (date as string) <= range.end;
 }
 
-type PaymentInput = { value: number; status: string; date: string };
+type PaymentInput = { valueCents: number; status: string; date: string };
 type ExpenseInput = { amountCents: number; status: string; dueOn: string; paidOn: string | null };
 
 export function financeTotals({ range, payments, expenses }: { range: DateRange; payments: PaymentInput[]; expenses: ExpenseInput[] }) {
   const paymentsInRange = payments.filter((payment) => inRange(payment.date, range));
-  const receivedCents = paymentsInRange.filter((payment) => payment.status === "Pago").reduce((sum, payment) => sum + Math.round(payment.value * 100), 0);
-  const pendingReceivableCents = paymentsInRange.filter((payment) => payment.status !== "Pago").reduce((sum, payment) => sum + Math.round(payment.value * 100), 0);
+  const receivedCents = paymentsInRange.filter((payment) => payment.status === "Pago").reduce((sum, payment) => sum + payment.valueCents, 0);
+  const pendingReceivableCents = paymentsInRange.filter((payment) => payment.status !== "Pago").reduce((sum, payment) => sum + payment.valueCents, 0);
   const expensesCents = expenses.filter((expense) => expense.status === "paid" && inRange(expense.paidOn, range)).reduce((sum, expense) => sum + expense.amountCents, 0);
   const payableCents = expenses.filter((expense) => expense.status === "open" && inRange(expense.dueOn, range)).reduce((sum, expense) => sum + expense.amountCents, 0);
   return {

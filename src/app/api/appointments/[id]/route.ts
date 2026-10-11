@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { appointmentDay, appointmentHasPassed, appointmentInstant, clinicNow, parseAppointmentDay, parseClockMinutes } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
 import { appointmentDeleteAllowed, appointmentStatusChangeAllowed, can, runningAppointmentStatuses } from "@/lib/permissions";
+
+const appointmentStatuses = ["Agendado", "Em atendimento", "Atendido", "Finalizado", "Faltou", "Cancelado"];
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
@@ -9,39 +12,32 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   const body = await request.json().catch(() => null) as { status?: string; date?: string; time?: string; procedure?: string; professional?: string; notes?: string } | null;
   if (!body?.status && !body?.date && !body?.time && !body?.procedure && !body?.professional && body?.notes === undefined) return NextResponse.json({ message: "Informe uma alteração para o agendamento." }, { status: 400 });
+  if (body.status && !appointmentStatuses.includes(body.status)) return NextResponse.json({ message: "Status inválido." }, { status: 400 });
+  if (body.time && parseClockMinutes(body.time) === null) return NextResponse.json({ message: "Horário inválido." }, { status: 400 });
+  const day = body.date ? parseAppointmentDay(body.date) : null;
+  if (body.date && !day) return NextResponse.json({ message: "Data inválida." }, { status: 400 });
   const id = (await params).id;
-  const current = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, select: { status: true } });
+  const current = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, select: { status: true, date: true, time: true } });
   if (!current) return NextResponse.json({ message: "Agendamento não encontrado." }, { status: 404 });
-  if (!appointmentStatusChangeAllowed(user.role, current.status, body?.status)) {
+  if (!appointmentStatusChangeAllowed(user.role, current.status, body.status)) {
     return NextResponse.json({ message: "O atendimento é conduzido pela equipe clínica." }, { status: 403 });
   }
-  const date = body?.date ? new Date(body.date) : null;
-  if (date && Number.isNaN(date.getTime())) return NextResponse.json({ message: "Data inválida." }, { status: 400 });
-  if (date && body?.time && appointmentDateHasPassed(body.date as string, body.time)) return NextResponse.json({ message: "Não é possível alterar para uma data ou horário que já passou." }, { status: 400 });
+  if ((day || body.time) && appointmentHasPassed({ date: appointmentInstant(day ?? appointmentDay(current.date)), time: body.time ?? current.time }, clinicNow())) {
+    return NextResponse.json({ message: "Não é possível alterar para uma data ou horário que já passou." }, { status: 400 });
+  }
   const result = await prisma.appointment.updateMany({ where: { id, clinicId: user.clinicId, ...(can(user.role, "appointment:run") ? {} : { status: { notIn: [...runningAppointmentStatuses] } }) }, data: {
-    ...(body?.status ? { status: body.status } : {}),
-    ...(date ? { date } : {}),
-    ...(body?.time ? { time: body.time } : {}),
-    ...(body?.procedure?.trim() ? { procedure: body.procedure.trim() } : {}),
-    ...(body?.professional?.trim() ? { professional: body.professional.trim() } : {}),
-    ...(body?.notes !== undefined ? { notes: body.notes.trim() } : {}),
+    ...(body.status ? { status: body.status } : {}),
+    ...(day ? { date: appointmentInstant(day) } : {}),
+    ...(body.time ? { time: body.time } : {}),
+    ...(body.procedure?.trim() ? { procedure: body.procedure.trim() } : {}),
+    ...(body.professional?.trim() ? { professional: body.professional.trim() } : {}),
+    ...(body.notes !== undefined ? { notes: body.notes.trim() } : {}),
   } });
   if (result.count === 0) return NextResponse.json({ message: "O atendimento já foi iniciado." }, { status: 409 });
   // Todo atendimento finalizado (na tela ou automaticamente pela agenda) fica com a conferência de materiais pendente.
-  if (body?.status === "Atendido") await prisma.appointment.updateMany({ where: { id, clinicId: user.clinicId, materialsCheck: null }, data: { materialsCheck: "pending" } });
+  if (body.status === "Atendido") await prisma.appointment.updateMany({ where: { id, clinicId: user.clinicId, materialsCheck: null }, data: { materialsCheck: "pending" } });
   const appointment = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, include: { patient: { select: { name: true } } } });
   return NextResponse.json({ appointment });
-}
-
-function appointmentDateHasPassed(dateValue: string, time: string) {
-  const nowParts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
-  const nowValues = Object.fromEntries(nowParts.map((part) => [part.type, part.value]));
-  const today = `${nowValues.year}-${nowValues.month}-${nowValues.day}`;
-  const requestedDate = dateValue.slice(0, 10);
-  if (requestedDate < today) return true;
-  if (requestedDate > today) return false;
-  const [hours, minutes] = time.split(":").map(Number);
-  return hours * 60 + minutes <= Number(nowValues.hour) * 60 + Number(nowValues.minute);
 }
 
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {

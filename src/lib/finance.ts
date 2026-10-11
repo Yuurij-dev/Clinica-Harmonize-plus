@@ -47,6 +47,19 @@ export async function ensureRecurringOccurrences(clinicId: string) {
   if (data.length) await prisma.expense.createMany({ data, skipDuplicates: true });
 }
 
+// O banco guarda centavos; a API de pagamentos e orçamentos continua em reais.
+export function toCents(reais: number) {
+  return Math.max(0, Math.round(reais * 100));
+}
+
+export function serializePayment<T extends { valueCents: number }>({ valueCents, ...payment }: T) {
+  return { ...payment, value: valueCents / 100 };
+}
+
+export function serializeQuote<T extends { totalCents: number }>({ totalCents, ...quote }: T) {
+  return { ...quote, total: totalCents / 100 };
+}
+
 export const recurringSelect = { id: true, description: true, category: true, amountCents: true, paymentMethod: true, frequency: true, weekday: true, dayOfMonth: true, month: true, startsOn: true, endsOn: true } as const;
 
 export function serializeRecurring<T extends { startsOn: Date; endsOn: Date | null }>(item: T) {

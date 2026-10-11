@@ -26,8 +26,8 @@ export async function POST(request: Request) {
   const email = body?.email?.trim().toLowerCase();
   const password = body?.password ?? "";
   const role = body?.role ?? "PROFESSIONAL";
-  if (!name || !email || password.length < 6 || !["ADMIN", "PROFESSIONAL", "STAFF"].includes(role)) {
-    return NextResponse.json({ message: "Informe nome, e-mail e uma senha com pelo menos 6 caracteres." }, { status: 400 });
+  if (!name || !email || password.length < 8 || !["ADMIN", "PROFESSIONAL", "STAFF"].includes(role)) {
+    return NextResponse.json({ message: "Informe nome, e-mail e uma senha com pelo menos 8 caracteres." }, { status: 400 });
   }
 
   const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
@@ -45,12 +45,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ member }, { status: 201 });
   } catch (error) {
     console.error("Failed to create clinic collaborator", error);
-    const prismaError = error as { code?: unknown; message?: unknown };
-    const errorMessage = typeof prismaError.message === "string" ? prismaError.message : "";
-    const missingPasswordChangeSchema = (error instanceof Prisma.PrismaClientKnownRequestError && prismaError.code === "P2022")
-      || errorMessage.includes("mustChangePassword");
-    if (missingPasswordChangeSchema) {
-      return NextResponse.json({ message: "O servidor ou o banco ainda não foi atualizado para o primeiro acesso com troca de senha. Reinicie o servidor e aplique a atualização do banco." }, { status: 503 });
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return NextResponse.json({ message: "Já existe uma conta com este e-mail." }, { status: 409 });
     }
     return NextResponse.json({ message: "Não foi possível cadastrar o colaborador agora. Tente novamente." }, { status: 500 });
   }

@@ -18,27 +18,36 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (!purchase) return NextResponse.json({ message: "Compra não encontrada." }, { status: 404 });
   if (body.action === "restore") {
     if (purchase.status !== "cancelled") return NextResponse.json({ message: "Esta compra não está cancelada." }, { status: 409 });
-    await prisma.$transaction(async (tx) => {
-      await lockLots(tx, purchase.items.map((item) => item.lotId));
-      for (const item of purchase.items) {
-        await tx.stockMovement.create({ data: { clinicId: user.clinicId, productId: item.productId, lotId: item.lotId, type: movementTypes.reversal, quantity: item.quantity, purchaseId: purchase.id, notes: `Desfazer cancelamento da compra ${purchase.supplier}`, userId: user.id, userName: user.name } });
-      }
-      await tx.expense.updateMany({ where: { clinicId: user.clinicId, purchaseId: purchase.id, status: "cancelled", paidOn: null }, data: { status: "open" } });
-      await tx.expense.updateMany({ where: { clinicId: user.clinicId, purchaseId: purchase.id, status: "cancelled", paidOn: { not: null } }, data: { status: "paid" } });
-      await tx.purchase.update({ where: { id: purchase.id }, data: { status: "active", cancelledAt: null } });
+    try {
+      await prisma.$transaction(async (tx) => {
+        // Troca o status primeiro: um segundo pedido simultâneo espera esta linha e não devolve o estoque de novo.
+        const claimed = await tx.purchase.updateMany({ where: { id: purchase.id, clinicId: user.clinicId, status: "cancelled" }, data: { status: "active", cancelledAt: null } });
+        if (!claimed.count) throw new StatusChanged();
+        await lockLots(tx, purchase.items.map((item) => item.lotId));
+        for (const item of purchase.items) {
+          await tx.stockMovement.create({ data: { clinicId: user.clinicId, productId: item.productId, lotId: item.lotId, type: movementTypes.reversal, quantity: item.quantity, purchaseId: purchase.id, notes: `Desfazer cancelamento da compra ${purchase.supplier}`, userId: user.id, userName: user.name } });
+        }
+        await tx.expense.updateMany({ where: { clinicId: user.clinicId, purchaseId: purchase.id, status: "cancelled", paidOn: null }, data: { status: "open" } });
+        await tx.expense.updateMany({ where: { clinicId: user.clinicId, purchaseId: purchase.id, status: "cancelled", paidOn: { not: null } }, data: { status: "paid" } });
 
-      // O custo volta para o preço da compra ativa mais recente de cada material.
-      for (const productId of new Set(purchase.items.map((item) => item.productId))) {
-        const latest = await tx.purchaseItem.findFirst({ where: { productId, purchase: { status: "active" } }, orderBy: [{ purchase: { purchasedOn: "desc" } }, { purchase: { createdAt: "desc" } }], select: { unitPriceCents: true } });
-        if (latest) await tx.product.update({ where: { id: productId }, data: { costCents: latest.unitPriceCents } });
-      }
-    });
+        // O custo volta para o preço da compra ativa mais recente de cada material.
+        for (const productId of new Set(purchase.items.map((item) => item.productId))) {
+          const latest = await tx.purchaseItem.findFirst({ where: { productId, purchase: { status: "active" } }, orderBy: [{ purchase: { purchasedOn: "desc" } }, { purchase: { createdAt: "desc" } }], select: { unitPriceCents: true } });
+          if (latest) await tx.product.update({ where: { id: productId }, data: { costCents: latest.unitPriceCents } });
+        }
+      });
+    } catch (error) {
+      if (error instanceof StatusChanged) return NextResponse.json({ message: "Esta compra não está cancelada." }, { status: 409 });
+      throw error;
+    }
     return NextResponse.json({ ok: true });
   }
   if (purchase.status === "cancelled") return NextResponse.json({ message: "Esta compra já está cancelada." }, { status: 409 });
 
   try {
     await prisma.$transaction(async (tx) => {
+      const claimed = await tx.purchase.updateMany({ where: { id: purchase.id, clinicId: user.clinicId, status: "active" }, data: { status: "cancelled", cancelledAt: new Date() } });
+      if (!claimed.count) throw new StatusChanged();
       const addedByLot = new Map<string, number>();
       for (const item of purchase.items) addedByLot.set(item.lotId, roundQuantity((addedByLot.get(item.lotId) ?? 0) + item.quantity));
       await lockLots(tx, [...addedByLot.keys()]);
@@ -51,7 +60,6 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         await tx.stockMovement.create({ data: { clinicId: user.clinicId, productId: item.productId, lotId: item.lotId, type: movementTypes.purchaseCancel, quantity: -item.quantity, purchaseId: purchase.id, notes: `Cancelamento da compra ${purchase.supplier}`, userId: user.id, userName: user.name } });
       }
       await tx.expense.updateMany({ where: { clinicId: user.clinicId, purchaseId: purchase.id }, data: { status: "cancelled" } });
-      await tx.purchase.update({ where: { id: purchase.id }, data: { status: "cancelled", cancelledAt: new Date() } });
 
       // O custo volta para o preço da compra ativa mais recente que sobrou de cada material.
       for (const productId of new Set(purchase.items.map((item) => item.productId))) {
@@ -60,6 +68,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       }
     });
   } catch (error) {
+    if (error instanceof StatusChanged) return NextResponse.json({ message: "Esta compra já está cancelada." }, { status: 409 });
     if (error instanceof CancelBlocked) return NextResponse.json({ message: "Parte de um lote desta compra já saiu do estoque. Corrija com um ajuste em vez de cancelar." }, { status: 409 });
     throw error;
   }
@@ -67,3 +76,4 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 }
 
 class CancelBlocked extends Error {}
+class StatusChanged extends Error {}

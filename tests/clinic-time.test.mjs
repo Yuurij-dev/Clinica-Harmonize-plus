@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appointmentWithinStartWindow, canRequestAppointmentStart, matchesProcedureAppointment } from "../src/lib/clinic-time.ts";
+import { appointmentDay, appointmentHasPassed, appointmentInstant, appointmentWithinStartWindow, canRequestAppointmentStart, clinicNow, matchesProcedureAppointment, parseAppointmentDay } from "../src/lib/clinic-time.ts";
 
 const appointment = { date: "10/10/2026", time: "14:00" };
 
@@ -30,4 +30,25 @@ test("only exact procedure appointments can use the out-of-window start path", (
   assert.equal(canRequestAppointmentStart({ ...futureAppointment, status: "Em atendimento" }, procedures, false, false), false);
   assert.equal(canRequestAppointmentStart({ procedure: "Retorno - procedimento 1", status: "Agendado" }, procedures, false, false), false);
   assert.equal(canRequestAppointmentStart({ ...futureAppointment, status: "Agendado" }, procedures, false, true), false);
+});
+
+test("appointment dates are stored at noon in the clinic time zone and read back as the same day", () => {
+  const stored = appointmentInstant("2026-10-15");
+  assert.equal(stored.toISOString(), "2026-10-15T15:00:00.000Z");
+  assert.equal(appointmentDay(stored), "2026-10-15");
+  assert.equal(appointmentDay(stored.toISOString()), "2026-10-15");
+  // Agendamento antigo gravado à meia-noite UTC pela agenda: em São Paulo ainda é o dia anterior.
+  assert.equal(appointmentDay(new Date("2026-10-15T00:00:00Z")), "2026-10-14");
+  assert.equal(parseAppointmentDay("2026-10-15T20:00:00-03:00"), "2026-10-15");
+  assert.equal(parseAppointmentDay("15/10/2026"), null);
+});
+
+test("an appointment only counts as missed after its own day and time plus tolerance", () => {
+  const appointment = { date: appointmentInstant("2026-10-15"), time: "09:00" };
+  assert.equal(appointmentHasPassed(appointment, { date: "2026-10-14", minutes: 23 * 60 }, 15), false);
+  assert.equal(appointmentHasPassed(appointment, { date: "2026-10-15", minutes: 9 * 60 + 14 }, 15), false);
+  assert.equal(appointmentHasPassed(appointment, { date: "2026-10-15", minutes: 9 * 60 + 15 }, 15), true);
+  assert.equal(appointmentHasPassed(appointment, { date: "2026-10-16", minutes: 0 }, 15), true);
+  assert.equal(clinicNow(new Date("2026-10-15T02:30:00Z")).date, "2026-10-14");
+  assert.equal(clinicNow(new Date("2026-10-15T02:30:00Z")).minutes, 23 * 60 + 30);
 });

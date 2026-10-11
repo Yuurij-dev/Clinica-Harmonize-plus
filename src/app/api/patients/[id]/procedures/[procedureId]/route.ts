@@ -29,7 +29,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (body.photo !== null && !body.photo?.startsWith("data:image/")) {
     return NextResponse.json({ message: "Envie uma foto válida." }, { status: 400 });
   }
-  if (!body.photoType) return NextResponse.json({ message: "Informe o tipo da foto." }, { status: 400 });
+  if (body.photoType !== "beforePhoto" && body.photoType !== "afterPhoto") return NextResponse.json({ message: "Informe o tipo da foto." }, { status: 400 });
 
   if (body.sessionId) {
     const session = await prisma.patientProcedurePhotoSession.findFirst({ where: { id: body.sessionId, procedureId: procedure.id }, select: { id: true } });

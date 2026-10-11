@@ -18,6 +18,8 @@ model User {
   profession                 String?
   practiceArea               String?
   hasSecretary               Boolean?
+  failedLogins               Int                @default(0)
+  lockedUntil                DateTime?          @db.Timestamptz(6)
   emailVerifiedAt            DateTime?          @db.Timestamptz(6)
   emailVerificationTokenHash String?            @unique
   emailVerificationExpiresAt DateTime?          @db.Timestamptz(6)
@@ -169,6 +171,7 @@ model PatientProcedure {
   clinicId      String?
   patientId     String
   journeyId     String?
+  quoteId       String?                        @unique
   name          String
   professional  String
   performedAt   DateTime                       @db.Timestamptz(6)
@@ -247,7 +250,7 @@ model Quote {
   patientId     String?
   journeyId     String?
   items         String
-  total         Int
+  totalCents    Int
   paymentMethod String          @default("Cartão de crédito")
   status        String          @default("Pendente")
   expires       DateTime?       @db.Timestamptz(6)
@@ -268,7 +271,7 @@ model Payment {
   clinicId     String?
   patientId    String?
   journeyId    String?
-  value        Int
+  valueCents   Int
   method       String
   date         DateTime        @default(now()) @db.Timestamptz(6)
   status       String          @default("Pago")
