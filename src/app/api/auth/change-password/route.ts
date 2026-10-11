@@ -3,12 +3,9 @@ import { jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createSession, invalidateUserAuthCache, sessionCookieName } from "@/lib/auth";
+import { getAuthSecret } from "@/lib/auth-secret";
 import { prisma } from "@/lib/prisma";
 import { withSaveErrors } from "@/lib/save-errors";
-
-function getSecret() {
-  return new TextEncoder().encode(process.env.AUTH_SECRET ?? "harmonize-local-development-secret");
-}
 
 export const POST = withSaveErrors("alterar a senha", async (request: Request) => {
   const body = await request.json().catch(() => null) as { password?: string } | null;
@@ -21,8 +18,9 @@ export const POST = withSaveErrors("alterar a senha", async (request: Request) =
   if (!token) return NextResponse.json({ message: "Sessão de primeiro acesso inválida. Entre novamente." }, { status: 401 });
 
   let userId: string;
+  const authSecret = getAuthSecret();
   try {
-    const { payload } = await jwtVerify(token, getSecret());
+    const { payload } = await jwtVerify(token, authSecret);
     if (payload.passwordChangeOnly !== true || typeof payload.userId !== "string") {
       return NextResponse.json({ message: "Esta sessão não permite alterar a senha." }, { status: 403 });
     }
@@ -33,7 +31,7 @@ export const POST = withSaveErrors("alterar a senha", async (request: Request) =
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, passwordHash: true, mustChangePassword: true, memberships: { take: 1, select: { clinic: { select: { name: true } } } } },
+    select: { id: true, passwordHash: true, mustChangePassword: true, memberships: { take: 1, orderBy: { id: "asc" }, select: { clinic: { select: { name: true } } } } },
   });
   if (!user?.mustChangePassword || !user.memberships[0]) {
     return NextResponse.json({ message: "Não foi possível validar este acesso." }, { status: 403 });

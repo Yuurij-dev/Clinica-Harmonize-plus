@@ -11,7 +11,7 @@ const currency = new Intl.NumberFormat("pt-BR", {
 });
 
 export function CostCalculator({ materials, charged = 0, patientName = "Atendimento", procedureName = "Procedimento" }: { materials: Product[]; charged?: number; patientName?: string; procedureName?: string }) {
-  const totalCost = materials.reduce((sum, material) => sum + material.cost, 0);
+  const totalCost = materials.reduce((sum, material) => sum + material.costCents, 0) / 100;
   const grossResult = charged - totalCost;
   const margin = (grossResult / charged) * 100;
 
@@ -30,7 +30,7 @@ export function CostCalculator({ materials, charged = 0, patientName = "Atendime
       <CardContent className="pt-5">
         <div className="space-y-3">
           {materials.map((material) => {
-            const subtotal = material.cost;
+            const subtotal = material.costCents / 100;
 
             return (
               <div
@@ -41,7 +41,7 @@ export function CostCalculator({ materials, charged = 0, patientName = "Atendime
                   <div>
                     <p className="font-black text-[#121733]">{material.name}</p>
                     <p className="text-sm text-[#65708b]">
-                      1 {material.unit} × {currency.format(material.cost)}
+                      1 {material.unit} × {currency.format(subtotal)}
                     </p>
                   </div>
                   <strong className="text-[#1438ff]">{currency.format(subtotal)}</strong>

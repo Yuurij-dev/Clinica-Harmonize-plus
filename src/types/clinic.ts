@@ -5,6 +5,7 @@ export type SectionId =
   | "agenda"
   | "clientes"
   | "procedimentos"
+  | "estoque"
   | "orcamentos"
   | "pagamentos"
   | "financeiro"
@@ -92,8 +93,10 @@ export type Product = {
   name: string;
   category: string;
   unit: string;
-  cost: number;
+  costCents: number;
   supplier: string;
+  minStock?: number;
+  archivedAt?: string | null;
 };
 
 export type Procedure = {

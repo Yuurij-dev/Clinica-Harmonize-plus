@@ -1,8 +1,10 @@
 import { jwtVerify, SignJWT } from "jose";
 import { cookies } from "next/headers";
+import { getAuthSecret } from "./auth-secret";
 import { prisma } from "./prisma";
 
 export const sessionCookieName = "harmonize_session";
+// shortcut: cache em memória por instância; quem sai da equipe ainda passa por até 15s; usar sessão no banco se exigirem revogação imediata.
 const authCacheTtl = 15_000;
 
 type AuthenticatedUser = {
@@ -26,16 +28,12 @@ const globalAuthCache = globalThis as typeof globalThis & {
 const authCache = globalAuthCache.harmonizeAuthCache ?? new Map();
 if (!globalAuthCache.harmonizeAuthCache) globalAuthCache.harmonizeAuthCache = authCache;
 
-function getSecret() {
-  return new TextEncoder().encode(process.env.AUTH_SECRET ?? "harmonize-local-development-secret");
-}
-
 export async function createSession(userId: string) {
   return new SignJWT({ userId })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("7d")
-    .sign(getSecret());
+    .sign(getAuthSecret());
 }
 
 export async function createPasswordChangeSession(userId: string) {
@@ -43,7 +41,7 @@ export async function createPasswordChangeSession(userId: string) {
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("15m")
-    .sign(getSecret());
+    .sign(getAuthSecret());
 }
 
 export function invalidateUserAuthCache(userId: string) {
@@ -55,7 +53,7 @@ export async function getCurrentUser({ requireActiveTrial = false }: CurrentUser
   if (!token) return null;
 
   try {
-    const { payload } = await jwtVerify(token, getSecret());
+    const { payload } = await jwtVerify(token, getAuthSecret());
     if (typeof payload.userId !== "string") return null;
     if (payload.passwordChangeOnly === true) return null;
     const cached = authCache.get(payload.userId);
@@ -73,6 +71,7 @@ export async function getCurrentUser({ requireActiveTrial = false }: CurrentUser
           role: true,
           memberships: {
             take: 1,
+            orderBy: { id: "asc" },
             select: { role: true, isOwner: true, clinic: { select: { id: true, name: true, slug: true, trialEndsAt: true } } },
           },
         },

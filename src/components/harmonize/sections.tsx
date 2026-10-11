@@ -10,11 +10,11 @@ import {
   CheckCircle2,
   Check,
   CircleDollarSign,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock3,
   Loader2,
+  MessageCircle,
   MoreVertical,
   PencilLine,
   Plus,
@@ -30,16 +30,15 @@ import {
   DetailCard,
   DateRangeFilter,
   EmptyState,
-  CountUpValue,
   LoadingSkeleton,
   LoadingTable,
   MiniTable,
-  ProgressBar,
   SearchFilterBar,
   SectionIntro,
   StatusBadge,
 } from "./shared";
 import { CostCalculator } from "./cost-calculator";
+import { useCan } from "./current-user";
 import { PatientDetail } from "./patient-detail";
 import { buildCustomerJourney } from "@/lib/customer-journey";
 import {
@@ -54,42 +53,20 @@ import {
 } from "@/lib/input-masks";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
+import { runningAppointmentStatuses } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import { errorMessage, fetchForSave, httpErrorMessage, responseErrorMessage } from "@/lib/client-errors";
+import { procedureCategories } from "@/data/categories";
+import { sendJson } from "@/lib/send-json";
+import { describeTechnicalSheet } from "@/lib/stock-rules";
+import { readTechnicalSheet, TechnicalSheetEditor, type TechnicalSheetItem } from "./technical-sheet-editor";
+import { MaterialCheckModal } from "./material-check-modal";
 import type { Appointment, JourneyStageId, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
 
 const currency = new Intl.NumberFormat("pt-BR", {
   style: "currency",
   currency: "BRL",
 });
-
-const procedureCategories = [
-  "Preenchimento",
-  "Toxina botulínica",
-  "Bioestimulação",
-  "Fios de sustentação",
-  "Peeling",
-  "Microagulhamento",
-  "Limpeza de pele",
-  "Laser e tecnologias",
-  "Skinbooster e mesoterapia",
-  "Outro",
-];
-
-const materialOptions = [
-  "Ácido hialurônico",
-  "Toxina botulínica",
-  "Bioestimulador de colágeno",
-  "Fios de PDO",
-  "Peeling químico",
-  "Anestésico tópico",
-  "Microagulhas",
-  "Antisséptico",
-  "Luvas descartáveis",
-  "Gel condutor",
-  "Protetor solar",
-  "Outro",
-];
 
 const appointmentTypeOptions = ["Consulta / retorno", "Avaliação", "Procedimento", "Outros"];
 
@@ -162,36 +139,6 @@ function mapApiPatient(patient: ApiPatient): Patient {
 
 function displayDate(value: string) {
   return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value));
-}
-
-function MaterialsMultiSelect({ options, defaultValue = [] }: { options: string[]; defaultValue?: string[] }) {
-  const [open, setOpen] = useState(false);
-  const [selected, setSelected] = useState(defaultValue);
-
-  function toggleMaterial(material: string) {
-    setSelected((current) => current.includes(material) ? current.filter((item) => item !== material) : [...current, material]);
-  }
-
-  return (
-    <div className="relative">
-      <button type="button" className={`${fieldClassName} flex min-h-11 w-full items-center justify-between gap-3 text-left`} onClick={() => setOpen((current) => !current)} aria-expanded={open}>
-        <span className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-          {selected.length ? selected.map((material) => <span className="rounded-full bg-[#f0efff] px-2 py-1 text-[10px] font-bold text-[#5147dc]" key={material}>{material}</span>) : <span className="text-[#858696]">Selecione os materiais</span>}
-        </span>
-        <ChevronDown className={`h-4 w-4 shrink-0 text-[#858696] transition-transform ${open ? "rotate-180" : ""}`} />
-      </button>
-      {selected.map((material) => <input key={material} type="hidden" name="materials" value={material} />)}
-      {open ? <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-60 overflow-auto rounded-[8px] border border-[#e2e5f0] bg-white p-1.5 shadow-[0_18px_40px_rgba(31,32,50,0.16)]">
-        {options.map((material) => {
-          const checked = selected.includes(material);
-          return <button type="button" key={material} className="flex w-full items-center gap-3 rounded-[6px] px-3 py-2.5 text-left text-xs font-semibold text-[#3f4054] transition hover:bg-[#f7f6ff]" onClick={() => toggleMaterial(material)}>
-            <span className={`grid h-4 w-4 shrink-0 place-items-center rounded-[4px] border ${checked ? "border-[#5147dc] bg-[#5147dc] text-white" : "border-[#cfd4e2] bg-white"}`}>{checked ? <CheckCircle2 className="h-3 w-3" /> : null}</span>
-            {material}
-          </button>;
-        })}
-      </div> : null}
-    </div>
-  );
 }
 
 function journeyForPatient(patient: Patient) {
@@ -304,7 +251,7 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
   if (selectedPatient) {
     return (
       <PatientDetail
-        key={selectedPatient.name}
+        key={selectedPatient.id ?? selectedPatient.name}
         patient={selectedPatient}
         journey={journeyForPatient(selectedPatient)}
         onBack={() => {
@@ -394,6 +341,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   const [deleteSaving, setDeleteSaving] = useState(false);
   const autoMissedIds = useRef(new Set<string>());
   const autoCompletedIds = useRef(new Set<string>());
+  const canRun = useCan("appointment:run");
   const professionalOptions = useMemo(() => ["Todos", ...new Set(appointmentRows.map((item) => item.professional))], [appointmentRows]);
   const activeProfessional = professionalOptions.includes(professional) ? professional : "Todos";
   const filteredAppointments = appointmentRows.filter((appointment) => activeProfessional === "Todos" || appointment.professional === activeProfessional);
@@ -432,11 +380,11 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         && appointmentHasPassed(appointment, now, appointmentToleranceMinutes)
         && !autoMissedIds.current.has(appointment.id)
       ));
-      const completed = appointmentRows.filter((appointment) => (
+      const completed = canRun ? appointmentRows.filter((appointment) => (
         appointment.status === "Em atendimento"
         && appointmentHasPassed(appointment, now, appointment.durationMinutes)
         && !autoCompletedIds.current.has(appointment.id)
-      ));
+      )) : [];
       const transitions = [...missed.map((appointment) => ({ appointment, status: "Faltou" })), ...completed.map((appointment) => ({ appointment, status: "Atendido" }))];
       if (!transitions.length) return;
 
@@ -459,7 +407,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     void markExpiredAppointments();
     const timer = window.setInterval(() => { void markExpiredAppointments(); }, 30_000);
     return () => window.clearInterval(timer);
-  }, [appointmentRows, appointmentToleranceMinutes, isLoading]);
+  }, [appointmentRows, appointmentToleranceMinutes, isLoading, canRun]);
 
   const matchingPatients = patientOptions.filter((patient) =>
     `${patient.name} ${patient.cpf ?? ""}`.toLowerCase().includes(patientQuery.toLowerCase()),
@@ -508,7 +456,6 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
           patientId: selectedPatientId,
-          patient: selectedPatient?.name,
           time: selectedTime,
           procedure: String(form.get("procedure")),
           professional: String(form.get("professional")),
@@ -533,6 +480,8 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     }
   }
 
+  const [materialCheck, setMaterialCheck] = useState<{ id: string; patientId: string } | null>(null);
+
   async function advanceAppointment(target: AppointmentRow) {
     const nextStatus = target.status === "Em atendimento" ? "Atendido" : "Em atendimento";
     setUpdatingId(target.id);
@@ -540,9 +489,10 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     if (!response.ok) { setUpdatingId(null); onSaved?.(await responseErrorMessage(response, "Não foi possível atualizar o agendamento"), undefined, "warning"); return; }
     const nextRows = appointmentRows.map((item) => item.id === target.id ? { ...item, status: nextStatus } : item);
     setAppointmentRows(nextRows);
-    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", ...(nextStatus === "Atendido" ? ["/api/patients", `/api/patients/${target.patientId}/history`] : []));
     setUpdatingId(null);
     onSaved?.(`${target.patient}: ${nextStatus}.`);
+    if (nextStatus === "Atendido") setMaterialCheck({ id: target.id, patientId: target.patientId });
   }
 
   async function markAppointmentAsMissed(target: AppointmentRow) {
@@ -665,7 +615,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         {selectedAppointment ? <div className="space-y-4">
           <div className={cn("rounded-[8px] border-l-4 p-4", appointmentTone(selectedAppointment).card)}><p className="text-xs font-bold text-[#77788a]">{selectedAppointment.time} - {formatEndTime(selectedAppointment.time, selectedAppointment.durationMinutes)}</p><h3 className="mt-1 text-lg font-black text-[#303144]">{selectedAppointment.procedure}</h3><p className="mt-1 text-sm text-[#656678]">{selectedAppointment.patient}</p></div>
           <div className="grid gap-3 sm:grid-cols-2">{[["Data", formatDate(selectedAppointment.date)], ["Profissional", selectedAppointment.professional], ["Tipo", selectedAppointment.category || "Atendimento"], ["Status", selectedAppointment.status]].map(([label, value]) => <div className="rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3" key={label}><p className="text-[9px] font-bold uppercase text-[#9697a7]">{label}</p><p className="mt-1 text-xs font-semibold text-[#4f5062]">{value}</p></div>)}</div>
-          <div className="flex justify-end"><Button type="button" onClick={() => setSelectedAppointment(null)}>Fechar</Button></div>
+          <div className="flex justify-end gap-2">{selectedAppointment.status === "Agendado" ? <Button type="button" variant="secondary" disabled title="Confirmação por WhatsApp em breve"><MessageCircle className="h-3.5 w-3.5" />Confirmar por WhatsApp</Button> : null}<Button type="button" onClick={() => setSelectedAppointment(null)}>Fechar</Button></div>
         </div> : null}
       </Modal>
 
@@ -695,10 +645,11 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
               <div className="flex items-center gap-2"><span className="grid h-6 w-6 place-items-center rounded-full bg-[#f0efff] text-[8px] font-black text-[#5147dc]">{appointment.professional.replace("Dra. ", "").replace("Dr. ", "").slice(0, 2).toUpperCase()}</span><strong className="text-[#5a5b6e]">{appointment.professional}</strong></div>
               <div><strong className="block uppercase text-[#444557]">{appointment.patient}</strong><span className="mt-1 block text-[9px] text-[#aaaab7]">Paciente</span></div>
               <div className="flex justify-end gap-2">
-                <Button className="border-[#5147dc] text-[#5147dc]" key="action" size="sm" variant="secondary" disabled={isCompleted || isMissed || updatingId !== null} onClick={() => advanceAppointment(appointment)}>{updatingId === appointment.id ? <Loader2 className="h-3 w-3 animate-spin" /> : null}{updatingId === appointment.id ? "Atualizando..." : primaryLabel} {updatingId === appointment.id ? null : <ArrowRight className="h-3 w-3" />}</Button>
+                {canRun ? <Button className="border-[#5147dc] text-[#5147dc]" key="action" size="sm" variant="secondary" disabled={isCompleted || isMissed || updatingId !== null} onClick={() => advanceAppointment(appointment)}>{updatingId === appointment.id ? <Loader2 className="h-3 w-3 animate-spin" /> : null}{updatingId === appointment.id ? "Atualizando..." : primaryLabel} {updatingId === appointment.id ? null : <ArrowRight className="h-3 w-3" />}</Button> : null}
                 {!isCompleted && !isMissed ? (
                   <Button className="border-[#f2c8c3] text-[#b42318] hover:border-[#b42318] hover:text-[#b42318]" key="missed" size="sm" variant="secondary" disabled={updatingId !== null} onClick={() => markAppointmentAsMissed(appointment)}>{updatingId === appointment.id ? <Loader2 className="h-3 w-3 animate-spin" /> : null}{updatingId === appointment.id ? "Salvando..." : "Faltou"}</Button>
                 ) : null}
+                {appointment.status === "Agendado" ? <Button key="whatsapp" size="sm" variant="secondary" disabled title="Confirmação por WhatsApp em breve" aria-label="Confirmar por WhatsApp"><MessageCircle className="h-3 w-3" /></Button> : null}
               </div>
             </div>
           );
@@ -753,6 +704,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
       <Modal open={Boolean(deleteTarget)} onClose={() => { if (!deleteSaving) setDeleteTarget(null); }} title="Excluir agendamento" description="Essa ação removerá o agendamento da agenda.">
         <div className="space-y-4"><p className="rounded-[7px] bg-[#fff7f7] px-3 py-3 text-xs font-semibold leading-5 text-[#7e3b43]">Tem certeza que deseja excluir o agendamento de <strong>{deleteTarget?.patient}</strong> às <strong>{deleteTarget?.time}</strong>? Você poderá desfazer pelo aviso exibido após a exclusão.</p><div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={deleteSaving} onClick={() => setDeleteTarget(null)}>Cancelar</Button><Button type="button" className="bg-[#b42318] hover:bg-[#991b1b]" disabled={deleteSaving} onClick={() => void deleteAppointment()}>{deleteSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{deleteSaving ? "Excluindo..." : "Excluir agendamento"}</Button></div></div>
       </Modal>
+      {materialCheck ? <MaterialCheckModal appointmentId={materialCheck.id} onClose={() => setMaterialCheck(null)} onDone={(message) => { invalidateClientCache(`/api/patients/${materialCheck.patientId}/history`); setMaterialCheck(null); onSaved?.(message); }} /> : null}
     </div>
   );
 }
@@ -908,16 +860,20 @@ function getCalendarAppointmentLayouts(appointments: AppointmentRow[]) {
 }
 
 function CalendarAppointmentCard({ appointment, top, height, column, columns, open, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, appointmentToleranceMinutes, updating }: { appointment: AppointmentRow; top: number; height: number; column: number; columns: number; open: boolean; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; appointmentToleranceMinutes: number; updating: boolean }) {
+  const canRun = useCan("appointment:run");
   const tone = appointmentTone(appointment);
   const past = appointmentHasPassed(appointment);
   const isCompleted = appointment.status === "Atendido";
   const isMissed = appointment.status === "Faltou";
   const isCancelled = appointment.status === "Cancelado";
   const canStart = appointment.status !== "Agendado" || appointmentCanStart(appointment, appointmentToleranceMinutes);
+  const showStatusGroup = !isCompleted && !isMissed && !isCancelled && (canRun || !(runningAppointmentStatuses as readonly string[]).includes(appointment.status));
+  const showWhatsapp = appointment.status === "Agendado";
+  const hasMenu = canRun || showStatusGroup || showWhatsapp;
   const primaryLabel = appointment.status === "Em atendimento" ? "Finalizar" : isCompleted ? "Concluído" : isMissed ? "Faltou" : "Atender";
   return <div className={cn("group absolute z-10 cursor-pointer overflow-hidden rounded-[7px] border-l-[3px] p-2 text-[10px] shadow-[0_4px_12px_rgba(38,39,58,0.06)]", tone.card, past && "brightness-[0.84] saturate-[0.78]")} style={{ top, height, left: `calc(${column} * 100% / ${columns} + 4px)`, width: `calc(100% / ${columns} - 8px)` }} aria-label={`${appointment.procedure} - status: ${appointment.status}`} onClick={() => onSelect(appointment)}>
     <span className="pointer-events-none absolute -top-7 left-2 z-40 hidden whitespace-nowrap rounded-[5px] bg-[#303144] px-2 py-1 text-[10px] font-bold text-white shadow-lg group-hover:block">Status: {appointment.status}</span>
-    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><p className="mt-1 truncate text-[11px] font-black">{appointment.procedure}</p><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0"><button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button>{open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button>{!isCompleted && !isMissed && !isCancelled ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button></> : null}</div> : null}</div></div>
+    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><p className="mt-1 truncate text-[11px] font-black">{appointment.procedure}</p><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0">{hasMenu ? <button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button> : null}{hasMenu && open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}>{canRun ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button> : null}{showStatusGroup ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button></> : null}{showWhatsapp ? <button type="button" className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] disabled:opacity-50" disabled title="Confirmação por WhatsApp em breve">Confirmar por WhatsApp</button> : null}</div> : null}</div></div>
     <span className={cn("mt-1 inline-flex rounded-full px-2 py-0.5 text-[9px] font-bold", tone.pill)}>{appointment.category || "Atendimento"}</span>
   </div>;
 }
@@ -1001,44 +957,50 @@ function appointmentTone(appointment: AppointmentRow) {
   return { card: "border-[#e0647d] bg-[#fff0f2] text-[#9b3a4f]", pill: "bg-[#ffe0e5] text-[#a8465b]" };
 }
 
+type ApiProcedure = { id: string; name: string; category: string; price: number; durationMinutes: number; margin: number; materialsNeedReview: boolean; technicalSheet: TechnicalSheetItem[] };
+type ProcedureRow = Procedure & { technicalSheet: TechnicalSheetItem[]; materialsNeedReview: boolean };
+
+function mapApiProcedures(procedures: ApiProcedure[] = []): ProcedureRow[] {
+  return procedures.map((item) => ({
+    id: item.id,
+    name: item.name,
+    category: item.category,
+    price: item.price,
+    duration: `${item.durationMinutes} min`,
+    materials: describeTechnicalSheet(item.technicalSheet),
+    margin: `${item.margin}%`,
+    technicalSheet: item.technicalSheet,
+    materialsNeedReview: item.materialsNeedReview,
+  }));
+}
+
 export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
-  const cachedProcedures = readClientCache<{ procedures?: Array<{ id: string; name: string; category: string; price: number; durationMinutes: number; materials: string; margin: number }> }>("/api/procedures");
+  const cachedProcedures = readClientCache<{ procedures?: ApiProcedure[] }>("/api/procedures");
   const cachedProducts = readClientCache<{ products?: Product[] }>("/api/products");
-  const [procedureRows, setProcedureRows] = useState<Procedure[]>(() => (cachedProcedures?.procedures ?? []).map((item) => ({ id: item.id, name: item.name, category: item.category, price: item.price, duration: `${item.durationMinutes} min`, materials: item.materials, margin: `${item.margin}%` })));
+  const [procedureRows, setProcedureRows] = useState<ProcedureRow[]>(() => mapApiProcedures(cachedProcedures?.procedures));
   const [productRows, setProductRows] = useState<Product[]>(cachedProducts?.products ?? []);
-  const [materialOpen, setMaterialOpen] = useState(false);
   const [editingProcedureIndex, setEditingProcedureIndex] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(!cachedProcedures);
   const [isSaving, setIsSaving] = useState(false);
+  const [formError, setFormError] = useState("");
   const editingProcedure = editingProcedureIndex === null ? null : procedureRows[editingProcedureIndex];
   const procedureModalOpen = openCreate || editingProcedureIndex !== null;
-
-  function applyProcedureRows(data: { procedures?: Array<{ id: string; name: string; category: string; price: number; durationMinutes: number; materials: string; margin: number }> }) {
-    setProcedureRows((data.procedures ?? []).map((item) => ({
-      id: item.id,
-      name: item.name,
-      category: item.category,
-      price: item.price,
-      duration: `${item.durationMinutes} min`,
-      materials: item.materials,
-      margin: `${item.margin}%`,
-    })));
-  }
+  const materialOptions = productRows.filter((product): product is Product & { id: string } => Boolean(product.id));
 
   async function loadProcedures() {
     setIsLoading(true);
     invalidateClientCache("/api/procedures", "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
-    const data = await getCachedJson<{ procedures?: Array<{ id: string; name: string; category: string; price: number; durationMinutes: number; materials: string; margin: number }> }>("/api/procedures");
-    applyProcedureRows(data);
+    const data = await getCachedJson<{ procedures?: ApiProcedure[] }>("/api/procedures");
+    setProcedureRows(mapApiProcedures(data.procedures));
     setIsLoading(false);
   }
 
   useEffect(() => {
     let active = true;
-    getCachedJson<{ procedures?: Array<{ id: string; name: string; category: string; price: number; durationMinutes: number; materials: string; margin: number }> }>("/api/procedures")
+    getCachedJson<{ procedures?: ApiProcedure[] }>("/api/procedures")
       .then((data) => {
         if (!active) return;
-        applyProcedureRows(data);
+        setProcedureRows(mapApiProcedures(data.procedures));
         setIsLoading(false);
       })
       .catch(() => {
@@ -1048,53 +1010,46 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   }, []);
 
   useEffect(() => {
-    getCachedJson<{ products?: Product[] }>("/api/products")
+    // Inclui arquivados para mostrar na ficha técnica os materiais que já estavam nela.
+    getCachedJson<{ products?: Product[] }>("/api/products?archived=1")
       .then((data) => setProductRows(data.products ?? []))
       .catch(() => setProductRows([]));
   }, []);
 
   function closeProcedureModal() {
     setEditingProcedureIndex(null);
+    setFormError("");
     onCreateClose();
   }
 
   async function saveProcedure(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setIsSaving(true);
     const form = new FormData(event.currentTarget);
+    const sheet = readTechnicalSheet(form, materialOptions);
+    if (sheet.error !== undefined) {
+      setFormError(sheet.error);
+      return;
+    }
     const name = String(form.get("name"));
-    const selectedMaterials = form.getAll("materials").map(String).filter(Boolean).join(", ");
     const nextProcedure = {
       name,
       category: String(form.get("category")),
       price: parseCurrency(form.get("price")),
       durationMinutes: parseInteger(form.get("duration")),
-      materials: selectedMaterials,
+      technicalSheet: sheet.items,
       margin: parseInteger(form.get("margin")),
     };
-    const response = await fetchForSave(editingProcedure?.id ? `/api/procedures/${editingProcedure.id}` : "/api/procedures", {
-      method: editingProcedure?.id ? "PATCH" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(nextProcedure),
-    }, "Não foi possível salvar o procedimento");
+    setIsSaving(true);
+    setFormError("");
+    const { ok, data } = await sendJson(editingProcedure?.id ? `/api/procedures/${editingProcedure.id}` : "/api/procedures", editingProcedure?.id ? "PATCH" : "POST", nextProcedure);
     setIsSaving(false);
-    if (!response.ok) { onSaved?.(await responseErrorMessage(response, "Não foi possível salvar o procedimento"), undefined, "warning"); return; }
-    invalidateClientCache("/api/procedures", "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+    if (!ok) {
+      setFormError(data?.message ?? "Não foi possível salvar o procedimento.");
+      return;
+    }
     await loadProcedures();
     onSaved?.(`${name} ${editingProcedure ? "foi atualizado" : "foi adicionado aos procedimentos"}.`);
     closeProcedureModal();
-  }
-
-  async function saveMaterial(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const name = String(form.get("name"));
-    const response = await fetchForSave("/api/products", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, category: String(form.get("category")), unit: String(form.get("unit")), cost: parseCurrency(form.get("cost")), supplier: String(form.get("supplier")) }) }, "Não foi possível salvar o material");
-    if (!response.ok) { onSaved?.(await responseErrorMessage(response, "Não foi possível salvar o material"), undefined, "warning"); return; }
-    invalidateClientCache("/api/products", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
-    const data = await response.json() as { product: Product };
-    setProductRows((current) => [...current, data.product]);
-    setMaterialOpen(false); onSaved?.(`${name} foi adicionado aos materiais.`);
   }
 
   return (
@@ -1102,18 +1057,21 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
       <div>
         <SectionIntro
           title="Procedimentos"
-          description="Cadastro de serviços com valor sugerido, tempo estimado e materiais usados para cálculo de custo."
+          description="Cadastro de serviços com valor sugerido, tempo estimado e a ficha técnica de materiais usada no estoque e no orçamento."
           action="Novo procedimento"
           onAction={onCreateOpen}
         />
         {isLoading ? <LoadingTable columns={7} /> : <MiniTable
-          columns={["Nome", "Categoria", "Valor sugerido", "Tempo", "Materiais", "Margem", "Ação"]}
+          columns={["Nome", "Categoria", "Valor sugerido", "Tempo", "Ficha técnica", "Margem", "Ação"]}
           rows={procedureRows.map((procedure, index) => [
             <strong className="text-[#121733]" key={procedure.name}>{procedure.name}</strong>,
             procedure.category,
             currency.format(procedure.price),
             procedure.duration,
-            procedure.materials,
+            <div className="max-w-xs space-y-1" key="sheet">
+              <span className="block text-xs">{procedure.materials || <span className="text-muted-foreground">Sem materiais</span>}</span>
+              {procedure.materialsNeedReview ? <Badge variant="amber" title="Convertida automaticamente do texto antigo. Confira as quantidades e salve.">Revisar ficha</Badge> : null}
+            </div>,
             <Badge key={procedure.margin} variant="green">{procedure.margin}</Badge>,
             <Button key="edit" size="sm" variant="secondary" onClick={() => setEditingProcedureIndex(index)}>
               <PencilLine className="h-3.5 w-3.5" />
@@ -1123,51 +1081,13 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
         />}
       </div>
 
-      <div className="hp-list-stagger grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
-        <Card>
-          <CardHeader>
-            <div>
-              <CardTitle>Materiais e custos</CardTitle>
-              <p className="mt-1 text-sm text-[#65708b]">
-                Cadastro usado somente para cálculo. Sem quantidade disponível,
-                entrada, baixa ou estoque neste MVP.
-              </p>
-            </div>
-            <Button variant="secondary" size="sm" onClick={() => setMaterialOpen(true)}>
-              <Plus className="h-4 w-4" />
-              Material
-            </Button>
-          </CardHeader>
-          <CardContent className="hp-list-stagger space-y-3">
-            {productRows.map((product) => (
-              <div
-                className="rounded-[8px] border border-[#e5e9f4] p-4 transition-colors duration-200 hover:border-[#dce5ff]"
-                key={product.name}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-black text-[#121733]">{product.name}</p>
-                    <p className="text-sm text-[#65708b]">
-                      {product.category} · {product.supplier}
-                    </p>
-                  </div>
-                  <Badge variant="purple">{product.unit}</Badge>
-                </div>
-                <p className="mt-3 text-lg font-black text-[#1438ff]">
-                  {currency.format(product.cost)} / {product.unit}
-                </p>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-        <CostCalculator materials={productRows} charged={procedureRows[0]?.price ?? 0} procedureName={procedureRows[0]?.name} />
-      </div>
+      <CostCalculator materials={productRows.filter((product) => !product.archivedAt)} charged={procedureRows[0]?.price ?? 0} procedureName={procedureRows[0]?.name} />
       <Modal
         key={editingProcedure ? `edit-${editingProcedure.name}` : `new-procedure-${openCreate ? "open" : "closed"}`}
         open={procedureModalOpen}
         onClose={closeProcedureModal}
         title={editingProcedure ? "Editar procedimento" : "Novo procedimento"}
-        description="Defina preço, duração e margem do serviço."
+        description="Defina preço, duração, margem e os materiais usados em cada atendimento."
       >
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveProcedure}>
           <div className="sm:col-span-2"><FormField label="Nome"><input className={fieldClassName} name="name" defaultValue={editingProcedure?.name ?? ""} required /></FormField></div>
@@ -1175,18 +1095,12 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
           <FormField label="Valor sugerido"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="price" inputMode="decimal" defaultValue={editingProcedure ? currency.format(editingProcedure.price) : ""} placeholder="R$ 0,00" required /></FormField>
           <FormField label="Duração em minutos"><MaskedInput className={fieldClassName} formatter={(value) => formatInteger(value, 3)} name="duration" inputMode="numeric" defaultValue={editingProcedure?.duration ?? ""} placeholder="60" required /></FormField>
           <FormField label="Margem estimada (%)"><MaskedInput className={fieldClassName} formatter={formatPercent} name="margin" inputMode="numeric" defaultValue={editingProcedure?.margin ?? ""} placeholder="40%" required /></FormField>
-          <div className="sm:col-span-2"><FormField label="Materiais utilizados"><MaterialsMultiSelect options={materialOptions} defaultValue={editingProcedure?.materials ? editingProcedure.materials.split(", ") : []} /><p className="mt-1 text-[10px] text-[#858696]">Selecione um ou mais materiais utilizados neste procedimento.</p></FormField></div>
+          <div className="sm:col-span-2"><FormField label="Ficha técnica" description="Materiais e quantidades usados em cada atendimento deste procedimento.">
+            {editingProcedure?.materialsNeedReview ? <p className="mb-2 rounded-[7px] bg-warning/10 px-3 py-2 text-[11px] font-semibold text-warning">Ficha convertida automaticamente do texto antigo com quantidade 1. Confira e salve para concluir a revisão.</p> : null}
+            <TechnicalSheetEditor materials={materialOptions} defaultValue={editingProcedure?.technicalSheet ?? []} />
+          </FormField></div>
+          {formError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{formError}</p> : null}
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={closeProcedureModal}>Cancelar</Button><Button disabled={isSaving} type="submit">{isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : editingProcedure ? "Salvar alterações" : "Salvar procedimento"}</Button></div>
-        </form>
-      </Modal>
-      <Modal open={materialOpen} onClose={() => setMaterialOpen(false)} title="Novo material">
-        <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveMaterial}>
-          <div className="sm:col-span-2"><FormField label="Nome"><input className={fieldClassName} name="name" required /></FormField></div>
-          <FormField label="Categoria"><select className={fieldClassName} name="category" required><option value="">Selecione uma categoria</option>{procedureCategories.map((category) => <option key={category}>{category}</option>)}</select></FormField>
-          <FormField label="Fornecedor"><input className={fieldClassName} name="supplier" required /></FormField>
-          <FormField label="Unidade"><select className={fieldClassName} name="unit"><option>ml</option><option>unidade</option><option>frasco</option></select></FormField>
-          <FormField label="Custo unitário"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="cost" inputMode="decimal" placeholder="R$ 0,00" required /></FormField>
-          <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" onClick={() => setMaterialOpen(false)}>Cancelar</Button><Button type="submit">Salvar material</Button></div>
         </form>
       </Modal>
     </div>
@@ -1196,7 +1110,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
 export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
   type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; createdAt?: string; patient?: { name: string } | null };
   type QuoteRow = Quote & { createdAt?: string };
-  type QuoteOptions = { patients?: Array<{ id: string; name: string; cpf: string | null }>; procedures?: Array<{ id: string; name: string; price: number }> };
+  type QuoteOptions = { patients?: Array<{ id: string; name: string; cpf: string | null }>; procedures?: Array<{ id: string; name: string; price: number }>; costs?: { laborCost: number; facilityCost: number; medicationCost: number } };
   const cachedQuotes = readClientCache<{ quotes?: ApiQuote[] }>("/api/quotes");
   const cachedQuoteOptions = readClientCache<QuoteOptions>("/api/quotes/options");
   const [quoteRows, setQuoteRows] = useState<QuoteRow[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
@@ -1204,6 +1118,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
   const [isSaving, setIsSaving] = useState(false);
   const [quotePatients, setQuotePatients] = useState(cachedQuoteOptions?.patients ?? []);
   const [quoteProcedures, setQuoteProcedures] = useState(cachedQuoteOptions?.procedures ?? []);
+  const [quoteCosts, setQuoteCosts] = useState(cachedQuoteOptions?.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
   const [optionsLoading, setOptionsLoading] = useState(!cachedQuoteOptions);
   const [patientQuery, setPatientQuery] = useState("");
   const [quoteSearch, setQuoteSearch] = useState("");
@@ -1225,12 +1140,15 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     getCachedJson<QuoteOptions>("/api/quotes/options").then((data) => {
       setQuotePatients(data.patients ?? []);
       setQuoteProcedures(data.procedures ?? []);
+      setQuoteCosts(data.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
       setOptionsLoading(false);
     }).catch(() => setOptionsLoading(false));
   }, []);
 
   const matchingQuotePatients = quotePatients.filter((patient) => `${patient.name} ${patient.cpf ?? ""}`.toLowerCase().includes(patientQuery.toLowerCase()));
-  const suggestedTotal = selectedProcedureNames.reduce((total, name) => total + (quoteProcedures.find((procedure) => procedure.name === name)?.price ?? 0), 0);
+  const procedureSubtotal = selectedProcedureNames.reduce((total, name) => total + (quoteProcedures.find((procedure) => procedure.name === name)?.price ?? 0), 0);
+  const clinicCostsTotal = quoteCosts.laborCost + quoteCosts.facilityCost + quoteCosts.medicationCost;
+  const suggestedTotal = procedureSubtotal + clinicCostsTotal;
   const visibleQuotes = quoteRows.filter((quote) => {
     const normalizedName = quoteSearch.trim().toLocaleLowerCase("pt-BR");
     const normalizedItems = itemSearch.trim().toLocaleLowerCase("pt-BR");
@@ -1249,7 +1167,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     if (!response.ok) { onSaved?.(await responseErrorMessage(response, "Não foi possível salvar o orçamento"), undefined, "warning"); return; }
     const data = await response.json() as { quote: { id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null } };
     const item = data.quote;
-    invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
+    invalidateClientCache("/api/quotes", "/api/patients", `/api/patients/${selectedPatientId}/history`, "/api/dashboard/bootstrap");
     setQuoteRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: new Date().toISOString() }, ...current]);
     setPatientQuery(""); setSelectedPatientId(""); setSelectedProcedureNames([]);
     onCreateClose(); onSaved?.(`Orçamento de ${patient} foi criado.`);
@@ -1268,7 +1186,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     <div>
       <SectionIntro
         title="Orçamentos"
-        description="Propostas associadas ao paciente com status comercial e total calculado por procedimento."
+        description="Propostas associadas ao paciente, com os preços dos procedimentos e os custos padrão definidos na Calculadora."
         action="Novo orçamento"
         onAction={onCreateOpen}
       />
@@ -1307,7 +1225,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
           </div>
           <FormField label="Validade"><MaskedInput className={fieldClassName} formatter={formatDate} name="expires" inputMode="numeric" maxLength={10} placeholder="30/09/2026" required /></FormField>
           <div className="sm:col-span-2"><FormField label="Procedimentos"><div className="flex min-h-10 flex-wrap gap-1.5 rounded-[7px] border border-[#dddfea] bg-white p-2">{selectedProcedureNames.map((name) => <span className="flex items-center gap-1 rounded-full bg-[#f0efff] px-2 py-1 text-[10px] font-bold text-[#5147dc]" key={name}>{name}<button className="text-[#5147dc] hover:text-[#b42318]" type="button" onClick={() => setSelectedProcedureNames((current) => current.filter((item) => item !== name))}>×</button></span>)}<select className="min-w-[150px] flex-1 bg-transparent text-xs font-semibold text-[#858696] outline-none" value="" disabled={optionsLoading || !quoteProcedures.length} onChange={(event) => { if (event.target.value) setSelectedProcedureNames((current) => current.includes(event.target.value) ? current : [...current, event.target.value]); }}><option value="">{optionsLoading ? "Carregando procedimentos..." : quoteProcedures.length ? "Adicionar procedimento" : "Nenhum procedimento cadastrado"}</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name} · {currency.format(procedure.price)}</option>)}</select></div><input className="sr-only" name="items" value={selectedProcedureNames.join(", ")} readOnly required /></FormField></div>
-          <div className="sm:col-span-2"><FormField label="Valor total"><MaskedInput key={selectedProcedureNames.join("|")} className={fieldClassName} formatter={formatCurrency} name="total" inputMode="decimal" defaultValue={suggestedTotal ? currency.format(suggestedTotal) : ""} placeholder="R$ 0,00" required /></FormField></div>
+          <div className="sm:col-span-2"><FormField label="Valor total"><MaskedInput key={selectedProcedureNames.join("|")} className={fieldClassName} formatter={formatCurrency} name="total" inputMode="decimal" defaultValue={suggestedTotal ? currency.format(suggestedTotal) : ""} placeholder="R$ 0,00" required /></FormField><p className="mt-1 text-[10px] text-[#858696]">Inclui {currency.format(procedureSubtotal)} em procedimentos e {currency.format(clinicCostsTotal)} em custos padrão da Calculadora.</p></div>
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || optionsLoading || !selectedPatientId || !selectedProcedureNames.length} type="submit">{isSaving ? "Salvando..." : "Salvar orçamento"}</Button></div>
         </form>
       </Modal>
@@ -1324,6 +1242,7 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
   const [methodFilter, setMethodFilter] = useState("Todos");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [paymentPatients, setPaymentPatients] = useState(readClientCache<{ patients?: Array<{ id: string; name: string; cpf: string | null }> }>("/api/quotes/options")?.patients ?? []);
   const visiblePayments = paymentRows.filter((item) => {
     const matchesMethod = methodFilter === "Todos" || item.method === methodFilter;
     const paymentDate = item.dateRaw?.slice(0, 10) ?? "";
@@ -1339,9 +1258,13 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
     }).catch(() => setIsLoading(false));
   }, []);
 
+  useEffect(() => {
+    getCachedJson<{ patients?: Array<{ id: string; name: string; cpf: string | null }> }>("/api/quotes/options").then((data) => setPaymentPatients(data.patients ?? [])).catch(() => undefined);
+  }, []);
+
   async function savePayment(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patient = String(form.get("patient"));
-    const response = await fetchForSave("/api/payments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patient, value: parseCurrency(form.get("value")), method: String(form.get("method")), status: String(form.get("status")), installments: String(form.get("installments")) }) }, "Não foi possível registrar o pagamento");
+    event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patientId = String(form.get("patientId")); const patient = paymentPatients.find((item) => item.id === patientId)?.name ?? "Paciente";
+    const response = await fetchForSave("/api/payments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, value: parseCurrency(form.get("value")), method: String(form.get("method")), status: String(form.get("status")), installments: String(form.get("installments")) }) }, "Não foi possível registrar o pagamento");
     setIsSaving(false);
     if (!response.ok) { onSaved?.(await responseErrorMessage(response, "Não foi possível registrar o pagamento"), undefined, "warning"); return; }
     const data = await response.json() as { payment: { id: string; value: number; method: string; date: string; status: string; installments: string; patient?: { name: string } | null } };
@@ -1391,7 +1314,7 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
       />}
       <Modal open={openCreate} onClose={onCreateClose} title="Registrar pagamento" description="O lançamento aparecerá imediatamente no histórico financeiro.">
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={savePayment}>
-          <div className="sm:col-span-2"><FormField label="Paciente"><input className={fieldClassName} name="patient" required /></FormField></div>
+          <div className="sm:col-span-2"><FormField label="Paciente"><select className={fieldClassName} name="patientId" required defaultValue=""><option value="" disabled>Selecione o paciente</option>{paymentPatients.map((item) => <option key={item.id} value={item.id}>{item.name}{item.cpf ? ` · ${item.cpf}` : ""}</option>)}</select></FormField></div>
           <FormField label="Valor"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="value" inputMode="decimal" placeholder="R$ 0,00" required /></FormField>
           <FormField label="Forma"><select className={fieldClassName} name="method"><option>Pix</option><option>Cartão de crédito</option><option>Cartão de débito</option><option>Dinheiro</option></select></FormField>
           <FormField label="Status"><select className={fieldClassName} name="status"><option>Pago</option><option>Parcial</option><option>Pendente</option></select></FormField>
@@ -1399,60 +1322,6 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving} type="submit">{isSaving ? "Salvando..." : "Registrar pagamento"}</Button></div>
         </form>
       </Modal>
-    </div>
-  );
-}
-
-export function FinanceSection() {
-  const [activePeriod, setActivePeriod] = useState("Mês");
-  const data = useFinancialData();
-  const received = data?.payments.filter((item) => item.status === "Pago").reduce((sum, item) => sum + item.value, 0) ?? 0;
-  const pending = data?.payments.filter((item) => item.status !== "Pago").reduce((sum, item) => sum + item.value, 0) ?? 0;
-  const values = [received, 0, received, pending, received];
-  const procedureTotals = Object.entries((data?.appointments ?? []).reduce<Record<string, number>>((result, item) => { result[item.procedure] = (result[item.procedure] ?? 0) + 1; return result; }, {}));
-
-  return (
-    <div>
-      <SectionIntro
-        title="Financeiro"
-        description="Dashboard de receita, despesas, resultado, pendências e performance por procedimento."
-      />
-      <div className="mb-6 flex flex-wrap gap-2">
-        {["Hoje", "Semana", "Mês", "Período personalizado"].map((period) => (
-          <Button key={period} variant={activePeriod === period ? "primary" : "secondary"} onClick={() => setActivePeriod(period)}>
-            {period}
-          </Button>
-        ))}
-      </div>
-      <div className="hp-list-stagger grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        {["Receita", "Despesas", "Resultado", "Valores pendentes", "Recebidos"].map((label, index) => (
-          <Card className="p-5" key={label}>
-            <p className="text-sm font-semibold text-[#65708b]">{label}</p>
-            <p className="mt-3 text-2xl font-black text-[#121733]">
-              <CountUpValue value={values[index]} format={(currentValue) => currency.format(Math.round(currentValue))} />
-            </p>
-          </Card>
-        ))}
-      </div>
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle>Resultado por procedimento</CardTitle>
-          <Badge variant="green">Margem real</Badge>
-        </CardHeader>
-        <CardContent className="hp-list-stagger space-y-5">
-          {procedureTotals.length ? procedureTotals.map(([name, count], index) => (
-            <div key={name}>
-              <div className="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                <p className="font-black text-[#121733]">{name}</p>
-                <p className="text-sm text-[#65708b]">
-                  Atendimentos realizados: <strong>{count}</strong>
-                </p>
-              </div>
-              <ProgressBar value={Math.min(100, count * 20)} tone={index === 2 ? "purple" : "green"} />
-            </div>
-          )) : <p className="text-sm text-[#65708b]">Ainda não há atendimentos para calcular resultados.</p>}
-        </CardContent>
-      </Card>
     </div>
   );
 }
@@ -1642,11 +1511,11 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       onClinicNameChange?.(data.settings.name);
     }
     invalidateClientCache("/api/clinic/cost-settings", "/api/quotes/options");
+    if (editing === "Agenda") setEditing(null);
   }
 
   const professionalShiftMinutes = Math.max(0, (Number(professionalClosingTimeInput.slice(0, 2)) * 60 + Number(professionalClosingTimeInput.slice(3, 5))) - (Number(professionalOpeningTimeInput.slice(0, 2)) * 60 + Number(professionalOpeningTimeInput.slice(3, 5))));
   const professionalShiftCost = (professionalShiftMinutes / 60) * (Number(professionalHourlyCostInput) || 0);
-
   async function saveCollaborator(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setTeamSaving(true);
@@ -1673,7 +1542,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
         return;
       }
       setMembers((current) => [...current, data.member as TeamMember].sort((a, b) => a.user.name.localeCompare(b.user.name)));
-      invalidateClientCache("/api/team");
+      invalidateClientCache("/api/team", "/api/team/professionals");
       setEditing(null);
       setTeamError("");
     } catch (error) {
@@ -1698,58 +1567,65 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       return;
     }
     setMembers((current) => current.filter((member) => member.id !== memberToRemove.id));
-    invalidateClientCache("/api/team", "/api/agenda/bootstrap");
+    invalidateClientCache("/api/team", "/api/team/professionals", "/api/agenda/bootstrap");
     setMemberToRemove(null);
   }
 
   if (mode === "calculator") {
     return (
-      <div className="mx-auto w-full max-w-3xl space-y-6">
-        <header className="rounded-xl bg-gradient-to-br from-[#101a43] via-[#18285a] to-[#5147dc] px-6 py-8 text-center text-white shadow-[0_16px_36px_rgba(27,39,93,0.18)] sm:px-10 sm:py-10">
-          <div className="mx-auto grid h-12 w-12 place-items-center rounded-xl border border-white/20 bg-white/10">
-            <CircleDollarSign className="h-6 w-6" />
-          </div>
-          <h2 className="mt-4 text-2xl font-black tracking-tight">Calculadora de custos</h2>
-          <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-white/80">Defina os custos dos seus procedimentos para maior margem de lucro e autonomia nos seus atendimentos.</p>
+      <div className="mx-auto flex min-h-[calc(100vh-9rem)] w-full max-w-4xl flex-col justify-center gap-5">
+        <header className="hp-page-enter mb-1 text-center">
+          <h2 className="text-lg font-bold text-primary">Calculadora de custos</h2>
+          <p className="mx-auto mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">Defina os custos dos seus procedimentos. Esses valores serão considerados nos novos orçamentos.</p>
         </header>
-        <Card className="overflow-hidden border-[#e6e9f2] shadow-[0_12px_32px_rgba(27,39,93,0.07)]">
-          <div className="border-b border-[#eceef5] px-5 py-5 sm:px-7">
-            <h3 className="font-bold text-[#171b35]">Custos e parâmetros</h3>
-            <p className="mt-1 text-sm text-[#73778d]">Os valores abaixo são aplicados automaticamente aos novos orçamentos.</p>
-          </div>
-          <form className="grid gap-5 p-5 sm:grid-cols-2 sm:p-7" onSubmit={saveCostSettings}>
-            <div className="space-y-4 rounded-lg border border-[#e9ebf3] p-4 sm:col-span-2 sm:p-5">
+        <form className="space-y-4" onSubmit={saveCostSettings}>
+          <Card>
+            <CardHeader className="border-b border-border/70 text-center">
               <div>
-                <h4 className="text-sm font-bold text-[#171b35]">Horário e custo do profissional</h4>
-                <p className="mt-1 text-xs leading-5 text-[#73778d]">Informe a jornada diária e o valor da hora para acompanhar o custo estimado do profissional.</p>
+                <CardTitle>Custo do profissional</CardTitle>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">Informe o horário de trabalho e o valor da hora para estimar o custo diário.</p>
               </div>
-              <div className="grid gap-4 sm:grid-cols-2">
+            </CardHeader>
+            <CardContent className="mx-auto w-full max-w-3xl space-y-4 pt-4">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <FormField label="Início do expediente"><input className={fieldClassName} name="professionalOpeningTime" type="time" value={professionalOpeningTimeInput} onChange={(event) => setProfessionalOpeningTimeInput(event.target.value)} required /></FormField>
                 <FormField label="Fim do expediente"><input className={fieldClassName} name="professionalClosingTime" type="time" value={professionalClosingTimeInput} onChange={(event) => setProfessionalClosingTimeInput(event.target.value)} required /></FormField>
-                <FormField label="Custo por hora do profissional"><input className={fieldClassName} name="professionalHourlyCost" type="number" min="0" step="0.01" value={professionalHourlyCostInput} onChange={(event) => setProfessionalHourlyCostInput(event.target.value)} placeholder="0,00" /></FormField>
-                <div className="flex items-end">
-                  <div className="w-full rounded-md bg-[#f5f6ff] px-4 py-3">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.08em] text-[#73778d]">Custo estimado por expediente</p>
-                    <p className="mt-1 text-lg font-black text-[#5147dc]">{currency.format(professionalShiftCost)}</p>
-                  </div>
-                </div>
+                <FormField label="Custo por hora (R$)"><input className={fieldClassName} name="professionalHourlyCost" type="number" min="0" step="0.01" value={professionalHourlyCostInput} onChange={(event) => setProfessionalHourlyCostInput(event.target.value)} placeholder="0,00" /></FormField>
               </div>
-            </div>
-            <div className="rounded-lg bg-[#f7f8fc] p-4 sm:col-span-2">
-              <FormField label="Tolerância para marcar falta (minutos)">
-                <input className={fieldClassName} name="appointmentToleranceMinutes" type="number" min="0" max="180" value={appointmentToleranceInput} onChange={(event) => setAppointmentToleranceInput(event.target.value)} required />
-              </FormField>
-              <p className="mt-2 text-xs leading-5 text-[#73778d]">O atendimento só será marcado como falta depois desse período.</p>
-            </div>
-            {costSettingsLoading ? <div className="space-y-3 sm:col-span-2"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : <>
-              <FormField label="Mão de obra / Honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField>
-              <FormField label="Sala / Estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField>
-              <FormField label="Anestésico / Medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField>
-            </>}
-            {costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{costSettingsError}</p> : null}
-            <div className="flex justify-end border-t border-[#eceef5] pt-5 sm:col-span-2"><Button className="min-w-36" disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div>
-          </form>
-        </Card>
+              <div className="flex flex-col gap-1 rounded-md bg-muted/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Custo estimado por expediente</p>
+                  <p className="text-xs text-muted-foreground">Horas trabalhadas × custo por hora</p>
+                </div>
+                <strong className="text-lg font-bold text-primary">{currency.format(professionalShiftCost)}</strong>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="border-b border-border/70 text-center">
+              <div>
+                <CardTitle>Custos por atendimento</CardTitle>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">Valores padrão adicionados aos novos orçamentos.</p>
+              </div>
+            </CardHeader>
+            <CardContent className="mx-auto w-full max-w-3xl pt-4">
+              {costSettingsLoading ? <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : (
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <FormField label="Mão de obra / honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField>
+                  <FormField label="Sala / estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField>
+                  <FormField label="Anestésico / medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {costSettingsError ? <p className="mx-auto w-full max-w-3xl rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{costSettingsError}</p> : null}
+          <div className="flex justify-center border-t border-border pt-4">
+            <Button className="min-w-36" disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button>
+          </div>
+        </form>
+
       </div>
     );
   }
@@ -1764,6 +1640,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
         {[
           ["Clínica", "Nome, CNPJ, endereço e dados comerciais."],
           ["Profissionais", "Perfis, agenda, permissões e assinatura visual."],
+          ["Agenda", "Defina a tolerância para marcar atrasos como falta."],
         ].map(([title, description]) => (
           <button className={cn("settings-option hp-pressable text-left", title === "Profissionais" && !isAdmin && "cursor-not-allowed opacity-60")} key={title} onClick={() => { if (title === "Profissionais" && !isAdmin) return; setEditing(title); }}><Card className="settings-option-card h-full p-5 transition-colors">
             <Sparkles className="mb-4 h-5 w-5 text-[#1438ff]" />
@@ -1782,9 +1659,22 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
           {teamLoading ? <div className="space-y-3 py-3">{[0, 1, 2].map((item) => <div className="flex items-center justify-between gap-4" key={item}><div className="flex-1 space-y-2"><LoadingSkeleton className="h-3 w-40" /><LoadingSkeleton className="h-2.5 w-56" /></div><LoadingSkeleton className="h-6 w-20 rounded-full" /></div>)}</div> : members.length ? members.map((member) => <div className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between" key={member.id}><div><p className="text-sm font-bold text-[#303144]">{member.user.name}</p><p className="text-xs text-[#858696]">{member.user.email}</p></div><div className="flex items-center gap-2"><Badge variant={member.isOwner ? "purple" : member.role === "ADMIN" ? "purple" : "green"}>{member.isOwner ? "Administrador principal" : member.role === "PROFESSIONAL" ? "Profissional" : member.role === "STAFF" ? "Equipe" : "Administrador"}</Badge>{isOwner && !member.isOwner ? <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-[#b42318] hover:bg-[#fff1f0] hover:text-[#b42318]" aria-label={`Remover ${member.user.name}`} title="Remover colaborador" onClick={() => { setMemberRemoveError(""); setMemberToRemove(member); }}><Trash2 className="h-3.5 w-3.5" /></Button> : null}</div></div>) : <p className="py-5 text-sm text-[#65708b]">Nenhum colaborador cadastrado.</p>}
         </div>
       </Card>
-      <Modal open={Boolean(editing)} onClose={() => setEditing(null)} title={`Configurar ${editing ?? ""}`} description="Essas preferências ficam salvas durante esta sessão.">
+      <Modal open={Boolean(editing)} onClose={() => setEditing(null)} title={`Configurar ${editing ?? ""}`} description="Essas preferências ficam salvas para a clínica.">
+        {editing === "Agenda" ? <form className="grid gap-4" onSubmit={saveCostSettings}>
+          <div>
+            <FormField label="Tolerância para marcar falta (minutos)">
+              <input className={fieldClassName} name="appointmentToleranceMinutes" type="number" min="0" max="180" value={appointmentToleranceInput} onChange={(event) => setAppointmentToleranceInput(event.target.value)} required />
+            </FormField>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">O atendimento só será marcado como falta depois desse período.</p>
+          </div>
+          {costSettingsError ? <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{costSettingsError}</p> : null}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button>
+            <Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar"}</Button>
+          </div>
+        </form> : null}
         {editing === "Clínica" ? <form className="grid gap-4" onSubmit={saveCostSettings}><p className="text-xs leading-5 text-[#65708b]">Configure o nome e o horário em que a clínica está aberta para novos atendimentos.</p><FormField label="Nome de exibição"><input className={fieldClassName} name="name" value={clinicNameInput} onChange={(event) => setClinicNameInput(event.target.value)} required /></FormField><div className="grid gap-4 sm:grid-cols-2"><FormField label="Início do funcionamento"><input className={fieldClassName} name="openingTime" type="time" value={openingTimeInput} onChange={(event) => setOpeningTimeInput(event.target.value)} required /></FormField><FormField label="Fim do funcionamento"><input className={fieldClassName} name="closingTime" type="time" value={closingTimeInput} onChange={(event) => setClosingTimeInput(event.target.value)} required /></FormField></div>{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar alterações"}</Button></div></form> : null}
-        {editing === "Novo colaborador" ? <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveCollaborator}><div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div><FormField label="E-mail de acesso"><input className={fieldClassName} name="email" type="email" required /></FormField><FormField label="Senha inicial"><input className={fieldClassName} name="password" type="password" minLength={6} required /></FormField><FormField label="Perfil"><select className={fieldClassName} name="role"><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Equipe</option><option value="ADMIN">Administrador</option></select></FormField>{teamError ? <p className="sm:col-span-2 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{teamError}</p> : null}<div className="flex justify-end gap-2 sm:col-span-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div></form> : editing === "Cálculo de custos" ? <form className="grid gap-4" onSubmit={saveCostSettings}><div className="sm:col-span-2"><FormField label="Tolerância para marcar falta (minutos)"><input className={fieldClassName} name="appointmentToleranceMinutes" type="number" min="0" max="180" value={appointmentToleranceInput} onChange={(event) => setAppointmentToleranceInput(event.target.value)} required /></FormField><p className="mt-1 text-[10px] text-[#858696]">O atendimento só será marcado como faltou depois desse período.</p></div><p className="text-xs leading-5 text-[#65708b]">Defina os valores padrão que serão adicionados automaticamente aos orçamentos desta clínica.</p>{costSettingsLoading ? <div className="space-y-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : <><FormField label="Mão de obra / Honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField><FormField label="Sala / Estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField><FormField label="Anestésico / Medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField></>}{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div></form> : null}
+        {editing === "Novo colaborador" ? <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveCollaborator}><div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div><FormField label="E-mail de acesso"><input className={fieldClassName} name="email" type="email" required /></FormField><FormField label="Senha inicial"><input className={fieldClassName} name="password" type="password" minLength={8} required /></FormField><FormField label="Perfil"><select className={fieldClassName} name="role"><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Atendente</option><option value="ADMIN">Administrador</option></select></FormField>{teamError ? <p className="sm:col-span-2 rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{teamError}</p> : null}<div className="flex justify-end gap-2 sm:col-span-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div></form> : editing === "Cálculo de custos" ? <form className="grid gap-4" onSubmit={saveCostSettings}><div className="sm:col-span-2"><FormField label="Tolerância para marcar falta (minutos)"><input className={fieldClassName} name="appointmentToleranceMinutes" type="number" min="0" max="180" value={appointmentToleranceInput} onChange={(event) => setAppointmentToleranceInput(event.target.value)} required /></FormField><p className="mt-1 text-[10px] text-[#858696]">O atendimento só será marcado como faltou depois desse período.</p></div><p className="text-xs leading-5 text-[#65708b]">Defina os valores padrão que serão adicionados automaticamente aos orçamentos desta clínica.</p>{costSettingsLoading ? <div className="space-y-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : <><FormField label="Mão de obra / Honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField><FormField label="Sala / Estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField><FormField label="Anestésico / Medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField></>}{costSettingsError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{costSettingsError}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div></form> : null}
       </Modal>
       <Modal open={Boolean(memberToRemove)} onClose={() => { if (!memberRemoving) setMemberToRemove(null); }} title="Remover colaborador" description="Essa ação remove o acesso do colaborador à clínica.">
         <div className="space-y-4">

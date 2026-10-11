@@ -5,6 +5,7 @@ import type { SectionId } from "@/types/clinic";
 const sections = new Set<SectionId>([
   "dashboard",
   "procedimentos",
+  "estoque",
   "clientes",
   "orcamentos",
   "pagamentos",

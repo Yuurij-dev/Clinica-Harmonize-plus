@@ -9,7 +9,8 @@ async function main() {
     create: { name: "Clínica Harmonize", slug: "harmonize-demo" },
   });
 
-  const users = await prisma.user.findMany({ select: { id: true, role: true } });
+  // Só usuários sem clínica: rodar de novo não pode ligar contas de outras clínicas à demo.
+  const users = await prisma.user.findMany({ where: { memberships: { none: {} } }, select: { id: true, role: true } });
   for (const user of users) {
     await prisma.clinicMembership.upsert({
       where: { userId_clinicId: { userId: user.id, clinicId: clinic.id } },

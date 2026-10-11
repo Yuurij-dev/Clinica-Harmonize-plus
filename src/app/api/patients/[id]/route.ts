@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { rejectInvalidCpf } from "@/lib/patient-cpf";
 import { prisma } from "@/lib/prisma";
 import { withSaveErrors } from "@/lib/save-errors";
 
@@ -17,13 +18,8 @@ export const PATCH = withSaveErrors("atualizar o paciente", async (request: Requ
   }
 
   const id = (await params).id;
-  if (cpf && cpf.replace(/\D/g, "").length !== 11) {
-    return NextResponse.json({ message: "Informe um CPF válido com 11 números." }, { status: 400 });
-  }
-  if (cpf) {
-    const duplicate = await prisma.patient.findFirst({ where: { clinicId: user.clinicId, cpf, id: { not: id } }, select: { id: true } });
-    if (duplicate) return NextResponse.json({ message: "Este CPF já está cadastrado para outro cliente." }, { status: 409 });
-  }
+  const cpfError = await rejectInvalidCpf(user.clinicId, cpf, id);
+  if (cpfError) return cpfError;
 
   const patient = await prisma.patient.updateMany({
     where: { id, clinicId: user.clinicId },

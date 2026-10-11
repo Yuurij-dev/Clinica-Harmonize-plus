@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import { LoginScreen, type RegisterResult, type RegisterValues } from "./login-screen";
 import { fetchForSave, httpErrorMessage } from "@/lib/client-errors";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
+import { setClientCacheScope } from "@/lib/client-cache";
 
-export function LoginPageClient() {
+export function LoginPageClient({ initialMode }: { initialMode: "login" | "register" }) {
   const router = useRouter();
   const [clinicName, setClinicName] = useState<string | null>(null);
 
@@ -21,8 +22,10 @@ export function LoginPageClient() {
       body: JSON.stringify(credentials),
     });
 
-    const data = await response.json().catch(() => null) as { message?: string; passwordChangeRequired?: boolean; user?: { clinic?: { name?: string } } } | null;
+    const data = await response.json().catch(() => null) as { message?: string; passwordChangeRequired?: boolean; user?: { id?: string; clinic?: { id?: string; name?: string } } } | null;
     if (!response.ok) return { error: data?.message ?? "Usuário ou senha inválidos." };
+    setClientCacheScope(data?.user?.id && data.user.clinic?.id ? `${data.user.id}:${data.user.clinic.id}` : null);
+    window.localStorage.setItem("harmonize-session-change", String(Date.now()));
     if (data?.passwordChangeRequired) return { passwordChangeRequired: true };
     setClinicName(data?.user?.clinic?.name ?? "Sua clínica");
     window.setTimeout(() => {
@@ -63,5 +66,5 @@ export function LoginPageClient() {
     return { error: result.error } satisfies RegisterResult;
   }
 
-  return clinicName ? <ClinicEntryTransition clinicName={clinicName} /> : <LoginScreen onLogin={handleLogin} onChangePassword={handlePasswordChange} onRegister={handleRegister} />;
+  return clinicName ? <ClinicEntryTransition clinicName={clinicName} /> : <LoginScreen initialMode={initialMode} onLogin={handleLogin} onChangePassword={handlePasswordChange} onRegister={handleRegister} />;
 }

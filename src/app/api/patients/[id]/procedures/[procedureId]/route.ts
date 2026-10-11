@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { denyUnless } from "@/lib/api-guards";
 import { withSaveErrors } from "@/lib/save-errors";
 
 export const PATCH = withSaveErrors("atualizar o procedimento", async (request: Request, { params }: { params: Promise<{ id: string; procedureId: string }> }) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user.role, "clinical:write");
+  if (denied) return denied;
 
   const { id: patientId, procedureId } = await params;
   const body = await request.json().catch(() => null) as { photoType?: "beforePhoto" | "afterPhoto"; photo?: string | null; sessionId?: string; name?: string } | null;
@@ -27,7 +30,7 @@ export const PATCH = withSaveErrors("atualizar o procedimento", async (request: 
   if (body.photo !== null && !body.photo?.startsWith("data:image/")) {
     return NextResponse.json({ message: "Envie uma foto válida." }, { status: 400 });
   }
-  if (!body.photoType) return NextResponse.json({ message: "Informe o tipo da foto." }, { status: 400 });
+  if (body.photoType !== "beforePhoto" && body.photoType !== "afterPhoto") return NextResponse.json({ message: "Informe o tipo da foto." }, { status: 400 });
 
   if (body.sessionId) {
     const session = await prisma.patientProcedurePhotoSession.findFirst({ where: { id: body.sessionId, procedureId: procedure.id }, select: { id: true } });
@@ -43,6 +46,8 @@ export const PATCH = withSaveErrors("atualizar o procedimento", async (request: 
 export const POST = withSaveErrors("salvar a sessão de fotos", async (request: Request, { params }: { params: Promise<{ id: string; procedureId: string }> }) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user.role, "clinical:write");
+  if (denied) return denied;
 
   const { id: patientId, procedureId } = await params;
   const body = await request.json().catch(() => null) as { name?: string } | null;
@@ -56,6 +61,8 @@ export const POST = withSaveErrors("salvar a sessão de fotos", async (request: 
 export const DELETE = withSaveErrors("excluir a sessão de fotos", async (request: Request, { params }: { params: Promise<{ id: string; procedureId: string }> }) => {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user.role, "clinical:write");
+  if (denied) return denied;
 
   const { id: patientId, procedureId } = await params;
   const sessionId = new URL(request.url).searchParams.get("sessionId");

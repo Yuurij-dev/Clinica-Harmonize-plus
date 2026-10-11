@@ -38,8 +38,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ message: "Informe um nome para a clínica com até 100 caracteres." }, { status: 400 });
   }
 
-  if (!name || !phone || !profession || !practiceArea || hasSecretary === null || !email || password.length < 6) {
-    return NextResponse.json({ message: "Preencha todos os campos e informe uma senha com pelo menos 6 caracteres." }, { status: 400 });
+  if (!name || !phone || !profession || !practiceArea || hasSecretary === null || !email || password.length < 8) {
+    return NextResponse.json({ message: "Preencha todos os campos e informe uma senha com pelo menos 8 caracteres." }, { status: 400 });
   }
 
   const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });

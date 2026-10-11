@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { inputVariants } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { CountUpValue, DetailCard, LoadingSkeleton, PageContainer, ProgressBar, StatCard, StatusBadge } from "./shared";
+import { StockAlertsCard } from "./stock-alerts";
 import type { SectionId } from "@/types/clinic";
 import { getCachedJson, readClientCache } from "@/lib/client-cache";
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -14,14 +15,14 @@ import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
 export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onAction: (action: "client" | "appointment" | "quote" | "payment") => void; onNavigate: (section: SectionId, focus?: { date: string; time: string }) => void; userName?: string }) {
-  type DashboardData = { appointments: Array<{ id: string; date: string; time: string; procedure: string; status: string; patient?: { name: string } | null }>; patients: Array<{ name: string; status: string; lastVisit: string | null; createdAt: string }>; quotes: Array<{ id: string; items: string; total: number; status: string; patient?: { name: string } | null }>; payments: Array<{ value: number; status: string; date: string }> };
+  type DashboardData = { appointmentCount: number; appointments: Array<{ id: string; date: string; time: string; procedure: string; status: string; patient?: { name: string } | null }>; patients: Array<{ name: string; status: string; lastVisit: string | null; createdAt: string }>; quotes: Array<{ id: string; items: string; total: number; status: string; patient?: { name: string } | null }>; payments: Array<{ value: number; status: string; date: string }> };
   const cachedDashboard = readClientCache<DashboardData>("/api/dashboard/bootstrap");
   const [data, setData] = useState<DashboardData | null>(cachedDashboard ?? null);
   const [now, setNow] = useState(() => clinicNow());
   useEffect(() => {
     getCachedJson<DashboardData>("/api/dashboard/bootstrap")
-      .then((dashboardData) => setData({ appointments: dashboardData.appointments ?? [], patients: dashboardData.patients ?? [], quotes: dashboardData.quotes ?? [], payments: dashboardData.payments ?? [] }))
-      .catch(() => setData({ appointments: [], patients: [], quotes: [], payments: [] }));
+      .then((dashboardData) => setData({ appointmentCount: dashboardData.appointmentCount ?? 0, appointments: dashboardData.appointments ?? [], patients: dashboardData.patients ?? [], quotes: dashboardData.quotes ?? [], payments: dashboardData.payments ?? [] }))
+      .catch(() => setData({ appointmentCount: 0, appointments: [], patients: [], quotes: [], payments: [] }));
   }, []);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(clinicNow()), 30_000);
@@ -35,7 +36,7 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
       { label: "Receita", value: paid, format: (currentValue: number) => currency.format(Math.round(currentValue)), detail: "Pagamentos registrados" },
       { label: "Despesas", value: 0, format: (currentValue: number) => currency.format(Math.round(currentValue)), detail: "Sem despesas cadastradas" },
       { label: "Resultado", value: paid, format: (currentValue: number) => currency.format(Math.round(currentValue)), detail: "Receita líquida" },
-      { label: "Atendimentos", value: data?.appointments.length ?? 0, detail: "Na clínica" },
+      { label: "Atendimentos", value: data?.appointmentCount ?? 0, detail: "Na clínica" },
       { label: "Retornos", value: data?.patients.filter((item) => item.status === "Retorno").length ?? 0, detail: "Clientes em retorno" },
       { label: "Orçamentos", value: data?.quotes.length ?? 0, detail: `${currency.format(pending)} em aberto` },
     ];
@@ -111,6 +112,8 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
           </div>
         </div>
       </div>
+
+      <StockAlertsCard onOpen={() => onNavigate("estoque")} />
 
       <div className="hp-list-stagger grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         {stats.map((stat) => (

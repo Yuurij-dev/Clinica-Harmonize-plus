@@ -8,6 +8,7 @@ import { Modal } from "@/components/ui/modal";
 import { getCachedJson, readClientCache, invalidateClientCache } from "@/lib/client-cache";
 import { cn } from "@/lib/utils";
 import { fetchForSave, httpErrorMessage } from "@/lib/client-errors";
+import { useCan } from "./current-user";
 import { ListAccordion } from "./list-accordion";
 import { LoadingSkeleton } from "./shared";
 
@@ -16,12 +17,12 @@ type ProcedureOption = {
   name: string;
   category: string;
   materials?: string;
+  unit?: string | null;
   price: number;
 };
 
-type ProductOption = { name: string; unit: string };
 type CostSettings = { laborCost: number; facilityCost: number; medicationCost: number };
-type QuoteOptionsResponse = { procedures: ProcedureOption[]; products: ProductOption[]; costs: CostSettings };
+type QuoteOptionsResponse = { procedures: ProcedureOption[]; costs: CostSettings };
 type PatientQuote = { id: string; items: string; total: number; status: string; paymentMethod?: string | null; createdAt?: string };
 type SelectedProcedure = ProcedureOption & { quantity: number; unit: string };
 
@@ -105,10 +106,10 @@ function formatQuoteTitle(items: string) {
 }
 
 function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPaymentUndone, onStatusChange }: { patientId: string; journeyId?: string; quote?: PatientQuote; onSaved: (quote: PatientQuote) => void; onPaid?: () => void; onPaymentUndone?: () => void; onStatusChange: (quoteId: string, status: string) => void }) {
+  const canReopen = useCan("quote:edit-closed");
   const cached = readClientCache<QuoteOptionsResponse>("/api/quotes/options");
   const cachedCostSettings = readClientCache<{ settings?: CostSettings }>("/api/clinic/cost-settings");
   const [procedures, setProcedures] = useState<ProcedureOption[]>(cached?.procedures ?? []);
-  const [products, setProducts] = useState<ProductOption[]>(cached?.products ?? []);
   const [costs, setCosts] = useState<CostSettings>(cachedCostSettings?.settings ?? cached?.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
   const [editedSelection, setSelected] = useState<Record<string, number> | null>(null);
   const [loading, setLoading] = useState(!cached);
@@ -132,7 +133,6 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
     getCachedJson<QuoteOptionsResponse>("/api/quotes/options")
       .then((data) => {
         setProcedures(data.procedures ?? []);
-        setProducts(data.products ?? []);
         setCosts(data.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
       })
       .catch(() => setNotice("Não foi possível carregar os procedimentos cadastrados."))
@@ -158,8 +158,8 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
   const selected = editedSelection ?? restoredSelection;
 
   const selectedItems = useMemo<SelectedProcedure[]>(
-    () => procedures.filter((procedure) => selected[procedure.id]).map((procedure) => ({ ...procedure, quantity: selected[procedure.id], unit: procedureUnit(procedure, products) })),
-    [procedures, products, selected],
+    () => procedures.filter((procedure) => selected[procedure.id]).map((procedure) => ({ ...procedure, quantity: selected[procedure.id], unit: procedureUnit(procedure) })),
+    [procedures, selected],
   );
   const materialsTotal = selectedItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const extraCosts = costs.laborCost + costs.facilityCost + costs.medicationCost;
@@ -213,7 +213,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
       }
       if (!response.ok) throw new Error(data.message ?? httpErrorMessage(response, "Não foi possível salvar o orçamento"));
       if (!data.quote?.id) throw new Error("O orçamento foi processado, mas não retornou um identificador válido.");
-      invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
+      invalidateClientCache("/api/quotes", "/api/patients", "/api/dashboard/bootstrap");
       setLatestQuoteId(data.quote.id);
       setSavedQuoteSignature(currentQuoteSignature);
       onSaved(data.quote);
@@ -250,7 +250,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
         throw new Error(quoteData?.message ?? httpErrorMessage(quoteResponse, "O pagamento foi registrado, mas não foi possível concluir o orçamento"));
       }
       invalidateClientCache("/api/payments", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
-      invalidateClientCache("/api/quotes");
+      invalidateClientCache("/api/quotes", "/api/patients");
       setPaymentConfirmed(true);
       onStatusChange(latestQuoteId, "Aprovado");
       onPaid?.();
@@ -291,7 +291,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
     const response = await fetch(`/api/payments/${createdPaymentId}`, { method: "DELETE" });
     if (!response.ok) return;
     const quoteResponse = latestQuoteId ? await fetch(`/api/quotes/${latestQuoteId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Pendente" }) }) : null;
-    invalidateClientCache("/api/payments", "/api/quotes", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
+    invalidateClientCache("/api/payments", "/api/quotes", "/api/patients", "/api/dashboard/bootstrap", `/api/patients/${patientId}/history`);
     setPaymentNotice(false);
     setPaymentNoticeLeaving(false);
     setCreatedPaymentId(null);
@@ -332,7 +332,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
                     </button>
                     <label className="relative block w-[82px]">
                       <select aria-label={`Quantidade de ${procedure.name}`} disabled={paymentConfirmed} className="h-8 w-full appearance-none rounded-[5px] border border-[#dddde6] bg-white px-2 pr-6 text-[10px] font-semibold text-[#555668] outline-none focus:border-[#5147dc] disabled:cursor-not-allowed disabled:bg-[#f4f4f8] focus:border-[#5147dc]" value={quantity || 1} onChange={(event) => updateQuantity(procedure.id, Number(event.target.value))}>
-                        {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{formatQuantity(value, procedureUnit(procedure, products))}</option>)}
+                        {[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{formatQuantity(value, procedureUnit(procedure))}</option>)}
                       </select><ChevronDown className="pointer-events-none absolute right-2 top-2.5 h-3 w-3 text-[#77788a]" />
                     </label>
                     <span className="font-semibold text-[#555668]">{currency.format(procedure.price)}</span>
@@ -370,19 +370,14 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
           <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setConfirmPayment(false)}>Cancelar</Button><Button disabled={paymentSaving} type="button" onClick={registerPayment}>{paymentSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}{paymentSaving ? "Registrando..." : "Confirmar pagamento"}</Button></div>
         </div>
       </Modal>
-      {paymentNotice ? <div className={`${paymentNoticeLeaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-6 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] bg-[#25263a] px-4 py-3 text-xs font-bold text-white shadow-[0_18px_45px_rgba(31,32,50,0.24)]`}><div className="flex items-center gap-3"><span className="min-w-0 flex-1">Pagamento registrado com sucesso.</span><button className="shrink-0 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-black transition hover:bg-white/20" onClick={undoPayment}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-[#7cffb2]" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
+      {paymentNotice ? <div className={`${paymentNoticeLeaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-6 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] bg-[#25263a] px-4 py-3 text-xs font-bold text-white shadow-[0_18px_45px_rgba(31,32,50,0.24)]`}><div className="flex items-center gap-3"><span className="min-w-0 flex-1">Pagamento registrado com sucesso.</span><button className="shrink-0 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-black transition hover:bg-white/20" onClick={undoPayment} disabled={!canReopen} title={canReopen ? undefined : "Só administrador ou profissional pode desfazer um pagamento"}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-[#7cffb2]" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
     </div>
   );
 }
 
-function procedureUnit(procedure: ProcedureOption, products: ProductOption[]) {
-  const materialNames = (procedure.materials ?? "").toLocaleLowerCase("pt-BR");
-  const matchedProduct = products.find((product) => materialNames.includes(product.name.toLocaleLowerCase("pt-BR")));
-  const matchedUnit = (matchedProduct?.unit ?? "").toLocaleLowerCase("pt-BR");
-  if (matchedUnit.includes("ml")) return "ml";
-  if (matchedUnit.includes("frasco")) return "frasco";
-  if (materialNames.includes("ácido hialurônico") || materialNames.includes("poli-l-láctico") || materialNames.includes("hidroxiapatita")) return "ml";
-  return "unidade";
+// A unidade vem do primeiro material da ficha técnica do procedimento.
+function procedureUnit(procedure: ProcedureOption) {
+  return procedure.unit ?? "unidade";
 }
 
 function formatQuantity(quantity: number, unit: string) {

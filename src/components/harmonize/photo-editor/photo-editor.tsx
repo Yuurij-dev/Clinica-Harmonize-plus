@@ -216,7 +216,7 @@ export function PhotoEditor({ patientId, evaluationId, patientName, onSaved }: {
       const data = await response.json().catch(() => null) as { evaluation?: SavedEvaluation; message?: string } | null;
       if (!response.ok || !data?.evaluation) throw new Error(data?.message ?? httpErrorMessage(response, "Não foi possível salvar a avaliação"));
       setCurrentEvaluationId(data.evaluation.id);
-      invalidateClientCache(`/api/patients/${patientId}/evaluation`, `/api/patients/${patientId}/history`);
+      invalidateClientCache(`/api/patients/${patientId}/evaluation`, `/api/patients/${patientId}/history`, "/api/patients");
       const previews = await Promise.all(photos.map(async (photo) => ({ photo, dataUrl: await renderExport(photo) })));
       setSavedPreviews(previews);
       setShowResult(true);
