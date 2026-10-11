@@ -3,11 +3,8 @@ import { jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createSession, invalidateUserAuthCache, sessionCookieName } from "@/lib/auth";
+import { getAuthSecret } from "@/lib/auth-secret";
 import { prisma } from "@/lib/prisma";
-
-function getSecret() {
-  return new TextEncoder().encode(process.env.AUTH_SECRET ?? "harmonize-local-development-secret");
-}
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as { password?: string } | null;
@@ -20,8 +17,9 @@ export async function POST(request: Request) {
   if (!token) return NextResponse.json({ message: "Sessão de primeiro acesso inválida. Entre novamente." }, { status: 401 });
 
   let userId: string;
+  const authSecret = getAuthSecret();
   try {
-    const { payload } = await jwtVerify(token, getSecret());
+    const { payload } = await jwtVerify(token, authSecret);
     if (payload.passwordChangeOnly !== true || typeof payload.userId !== "string") {
       return NextResponse.json({ message: "Esta sessão não permite alterar a senha." }, { status: 403 });
     }

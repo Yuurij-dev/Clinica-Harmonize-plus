@@ -151,22 +151,3 @@ create unique index "Product_clinicId_name_key" on "Product" ("clinicId", "name"
 
 -- Execute this separately if the Patient table was created before CPF was added.
 alter table "Patient" add column if not exists "cpf" text;
-
-insert into "User" ("id", "name", "email", "passwordHash", "role")
-values (
-  'admin-user',
-  'Dra. Ana',
-  'admin',
-  '$2b$12$Pcss9e9V3IoqLJczBEX6vemHQ4/kxU770jR88/Gvn9FIlNDXEpxJO',
-  'ADMIN'
-)
-on conflict ("email") do nothing;
-
-insert into "Clinic" ("id", "name", "slug")
-values ('clinic-demo', 'Clínica Harmonize', 'harmonize-demo')
-on conflict ("slug") do nothing;
-
-insert into "ClinicMembership" ("id", "userId", "clinicId", "role", "isOwner")
-select 'membership-admin-demo', "id", 'clinic-demo', 'ADMIN', true
-from "User" where "email" = 'admin'
-on conflict ("userId", "clinicId") do nothing;

@@ -3,9 +3,25 @@ export function mergePatientAppointments<T extends { id?: string }>(appointments
   return [...appointments, ...additions.filter((appointment) => !appointment.id || !existingIds.has(appointment.id))];
 }
 
+const letterOrNumber = /[\p{L}\p{N}]/u;
+
+function isLetterOrNumberAt(value: string, index: number) {
+  const codePoint = value.codePointAt(index);
+  return codePoint !== undefined && letterOrNumber.test(String.fromCodePoint(codePoint));
+}
+
 function containsProcedureName(cardName: string, procedureName: string) {
-  const escapedName = procedureName.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapedName}(?=$|[^\\p{L}\\p{N}])`, "iu").test(cardName);
+  const name = procedureName.trim().toLocaleLowerCase("pt-BR");
+  if (!name) return false;
+  const card = cardName.toLocaleLowerCase("pt-BR");
+  let index = card.indexOf(name);
+  while (index !== -1) {
+    const previousUnit = card.charCodeAt(index - 1);
+    const previousIndex = index > 1 && previousUnit >= 0xdc00 && previousUnit <= 0xdfff ? index - 2 : index - 1;
+    if (!isLetterOrNumberAt(card, previousIndex) && !isLetterOrNumberAt(card, index + name.length)) return true;
+    index = card.indexOf(name, index + 1);
+  }
+  return false;
 }
 
 export function assignProcedureAppointmentsToCards<T extends { procedure: string; status: string }>(appointments: T[], cards: Array<{ name: string }>, procedureNames: Array<{ name: string }>) {
