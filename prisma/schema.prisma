@@ -247,7 +247,7 @@ model Quote {
   patientId     String?
   journeyId     String?
   items         String
-  total         Int
+  total         Int             @map("totalCents")
   paymentMethod String          @default("Cartão de crédito")
   status        String          @default("Pendente")
   expires       DateTime?       @db.Timestamptz(6)
@@ -268,7 +268,7 @@ model Payment {
   clinicId     String?
   patientId    String?
   journeyId    String?
-  value        Int
+  value        Int             @map("valueCents")
   method       String
   date         DateTime        @default(now()) @db.Timestamptz(6)
   status       String          @default("Pago")

@@ -3,12 +3,10 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LoginScreen, type RegisterResult, type RegisterValues } from "./login-screen";
-import { ClinicEntryTransition } from "./clinic-entry-transition";
 import { setClientCacheScope } from "@/lib/client-cache";
 
 export function LoginPageClient({ initialMode }: { initialMode: "login" | "register" }) {
   const router = useRouter();
-  const [clinicName, setClinicName] = useState<string | null>(null);
 
   useEffect(() => {
     document.documentElement.classList.remove("dark");
@@ -26,11 +24,8 @@ export function LoginPageClient({ initialMode }: { initialMode: "login" | "regis
     setClientCacheScope(data?.user?.id && data.user.clinic?.id ? `${data.user.id}:${data.user.clinic.id}` : null);
     window.localStorage.setItem("harmonize-session-change", String(Date.now()));
     if (data?.passwordChangeRequired) return { passwordChangeRequired: true };
-    setClinicName(data?.user?.clinic?.name ?? "Sua clínica");
-    window.setTimeout(() => {
-      router.replace("/");
-      router.refresh();
-    }, 1500);
+    router.replace("/");
+    router.refresh();
     return {};
   }
 
@@ -42,11 +37,8 @@ export function LoginPageClient({ initialMode }: { initialMode: "login" | "regis
     });
     const data = await response.json().catch(() => null) as { message?: string; clinicName?: string } | null;
     if (!response.ok) return { error: data?.message ?? "Não foi possível salvar a nova senha." };
-    setClinicName(data?.clinicName ?? "Sua clínica");
-    window.setTimeout(() => {
-      router.replace("/");
-      router.refresh();
-    }, 1500);
+    router.replace("/");
+    router.refresh();
     return {};
   }
 
@@ -65,5 +57,5 @@ export function LoginPageClient({ initialMode }: { initialMode: "login" | "regis
     return { error: result.error } satisfies RegisterResult;
   }
 
-  return clinicName ? <ClinicEntryTransition clinicName={clinicName} /> : <LoginScreen initialMode={initialMode} onLogin={handleLogin} onChangePassword={handlePasswordChange} onRegister={handleRegister} />;
+  return <LoginScreen initialMode={initialMode} onLogin={handleLogin} onChangePassword={handlePasswordChange} onRegister={handleRegister} />;
 }
