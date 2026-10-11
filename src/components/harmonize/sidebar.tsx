@@ -4,6 +4,7 @@ import type { SectionId } from "@/types/clinic";
 import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import { visibleSections } from "@/lib/permissions";
 
 type SidebarProps = {
   active: SectionId;
@@ -12,7 +13,7 @@ type SidebarProps = {
   onClose: () => void;
   onNewAppointment: () => void;
   clinicName?: string;
-  isAdmin?: boolean;
+  role?: string | null;
 };
 
 export function Sidebar({
@@ -22,9 +23,10 @@ export function Sidebar({
   onClose,
   onNewAppointment,
   clinicName,
-  isAdmin = false,
+  role,
 }: SidebarProps) {
-  const visibleNavItems = isAdmin ? navItems : navItems.filter((item) => ["agenda", "clientes", "orcamentos"].includes(item.id));
+  const allowed = visibleSections(role);
+  const visibleNavItems = navItems.filter((item) => allowed.includes(item.id));
   const content = (
     <aside className="flex h-full w-[220px] flex-col border-r border-border bg-card px-4 py-5 text-card-foreground">
       <div className="mb-7 flex items-center justify-between gap-3 px-1">

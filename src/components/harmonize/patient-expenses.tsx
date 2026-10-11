@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { getCachedJson, readClientCache, invalidateClientCache } from "@/lib/client-cache";
 import { cn } from "@/lib/utils";
+import { useCan } from "./current-user";
 import { ListAccordion } from "./list-accordion";
 import { LoadingSkeleton } from "./shared";
 
@@ -104,6 +105,7 @@ function formatQuoteTitle(items: string) {
 }
 
 function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPaymentUndone, onStatusChange }: { patientId: string; journeyId?: string; quote?: PatientQuote; onSaved: (quote: PatientQuote) => void; onPaid?: () => void; onPaymentUndone?: () => void; onStatusChange: (quoteId: string, status: string) => void }) {
+  const canReopen = useCan("quote:edit-closed");
   const cached = readClientCache<QuoteOptionsResponse>("/api/quotes/options");
   const cachedCostSettings = readClientCache<{ settings?: CostSettings }>("/api/clinic/cost-settings");
   const [procedures, setProcedures] = useState<ProcedureOption[]>(cached?.procedures ?? []);
@@ -364,7 +366,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
           <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setConfirmPayment(false)}>Cancelar</Button><Button disabled={paymentSaving} type="button" onClick={registerPayment}>{paymentSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}{paymentSaving ? "Registrando..." : "Confirmar pagamento"}</Button></div>
         </div>
       </Modal>
-      {paymentNotice ? <div className={`${paymentNoticeLeaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-6 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] bg-[#25263a] px-4 py-3 text-xs font-bold text-white shadow-[0_18px_45px_rgba(31,32,50,0.24)]`}><div className="flex items-center gap-3"><span className="min-w-0 flex-1">Pagamento registrado com sucesso.</span><button className="shrink-0 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-black transition hover:bg-white/20" onClick={undoPayment}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-[#7cffb2]" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
+      {paymentNotice ? <div className={`${paymentNoticeLeaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-6 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] bg-[#25263a] px-4 py-3 text-xs font-bold text-white shadow-[0_18px_45px_rgba(31,32,50,0.24)]`}><div className="flex items-center gap-3"><span className="min-w-0 flex-1">Pagamento registrado com sucesso.</span><button className="shrink-0 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-black transition hover:bg-white/20" onClick={undoPayment} disabled={!canReopen} title={canReopen ? undefined : "Só administrador ou profissional pode desfazer um pagamento"}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-[#7cffb2]" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
     </div>
   );
 }

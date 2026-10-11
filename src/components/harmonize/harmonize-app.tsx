@@ -21,6 +21,8 @@ import {
 } from "./sections";
 import type { SectionId } from "@/types/clinic";
 import { CLIENT_CACHE_UNAUTHORIZED_EVENT, setClientCacheScope } from "@/lib/client-cache";
+import { visibleSections } from "@/lib/permissions";
+import { CurrentRoleProvider } from "./current-user";
 
 type CurrentUser = { id: string; clinicId: string; name: string; role: string; isOwner?: boolean; trialExpired?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
 type AgendaFocus = { date: string; time: string };
@@ -58,9 +60,8 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const [agendaFocus, setAgendaFocus] = useState<AgendaFocus | null>(null);
   const [undoNotice, setUndoNotice] = useState<UndoNotice>(null);
   const undoNoticeId = useRef(0);
-  const isAdmin = currentUser?.role === "ADMIN";
   const trialExpired = currentUser?.trialExpired === true;
-  const restrictedSections: SectionId[] = ["agenda", "clientes", "orcamentos"];
+  const allowedSections = visibleSections(currentUser?.role);
 
   const activeUndoNoticeId = undoNotice?.id;
   useEffect(() => {
@@ -71,7 +72,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   }, [activeUndoNoticeId]);
 
   function selectSection(section: SectionId, focus?: AgendaFocus) {
-    if (!isAdmin && !restrictedSections.includes(section)) {
+    if (!allowedSections.includes(section)) {
       return;
     }
     setAgendaFocus(section === "agenda" ? focus ?? null : null);
@@ -165,6 +166,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   }
 
   return (
+    <CurrentRoleProvider value={currentUser?.role ?? null}>
     <div className="harmonize-app min-h-screen bg-background text-foreground">
       <Sidebar
         active={active}
@@ -173,30 +175,31 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
         onSelect={selectSection}
         onNewAppointment={() => openCreate("agenda", "appointment")}
         clinicName={currentUser?.clinic?.name}
-        isAdmin={isAdmin}
+        role={currentUser?.role}
       />
       <div className="lg:pl-[220px]">
         <Topbar user={currentUser} onMenu={() => setMobileOpen(true)} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onLogout={logout} />
         <main className={`mx-auto w-full ${active === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-10 pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
-          {currentUser && active === "dashboard" && isAdmin ? <Dashboard userName={currentUser?.name} onAction={(action) => {
+          {currentUser && allowedSections.includes("dashboard") && active === "dashboard" ? <Dashboard userName={currentUser?.name} onAction={(action) => {
             const target = { client: ["clientes", "client"], appointment: ["agenda", "appointment"], quote: ["orcamentos", "quote"], payment: ["pagamentos", "payment"] }[action] as [SectionId, NonNullable<typeof createDialog>];
             openCreate(target[0], target[1]);
           }} onNavigate={selectSection} /> : null}
           {currentUser && active === "agenda" ? <ScheduleSection focus={agendaFocus} openCreate={createDialog === "appointment"} onCreateOpen={() => openCreate("agenda", "appointment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && active === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => openCreate("clientes", "client")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {currentUser && active === "procedimentos" && isAdmin ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => openCreate("procedimentos", "procedure")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {currentUser && active === "estoque" && isAdmin ? <StockSection onSaved={showNotice} /> : null}
+          {currentUser && allowedSections.includes("procedimentos") && active === "procedimentos" ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => openCreate("procedimentos", "procedure")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && allowedSections.includes("estoque") && active === "estoque" ? <StockSection onSaved={showNotice} /> : null}
           {currentUser && active === "orcamentos" ? <QuotesSection openCreate={createDialog === "quote"} onCreateOpen={() => openCreate("orcamentos", "quote")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {currentUser && active === "pagamentos" && isAdmin ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => openCreate("pagamentos", "payment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {currentUser && active === "financeiro" && isAdmin ? <FinanceSection /> : null}
-          {currentUser && active === "relatorios" && isAdmin ? <ReportsSection /> : null}
-          {currentUser && active === "calculadora" && isAdmin ? <SettingsSection mode="calculator" /> : null}
-          {currentUser && active === "configuracoes" && isAdmin ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
-          {currentUser && active === "configuracoes" && isAdmin ? <StockSettingsCard onSaved={showNotice} /> : null}
+          {currentUser && allowedSections.includes("pagamentos") && active === "pagamentos" ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => openCreate("pagamentos", "payment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && allowedSections.includes("financeiro") && active === "financeiro" ? <FinanceSection /> : null}
+          {currentUser && allowedSections.includes("relatorios") && active === "relatorios" ? <ReportsSection /> : null}
+          {currentUser && allowedSections.includes("calculadora") && active === "calculadora" ? <SettingsSection mode="calculator" /> : null}
+          {currentUser && allowedSections.includes("configuracoes") && active === "configuracoes" ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
+          {currentUser && allowedSections.includes("configuracoes") && active === "configuracoes" ? <StockSettingsCard onSaved={showNotice} /> : null}
         </main>
       </div>
       <AppToaster />
       {undoNotice ? <div className={`${undoNotice.leaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-6 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] border border-border bg-card px-4 py-3 text-xs font-bold text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.18)]`} role="status"><div className="flex items-center gap-3"><span className="min-w-0 flex-1">{undoNotice.message}</span><button className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-[11px] font-black text-foreground transition hover:bg-muted/80" onClick={() => { const undo = undoNotice.undo; setUndoNotice(null); undo(); }}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-success" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
     </div>
+    </CurrentRoleProvider>
   );
 }
