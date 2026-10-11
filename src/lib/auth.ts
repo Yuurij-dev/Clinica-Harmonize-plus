@@ -4,6 +4,7 @@ import { getAuthSecret } from "./auth-secret";
 import { prisma } from "./prisma";
 
 export const sessionCookieName = "harmonize_session";
+// shortcut: cache em memória por instância; quem sai da equipe ainda passa por até 15s; usar sessão no banco se exigirem revogação imediata.
 const authCacheTtl = 15_000;
 
 type AuthenticatedUser = {
@@ -70,6 +71,7 @@ export async function getCurrentUser({ requireActiveTrial = false }: CurrentUser
           role: true,
           memberships: {
             take: 1,
+            orderBy: { id: "asc" },
             select: { role: true, isOwner: true, clinic: { select: { id: true, name: true, slug: true, trialEndsAt: true } } },
           },
         },

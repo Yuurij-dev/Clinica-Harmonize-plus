@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
+import { serializePayment, toCents } from "@/lib/finance";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 
 export async function GET() {
@@ -10,7 +11,7 @@ export async function GET() {
   const denied = denyUnless(user.role, "payments:access");
   if (denied) return denied;
   const payments = await prisma.payment.findMany({ where: { clinicId: user.clinicId }, orderBy: { date: "desc" }, include: { patient: { select: { name: true } } } });
-  return NextResponse.json({ payments });
+  return NextResponse.json({ payments: payments.map(serializePayment) });
 }
 
 export async function POST(request: Request) {
@@ -18,11 +19,11 @@ export async function POST(request: Request) {
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const denied = denyUnless(user.role, "payments:access");
   if (denied) return denied;
-  const body = await request.json().catch(() => null) as { patient?: string; patientId?: string; journeyId?: string; value?: number; method?: string; status?: string; installments?: string } | null;
-  const patient = body?.patientId ? await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId } }) : body?.patient ? await prisma.patient.findFirst({ where: { name: body.patient, clinicId: user.clinicId } }) : null;
+  const body = await request.json().catch(() => null) as { patientId?: string; journeyId?: string; value?: number; method?: string; status?: string; installments?: string } | null;
+  const patient = body?.patientId ? await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId } }) : null;
   const value = Number(body?.value);
   if (!patient || !Number.isFinite(value) || !body?.method || !body.installments) return NextResponse.json({ message: "Selecione um paciente e preencha o pagamento." }, { status: 400 });
   const journey = await ensurePatientJourney(patient.id, user.clinicId, body.journeyId);
-  const payment = await prisma.payment.create({ data: { clinicId: user.clinicId, patientId: patient.id, journeyId: journey.id, value: Math.max(0, Math.round(value)), method: body.method, status: body.status || "Pago", installments: body.installments }, include: { patient: { select: { name: true } } } });
-  return NextResponse.json({ payment }, { status: 201 });
+  const payment = await prisma.payment.create({ data: { clinicId: user.clinicId, patientId: patient.id, journeyId: journey.id, valueCents: toCents(value), method: body.method, status: body.status || "Pago", installments: body.installments }, include: { patient: { select: { name: true } } } });
+  return NextResponse.json({ payment: serializePayment(payment) }, { status: 201 });
 }

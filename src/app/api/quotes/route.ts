@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { serializeQuote, toCents } from "@/lib/finance";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 
 export async function GET(request: Request) {
@@ -14,20 +15,20 @@ export async function GET(request: Request) {
     orderBy: { createdAt: "desc" },
     include: { patient: { select: { name: true } } },
   });
-  return NextResponse.json({ quotes });
+  return NextResponse.json({ quotes: quotes.map(serializeQuote) });
 }
 
 export async function POST(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const body = await request.json().catch(() => null) as { patient?: string; patientId?: string; journeyId?: string; items?: string; total?: number; expires?: string; paymentMethod?: string } | null;
-  const patient = body?.patientId ? await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId } }) : body?.patient ? await prisma.patient.findFirst({ where: { name: body.patient, clinicId: user.clinicId } }) : null;
+  const body = await request.json().catch(() => null) as { patientId?: string; journeyId?: string; items?: string; total?: number; expires?: string; paymentMethod?: string } | null;
+  const patient = body?.patientId ? await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId } }) : null;
   const total = Number(body?.total);
   if (!patient || !body?.items?.trim() || !Number.isFinite(total)) return NextResponse.json({ message: "Selecione um paciente e preencha o orçamento." }, { status: 400 });
   const journey = await ensurePatientJourney(patient.id, user.clinicId, body.journeyId);
   const paymentMethod = ["Cartão de crédito", "Cartão de débito", "Pix"].includes(body?.paymentMethod ?? "") ? body?.paymentMethod : "Cartão de crédito";
-  const quote = await prisma.quote.create({ data: { clinicId: user.clinicId, patientId: patient.id, journeyId: journey.id, items: body.items.trim(), total: Math.max(0, Math.round(total)), paymentMethod, expires: parseDate(body.expires) }, include: { patient: { select: { name: true } } } });
-  return NextResponse.json({ quote }, { status: 201 });
+  const quote = await prisma.quote.create({ data: { clinicId: user.clinicId, patientId: patient.id, journeyId: journey.id, items: body.items.trim(), totalCents: toCents(total), paymentMethod, expires: parseDate(body.expires) }, include: { patient: { select: { name: true } } } });
+  return NextResponse.json({ quote: serializeQuote(quote) }, { status: 201 });
 }
 
 function parseDate(value?: string) {

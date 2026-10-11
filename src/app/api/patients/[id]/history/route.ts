@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { dateOnly } from "@/lib/clinic-time";
+import { appointmentHasPassed, clinicNow, dateOnly } from "@/lib/clinic-time";
+import { serializePayment } from "@/lib/finance";
 import { can, observationKindsFor } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
@@ -32,7 +33,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     includeAppointments ? prisma.appointment.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: [{ date: "desc" }, { time: "desc" }] }) : Promise.resolve([]),
     includePayments ? prisma.payment.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { date: "desc" } }) : Promise.resolve([]),
     includeQuotes ? prisma.quote.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { createdAt: "desc" }, select: { id: true, items: true, status: true, createdAt: true } }) : Promise.resolve([]),
-    includeProcedureRecords ? prisma.patientProcedure.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { performedAt: "desc" }, select: { id: true, name: true, professional: true, performedAt: true, ...(clinical ? { notes: true } : {}), beforePhoto: true, afterPhoto: true, photoSessions: { orderBy: { createdAt: "asc" }, select: { id: true, name: true, beforePhoto: true, afterPhoto: true, createdAt: true } } } }) : Promise.resolve([]),
+    includeProcedureRecords ? prisma.patientProcedure.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { performedAt: "desc" }, select: { id: true, quoteId: true, name: true, professional: true, performedAt: true, ...(clinical ? { notes: true } : {}), beforePhoto: true, afterPhoto: true, photoSessions: { orderBy: { createdAt: "asc" }, select: { id: true, name: true, beforePhoto: true, afterPhoto: true, createdAt: true } } } }) : Promise.resolve([]),
     prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { appointmentToleranceMinutes: true } }),
     // Materiais usados no paciente (rastreio): saídas de atendimento, sem custo.
     includeProcedureRecords && clinical ? prisma.stockMovement.findMany({ where: { clinicId: user.clinicId, patientId, type: "attendance" }, orderBy: { attendanceDate: "desc" }, select: { id: true, appointmentId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, unit: true } }, lot: { select: { code: true, expiresOn: true } }, reversedBy: { select: { id: true } } } }) : Promise.resolve([]),
@@ -42,7 +43,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   ]);
   const now = clinicNow();
   const toleranceMinutes = clinic?.appointmentToleranceMinutes ?? 15;
-  const overdue = appointments.filter((appointment) => appointment.status === "Agendado" && appointmentHasPassed(appointment.date, appointment.time, now, toleranceMinutes));
+  const overdue = appointments.filter((appointment) => appointment.status === "Agendado" && appointmentHasPassed(appointment, now, toleranceMinutes));
   if (overdue.length) {
     await prisma.appointment.updateMany({ where: { clinicId: user.clinicId, id: { in: overdue.map((appointment) => appointment.id) }, ...(journeyId ? { journeyId } : {}) }, data: { status: "Faltou" } });
   }
@@ -65,19 +66,6 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     ...pendingMaterials.map((item) => ({ id: item.id, appointmentId: item.appointmentId, name: item.product.name, unit: item.product.unit, quantity: item.quantity, lotCode: null, lotExpiresOn: null, kind: item.attendanceKind, attendanceName: item.attendanceName, date: item.attendanceDate, status: "pending" })),
   ];
 
-  return NextResponse.json({ patient: { id: patient.id, appointments: updatedAppointments, payments, quotes, procedureRecords: responseProcedureRecords, materialsUsed, observations, appointmentToleranceMinutes: toleranceMinutes, ...(includeAppointmentProcedureNames ? { appointmentProcedureNames } : {}) } });
+  return NextResponse.json({ patient: { id: patient.id, appointments: updatedAppointments, payments: payments.map(serializePayment), quotes, procedureRecords: responseProcedureRecords, materialsUsed, observations, appointmentToleranceMinutes: toleranceMinutes, ...(includeAppointmentProcedureNames ? { appointmentProcedureNames } : {}) } });
 }
 
-function clinicNow() {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return { date: `${values.year}-${values.month}-${values.day}`, minutes: Number(values.hour) * 60 + Number(values.minute) };
-}
-
-function appointmentHasPassed(date: Date, time: string, now: { date: string; minutes: number }, toleranceMinutes: number) {
-  const appointmentDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
-  if (appointmentDate < now.date) return true;
-  if (appointmentDate > now.date) return false;
-  const [hours, minutes] = time.split(":").map(Number);
-  return hours * 60 + minutes + toleranceMinutes <= now.minutes;
-}

@@ -764,7 +764,7 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
       const data = await response.json().catch(() => null) as { message?: string } | null;
       if (!response.ok) throw new Error(data?.message ?? "Não foi possível atualizar o procedimento.");
       setAppointmentStatuses((current) => ({ ...current, [appointment.id as string]: status }));
-      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/patients", "/api/appointments", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/patients", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
       if (status === "Atendido") setCheckAppointmentId(appointment.id);
       return true;
     } catch (appointmentError) {
@@ -810,7 +810,7 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
         setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, beforePhoto: data.procedure?.beforePhoto ?? "", afterPhoto: data.procedure?.afterPhoto ?? "", status: procedurePhotoStatus(data.procedure?.beforePhoto ?? null, data.procedure?.afterPhoto ?? null) } : item));
         onProcedurePhotoUpdated(procedureId, data.procedure);
       }
-      invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`, "/api/patients");
+      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/patients");
     } catch (photoError) {
       setError(photoError instanceof Error ? photoError.message : "Não foi possível atualizar a foto.");
     } finally {
@@ -840,7 +840,7 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
       if (!response.ok || !data.session) throw new Error(data.message ?? "Não foi possível criar a sessão de fotos.");
       const session = { id: data.session.id, name: data.session.name, beforePhoto: data.session.beforePhoto ?? "", afterPhoto: data.session.afterPhoto ?? "" };
       setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, photoSessions: [...item.photoSessions, session] } : item));
-      invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`);
+      invalidateClientCache(`/api/patients/${patientId}/history`);
       return session;
     } catch (sessionError) {
       setError(sessionError instanceof Error ? sessionError.message : "Não foi possível criar a sessão de fotos.");
@@ -858,7 +858,7 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
       const data = await response.json().catch(() => null) as { message?: string } | null;
       if (!response.ok) throw new Error(data?.message ?? "Não foi possível excluir a sessão de fotos.");
       setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, photoSessions: item.photoSessions.filter((session) => session.id !== sessionId) } : item));
-      invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`);
+      invalidateClientCache(`/api/patients/${patientId}/history`);
       return true;
     } catch (sessionError) {
       setError(sessionError instanceof Error ? sessionError.message : "Não foi possível excluir a sessão de fotos.");
@@ -876,7 +876,7 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
       const data = await response.json().catch(() => null) as { session?: { id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }; message?: string } | null;
       if (!response.ok || !data?.session) throw new Error(data?.message ?? "Não foi possível renomear a sessão de fotos.");
       setProcedures((current) => (current.length ? current : history?.procedures ?? []).map((item) => item.id === procedureId ? { ...item, photoSessions: item.photoSessions.map((session) => session.id === sessionId ? { ...session, name: data.session?.name ?? name.trim() } : session) } : item));
-      invalidateClientCache(`/api/patients/${patientId}/history`, `/api/patients/${patientId}/procedures`);
+      invalidateClientCache(`/api/patients/${patientId}/history`);
       return true;
     } catch (sessionError) {
       setError(sessionError instanceof Error ? sessionError.message : "Não foi possível renomear a sessão de fotos.");
@@ -1004,7 +1004,7 @@ function ptBrDateToIso(value: string) {
   return match ? `${match[3]}-${match[2]}-${match[1]}` : null;
 }
 
-type PatientHistoryResponse = { patient?: { appointmentToleranceMinutes?: number; appointmentProcedureNames?: Array<{ name: string }>; observations?: PatientObservation[]; materialsUsed?: MaterialUsed[]; appointments: Array<{ id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string; materialsCheck?: string | null }>; payments: Array<{ id: string; value: number; method: string; status: string; installments: string }>; quotes: Array<{ id: string; items: string; status: string; createdAt?: string }>; procedureRecords: Array<{ id: string; name: string; professional: string; performedAt: string; notes: string; beforePhoto: string | null; afterPhoto: string | null; photoSessions?: Array<{ id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }> }> } };
+type PatientHistoryResponse = { patient?: { appointmentToleranceMinutes?: number; appointmentProcedureNames?: Array<{ name: string }>; observations?: PatientObservation[]; materialsUsed?: MaterialUsed[]; appointments: Array<{ id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string; materialsCheck?: string | null }>; payments: Array<{ id: string; value: number; method: string; status: string; installments: string }>; quotes: Array<{ id: string; items: string; status: string; createdAt?: string }>; procedureRecords: Array<{ id: string; quoteId?: string | null; name: string; professional: string; performedAt: string; notes: string; beforePhoto: string | null; afterPhoto: string | null; photoSessions?: Array<{ id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }> }> } };
 
 function mapPatientHistory(data: PatientHistoryResponse) {
   const appointments = data.patient?.appointments ?? [];
@@ -1015,7 +1015,7 @@ function mapPatientHistory(data: PatientHistoryResponse) {
   const persistedProcedures = data.patient?.procedureRecords ?? [];
   const quoteDates = new Map((data.patient?.quotes ?? []).map((quote) => [quote.id, quote.createdAt]));
   const procedures = persistedProcedures.length
-    ? persistedProcedures.map((item) => ({ id: item.id, name: useQuoteTitle ? latestQuoteItems ?? item.name : item.name, date: new Date(item.performedAt).toLocaleDateString("pt-BR"), professional: item.professional, status: procedurePhotoStatus(item.beforePhoto, item.afterPhoto), beforePhoto: item.beforePhoto ?? "", afterPhoto: item.afterPhoto ?? "", photoSessions: item.photoSessions?.map((session) => ({ id: session.id, name: session.name, beforePhoto: session.beforePhoto ?? "", afterPhoto: session.afterPhoto ?? "" })) ?? [], notes: item.notes.startsWith("__quote:") ? "" : item.notes, quoteDate: item.notes.startsWith("__quote:") ? quoteDates.get(item.notes.slice("__quote:".length)) : undefined }))
+    ? persistedProcedures.map((item) => ({ id: item.id, name: useQuoteTitle ? latestQuoteItems ?? item.name : item.name, date: new Date(item.performedAt).toLocaleDateString("pt-BR"), professional: item.professional, status: procedurePhotoStatus(item.beforePhoto, item.afterPhoto), beforePhoto: item.beforePhoto ?? "", afterPhoto: item.afterPhoto ?? "", photoSessions: item.photoSessions?.map((session) => ({ id: session.id, name: session.name, beforePhoto: session.beforePhoto ?? "", afterPhoto: session.afterPhoto ?? "" })) ?? [], notes: item.notes, quoteDate: item.quoteId ? quoteDates.get(item.quoteId) : undefined }))
     : paidQuotes.map((quote): PatientProcedureRecord => ({ name: quote.items, date: quote.createdAt ? new Date(quote.createdAt).toLocaleDateString("pt-BR") : new Date().toLocaleDateString("pt-BR"), professional: "", status: "Aguardando foto", beforePhoto: "", afterPhoto: "", photoSessions: [], notes: "", quoteDate: quote.createdAt }))
       .concat(appointments.filter((item) => ["Atendido", "Finalizado"].includes(item.status)).map((item) => ({ name: item.procedure, date: new Date(item.date).toLocaleDateString("pt-BR"), professional: item.professional, status: item.status, beforePhoto: "", afterPhoto: "", photoSessions: [], notes: item.notes })));
   const history: PatientHistoryRecord = {
@@ -1349,7 +1349,7 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
       const data = await response.json().catch(() => null) as { message?: string } | null;
       if (!response.ok) throw new Error(data?.message ?? "Não foi possível atualizar o atendimento.");
       setEditedAppointments((current) => ({ ...current, [appointment.id as string]: { ...appointment, status } }));
-      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/appointments", "/api/agenda/bootstrap", "/api/dashboard/bootstrap", ...(status === "Atendido" ? ["/api/patients"] : []));
+      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/agenda/bootstrap", "/api/dashboard/bootstrap", ...(status === "Atendido" ? ["/api/patients"] : []));
       if (status === "Atendido") setCheckAppointmentId(appointment.id);
       return true;
     } catch (statusError) {
@@ -1420,7 +1420,7 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
         setCreatedAppointments((current) => mergePatientAppointments(current, [appointmentRecord]));
         onAppointmentCreated(appointmentRecord);
       }
-      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/appointments", "/api/patients", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/patients", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
       setEditingAppointment(null); setProfessionalChoice(null);
       onReturnAppointmentClose();
     } catch (scheduleError) {

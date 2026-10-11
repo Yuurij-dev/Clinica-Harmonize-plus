@@ -30,7 +30,7 @@ export async function POST(request: Request) {
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, passwordHash: true, mustChangePassword: true, memberships: { take: 1, select: { clinic: { select: { name: true } } } } },
+    select: { id: true, passwordHash: true, mustChangePassword: true, memberships: { take: 1, orderBy: { id: "asc" }, select: { clinic: { select: { name: true } } } } },
   });
   if (!user?.mustChangePassword || !user.memberships[0]) {
     return NextResponse.json({ message: "Não foi possível validar este acesso." }, { status: 403 });

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { rejectInvalidCpf } from "@/lib/patient-cpf";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
@@ -63,6 +64,8 @@ export async function POST(request: Request) {
   if (!name || !phone || !Number.isInteger(age) || age < 0 || age > 130) {
     return NextResponse.json({ message: "Nome, telefone e idade válida são obrigatórios." }, { status: 400 });
   }
+  const cpfError = await rejectInvalidCpf(user.clinicId, cpf);
+  if (cpfError) return cpfError;
 
   const patient = await prisma.patient.create({
     data: {
