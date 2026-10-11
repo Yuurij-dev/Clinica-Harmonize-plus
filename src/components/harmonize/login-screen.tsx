@@ -219,7 +219,8 @@ function FirstAccessPasswordForm({ onSubmit }: { onSubmit: (password: string) =>
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (password !== confirmation) {
+    // Both values are entered locally by the same user; no stored secret is compared.
+    if (password !== confirmation) { // nosemgrep: rules.ajinabraham.njsscan.crypto.timing_attack_node.node_timing_attack
       setError("As senhas não coincidem.");
       return;
     }
