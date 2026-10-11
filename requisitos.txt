@@ -1,25 +1,117 @@
 O que nosso CRM vai ter?
 
-📋 Prontuário completo do paciente (Terminando)
-📸 Registro e evolução com fotos (Terminando)
-📝 Histórico de procedimentos realizados (terminando)
-💉 Registro de produtos, técnicas e protocolos
-📅 Agenda e agendamento de pacientes *
-🔔 Lembretes e confirmações de consultas *
-👥 Cadastro completo de pacientes *
-📊 Evolução e acompanhamento de resultados (Terminando)
-💰 Precificação de procedimentos 
-🧾 Controle de valores e serviços realizados 
-📦 Controle de produtos e estoque *
-💳 Controle financeiro e formas de pagamento 
-📈 Relatórios e indicadores da clínica (Falta ajustes)
-📱 Histórico de atendimento e comunicação
-📑 Termos, documentos e registros do paciente
-🔐 Organização e segurança das informações
-🎯 Gestão de retornos e acompanhamento pós-procedimento (Em andamento)
-🤝 Gestão de relacionamento com o paciente (CRM)
-📣 Lembretes de retorno e campanhas de relacionamento
-📊 Indicadores de faturamento, procedimentos e pacientes (Falta ajustes)
-⚙️ Protocolos e procedimentos personalizáveis (Falta ajustes)
+Legenda: [PRONTO] cumpre o item | [PARCIAL] falta uma parte central do item | [NÃO INICIADO] ainda não existe
+Em cada item: "Já tem" é o que existe no código; "Falta" é o que foi encontrado faltando.
+Reanálise de 11/10/2026, conferida no código. O * é a marcação que já estava aqui e foi mantida.
+
+📋 Prontuário completo do paciente [PARCIAL]
+   Já tem: abas Dados, Avaliação, Orçamento, Procedimentos, Agendamentos, Observações (clínicas e administrativas), Histórico e Pagamentos
+   Falta: anamnese e dados de saúde (alergias, medicamentos, condições); a avaliação hoje só guarda fotos com anotações, sem queixa, conduta ou conclusão em texto; termos assinados (item de documentos)
+
+📸 Registro e evolução com fotos [PRONTO]
+   Já tem: fotos de antes e depois por ângulo, editor de fotos, galeria e fotos nas avaliações
+   Falta: o botão "Ver anexos" está desabilitado ("em breve"); as fotos ficam gravadas como imagem dentro do banco, sem armazenamento de arquivos; a comparação entre sessões diferentes está no item de evolução
+
+📝 Histórico de procedimentos realizados [PRONTO]
+   Já tem: linha do tempo com procedimentos, agendamentos, pagamentos e observações, com filtros; materiais e lotes usados em cada atendimento
+   Falta: exportar ou imprimir o histórico do paciente
+
+💉 Registro de produtos, técnicas e protocolos [PARCIAL]
+   Já tem: produtos com lote, validade, fornecedor e uso rastreável por paciente
+   Falta: registrar a técnica usada (hoje só texto livre nas observações); registrar o protocolo seguido
+
+📅 Agenda e agendamento de pacientes * [PRONTO]
+   Já tem: agenda, status do atendimento, faltas automáticas, alertas no topo e escolha do profissional
+   Falta: aviso de horário já ocupado (hoje só valida data passada e horário de funcionamento, então dá para marcar dois pacientes no mesmo horário com o mesmo profissional); bloqueio de horários, folgas e férias do profissional
+
+🔔 Lembretes e confirmações de consultas * [NÃO INICIADO]
+   Já tem: alertas internos na tela e o botão "Confirmar por WhatsApp", ainda desabilitado
+   Falta: canal de envio (WhatsApp, e-mail ou SMS); agendador que dispare no horário certo; link de confirmação para o paciente; marca "Confirmado" no agendamento; modelos de mensagem e antecedência configurável
+
+👥 Cadastro completo de pacientes * [PARCIAL]
+   Já tem: nome, CPF, telefone, idade, status e jornadas
+   Falta: data de nascimento (hoje só a idade em número), e-mail, endereço, responsável (menores) e origem do paciente; excluir ou arquivar paciente (decidido deixar para depois)
+
+📊 Evolução e acompanhamento de resultados [PARCIAL]
+   Já tem: fotos de antes e depois, com comparação por ângulo
+   Falta: gráfico ou linha do tempo da evolução; comparação entre sessões em datas diferentes; registro do resultado em texto ou escala
+
+💰 Precificação de procedimentos [PRONTO]
+   Já tem: valor, duração, margem e ficha técnica de materiais; calculadora de custos
+   Falta: a margem do procedimento é digitada à mão no cadastro (a calculadora calcula a margem em separado); desconto e pacotes de procedimentos
+
+🧾 Controle de valores e serviços realizados [PARCIAL]
+   Já tem: orçamentos que geram procedimentos e se ligam aos pagamentos pela jornada do paciente
+   Falta: o botão "Gerar PDF" do orçamento não faz nada; "Enviar" só marca o status como enviado, não envia; desconto no orçamento; os itens do orçamento são um texto único, não uma lista estruturada; o pagamento não aponta para um orçamento específico
+
+📦 Controle de produtos e estoque * [PRONTO]
+   Já tem: lotes, validade, movimentações, compras, alertas e saídas pendentes
+   Falta: nada relevante encontrado
+
+💳 Controle financeiro e formas de pagamento [PRONTO]
+   Já tem: pagamentos com forma e parcelas, despesas e despesas recorrentes
+   Falta: controle de parcelas com vencimento e baixa (o parcelamento é só um texto, como "À vista"); recibo ou comprovante
+
+📈 Relatórios e indicadores da clínica [PARCIAL]
+   Já tem: cards de receita, custo e margem calculados a partir dos dados
+   Falta: filtro por período (os valores somam tudo); a lista "Relatórios iniciais" é só texto, sem relatório por trás; o aviso "8 pacientes possuem retorno nos próximos 7 dias" é um texto fixo; exportação real (hoje só imprimir a tela)
+
+📱 Histórico de atendimento e comunicação [NÃO INICIADO]
+   Já tem: nada
+   Falta: registro manual de contatos (ligação, WhatsApp, e-mail, presencial) por paciente; registro automático das mensagens enviadas pelo sistema; vínculo ao paciente e ao agendamento
+
+📑 Termos, documentos e registros do paciente [NÃO INICIADO]
+   Já tem: nada
+   Falta: envio e armazenamento de arquivos; modelos de termo de consentimento; assinatura; vínculo ao paciente e à data; visualizar e baixar
+
+🔐 Organização e segurança das informações [PARCIAL]
+   Já tem: login, controle de acesso por papel (administrador, profissional e atendente, aplicado na API) e dados separados por clínica
+   Falta: a verificação de e-mail está desativada (a conta nasce já verificada); "esqueci minha senha"; registro de auditoria (quem viu ou alterou o quê); proteção extra no login (dois fatores); consentimento de dados (LGPD)
+
+🎯 Gestão de retornos e acompanhamento pós-procedimento [PARCIAL]
+   Já tem: marcar retorno a partir do procedimento e campo de próximo retorno
+   Falta: "próximo retorno" e "última visita" são campos manuais, não são atualizados pela agenda; fila de retornos pendentes e atrasados; intervalo de retorno sugerido (viria do protocolo)
+
+🤝 Gestão de relacionamento com o paciente (CRM) [NÃO INICIADO]
+   Já tem: nada
+   Falta: segmentação de pacientes (por procedimento, por tempo sem voltar); etapas de relacionamento (funil); aniversários; origem do paciente; histórico de contato (item de comunicação)
+
+📣 Lembretes de retorno e campanhas de relacionamento [NÃO INICIADO]
+   Já tem: nada
+   Falta: canal de envio; listas de destinatários; modelos de mensagem; agendamento de envio; consentimento e descadastro; métricas de resultado
+
+📊 Indicadores de faturamento, procedimentos e pacientes [PARCIAL]
+   Já tem: dashboard com receita, atendimentos, retornos, orçamentos em aberto e atendimentos por mês
+   Falta: o card Despesas é fixo em R$ 0 e o Resultado repete a Receita (não usa as despesas do Financeiro); atendimentos e retornos contam tudo, sem período; indicadores por procedimento e por profissional
+
+⚙️ Protocolos e procedimentos personalizáveis [PARCIAL]
+   Já tem: procedimentos personalizáveis, com ficha técnica de materiais
+   Falta: o conceito de protocolo (decidido deixar para depois): protocolo opcional por procedimento, com etapas, intervalo de retorno e cuidados pós; padrão criado pelo administrador e cópia pessoal do profissional; checklist durante o atendimento
+
+Resumo: 6 prontos, 10 parciais e 5 não iniciados.
+
+O que ainda não tem (nenhum código feito):
+- Lembretes e confirmações de consultas
+- Histórico de atendimento e comunicação
+- Termos, documentos e registros do paciente
+- Gestão de relacionamento com o paciente (CRM)
+ 
+Os lembretes, o histórico de comunicação e as campanhas dependem de um canal de envio e de um agendador externo ao sistema. O registro manual de contatos e os documentos do paciente não dependem.
+
+O que está pela metade (falta fechar a parte central):
+- Prontuário completo do paciente
+- Registro de produtos, técnicas e protocolos
+- Cadastro completo de pacientes
+- Evolução e acompanhamento de resultados
+- Controle de valores e serviços realizados
+- Relatórios e indicadores da clínica
+- Organização e segurança das informações
+- Gestão de retornos
+- Indicadores de faturamento, procedimentos e pacientes
+- Protocolos e procedimentos personalizáveis
+
+Ideias já conversadas, ainda sem implementação:
+- Protocolo opcional por procedimento, com padrão criado pelo administrador e cópia pessoal do profissional
+- Exclusão de paciente, só para administrador (decisão em aberto: arquivar ou apagar)
 
 Tudo em um só lugar para organizar, acompanhar e fazer a clínica crescer.
