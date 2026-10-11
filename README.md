@@ -11,10 +11,13 @@ O projeto usa Prisma com PostgreSQL quando conectado ao Supabase.
 ```env
 DATABASE_URL="postgresql://...:6543/postgres?pgbouncer=true&connection_limit=1"
 DIRECT_URL="postgresql://...:5432/postgres?sslmode=require"
-AUTH_SECRET="uma-chave-secreta-longa"
+AUTH_SECRET=""
+SEED_ADMIN_PASSWORD=""
 ```
 
-`DATABASE_URL` é usada pela aplicação. `DIRECT_URL` é usada pelo Prisma em migrações.
+`DATABASE_URL` é usada pela aplicação. `DIRECT_URL` é usada pelo Prisma em migrações. Gere valores aleatórios distintos para `AUTH_SECRET` e `SEED_ADMIN_PASSWORD` com `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`. A aplicação exige pelo menos 32 bytes para `AUTH_SECRET` e não usa uma chave padrão.
+Antes de executar `npm run db:seed`, defina `SEED_ADMIN_PASSWORD` com uma senha única de pelo menos 12 caracteres. O seed cria ou atualiza a senha da conta `admin`; as contas opcionais `teste` e `pro` só são criadas quando `SEED_TEST_PASSWORD` e `SEED_PRO_PASSWORD` também forem definidas com senhas únicas. O script não imprime as senhas.
+Em bancos que já receberam as credenciais de demonstração antigas, altere as senhas dessas contas antes de expor a aplicação.
 
 ## Multi-clínica
 

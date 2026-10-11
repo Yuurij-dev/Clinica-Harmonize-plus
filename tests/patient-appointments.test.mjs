@@ -28,3 +28,15 @@ test("a grouped card appointment is assigned only to the most specific matching 
   assert.deepEqual(assignProcedureAppointmentsToCards([appointments[1]], cards, names), [undefined, appointments[1]]);
   assert.deepEqual(assignProcedureAppointmentsToCards([appointments[1]], [{ name: "Botoxyl (1x)" }], names), [undefined]);
 });
+
+test("procedure names with punctuation and Unicode match only complete names", () => {
+  const appointment = { procedure: "Peeling (A+B)", status: "Agendado" };
+  const names = [{ name: appointment.procedure }];
+  const cards = [
+    { name: "PEELING (A+B) (1x)" },
+    { name: "Peeling (A+B)extra (1x)" },
+    { name: "PréPeeling (A+B) (1x)" },
+    { name: "𐐀Peeling (A+B) (1x)" },
+  ];
+  assert.deepEqual(assignProcedureAppointmentsToCards([appointment], cards, names), [appointment, undefined, undefined, undefined]);
+});
