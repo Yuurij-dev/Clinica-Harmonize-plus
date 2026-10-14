@@ -1,0 +1,53 @@
+name: Prisma migrations
+
+on:
+  pull_request:
+    paths:
+      - "prisma/**"
+      - "prisma.config.ts"
+      - "scripts/check-prisma-migrations.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/prisma-migrations.yml"
+  push:
+    branches: [develop, main]
+    paths:
+      - "prisma/**"
+      - "prisma.config.ts"
+      - "scripts/check-prisma-migrations.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/prisma-migrations.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: harmonize
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d harmonize"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/harmonize?schema=public
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/harmonize?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run db:migration:check
+      - run: npx prisma validate
+      - run: npm run db:generate
+      - run: npm run db:migrate:deploy
+      - run: npm run db:migrate:status
