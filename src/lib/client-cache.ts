@@ -17,6 +17,7 @@ function policyFor(key: string): CachePolicy {
   if (key.startsWith("/api/agenda/bootstrap")) return { freshFor: 20_000, retainFor: 90_000 };
   if (key.startsWith("/api/dashboard/bootstrap")) return { freshFor: 45_000, retainFor: 180_000 };
   if (key.includes("/history?")) return { freshFor: 30_000, retainFor: 120_000 };
+  if (key.includes("/follow-ups")) return { freshFor: 30_000, retainFor: 90_000 };
   if (key.includes("/evaluation?") && !key.includes("list=1")) return { freshFor: 60_000, retainFor: 120_000 };
   if (key.startsWith("/api/clinic/") || key === "/api/team" || key === "/api/procedures" || key === "/api/products" || key === "/api/quotes/options") {
     return { freshFor: 300_000, retainFor: 900_000 };
@@ -25,7 +26,7 @@ function policyFor(key: string): CachePolicy {
 }
 
 function isPhotoKey(key: string) {
-  return key.includes("/history?") || (key.includes("/evaluation?") && !key.includes("list=1"));
+  return key.includes("/history?") || key.includes("/follow-ups") || (key.includes("/evaluation?") && !key.includes("list=1"));
 }
 
 function remove(key: string) {
@@ -103,8 +104,17 @@ export const CLIENT_CACHE_INVALIDATED_EVENT = "client-cache:invalidated";
 export const CLIENT_CACHE_UNAUTHORIZED_EVENT = "client-cache:unauthorized";
 
 export function invalidateClientCache(...keys: string[]) {
-  for (const cachedKey of cache.keys()) {
-    if (keys.some((key) => cachedKey === key || cachedKey.startsWith(`${key}?`))) remove(cachedKey);
+  const affected = new Set(keys);
+  for (const key of keys) {
+    const patientResource = key.match(/^\/api\/patients\/([^/?]+)\/(history|evaluation|observations|procedures)(?:[/?]|$)/);
+    if (patientResource) {
+      const patientPrefix = `/api/patients/${patientResource[1]}`;
+      affected.add(`${patientPrefix}/profile`);
+      affected.add(`${patientPrefix}/journeys`);
+    }
   }
-  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent<string[]>(CLIENT_CACHE_INVALIDATED_EVENT, { detail: keys }));
+  for (const cachedKey of cache.keys()) {
+    if ([...affected].some((key) => cachedKey === key || cachedKey.startsWith(`${key}?`))) remove(cachedKey);
+  }
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent<string[]>(CLIENT_CACHE_INVALIDATED_EVENT, { detail: [...affected] }));
 }

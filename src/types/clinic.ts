@@ -26,6 +26,7 @@ export type Patient = {
   phone: string;
   age: number;
   status: string;
+  createdAt?: string;
   lastVisit: string;
   lastVisitRaw?: string;
   nextReturn: string;

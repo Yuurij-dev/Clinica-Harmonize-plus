@@ -85,6 +85,7 @@ type ApiPatient = {
   phone: string;
   age: number;
   status: string;
+  createdAt?: string;
   lastVisit: string | null;
   nextReturn: string | null;
   totalValue: number;
@@ -128,6 +129,7 @@ function mapApiPatient(patient: ApiPatient): Patient {
     phone: patient.phone,
     age: patient.age,
     status: patient.status,
+    createdAt: patient.createdAt,
     lastVisit: patient.lastVisit ? displayDate(patient.lastVisit) : "Primeiro contato",
     lastVisitRaw: patient.lastVisit ?? undefined,
     nextReturn: patient.nextReturn ? displayDate(patient.nextReturn) : "A definir",
@@ -252,7 +254,6 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
       <PatientDetail
         key={selectedPatient.id ?? selectedPatient.name}
         patient={selectedPatient}
-        journey={journeyForPatient(selectedPatient)}
         onBack={() => {
           setSelectedPatientName(null);
           router.replace("/clientes");

@@ -7,6 +7,7 @@ import {
   Eraser,
   MousePointer2,
   Pencil,
+  Move,
   Redo2,
   RotateCcw,
   Save,
@@ -24,8 +25,11 @@ import type { EditorTool } from "./types";
 
 const tools: { id: EditorTool; label: string; icon: LucideIcon }[] = [
   { id: "select", label: "Seleção", icon: MousePointer2 },
+  { id: "pan", label: "Mover foto", icon: Move },
   { id: "pen", label: "Desenho livre", icon: Pencil },
+  { id: "point", label: "Ponto", icon: Circle },
   { id: "line", label: "Linha", icon: Slash },
+  { id: "curve", label: "Curva", icon: Pencil },
   { id: "arrow", label: "Seta", icon: ArrowUpRight },
   { id: "ellipse", label: "Círculo/elipse", icon: Circle },
   { id: "text", label: "Texto", icon: Type },
@@ -43,11 +47,13 @@ const colors = [
 export function EditorToolbar({
   tool,
   color,
+  strokeWidth,
   canUndo,
   canRedo,
   hasSelection,
   onToolChange,
   onColorChange,
+  onStrokeWidthChange,
   onUndo,
   onRedo,
   onZoomIn,
@@ -61,11 +67,13 @@ export function EditorToolbar({
 }: {
   tool: EditorTool;
   color: string;
+  strokeWidth: number;
   canUndo: boolean;
   canRedo: boolean;
   hasSelection: boolean;
   onToolChange: (tool: EditorTool) => void;
   onColorChange: (color: string) => void;
+  onStrokeWidthChange: (width: number) => void;
   onUndo: () => void;
   onRedo: () => void;
   onZoomIn: () => void;
@@ -102,6 +110,11 @@ export function EditorToolbar({
         ))}
         </div>
       </div>
+
+      <label className="grid gap-1.5 border-t border-[#ececf3] pt-3 text-[11px] font-black text-[#303144]">
+        Espessura: {strokeWidth}px
+        <input aria-label="Espessura da marcação" className="w-full accent-[#5147dc]" type="range" min="1" max="12" value={strokeWidth} onChange={(event) => onStrokeWidthChange(Number(event.target.value))} />
+      </label>
 
       <div className="border-t border-[#ececf3] pt-3">
         <p className="mb-2 text-[11px] font-black text-[#303144]">Cores</p>

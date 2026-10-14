@@ -58,6 +58,22 @@ test("invalidates only affected keys, including query-string variants", async ()
   assert.equal(requests, 3);
 });
 
+test("invalidates patient profile and journey summaries after clinical history changes", async () => {
+  let requests = 0;
+  globalThis.fetch = async (url) => {
+    requests += 1;
+    return new Response(JSON.stringify({ url, requests }), { status: 200 });
+  };
+  setClientCacheScope("user-a:clinic-a");
+  const profile = "/api/patients/1/profile";
+  const journeys = "/api/patients/1/journeys";
+  const history = "/api/patients/1/history?tab=Procedimentos&journeyId=j1";
+  await Promise.all([getCachedJson(profile), getCachedJson(journeys), getCachedJson(history)]);
+  invalidateClientCache("/api/patients/1/history");
+  await Promise.all([getCachedJson(profile), getCachedJson(journeys), getCachedJson(history)]);
+  assert.equal(requests, 6);
+});
+
 test("keeps patient and tab responses separate while reusing revisited tabs", async () => {
   let requests = 0;
   globalThis.fetch = async (url) => {

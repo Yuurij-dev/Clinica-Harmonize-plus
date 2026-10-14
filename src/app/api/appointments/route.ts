@@ -23,6 +23,9 @@ export async function POST(request: Request) {
 
   const patient = await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId } });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
+  if (body.journeyId && !await prisma.patientJourney.findFirst({ where: { id: body.journeyId, patientId: patient.id, clinicId: user.clinicId, archivedAt: null }, select: { id: true } })) {
+    return NextResponse.json({ message: "Tratamento não encontrado." }, { status: 404 });
+  }
 
   const now = clinicNow();
   const day = body.date ? parseAppointmentDay(body.date) : now.date;
