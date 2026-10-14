@@ -8,7 +8,7 @@ Especificações e tarefas ficam em arquivos markdown locais em `.scratch/<funci
 
 ### Testes ponta a ponta
 
-Depois de adicionar ou alterar uma funcionalidade com rota em `src/app/api`, use o agente `e2e-tester` antes de dizer que está pronta. Ele roda `npm run test:e2e` com a conta de teste (clínica isolada) e acrescenta testes para a funcionalidade em `tests/e2e/smoke.mjs`.
+Depois de adicionar ou alterar uma funcionalidade com rota em `src/app/api`, use o agente `e2e-tester` antes de dizer que está pronta. Ele acrescenta testes para a funcionalidade em `tests/e2e/smoke.mjs` e roda, com a conta de teste (clínica isolada), só as partes do roteiro ligadas à mudança (`npm run test:e2e -- <partes>`), não o roteiro inteiro.
 
 ### Domain docs
 
