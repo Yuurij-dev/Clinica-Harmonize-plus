@@ -290,7 +290,9 @@ model Product {
   name           String
   category       String
   unit           String
-  costCents      Int
+  costCents      Int                  @default(0)
+  /// Legacy compatibility column, synchronized with costCents by a PostgreSQL trigger.
+  cost           Int?                 @ignore
   minStock       Float                @default(0)
   archivedAt     DateTime?            @db.Timestamptz(6)
   supplier       String
