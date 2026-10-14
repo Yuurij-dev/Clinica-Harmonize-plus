@@ -1,5 +1,6 @@
 // Testes ponta a ponta pela API, com a conta de teste, contra o servidor em execução (npm run dev).
 // Uso: npm run test:e2e   (E2E_BASE_URL muda o endereço; padrão http://localhost:3000)
+//      npm run test:e2e -- estoque agenda   roda só essas partes (e as que elas precisam); ver `suites` abaixo.
 // Precisa de TEST_ACCOUNT_EMAIL e TEST_ACCOUNT_PASSWORD no .env. Só roda na clínica de teste, que é esvaziada
 // no começo e no fim de cada execução. A parte de navegador usa o Microsoft Edge instalado (E2E_BROWSER muda o canal).
 import "dotenv/config";
@@ -160,7 +161,8 @@ async function loginLockout() {
 }
 
 // Telas: os valores aparecem formatados e o pagamento registrado pela tela vai para o paciente escolhido.
-async function browser(homonym) {
+// Abre o navegador já logado na conta de teste. pageErrors junta os erros de JavaScript da página.
+async function withPage(fn) {
   const instance = await chromium.launch({ channel: process.env.E2E_BROWSER ?? "msedge", headless: true });
   try {
     const context = await instance.newContext({ timezoneId: "America/Sao_Paulo", locale: "pt-BR" });
@@ -169,7 +171,14 @@ async function browser(homonym) {
     const pageErrors = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
     page.setDefaultTimeout(30_000);
+    await fn(page, pageErrors);
+  } finally {
+    await instance.close();
+  }
+}
 
+async function browser(homonym) {
+  await withPage(async (page, pageErrors) => {
     await page.goto(`${baseUrl}/pagamentos`);
     await page.getByRole("cell", { name: "R$ 150,50" }).first().waitFor();
     check("tela de Pagamentos mostra R$ 150,50", true);
@@ -191,9 +200,7 @@ async function browser(homonym) {
       await page.goto(`${baseUrl}/${section}`, { waitUntil: "networkidle" });
     }
     check("telas principais abrem sem erro de JavaScript", pageErrors.length === 0, pageErrors.join(" | "));
-  } finally {
-    await instance.close();
-  }
+  });
 }
 
 // Apaga os dados de negócio da clínica de teste (mantém clínica, usuário e vínculo).
@@ -219,21 +226,42 @@ async function resetTestClinic() {
   ]);
 }
 
+// Partes do roteiro, na ordem em que rodam. `needs` lista as partes que criam os dados que esta usa.
+const suites = {
+  pacientes: { needs: [], run: async (state) => Object.assign(state, await patientsAndPayments()) },
+  orcamentos: { needs: ["pacientes"], run: async (state) => { state.quote = await quotesAndProcedures(state.patient); } },
+  agenda: { needs: ["pacientes"], run: (state) => appointments(state.patient) },
+  jornadas: { needs: ["orcamentos"], run: (state) => journeys(state.patient, state.quote) },
+  configuracoes: { needs: [], run: () => settings() },
+  estoque: { needs: [], run: () => stock() },
+  telas: { needs: ["orcamentos"], run: (state) => browser(state.homonym) },
+  login: { needs: [], run: () => loginLockout() },
+};
+
+// Sem nomes, roda tudo. Com nomes, roda essas partes e as que elas precisam.
+function selectSuites(names) {
+  if (names.length === 0) return new Set(Object.keys(suites));
+  const selected = new Set();
+  const add = (name) => {
+    if (!suites[name]) throw new Error(`Parte desconhecida: "${name}". Use: ${Object.keys(suites).join(", ")}.`);
+    if (selected.has(name)) return;
+    selected.add(name);
+    suites[name].needs.forEach(add);
+  };
+  names.forEach(add);
+  return selected;
+}
+
 async function main() {
   if (!email || !password) throw new Error("Defina TEST_ACCOUNT_EMAIL e TEST_ACCOUNT_PASSWORD no .env.");
+  const selected = selectSuites(process.argv.slice(2));
   const alive = await fetch(`${baseUrl}/login`).catch(() => null);
   if (!alive?.ok) throw new Error(`Servidor fora do ar em ${baseUrl}. Rode npm run dev.`);
   await login();
   await resetTestClinic();
 
-  const { patient, homonym } = await patientsAndPayments();
-  const quote = await quotesAndProcedures(patient);
-  await appointments(patient);
-  await journeys(patient, quote);
-  await settings();
-  await stock();
-  await browser(homonym);
-  await loginLockout();
+  const state = {};
+  for (const [name, suite] of Object.entries(suites)) if (selected.has(name)) await suite.run(state);
 
   for (const result of results) console.log(`${result.ok ? "OK    " : "FALHOU"} ${result.name}${result.detail ? ` — ${result.detail}` : ""}`);
   const failed = results.filter((result) => !result.ok).length;

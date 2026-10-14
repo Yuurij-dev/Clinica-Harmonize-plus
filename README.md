@@ -2,31 +2,28 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Banco de dados
 
-O projeto usa Prisma com PostgreSQL quando conectado ao Supabase.
+O desenvolvimento e os testes usam PostgreSQL local. Inicie Docker Desktop e então prepare a base:
 
-1. Crie um projeto no Supabase.
-2. Copie as URLs do Pooler e da conexão direta para o `.env`:
-
-```env
-DATABASE_URL="postgresql://...:6543/postgres?pgbouncer=true&connection_limit=1"
-DIRECT_URL="postgresql://...:5432/postgres?sslmode=require"
-AUTH_SECRET=""
-SEED_ADMIN_PASSWORD=""
+```bash
+npm run db:local:up
+npm run db:migrate:deploy
+npm run db:generate
 ```
 
-3. Num banco vazio, crie as tabelas com `npx prisma db push`.
+As URLs locais estão no `.env.example`. Para integrar recursos hospedados no Supabase, use `DATABASE_URL` com pooler de transações (6543) e `DIRECT_URL` com conexão direta ou pooler de sessão (5432). `SHADOW_DATABASE_URL` deve apontar para um banco separado e descartável para criar migrations com `prisma migrate dev`.
 
-`DATABASE_URL` é usada pela aplicação. `DIRECT_URL` é usada pelo Prisma em migrações. Gere valores aleatórios distintos para `AUTH_SECRET` e `SEED_ADMIN_PASSWORD` com `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`. A aplicação exige pelo menos 32 bytes para `AUTH_SECRET` e não usa uma chave padrão.
+Gere valores aleatórios distintos para `AUTH_SECRET` e `SEED_ADMIN_PASSWORD` com `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`. A aplicação exige pelo menos 32 bytes para `AUTH_SECRET` e não usa uma chave padrão.
 Antes de executar `npm run db:seed`, defina `SEED_ADMIN_PASSWORD` com uma senha única de pelo menos 12 caracteres. O seed cria ou atualiza a senha da conta `admin`; as contas opcionais `teste` e `pro` só são criadas quando `SEED_TEST_PASSWORD` e `SEED_PRO_PASSWORD` também forem definidas com senhas únicas. O script não imprime as senhas.
 Em bancos que já receberam as credenciais de demonstração antigas, altere as senhas dessas contas antes de expor a aplicação.
 
 ## Multi-clínica
 
-Cada usuário precisa estar vinculado a uma clínica por `ClinicMembership`. As entidades de negócio possuem `clinicId`, e as APIs filtram os registros pela clínica da sessão autenticada. Para preparar um banco novo:
+Cada usuário precisa estar vinculado a uma clínica por `ClinicMembership`. As entidades de negócio possuem `clinicId`, e as APIs filtram os registros pela clínica da sessão autenticada. Para preparar um banco local novo:
 
 ```bash
-npx prisma db push
-npx prisma generate
+npm ci
+npm run db:migrate:deploy
+npm run db:generate
 npm run db:seed
 npm run db:tenant-seed
 ```
@@ -35,11 +32,9 @@ O `db:tenant-seed` cria a clínica inicial, vincula a ela os usuários que ainda
 
 ## Atualizar um banco que já tem dados
 
-O histórico em `prisma/migrations` não serve para `prisma migrate deploy` (a primeira migration foi gerada para SQLite e o banco foi criado com `db push`). Não use `db push` num banco com dados: ele troca colunas renomeadas por colunas novas e perde os valores. Para cada migration nova:
+O histórico anterior foi preservado em `prisma/legacy-migrations-before-postgresql-baseline` para auditoria; a pasta ativa contém uma baseline PostgreSQL limpa. Em uma base existente, **não execute o SQL da baseline sobre as tabelas atuais**. Faça backup, compare o schema existente com o schema Prisma e, somente quando estiver confirmado que representam o mesmo estado, registre a baseline como aplicada com `npx prisma migrate resolve --applied 0_init`. Esse comando altera apenas o controle de migrations; não cria nem apaga tabelas. Se a comparação apontar diferenças, pare e prepare uma migration de reconciliação específica antes de continuar.
 
-1. `npm run db:backup`
-2. Rode o `migration.sql` dentro de `BEGIN;` ... `COMMIT;` com `npx prisma db execute --url <conexão direta, porta 5432> --file <arquivo>`.
-3. Confira com `npx prisma migrate diff --from-url <conexão direta> --to-schema-datamodel prisma/schema.prisma --script`.
+O fluxo de desenvolvimento, produção e reconciliação está em [docs/prisma-migrations.md](docs/prisma-migrations.md).
 
 ## Backup
 
