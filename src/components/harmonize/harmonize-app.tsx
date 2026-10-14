@@ -20,15 +20,47 @@ import {
   SettingsSection,
 } from "./sections";
 import type { SectionId } from "@/types/clinic";
-import { CLIENT_CACHE_UNAUTHORIZED_EVENT, setClientCacheScope } from "@/lib/client-cache";
+import { CLIENT_CACHE_UNAUTHORIZED_EVENT, getCachedJson, setClientCacheScope } from "@/lib/client-cache";
 import { visibleSections } from "@/lib/permissions";
 import { CurrentRoleProvider } from "./current-user";
+import { ClinicEntryTransition } from "./clinic-entry-transition";
 
 type CurrentUser = { id: string; clinicId: string; name: string; role: string; isOwner?: boolean; trialExpired?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
 type AgendaFocus = { date: string; time: string };
 type CreateDialog = "appointment" | "client" | "procedure" | "quote" | "payment";
 type HarmonizeAppProps = { initialCreate?: CreateDialog };
 type UndoNotice = { id: number; message: string; undo: () => void; leaving: boolean } | null;
+type StartupState =
+  | { status: "checking-session"; sessionConfirmed: false; clinicName?: string; message: string }
+  | { status: "loading-data"; sessionConfirmed: true; clinicName?: string; message: string }
+  | { status: "error"; sessionConfirmed: boolean; clinicName?: string; message: string }
+  | { status: "ready"; sessionConfirmed: true; clinicName?: string; message?: string };
+
+const initialScreenResources: Partial<Record<SectionId, { key: string; message: string }>> = {
+  dashboard: { key: "/api/dashboard/bootstrap", message: "Carregando os indicadores da clínica..." },
+  agenda: { key: "/api/agenda/bootstrap", message: "Carregando os dados da agenda..." },
+  clientes: { key: "/api/patients", message: "Carregando a lista de pacientes..." },
+  procedimentos: { key: "/api/procedures", message: "Carregando os procedimentos..." },
+  estoque: { key: "/api/products", message: "Carregando os materiais do estoque..." },
+  orcamentos: { key: "/api/quotes", message: "Carregando os orçamentos..." },
+  pagamentos: { key: "/api/payments", message: "Carregando os pagamentos..." },
+  financeiro: { key: "/api/finance/summary?period=month", message: "Carregando o resumo financeiro..." },
+  relatorios: { key: "/api/dashboard/bootstrap", message: "Carregando os dados dos relatórios..." },
+  calculadora: { key: "/api/clinic/cost-settings", message: "Carregando os custos da clínica..." },
+  configuracoes: { key: "/api/clinic/cost-settings", message: "Carregando as configurações da clínica..." },
+};
+
+type SessionCheck = { status: number; user?: CurrentUser };
+let sessionCheck: Promise<SessionCheck> | null = null;
+
+function getSessionCheck() {
+  if (!sessionCheck) {
+    sessionCheck = fetch("/api/auth/me", { cache: "no-store" })
+      .then(async (response) => ({ status: response.status, ...(response.ok ? await response.json() as { user?: CurrentUser } : {}) }))
+      .finally(() => { sessionCheck = null; });
+  }
+  return sessionCheck;
+}
 
 const sectionPaths: Record<SectionId, string> = {
   dashboard: "/dashboard",
@@ -57,11 +89,14 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [createDialog, setCreateDialog] = useState<CreateDialog | null>(initialCreate ?? null);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [startup, setStartup] = useState<StartupState>({ status: "checking-session", sessionConfirmed: false, message: "Validando seu acesso..." });
+  const [startupAttempt, setStartupAttempt] = useState(0);
   const [agendaFocus, setAgendaFocus] = useState<AgendaFocus | null>(null);
   const [undoNotice, setUndoNotice] = useState<UndoNotice>(null);
   const undoNoticeId = useRef(0);
   const trialExpired = currentUser?.trialExpired === true;
   const allowedSections = visibleSections(currentUser?.role);
+  const initialSection = useRef(active).current;
 
   const activeUndoNoticeId = undoNotice?.id;
   useEffect(() => {
@@ -83,30 +118,53 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
 
   useEffect(() => {
     let active = true;
-    fetch("/api/auth/me")
-      .then(async (response) => {
-        if (!response.ok) {
-          if (active) {
-            setClientCacheScope(null);
-            router.replace("/login");
-          }
-          return null;
-        }
-        return response.json() as Promise<{ user: CurrentUser }>;
-      })
-      .then((data) => {
-        if (!active || !data?.user) return;
-        setClientCacheScope(`${data.user.id}:${data.user.clinicId}`);
-        setCurrentUser(data.user);
-      })
-      .catch(() => {
-        if (active) {
+    async function initializeApp() {
+      let sessionConfirmed = false;
+      let clinicName: string | undefined;
+      setStartup({ status: "checking-session", sessionConfirmed: false, message: "Validando seu acesso..." });
+      try {
+        const session = await getSessionCheck();
+        if (!active) return;
+        if (session.status === 401) {
           setClientCacheScope(null);
           router.replace("/login");
+          return;
         }
-      });
+        if (session.status < 200 || session.status >= 300 || !session.user) {
+          throw new Error("Não foi possível validar sua sessão. Tente novamente.");
+        }
+
+        const user = session.user;
+        sessionConfirmed = true;
+        clinicName = user.clinic?.name;
+        setClientCacheScope(`${user.id}:${user.clinicId}`);
+        setCurrentUser(user);
+
+        const resource = visibleSections(user.role).includes(initialSection) ? initialScreenResources[initialSection] : undefined;
+        setStartup({
+          status: "loading-data",
+          sessionConfirmed: true,
+          clinicName,
+          message: resource?.message ?? "Preparando seu ambiente de trabalho...",
+        });
+        if (resource) await getCachedJson<unknown>(resource.key);
+        if (active) setStartup({ status: "ready", sessionConfirmed: true, clinicName });
+      } catch {
+        if (!active) return;
+        setStartup({
+          status: "error",
+          sessionConfirmed,
+          clinicName,
+          message: sessionConfirmed
+            ? "Não foi possível carregar os dados necessários para abrir esta tela. Confira sua conexão e tente novamente."
+            : "Não foi possível validar sua sessão. Confira sua conexão e tente novamente.",
+        });
+      }
+    }
+
+    void initializeApp();
     return () => { active = false; };
-  }, [router]);
+  }, [initialSection, router, startupAttempt]);
 
   useEffect(() => {
     const handleUnauthorized = () => {
@@ -153,6 +211,19 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       setCreateDialog(null);
       router.replace("/login");
     }
+  }
+
+  if (startup.status !== "ready" || !currentUser) {
+    return (
+      <ClinicEntryTransition
+        sessionConfirmed={startup.sessionConfirmed}
+        clinicName={startup.clinicName ?? currentUser?.clinic?.name}
+        message={startup.message ?? "Preparando seu ambiente de trabalho..."}
+        error={startup.status === "error" ? startup.message : undefined}
+        onRetry={() => setStartupAttempt((attempt) => attempt + 1)}
+        onBackToLogin={() => { void logout(); }}
+      />
+    );
   }
 
   function showNotice(message: string, undo?: () => void, tone: "success" | "warning" = "success") {
