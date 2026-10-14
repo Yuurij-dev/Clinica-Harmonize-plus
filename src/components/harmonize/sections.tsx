@@ -329,6 +329,8 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   const [appointmentFormError, setAppointmentFormError] = useState("");
   const [activeView, setActiveView] = useState<"Dia" | "Semana" | "Mês">(() => focus ? "Dia" : "Semana");
   const [calendarDate, setCalendarDate] = useState(() => focus ? focusDate(focus.date) : clinicNow());
+  const [calendarDatePickerOpen, setCalendarDatePickerOpen] = useState(false);
+  const [calendarDateDraft, setCalendarDateDraft] = useState(() => calendarDateKey(focus ? focusDate(focus.date) : clinicNow()));
   const focusTime = focus?.time;
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [professional, setProfessional] = useState("Todos");
@@ -581,7 +583,49 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
               </Button>
             ))}
           </div>
-          <Button variant="secondary" size="icon" aria-label="Selecionar data" title="Selecionar data"><CalendarDays className="h-4 w-4" /></Button>
+          <div className="relative">
+            <Button
+              variant="secondary"
+              size="icon"
+              aria-label="Selecionar data"
+              aria-expanded={calendarDatePickerOpen}
+              aria-haspopup="dialog"
+              title="Ir para uma data"
+              onClick={() => {
+                setCalendarDateDraft(calendarDateKey(calendarDate));
+                setCalendarDatePickerOpen((current) => !current);
+              }}
+            ><CalendarDays className="h-4 w-4" /></Button>
+            {calendarDatePickerOpen ? (
+              <form
+                className="absolute right-0 top-11 z-40 w-64 rounded-[8px] border border-[#e7e9f2] bg-white p-3 shadow-[0_12px_32px_rgba(38,39,58,0.16)]"
+                role="dialog"
+                aria-label="Ir para uma data da agenda"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!/^\d{4}-\d{2}-\d{2}$/.test(calendarDateDraft)) return;
+                  const [year, month, day] = calendarDateDraft.split("-").map(Number);
+                  setCalendarDate(new Date(year, month - 1, day));
+                  setCalendarDatePickerOpen(false);
+                }}
+              >
+                <label htmlFor="schedule-date-picker" className="mb-2 block text-xs font-semibold text-[#454659]">Escolha a data</label>
+                <input
+                  id="schedule-date-picker"
+                  type="date"
+                  className={cn(fieldClassName, "w-full text-xs")}
+                  value={calendarDateDraft}
+                  onChange={(event) => setCalendarDateDraft(event.target.value)}
+                  required
+                  autoFocus
+                />
+                <div className="mt-3 flex justify-end gap-2">
+                  <Button type="button" size="sm" variant="secondary" onClick={() => setCalendarDatePickerOpen(false)}>Cancelar</Button>
+                  <Button type="submit" size="sm">Ir para data</Button>
+                </div>
+              </form>
+            ) : null}
+          </div>
           <select className={cn(fieldClassName, "min-w-0 flex-1 text-xs sm:min-w-[170px] sm:flex-none")} value={activeProfessional} onChange={(event) => setProfessional(event.target.value)} aria-label="Filtrar por profissional">
             {professionalOptions.map((item) => <option key={item}>{item}</option>)}
           </select>
