@@ -2,13 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
-import { CalendarCheck, CalendarDays, ChevronRight, RotateCcw, Plus, TrendingUp, UserPlus, type LucideIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { CalendarCheck, CalendarDays, ChevronRight, RotateCcw, TrendingUp, UserPlus, type LucideIcon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { inputVariants } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { CountUpValue, DetailCard, LoadingSkeleton, PageContainer, ProgressBar, StatCard, StatusBadge } from "./shared";
-import { StockAlertsCard } from "./stock-alerts";
 import type { SectionId } from "@/types/clinic";
 import { getCachedJson, readClientCache } from "@/lib/client-cache";
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -16,11 +14,13 @@ import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 const patientNameLinkClassName = "origin-left transition-transform hover:scale-[1.03] focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]";
 
-export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onAction: (action: "client" | "appointment" | "quote" | "payment") => void; onNavigate: (section: SectionId, focus?: { date: string; time: string }) => void; userName?: string }) {
+export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (section: SectionId, focus?: { date: string; time: string }) => void; userName?: string }) {
   type DashboardData = { appointmentCount: number; appointments: Array<{ id: string; date: string; time: string; procedure: string; status: string; patient?: { id: string; name: string } | null }>; patients: Array<{ id: string; name: string; status: string; lastVisit: string | null; createdAt: string }>; quotes: Array<{ id: string; items: string; total: number; status: string; patient?: { id: string; name: string } | null }>; payments: Array<{ value: number; status: string; date: string }> };
   const cachedDashboard = readClientCache<DashboardData>("/api/dashboard/bootstrap");
   const [data, setData] = useState<DashboardData | null>(cachedDashboard ?? null);
   const [now, setNow] = useState(() => clinicNow());
+  const [showAllPatients, setShowAllPatients] = useState(false);
+  const [showAllQuotes, setShowAllQuotes] = useState(false);
   useEffect(() => {
     getCachedJson<DashboardData>("/api/dashboard/bootstrap")
       .then((dashboardData) => setData({ appointmentCount: dashboardData.appointmentCount ?? 0, appointments: dashboardData.appointments ?? [], patients: dashboardData.patients ?? [], quotes: dashboardData.quotes ?? [], payments: dashboardData.payments ?? [] }))
@@ -82,40 +82,19 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
     const received = payments.filter((payment) => payment.status === "Pago").reduce((sum, payment) => sum + payment.value, 0);
     return { received: total ? Math.round((received / total) * 100) : 0, pending: total ? Math.round(((total - received) / total) * 100) : 0 };
   }, [data]);
-  const actions = [
-    ["Novo cliente", "client"], ["Novo atendimento", "appointment"], ["Novo orçamento", "quote"], ["Registrar pagamento", "payment"],
-  ] as const;
   return (
     <PageContainer>
       <div className="hp-page-enter border-b border-border pb-5">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="text-xs font-semibold text-muted-foreground">{new Intl.DateTimeFormat("pt-BR", { dateStyle: "full" }).format(new Date())}</p>
-            <h2 className="mt-1 text-xl font-bold text-foreground">Olá, {userName}</h2>
+            <h2 className="text-xl font-bold text-foreground">Olá, {userName}</h2>
+            <p className="mt-1 text-xs font-semibold text-muted-foreground">{new Intl.DateTimeFormat("pt-BR", { dateStyle: "full" }).format(new Date())}</p>
             <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
               Acompanhe os números e os próximos atendimentos da sua clínica.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2 lg:max-w-[560px] lg:justify-end">
-            {actions.map(
-              ([label, action]) => (
-                <Button
-                  className="min-w-fit whitespace-nowrap"
-                  key={action}
-                  variant={action === "appointment" ? "primary" : "secondary"}
-                  size="sm"
-                  onClick={() => onAction(action)}
-                >
-                  <Plus className="h-4 w-4" />
-                  {label}
-                </Button>
-              ),
-            )}
-          </div>
         </div>
       </div>
-
-      <StockAlertsCard onOpen={() => onNavigate("estoque")} />
 
       <div className="hp-list-stagger grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         {stats.map((stat) => (
@@ -183,10 +162,10 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
       </div>
 
       <div className="hp-list-stagger grid gap-6 lg:grid-cols-3">
-        <DetailCard title="Clientes recentes">
+        <DetailCard title="Clientes recentes" onAction={() => setShowAllPatients((expanded) => !expanded)} expanded={showAllPatients}>
           <div className="space-y-4">
-            {(data?.patients ?? []).slice(0, 3).map((patient) => (
-              <div className="flex items-center justify-between gap-3" key={patient.id}>
+            {(showAllPatients ? (data?.patients ?? []) : (data?.patients ?? []).slice(0, 3)).map((patient, index) => (
+              <div className="flex items-center justify-between gap-3" key={`${patient.id || "patient"}-${index}`}>
                 <div className="flex min-w-0 items-center gap-3">
                   <PatientAvatarLink patientId={patient.id} patientName={patient.name} />
                   <div className="min-w-0">
@@ -202,9 +181,9 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
           </div>
         </DetailCard>
 
-        <DetailCard title="Orçamentos recentes">
+        <DetailCard title="Orçamentos recentes" onAction={() => setShowAllQuotes((expanded) => !expanded)} expanded={showAllQuotes}>
           <div className="space-y-4">
-            {(data?.quotes ?? []).slice(0, 3).map((quote) => (
+            {(showAllQuotes ? (data?.quotes ?? []) : (data?.quotes ?? []).slice(0, 3)).map((quote) => (
               <div key={quote.id}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
@@ -311,7 +290,7 @@ function AttendanceChart({ current, previous, month }: { current: number[]; prev
     <div>
       <div className="h-56 border-b border-[#e8e8ef] bg-[#fcfcfe] pt-2">
         <ResponsiveContainer height="100%" width="100%">
-          <ComposedChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <ComposedChart accessibilityLayer={false} data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid stroke="#e8e8ef" strokeDasharray="3 3" vertical={false} />
             <XAxis axisLine={false} dataKey="day" tick={{ fill: "#7c86a2", fontSize: 9, fontWeight: 600 }} tickLine={false} tickMargin={8} />
             <YAxis allowDecimals={false} axisLine={false} domain={[0, max]} tick={{ fill: "#7c86a2", fontSize: 9, fontWeight: 600 }} tickLine={false} width={28} />

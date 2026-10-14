@@ -222,16 +222,24 @@ export function DetailCard({
   title,
   children,
   className,
+  onAction,
+  expanded = false,
 }: {
   title: string;
   children: React.ReactNode;
   className?: string;
+  onAction?: () => void;
+  expanded?: boolean;
 }) {
   return (
     <Card className={className}>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <ArrowRight className="h-4 w-4 text-[#7c86a2]" />
+        {onAction ? (
+          <button type="button" aria-label={`${expanded ? "Recolher" : "Expandir"} ${title}`} aria-expanded={expanded} className="rounded-sm text-[#7c86a2] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" onClick={onAction}>
+            <ArrowRight className={`h-4 w-4 transition-transform ${expanded ? "rotate-90" : ""}`} />
+          </button>
+        ) : <ArrowRight className="h-4 w-4 text-[#7c86a2]" />}
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
