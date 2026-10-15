@@ -225,7 +225,9 @@ model Product {
   id             String               @id @default(cuid())
   clinicId       String?
   name           String
-  category       String
+  /// "material" (agulha, algodão...) ou "produto" (ácido hialurônico, álcool...). Só organiza as telas.
+  kind           String               @default("material")
+  category       String               @default("")
   unit           String
   costCents      Int                  @default(0)
   /// Legacy compatibility column, synchronized with costCents by a PostgreSQL trigger.

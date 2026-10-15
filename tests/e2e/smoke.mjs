@@ -132,9 +132,14 @@ async function settings() {
 }
 
 async function stock() {
-  let r = await api("POST", "/api/products", { name: `Material ${run}`, category: "Toxina", unit: "frasco", costCents: 1000, supplier: "Fornecedor", minStock: 0 });
+  let r = await api("POST", "/api/products", { name: `Material ${run}`, kind: "material", unit: "frasco", costCents: 1000, supplier: "Fornecedor", minStock: 0 });
   const product = r.data.product;
   check("material é criado", r.status === 201, r.status);
+  check("item criado guarda o tipo", product?.kind === "material", product?.kind);
+  r = await api("POST", "/api/products", { name: `Sem tipo ${run}`, unit: "unidade", costCents: 100, supplier: "Fornecedor" });
+  check("item sem tipo é recusado", r.status === 400, r.status);
+  r = await api("POST", "/api/products", { name: `Tipo errado ${run}`, kind: "Produto", unit: "unidade", costCents: 100, supplier: "Fornecedor" });
+  check("tipo inválido é recusado", r.status === 400, r.status);
   r = await api("POST", "/api/purchases", { supplier: "Fornecedor", purchasedOn: day(0), paymentMethod: "Pix", installments: 1, items: [{ productId: product.id, lotCode: `L${run}`, expiresOn: day(300), quantity: 2, unitPriceCents: 5000 }] });
   const purchaseId = r.data.purchase?.id;
   check("compra é registrada", r.status === 201, r.status);
@@ -146,6 +151,12 @@ async function stock() {
   pair = await Promise.all([api("PATCH", `/api/purchases/${purchaseId}`, { action: "restore" }), api("PATCH", `/api/purchases/${purchaseId}`, { action: "restore" })]);
   check("restauração dupla simultânea: só uma passa", pair.map((item) => item.status).sort().join() === "200,409", pair.map((item) => item.status).join());
   check("saldo depois de restaurar é 2", (await balance()) === 2, await balance());
+  r = await api("PATCH", `/api/products/${product.id}`, { kind: "produto" });
+  check("tipo pode ser trocado mesmo com movimentações", r.status === 200 && r.data.product?.kind === "produto", `${r.status} ${r.data.product?.kind}`);
+  r = await api("GET", "/api/products");
+  check("lista devolve o tipo e não a categoria", r.data.products?.some((item) => item.id === product.id && item.kind === "produto" && !("category" in item)), JSON.stringify(r.data.products?.[0] ?? {}));
+  r = await api("PATCH", `/api/products/${product.id}`, { kind: "outro" });
+  check("troca para tipo inválido é recusada", r.status === 400, r.status);
 }
 
 async function loginLockout() {

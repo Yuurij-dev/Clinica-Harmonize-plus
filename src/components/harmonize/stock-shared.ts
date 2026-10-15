@@ -1,9 +1,10 @@
+import type { StockKind } from "@/lib/stock-rules";
 import { invalidateClientCache } from "@/lib/client-cache";
 
 export type StockMaterial = {
   id: string;
   name: string;
-  category: string;
+  kind: StockKind;
   unit: string;
   costCents: number;
   supplier: string;

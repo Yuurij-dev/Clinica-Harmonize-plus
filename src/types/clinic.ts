@@ -91,7 +91,7 @@ export type Appointment = {
 export type Product = {
   id?: string;
   name: string;
-  category: string;
+  kind?: "material" | "produto";
   unit: string;
   costCents: number;
   supplier: string;

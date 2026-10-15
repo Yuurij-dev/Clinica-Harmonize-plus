@@ -31,7 +31,7 @@ export async function listMaterials(clinicId: string, includeArchived = false) {
     prisma.product.findMany({
       where: { clinicId, ...(includeArchived ? {} : { archivedAt: null }) },
       orderBy: { name: "asc" },
-      select: { id: true, name: true, category: true, unit: true, costCents: true, supplier: true, minStock: true, archivedAt: true, lots: { select: { id: true } } },
+      select: { id: true, name: true, kind: true, unit: true, costCents: true, supplier: true, minStock: true, archivedAt: true, lots: { select: { id: true } } },
     }),
     lotBalances(clinicId),
     prisma.stockMovement.groupBy({ by: ["productId"], where: { clinicId }, _count: { _all: true } }),
@@ -48,7 +48,7 @@ export async function materialDetail(clinicId: string, productId: string) {
   const product = await prisma.product.findFirst({
     where: { id: productId, clinicId },
     select: {
-      id: true, name: true, category: true, unit: true, costCents: true, supplier: true, minStock: true, archivedAt: true,
+      id: true, name: true, kind: true, unit: true, costCents: true, supplier: true, minStock: true, archivedAt: true,
       lots: { orderBy: { expiresOn: "asc" }, select: { id: true, code: true, expiresOn: true } },
     },
   });

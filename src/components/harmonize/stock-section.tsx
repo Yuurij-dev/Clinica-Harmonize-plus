@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { MaskedInput } from "@/components/ui/masked-input";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
-import { procedureCategories } from "@/data/categories";
 import { sendJson } from "@/lib/send-json";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, readClientCache } from "@/lib/client-cache";
 import { formatCurrency, parseCurrency } from "@/lib/input-masks";
@@ -111,7 +110,7 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
           <MiniTable
             columns={["Material", "Unidade", "Saldo", "Mínimo", "Custo", "Situação", "Ação"]}
             rows={visibleMaterials.map((material) => [
-              <div key="name"><p className="font-bold text-foreground">{material.name}</p><p className="text-xs text-muted-foreground">{material.category} · {material.supplier}</p></div>,
+              <div key="name"><p className="font-bold text-foreground">{material.name}</p><p className="text-xs text-muted-foreground">{material.supplier}</p></div>,
               material.unit,
               <strong key="balance">{formatQuantity(material.balance, material.unit)}</strong>,
               formatQuantity(material.minStock, material.unit),
@@ -148,11 +147,11 @@ function MaterialFormModal({ material, onClose, onSaved }: { material: StockMate
     }
     const payload = {
       name: String(form.get("name") ?? "").trim(),
-      category: String(form.get("category") ?? ""),
       supplier: String(form.get("supplier") ?? "").trim(),
       unit: String(form.get("unit") ?? ""),
       costCents: Math.round(parseCurrency(form.get("cost")) * 100),
       minStock,
+      ...(material ? {} : { kind: "material" }),
     };
     setSaving(true);
     setError("");
@@ -169,7 +168,6 @@ function MaterialFormModal({ material, onClose, onSaved }: { material: StockMate
     <Modal open onClose={onClose} title={material ? "Editar material" : "Novo material"} description="O custo é atualizado sozinho a cada compra, mas pode ser editado aqui.">
       <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
         <div className="sm:col-span-2"><FormField label="Nome"><input className={fieldClassName} name="name" defaultValue={material?.name ?? ""} required /></FormField></div>
-        <FormField label="Categoria"><select className={fieldClassName} name="category" defaultValue={material?.category ?? ""} required><option value="">Selecione uma categoria</option>{procedureCategories.map((category) => <option key={category}>{category}</option>)}</select></FormField>
         <FormField label="Fornecedor"><input className={fieldClassName} name="supplier" defaultValue={material?.supplier ?? ""} required /></FormField>
         <FormField label="Unidade" description={material?.hasMovements ? "Não pode ser trocada: o material já teve movimentações." : undefined}>
           <select className={fieldClassName} name="unit" defaultValue={material?.unit ?? "ml"} disabled={material?.hasMovements}>{stockUnits.map((unit) => <option key={unit}>{unit}</option>)}</select>
@@ -283,7 +281,7 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
   }
 
   return (
-    <Modal open onClose={onClose} title={detail?.name ?? "Material"} description={detail ? `${detail.category} · ${detail.supplier}` : undefined}>
+    <Modal open onClose={onClose} title={detail?.name ?? "Material"} description={detail ? detail.supplier : undefined}>
       {!detail ? <div className="grid place-items-center py-10"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div> : (
         <div className="space-y-5">
           <div className="grid gap-3 sm:grid-cols-3">
