@@ -131,7 +131,7 @@ async function settings() {
   check("configurações gravam e devolvem o valor salvo", r.status === 200 && r.data.settings?.appointmentToleranceMinutes === tolerance, JSON.stringify(r.data).slice(0, 160));
 }
 
-async function stock() {
+async function stock(patient) {
   let r = await api("POST", "/api/products", { name: `Material ${run}`, kind: "material", unit: "frasco", costCents: 1000, supplier: "Fornecedor", minStock: 0 });
   const product = r.data.product;
   check("material é criado", r.status === 201, r.status);
@@ -159,6 +159,26 @@ async function stock() {
   check("lista devolve o tipo e não a categoria", r.data.products?.some((item) => item.id === product.id && item.kind === "produto" && !("category" in item)), JSON.stringify(r.data.products?.[0] ?? {}));
   r = await api("PATCH", `/api/products/${product.id}`, { kind: "outro" });
   check("troca para tipo inválido é recusada", r.status === 400, r.status);
+
+  // Tipo nos avisos, na conferência de materiais e nas pendências.
+  r = await api("POST", "/api/products", { name: `Faltando ${run}`, kind: "produto", unit: "unidade", costCents: 500, supplier: "Fornecedor", minStock: 10 });
+  const low = r.data.product;
+  r = await api("GET", "/api/stock/alerts");
+  const lowAlert = r.data.alerts?.find((alert) => alert.kind === "below_minimum" && alert.productId === low?.id);
+  check("aviso de abaixo do mínimo traz productKind", lowAlert?.productKind === "produto", JSON.stringify(lowAlert));
+
+  r = await api("POST", "/api/appointments", { patientId: patient.id, procedure: "Retorno estoque", professional: "Teste", time: "11:00", date: `${day(1)}T00:00:00` });
+  const attendance = r.data.appointment;
+  r = await api("PATCH", `/api/appointments/${attendance?.id}`, { status: "Atendido" });
+  check("atendimento marcado como atendido", r.status === 200, r.status);
+  r = await api("GET", `/api/appointments/${attendance?.id}/materials`);
+  const byId = Object.fromEntries((r.data.materials ?? []).map((item) => [item.id, item.kind]));
+  check("conferência de materiais devolve o tipo de cada item", r.status === 200 && byId[product.id] === "produto" && byId[low?.id] === "produto", JSON.stringify(byId));
+  r = await api("POST", `/api/appointments/${attendance?.id}/materials`, { items: [{ productId: low.id, quantity: 3 }] });
+  check("conferência sem saldo gera pendência", r.status === 200 && r.data.pending?.length === 1, `${r.status} ${JSON.stringify(r.data).slice(0, 120)}`);
+  r = await api("GET", "/api/stock/pending");
+  const output = r.data.outputs?.find((item) => item.product?.id === low.id);
+  check("pendência de saída traz product.kind", output?.product?.kind === "produto", JSON.stringify(output?.product));
 }
 
 async function loginLockout() {
@@ -209,6 +229,22 @@ async function browser(homonym) {
     await page.getByRole("cell", { name: "R$ 99,40" }).first().waitFor();
     check("tela de Orçamentos mostra R$ 99,40", true);
 
+    // Estoque: abre em Materiais; o produto só aparece em Produtos; a compra agrupa os itens.
+    const material = (await api("POST", "/api/products", { name: `Material tela ${run}`, kind: "material", unit: "frasco", costCents: 100, supplier: "Fornecedor" })).data.product;
+    const produto = (await api("POST", "/api/products", { name: `Produto tela ${run}`, kind: "produto", unit: "unidade", costCents: 100, supplier: "Fornecedor" })).data.product;
+    await page.goto(`${baseUrl}/estoque`);
+    await page.getByText(material.name).first().waitFor();
+    check("Estoque abre na aba Materiais e mostra o material", await page.getByRole("button", { name: "Novo material" }).isVisible());
+    check("aba Materiais não mostra o produto", (await page.getByText(produto.name).count()) === 0);
+    await page.getByRole("button", { name: "Produtos", exact: true }).click();
+    await page.getByText(produto.name).first().waitFor();
+    check("aba Produtos mostra o produto, tem o botão Novo produto e não mostra o material", (await page.getByText(material.name).count()) === 0 && await page.getByRole("button", { name: "Novo produto" }).isVisible());
+    await page.getByRole("button", { name: "Compras", exact: true }).click();
+    await page.getByRole("button", { name: "Nova compra" }).first().click();
+    const itemSelect = page.locator("select").filter({ has: page.locator("option", { hasText: "Selecione um item" }) }).first();
+    await itemSelect.locator(`optgroup[label="Materiais"] option`, { hasText: material.name }).waitFor({ state: "attached" });
+    check("seleção de item na compra agrupa em Materiais e Produtos", (await itemSelect.locator(`optgroup[label="Produtos"] option`, { hasText: produto.name }).count()) === 1);
+
     for (const section of ["dashboard", "agenda", "clientes", "estoque", "financeiro", "configuracoes"]) {
       await page.goto(`${baseUrl}/${section}`, { waitUntil: "networkidle" });
     }
@@ -246,7 +282,7 @@ const suites = {
   agenda: { needs: ["pacientes"], run: (state) => appointments(state.patient) },
   jornadas: { needs: ["orcamentos"], run: (state) => journeys(state.patient, state.quote) },
   configuracoes: { needs: [], run: () => settings() },
-  estoque: { needs: [], run: () => stock() },
+  estoque: { needs: ["pacientes"], run: (state) => stock(state.patient) },
   telas: { needs: ["orcamentos"], run: (state) => browser(state.homonym) },
   login: { needs: [], run: () => loginLockout() },
 };
