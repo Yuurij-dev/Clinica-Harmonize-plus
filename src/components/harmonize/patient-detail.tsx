@@ -7,7 +7,6 @@ import {
   ArrowLeftRight,
   CalendarPlus,
   CalendarDays,
-  CalendarCheck2,
   CheckCircle2,
   Camera,
   ChevronDown,
@@ -179,7 +178,6 @@ export function PatientDetail({
   const [journeyWorkflowLoading, setJourneyWorkflowLoading] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).has("journey"));
   const [journeyWorkflowError, setJourneyWorkflowError] = useState("");
   const [journeyWorkflowRetry, setJourneyWorkflowRetry] = useState(0);
-  const canWriteClinical = useCan("clinical:write");
   // Apenas uma linha do tempo de procedimento fica exibida no topo por vez.
   const [pinnedJourney, setPinnedJourney] = useState<PinnedJourney | null>(null);
   const [pinnedRefreshKey, setPinnedRefreshKey] = useState(0);
@@ -300,38 +298,6 @@ export function PatientDetail({
     setActiveTab("Prontuário");
     setRecordTab("Agendamentos");
     setReturnAppointmentTarget({ name: "", professional: "", kind: "procedure", journeyId: selectedJourneyId ?? undefined });
-  }
-
-  async function createTreatment(resolveWorkflow = true) {
-    if (!currentPatient.id) return null;
-    try {
-      const response = await fetch(`/api/patients/${encodeURIComponent(currentPatient.id)}/journeys`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
-      const data = await response.json().catch(() => ({})) as { journey?: { id: string }; message?: string };
-      if (!response.ok || !data.journey) throw new Error(data.message ?? "Não foi possível criar o tratamento.");
-      invalidateClientCache(`/api/patients/${currentPatient.id}/journeys`, `/api/patients/${currentPatient.id}/profile`);
-      openJourney(data.journey.id, resolveWorkflow);
-      return data.journey.id as string;
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Não foi possível criar o tratamento.");
-      return null;
-    }
-  }
-
-  async function startClinicalEncounter() {
-    if (!currentPatient.id) return;
-    const journeyId = selectedJourneyId ?? await createTreatment(false);
-    if (!journeyId) return;
-    setEncounterLabel("Novo atendimento");
-    setEncounterEvaluationId(undefined);
-    try {
-      const data = await getCachedJson<{ evaluations?: Array<{ id: string; status?: string }> }>(`/api/patients/${currentPatient.id}/evaluation?list=1&journeyId=${encodeURIComponent(journeyId)}`);
-      const draft = data.evaluations?.find((evaluation) => evaluation.status === "Rascunho");
-      if (draft) setEncounterEvaluationId(draft.id);
-    } catch {
-      toast.error("Não foi possível verificar rascunhos anteriores. Você pode iniciar uma nova avaliação.");
-    }
-    setJourneyWorkflowLoading(false);
-    setEncounterMode(true);
   }
 
   function openJourneyEvaluation(journey: PatientJourneySummary, evaluationId?: string) {
@@ -460,10 +426,6 @@ export function PatientDetail({
             </div>
           </div>
           </div>
-          {!journeyPage ? <div className="flex flex-wrap items-center gap-2">
-            {canWriteClinical ? <Button size="sm" onClick={() => void startClinicalEncounter()}><CalendarPlus className="h-4 w-4" />Novo atendimento</Button> : null}
-            <Button size="sm" variant="outline" onClick={openNewAppointment}><CalendarCheck2 className="h-4 w-4" />Nova sessão</Button>
-          </div> : null}
         </div>
 
         {pinnedJourney ? (
@@ -498,8 +460,8 @@ export function PatientDetail({
         </div>
       </Card> : null}
 
-      {activeTab === "Visão geral" ? <PatientOverview patient={currentPatient} onOpen={(area, tab) => { if (tab) selectRecordTab(tab); selectTab(area); }} onNewAppointment={openNewAppointment} /> : null}
-      {activeTab === "Tratamentos" ? <PatientTreatments patient={currentPatient} selectedJourneyId={selectedJourneyId} onSelect={openJourney} onJourneyLabelChange={setSelectedJourneyLabel} onBack={() => openJourney(null)} onOpenClinical={(tab) => { if (tab === "Arquivos e fotos" || tab === "Financeiro") selectTab(tab); else { selectTab("Prontuário"); selectRecordTab(tab); } }} onOpenEvaluation={openJourneyEvaluation} onNewTreatment={() => void createTreatment()} onNewSession={(journey) => { setReturnAppointmentTarget({ name: journey.name, professional: journey.professional, kind: "procedure", journeyId: journey.id }); selectTab("Prontuário"); selectRecordTab("Procedimentos"); }} onScheduleReturn={(journey) => { setReturnAppointmentTarget({ name: journey.name, professional: journey.professional, kind: "return", journeyId: journey.id }); selectTab("Prontuário"); selectRecordTab("Procedimentos"); }} onOpenFollowUp={(journey, sessionId) => { openJourney(journey.id); setEncounterPostProcedureSessionId(sessionId); setEncounterPostProcedureMode(true); }} /> : null}
+      {activeTab === "Visão geral" ? <PatientOverview patient={currentPatient} onOpen={(area, tab) => { if (tab) selectRecordTab(tab); selectTab(area); }} onOpenJourney={(journeyId) => openJourney(journeyId)} onNewAppointment={openNewAppointment} /> : null}
+      {activeTab === "Tratamentos" ? <PatientTreatments patient={currentPatient} selectedJourneyId={selectedJourneyId} onSelect={openJourney} onJourneyLabelChange={setSelectedJourneyLabel} onBack={() => openJourney(null)} onOpenClinical={(tab) => { if (tab === "Arquivos e fotos" || tab === "Financeiro") selectTab(tab); else { selectTab("Prontuário"); selectRecordTab(tab); } }} onOpenEvaluation={openJourneyEvaluation} onNewSession={(journey) => { setReturnAppointmentTarget({ name: journey.name, professional: journey.professional, kind: "procedure", journeyId: journey.id }); selectTab("Prontuário"); selectRecordTab("Procedimentos"); }} onScheduleReturn={(journey) => { setReturnAppointmentTarget({ name: journey.name, professional: journey.professional, kind: "return", journeyId: journey.id }); selectTab("Prontuário"); selectRecordTab("Procedimentos"); }} onOpenFollowUp={(journey, sessionId) => { openJourney(journey.id); setEncounterPostProcedureSessionId(sessionId); setEncounterPostProcedureMode(true); }} /> : null}
       {activeTab === "Prontuário" ? <div className="space-y-4"><div className="flex flex-wrap gap-1 border-b border-border" role="tablist" aria-label="Seções do prontuário">{recordTabs.map((tab) => <button className={cn("border-b-2 px-3 py-2 text-xs font-medium", recordTab === tab ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground")} type="button" key={tab} role="tab" aria-selected={recordTab === tab} onClick={() => selectRecordTab(tab)}>{tab}</button>)}</div><PatientTabContent key={`record-${recordTab}-${selectedJourneyId ?? "all"}`} patient={currentPatient} activeTab={recordTab} journeyId={selectedJourneyId ?? undefined} history={history} historyLoading={historyLoading} quoteCompleted={quoteCompleted} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={() => setReturnAppointmentTarget(null)} onAppointmentCreated={(appointment) => setHistory((current) => current ? { ...current, appointments: mergePatientAppointments(current.appointments, [appointment]) } : current)} onPatientUpdated={setCurrentPatient} onProcedurePhotoUpdated={(procedureId, photo) => setHistory((current) => current ? { ...current, procedures: current.procedures.map((item) => item.id === procedureId ? { ...item, beforePhoto: photo.beforePhoto ?? "", afterPhoto: photo.afterPhoto ?? "", status: procedurePhotoStatus(photo.beforePhoto, photo.afterPhoto) } : item) } : current)} onOpenTab={selectRecordTab} pinnedJourneyKey={pinnedJourney?.key} onPinJourney={setPinnedJourney} onScheduleReturn={(procedure, kind = "return") => { setReturnAppointmentTarget({ ...procedure, kind, journeyId: selectedJourneyId ?? undefined }); }} /></div> : null}
       {activeTab === "Arquivos e fotos" ? <PatientFiles patientId={currentPatient.id ?? ""} selectedJourneyId={selectedJourneyId} onJourneyChange={setSelectedJourneyId} onOpenEvaluations={() => { selectTab("Prontuário"); selectRecordTab("Avaliação"); }} /> : null}
       {activeTab === "Financeiro" ? <div className="space-y-4"><div className="flex gap-1 border-b border-border" role="tablist" aria-label="Seções financeiras">{["Orçamento", "Pagamentos"].map((tab) => <button className={cn("border-b-2 px-3 py-2 text-xs font-medium", financeTab === tab ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground")} type="button" key={tab} role="tab" aria-selected={financeTab === tab} onClick={() => { setFinanceTab(tab); if (tab === "Pagamentos") { const cached = patient.id ? readClientCache<PatientHistoryResponse>(historyCacheKey(patient.id, tab, selectedJourneyId)) : undefined; setHistory(cached ? mapPatientHistory(cached).history : undefined); setHistoryLoading(Boolean(patient.id && !cached)); } }}>{tab === "Orçamento" ? "Orçamentos" : tab}</button>)}</div>{financeTab === "Orçamento" ? <PatientExpenses patientId={currentPatient.id ?? ""} journeyId={selectedJourneyId ?? undefined} onPaid={() => { setQuoteCompleted(true); setHistory(undefined); setHistoryLoading(true); setHistoryRefreshKey((current) => current + 1); }} onPaymentUndone={() => { setQuoteCompleted(false); setHistory(undefined); setHistoryLoading(true); setHistoryRefreshKey((current) => current + 1); }} /> : <PatientTabContent key={`finance-${financeTab}-${selectedJourneyId ?? "all"}`} patient={currentPatient} activeTab="Pagamentos" journeyId={selectedJourneyId ?? undefined} history={history} historyLoading={historyLoading} quoteCompleted={quoteCompleted} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={() => setReturnAppointmentTarget(null)} onAppointmentCreated={() => {}} onPatientUpdated={setCurrentPatient} onProcedurePhotoUpdated={() => {}} onOpenTab={selectRecordTab} pinnedJourneyKey={pinnedJourney?.key} onPinJourney={setPinnedJourney} onScheduleReturn={() => {}} />}</div> : null}

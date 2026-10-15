@@ -11,11 +11,12 @@ async function getPatient(patientId: string, clinicId: string) {
 const journeyProgressSelect = {
   id: true,
   name: true,
+  professional: true,
   status: true,
   createdAt: true,
   updatedAt: true,
   archivedAt: true,
-  evaluations: { take: 1, select: { id: true } },
+  evaluations: { orderBy: { createdAt: "asc" }, take: 1, select: { id: true, professional: true } },
   quotes: { select: { id: true, status: true, createdAt: true } },
   appointments: { orderBy: [{ date: "desc" }, { time: "desc" }], select: { id: true, date: true, time: true, procedure: true, professional: true, status: true } },
   procedures: { orderBy: { performedAt: "desc" }, take: 10, select: { id: true, name: true, professional: true, performedAt: true } },
@@ -69,7 +70,7 @@ async function serializeJourneys(patientId: string, clinicId: string, journeys: 
     latestCompletedQuoteId: journey.procedureSessions.find((session) => session.status === "Concluída")?.quoteId ?? null,
     procedureCount: journey._count.procedures,
     photoCount: photoCountByJourney.get(journey.id) ?? 0,
-    professional: journey.procedureSessions[0]?.professional || journey.procedures[0]?.professional || journey.appointments[0]?.professional || "Não informado",
+    professional: journey.professional || journey.evaluations[0]?.professional || journey.procedureSessions[0]?.professional || journey.procedures[0]?.professional || journey.appointments[0]?.professional || "Não informado",
     nextAppointment: journey.appointments.filter((appointment) => appointment.status === "Agendado" && !appointmentHasPassed(appointment, now)).sort((left, right) => left.date.getTime() - right.date.getTime() || left.time.localeCompare(right.time))[0] ?? null,
     lastActivityAt: [journey.updatedAt, ...journey.appointments.map((item) => item.date), ...journey.procedures.map((item) => item.performedAt), ...journey.procedureSessions.map((item) => item.performedAt), ...journey.quotes.map((item) => item.createdAt)].sort((left, right) => right.getTime() - left.getTime())[0],
   }));
@@ -89,9 +90,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const patientId = (await params).id;
   if (!await getPatient(patientId, user.clinicId)) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
-  const body = await request.json().catch(() => null) as { name?: string } | null;
-  const count = await prisma.patientJourney.count({ where: { patientId, clinicId: user.clinicId } });
-  const journey = await prisma.patientJourney.create({ data: { patientId, clinicId: user.clinicId, name: body?.name?.trim() || `Jornada ${count + 1}` }, select: journeyProgressSelect });
+  const body = await request.json().catch(() => null) as { name?: string; professionalId?: string } | null;
+  const name = body?.name?.trim();
+  if (!name || name.length > 80) return NextResponse.json({ message: "Informe um nome para a jornada com até 80 caracteres." }, { status: 400 });
+  if (!body?.professionalId) return NextResponse.json({ message: "Selecione o profissional responsável." }, { status: 400 });
+  const professional = await prisma.clinicMembership.findFirst({
+    where: { clinicId: user.clinicId, userId: body.professionalId, role: { in: ["ADMIN", "PROFESSIONAL"] } },
+    select: { user: { select: { name: true } } },
+  });
+  if (!professional) return NextResponse.json({ message: "Selecione um profissional ativo da clínica." }, { status: 400 });
+  const journey = await prisma.patientJourney.create({ data: { patientId, clinicId: user.clinicId, name, professional: professional.user.name }, select: journeyProgressSelect });
   const [serialized] = await serializeJourneys(patientId, user.clinicId, [journey]);
   return NextResponse.json({ journey: serialized }, { status: 201 });
 }

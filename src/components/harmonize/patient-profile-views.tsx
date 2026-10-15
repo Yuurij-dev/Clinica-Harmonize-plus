@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import NextImage from "next/image";
-import { BadgeCheck, CalendarDays, Camera, Check, ChevronDown, ChevronRight, CircleAlert, Clock3, CreditCard, FileImage, FileText, HeartPulse, Image as ImageIcon, Layers3, PackageCheck, Pencil, Plus, ShieldAlert, Stethoscope, Syringe, UserRound } from "lucide-react";
+import { BadgeCheck, CalendarDays, Camera, Check, ChevronDown, ChevronRight, CircleAlert, Clock3, CreditCard, FileImage, FileText, HeartPulse, Image as ImageIcon, Layers3, Loader2, PackageCheck, Pencil, Plus, ShieldAlert, Stethoscope, Syringe, Trash2, UserRound } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -11,6 +11,7 @@ import type { Patient } from "@/types/clinic";
 import { EmptyState, LoadingSkeleton } from "./shared";
 import { useCan } from "./current-user";
 import { Modal } from "@/components/ui/modal";
+import { cn } from "@/lib/utils";
 
 export type PatientJourneySummary = {
   id: string;
@@ -43,6 +44,7 @@ type JourneyEvaluation = { id: string; professional: string; status: string; cre
 
 const journeyKey = (patientId: string) => `/api/patients/${encodeURIComponent(patientId)}/journeys`;
 const summaryKey = (patientId: string) => `/api/patients/${encodeURIComponent(patientId)}/profile`;
+const professionalsKey = "/api/team/professionals";
 const dateFormatter = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" });
 
 function dateLabel(value?: string | null) {
@@ -53,11 +55,12 @@ function dateLabel(value?: string | null) {
 
 function statusTone(status: string) {
   if (status === "Concluído") return "green" as const;
+  if (status === "Em andamento") return "amber" as const;
   if (status === "Cancelado") return "slate" as const;
   return "purple" as const;
 }
 
-export function PatientOverview({ patient, onOpen, onNewAppointment }: { patient: Patient; onOpen: (area: string, recordTab?: string) => void; onNewAppointment: () => void }) {
+export function PatientOverview({ patient, onOpen, onOpenJourney, onNewAppointment }: { patient: Patient; onOpen: (area: string, recordTab?: string) => void; onOpenJourney: (journeyId: string) => void; onNewAppointment: () => void }) {
   const patientId = patient.id ?? "";
   const cachedJourneys = readClientCache<{ journeys?: PatientJourneySummary[] }>(journeyKey(patientId));
   const cachedSummary = readClientCache<ProfileSummary>(summaryKey(patientId));
@@ -120,7 +123,7 @@ export function PatientOverview({ patient, onOpen, onNewAppointment }: { patient
               })}
             </div>
             <div className="mt-4 grid gap-3 rounded-md bg-muted/50 p-3 text-xs sm:grid-cols-2"><p className="flex items-center gap-2 text-muted-foreground"><UserRound className="h-4 w-4 shrink-0 text-primary" /><span>Responsável: <strong className="text-foreground">{journey.professional || "Não informado"}</strong></span></p><p className="flex items-center gap-2 text-muted-foreground"><CalendarDays className="h-4 w-4 shrink-0 text-primary" /><span>Iniciado em <strong className="text-foreground">{dateLabel(journey.createdAt)}</strong></span></p></div>
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3"><p className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">{journey.nextAppointment ? <><CalendarDays className="h-4 w-4 shrink-0 text-primary" /><span className="truncate">Próximo retorno: {dateLabel(journey.nextAppointment.date)} · {journey.nextAppointment.time}</span></> : <><Clock3 className="h-4 w-4 shrink-0 text-muted-foreground" /><span>Sem retorno agendado</span></>}</p><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => onOpen("Tratamentos")}>Abrir jornada <ChevronRight className="h-3.5 w-3.5" /></Button>{journey.nextAppointment ? <Button size="sm" onClick={onNewAppointment}><CalendarDays className="h-4 w-4" />Registrar retorno</Button> : null}</div></div>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3"><p className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">{journey.nextAppointment ? <><CalendarDays className="h-4 w-4 shrink-0 text-primary" /><span className="truncate">Próximo retorno: {dateLabel(journey.nextAppointment.date)} · {journey.nextAppointment.time}</span></> : <><Clock3 className="h-4 w-4 shrink-0 text-muted-foreground" /><span>Sem retorno agendado</span></>}</p><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => onOpenJourney(journey.id)}>Abrir jornada <ChevronRight className="h-3.5 w-3.5" /></Button>{journey.nextAppointment ? <Button size="sm" onClick={onNewAppointment}><CalendarDays className="h-4 w-4" />Registrar retorno</Button> : null}</div></div>
           </> : <Button className="mt-4" variant="outline" onClick={() => onOpen("Tratamentos")}><Plus className="h-4 w-4" />Ver tratamentos</Button>}
         </Card>
         <Card className="p-5"><div className="flex items-center justify-between gap-3"><IconHeading icon={CalendarDays} title="Próximas ações" /><Button variant="ghost" size="icon" aria-label="Novo atendimento" title="Novo atendimento" onClick={onNewAppointment}><Plus className="h-4 w-4" /></Button></div><div className="mt-3 space-y-2">{pendingEvents.length ? pendingEvents.map((event, index) => {
@@ -173,7 +176,7 @@ function QuickAccess({ icon: Icon, label, onClick }: { icon: typeof Camera; labe
   return <button type="button" className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-md border border-border px-2 text-center text-[10px] font-medium text-muted-foreground transition hover:bg-muted" onClick={onClick}><Icon className="h-4 w-4 text-primary" />{label}</button>;
 }
 
-export function PatientTreatments({ patient, selectedJourneyId, onSelect, onJourneyLabelChange, onBack, onOpenClinical, onOpenEvaluation, onNewTreatment, onNewSession, onScheduleReturn, onOpenFollowUp }: { patient: Patient; selectedJourneyId: string | null; onSelect: (journeyId: string | null) => void; onJourneyLabelChange: (label: string) => void; onBack: () => void; onOpenClinical: (tab: string) => void; onOpenEvaluation: (journey: PatientJourneySummary, evaluationId?: string) => void; onNewTreatment: () => void; onNewSession: (journey: PatientJourneySummary) => void; onScheduleReturn: (journey: PatientJourneySummary) => void; onOpenFollowUp: (journey: PatientJourneySummary, sessionId: string) => void }) {
+export function PatientTreatments({ patient, selectedJourneyId, onSelect, onJourneyLabelChange, onBack, onOpenClinical, onOpenEvaluation, onNewSession, onScheduleReturn, onOpenFollowUp }: { patient: Patient; selectedJourneyId: string | null; onSelect: (journeyId: string | null) => void; onJourneyLabelChange: (label: string) => void; onBack: () => void; onOpenClinical: (tab: string) => void; onOpenEvaluation: (journey: PatientJourneySummary, evaluationId?: string) => void; onNewSession: (journey: PatientJourneySummary) => void; onScheduleReturn: (journey: PatientJourneySummary) => void; onOpenFollowUp: (journey: PatientJourneySummary, sessionId: string) => void }) {
   const key = patient.id ? journeyKey(patient.id) : "";
   const profileKey = patient.id ? summaryKey(patient.id) : "";
   const cached = key ? readClientCache<{ journeys?: PatientJourneySummary[] }>(key) : undefined;
@@ -187,6 +190,28 @@ export function PatientTreatments({ patient, selectedJourneyId, onSelect, onJour
   const [expandedJourneyId, setExpandedJourneyId] = useState<string | null>(() => !selectedJourneyId && cached?.journeys?.length === 1 ? cached.journeys[0].id : null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
+  const [treatmentToRemove, setTreatmentToRemove] = useState<PatientJourneySummary | null>(null);
+  const [newTreatmentOpen, setNewTreatmentOpen] = useState(false);
+  const [newTreatmentName, setNewTreatmentName] = useState("");
+  const [newTreatmentProfessional, setNewTreatmentProfessional] = useState("");
+  const [newTreatmentErrors, setNewTreatmentErrors] = useState<{ name?: string; professional?: string }>({});
+  const [newTreatmentError, setNewTreatmentError] = useState("");
+  const [newTreatmentAttempt, setNewTreatmentAttempt] = useState(0);
+  const [newTreatmentSaving, setNewTreatmentSaving] = useState(false);
+  const [professionals, setProfessionals] = useState<Array<{ id: string; name: string }>>(() => readClientCache<{ professionals: Array<{ id: string; name: string }> }>(professionalsKey)?.professionals ?? []);
+  const [professionalsLoading, setProfessionalsLoading] = useState(false);
+  const [professionalsError, setProfessionalsError] = useState("");
+  const [professionalsRetry, setProfessionalsRetry] = useState(0);
+
+  useEffect(() => {
+    if (!newTreatmentOpen) return;
+    let active = true;
+    getCachedJson<{ professionals: Array<{ id: string; name: string }> }>(professionalsKey)
+      .then((data) => { if (active) setProfessionals(data.professionals); })
+      .catch((reason) => { if (active) setProfessionalsError(reason instanceof Error ? reason.message : "Não foi possível carregar os profissionais."); })
+      .finally(() => { if (active) setProfessionalsLoading(false); });
+    return () => { active = false; };
+  }, [newTreatmentOpen, professionalsRetry]);
 
   useEffect(() => {
     if (!key) return;
@@ -218,24 +243,80 @@ export function PatientTreatments({ patient, selectedJourneyId, onSelect, onJour
     onJourneyLabelChange(index >= 0 ? `Jornada ${index + 1}` : "Jornada");
   }, [journeys, selectedJourneyId, onJourneyLabelChange]);
   const canWriteClinical = useCan("clinical:write");
-  const visibleJourneys = journeys.filter((journey) => filter === "Todos" || journey.status === filter);
+  const activeJourneys = journeys.filter((journey) => journey.status !== "Cancelado");
+  const visibleJourneys = activeJourneys.filter((journey) => filter === "Todos" || journey.status === filter);
 
-  async function updateJourney(journey: PatientJourneySummary, action: "complete" | "cancel" | "restore") {
-    if (!patient.id || busyId) return;
+  function openNewTreatment() {
+    const cachedProfessionals = readClientCache<{ professionals: Array<{ id: string; name: string }> }>(professionalsKey);
+    if (cachedProfessionals) setProfessionals(cachedProfessionals.professionals);
+    setProfessionalsLoading(true);
+    setProfessionalsError("");
+    setNewTreatmentName(`Jornada ${journeys.length + 1}`);
+    setNewTreatmentProfessional("");
+    setNewTreatmentErrors({});
+    setNewTreatmentError("");
+    setNewTreatmentAttempt(0);
+    setNewTreatmentOpen(true);
+  }
+
+  async function createTreatment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (newTreatmentSaving || !patient.id) return;
+    const name = newTreatmentName.trim();
+    const errors = {
+      ...(!name ? { name: "Informe o nome da jornada." } : name.length > 80 ? { name: "Use até 80 caracteres." } : {}),
+      ...(!newTreatmentProfessional ? { professional: "Selecione o profissional responsável." } : {}),
+    };
+    if (Object.keys(errors).length) {
+      setNewTreatmentErrors(errors);
+      setNewTreatmentAttempt((attempt) => attempt + 1);
+      return;
+    }
+    setNewTreatmentSaving(true);
+    setNewTreatmentErrors({});
+    setNewTreatmentError("");
+    try {
+      const response = await fetch(journeyKey(patient.id), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, professionalId: newTreatmentProfessional }) });
+      const result = await response.json().catch(() => ({})) as { journey?: { id: string }; message?: string };
+      if (!response.ok || !result.journey) {
+        const message = result.message ?? "Não foi possível criar o tratamento.";
+        if (/profissional/i.test(message)) setNewTreatmentErrors({ professional: message });
+        else if (/nome|jornada/i.test(message)) setNewTreatmentErrors({ name: message });
+        else setNewTreatmentError(message);
+        setNewTreatmentAttempt((attempt) => attempt + 1);
+        return;
+      }
+      invalidateClientCache(journeyKey(patient.id), profileKey);
+      setNewTreatmentOpen(false);
+      onSelect(result.journey.id);
+    } catch (reason) {
+      setNewTreatmentError(reason instanceof Error ? reason.message : "Não foi possível criar o tratamento.");
+    } finally { setNewTreatmentSaving(false); }
+  }
+
+  async function updateJourney(journey: PatientJourneySummary, action: "complete" | "cancel" | "delete" | "restore"): Promise<boolean> {
+    if (!patient.id || busyId) return false;
     setBusyId(journey.id);
     setActionError("");
     try {
-      const response = await fetch(`/api/patients/${encodeURIComponent(patient.id)}/journeys/${encodeURIComponent(journey.id)}`, action === "cancel" ? { method: "DELETE" } : { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action === "complete" ? { status: "Concluído" } : {}) });
+      const response = await fetch(`/api/patients/${encodeURIComponent(patient.id)}/journeys/${encodeURIComponent(journey.id)}`, action === "delete" ? { method: "DELETE" } : { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action === "complete" ? { status: "Concluído" } : action === "cancel" ? { status: "Cancelado" } : {}) });
       const data = await response.json().catch(() => ({})) as { message?: string };
       if (!response.ok) throw new Error(data.message ?? "Não foi possível atualizar o tratamento.");
-      invalidateClientCache(key, summaryKey(patient.id));
+      invalidateClientCache(key, summaryKey(patient.id), ...(action === "delete" ? [`/api/quotes?patientId=${encodeURIComponent(patient.id)}&journeyId=${encodeURIComponent(journey.id)}`, `/api/quotes?patientId=${encodeURIComponent(patient.id)}&journeyId=`] : []));
       const fresh = await getCachedJson<{ journeys?: PatientJourneySummary[] }>(key);
       const next = fresh.journeys ?? [];
       setJourneys(next);
       if (!selectedJourneyId) setExpandedJourneyId(next.length === 1 ? next[0].id : null);
+      return true;
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Não foi possível atualizar o tratamento.");
+      return false;
     } finally { setBusyId(null); }
+  }
+
+  async function removeTreatment() {
+    if (!treatmentToRemove || busyId) return;
+    if (await updateJourney(treatmentToRemove, "delete")) setTreatmentToRemove(null);
   }
 
   if (loading && !journeys.length) return <Card className="space-y-4 p-5"><LoadingSkeleton className="h-6 w-56" />{[1, 2].map((item) => <LoadingSkeleton className="h-28 w-full" key={item} />)}</Card>;
@@ -243,10 +324,10 @@ export function PatientTreatments({ patient, selectedJourneyId, onSelect, onJour
 
   if (selected) return <JourneyDetail patient={patient} journey={selected} onBack={onBack} onOpenClinical={onOpenClinical} onOpenEvaluation={onOpenEvaluation} onNewSession={onNewSession} onScheduleReturn={onScheduleReturn} onOpenFollowUp={onOpenFollowUp} canWriteClinical={canWriteClinical} busy={busyId === selected.id} actionError={actionError} onComplete={() => void updateJourney(selected, "complete")} onCancel={() => void updateJourney(selected, "cancel")} onRestore={() => void updateJourney(selected, "restore")} />;
 
-  return <div className="space-y-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-base font-bold">Tratamentos da paciente</h3><p className="mt-1 text-xs text-muted-foreground">Jornadas clínicas, sessões e próximos retornos.</p></div><Button onClick={onNewTreatment}><Plus className="h-4 w-4" />Novo tratamento</Button></div>
+  return <><div className="space-y-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-base font-bold">Tratamentos da paciente</h3><p className="mt-1 text-xs text-muted-foreground">Jornadas clínicas, sessões e próximos retornos.</p></div><Button onClick={openNewTreatment}><Plus className="h-4 w-4" />Novo tratamento</Button></div>
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
     <section className="min-w-0 space-y-4">
-    <div className="flex flex-wrap gap-2" role="group" aria-label="Filtrar tratamentos">{["Todos", "Em andamento", "Concluído", "Cancelado"].map((item) => <Button key={item} variant={filter === item ? "default" : "outline"} size="sm" aria-pressed={filter === item} onClick={() => setFilter(item)}>{item}</Button>)}</div>
+    <div className="flex flex-wrap gap-2" role="group" aria-label="Filtrar tratamentos">{["Todos", "Em andamento", "Concluído"].map((item) => <Button key={item} variant={filter === item ? "default" : "outline"} size="sm" aria-pressed={filter === item} onClick={() => setFilter(item)}>{item}</Button>)}</div>
     {actionError ? <p role="alert" className="text-xs text-destructive">{actionError}</p> : null}
     {!visibleJourneys.length ? <Card className="p-6"><EmptyState title={journeys.length ? "Nenhum tratamento neste filtro" : "Nenhum tratamento cadastrado"} description={journeys.length ? "Selecione outro status para ver jornadas." : "Crie um tratamento para organizar avaliações, orçamentos e atendimentos."} /></Card> : <div className="space-y-3">{visibleJourneys.map((journey) => {
       const expanded = expandedJourneyId === journey.id;
@@ -256,11 +337,12 @@ export function PatientTreatments({ patient, selectedJourneyId, onSelect, onJour
         <div className="flex items-center gap-3 p-3 sm:p-4">
           <span className="grid h-11 w-11 shrink-0 place-items-center rounded-md bg-primary/10 text-primary"><Syringe className="h-5 w-5" /></span>
           <button className="min-w-0 flex-1 text-left" type="button" aria-expanded={expanded} onClick={() => setExpandedJourneyId(expanded ? null : journey.id)}>
-            <span className="flex flex-wrap items-center gap-2"><span className="truncate text-sm font-bold">{journey.name}</span><Badge variant={statusTone(journey.status)}>{journey.status === "Em andamento" ? "Em acompanhamento" : journey.status}</Badge></span>
+            <span className="flex flex-wrap items-center gap-2"><span className="truncate text-sm font-bold">{journey.name}</span><Badge variant={statusTone(journey.status)}>{journey.status}</Badge></span>
             <span className="mt-1 block truncate text-[10px] text-muted-foreground">{journey.professional} · Iniciado em {dateLabel(journey.createdAt)}</span>
           </button>
           <ProgressSteps journey={journey} />
           <Button className="hidden sm:inline-flex" size="sm" variant="outline" onClick={() => onSelect(journey.id)}>Abrir jornada <ChevronRight className="h-3.5 w-3.5" /></Button>
+          {canWriteClinical && journey.status !== "Cancelado" ? <Button size="icon" variant="ghost" className="text-[#b42318] hover:bg-[#fff1f0] hover:text-[#b42318]" aria-label={`Remover tratamento ${journey.name}`} title="Remover tratamento" disabled={busyId === journey.id} onClick={() => { setActionError(""); setTreatmentToRemove(journey); }}><Trash2 className="h-4 w-4" /></Button> : null}
           <Button size="icon" variant="ghost" aria-label={expanded ? "Recolher tratamento" : "Expandir tratamento"} aria-expanded={expanded} onClick={() => setExpandedJourneyId(expanded ? null : journey.id)}><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? "rotate-180" : ""}`} /></Button>
         </div>
         {expanded ? <div className="border-t border-border px-3 pb-3 sm:px-4 sm:pb-4">
@@ -276,11 +358,36 @@ export function PatientTreatments({ patient, selectedJourneyId, onSelect, onJour
     })}</div>}
     </section>
     <aside className="space-y-4">
-      <Card className="p-4"><IconHeading icon={Layers3} title="Resumo de tratamentos" /><div className="mt-3 space-y-3 text-xs"><p className="flex items-center gap-3"><CalendarDays className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{journeys.length}</strong><span className="text-muted-foreground">tratamentos</span></p><p className="flex items-center gap-3"><Clock3 className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{journeys.filter((item) => item.status === "Em andamento").length}</strong><span className="text-muted-foreground">em andamento</span></p><p className="flex items-center gap-3"><Check className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{journeys.filter((item) => item.status === "Concluído").length}</strong><span className="text-muted-foreground">concluídos</span></p><p className="flex items-center gap-3"><Camera className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{journeys.reduce((total, item) => total + item.photoCount, 0)}</strong><span className="text-muted-foreground">fotos vinculadas</span></p></div></Card>
+      <Card className="p-4"><IconHeading icon={Layers3} title="Resumo de tratamentos" /><div className="mt-3 space-y-3 text-xs"><p className="flex items-center gap-3"><CalendarDays className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{activeJourneys.length}</strong><span className="text-muted-foreground">tratamentos</span></p><p className="flex items-center gap-3"><Clock3 className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{activeJourneys.filter((item) => item.status === "Em andamento").length}</strong><span className="text-muted-foreground">em andamento</span></p><p className="flex items-center gap-3"><Check className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{activeJourneys.filter((item) => item.status === "Concluído").length}</strong><span className="text-muted-foreground">concluídos</span></p><p className="flex items-center gap-3"><Camera className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{activeJourneys.reduce((total, item) => total + item.photoCount, 0)}</strong><span className="text-muted-foreground">fotos vinculadas</span></p></div></Card>
       <Card className="p-4"><IconHeading icon={Clock3} title="Linha do tempo clínica" />{summaryLoading && !summary ? <div className="mt-3 space-y-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : summary?.events.length ? <ol className="mt-3 space-y-3">{summary.events.slice(0, 5).map((event, index) => { const EventIcon = eventIcon(event.kind); return <li className="relative flex gap-2.5" key={`${event.kind}-${event.date}-${index}`}><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary/10 text-primary"><EventIcon className="h-3.5 w-3.5" /></span><span className="min-w-0 flex-1"><strong className="block text-[11px]">{event.title}</strong><span className="mt-0.5 block text-[10px] leading-4 text-muted-foreground">{event.detail}</span><time className="mt-1 block text-[9px] text-muted-foreground">{dateLabel(event.date)}</time></span></li>; })}</ol> : <p className="mt-3 rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">Nenhuma atividade clínica registrada.</p>}</Card>
     </aside>
     </div>
-  </div>;
+  </div><Modal open={newTreatmentOpen} title="Novo tratamento" description="Defina o nome da jornada e quem será responsável pelo acompanhamento." onClose={() => { if (!newTreatmentSaving) setNewTreatmentOpen(false); }} closeOnOverlayClick={!newTreatmentSaving}>
+    <form noValidate onSubmit={(event) => void createTreatment(event)} className="space-y-4">
+      <label htmlFor="new-treatment-name" className="block text-xs font-medium">Nome da jornada
+        <input id="new-treatment-name" key={`journey-name-${newTreatmentAttempt}`} autoFocus maxLength={80} value={newTreatmentName} onChange={(event) => { setNewTreatmentName(event.target.value); setNewTreatmentErrors((current) => ({ ...current, name: undefined })); setNewTreatmentError(""); }} aria-invalid={Boolean(newTreatmentErrors.name)} aria-describedby={newTreatmentErrors.name ? "new-treatment-name-error" : undefined} placeholder="Ex.: Preenchimento labial" className={cn("mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-primary", newTreatmentErrors.name && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} />
+        {newTreatmentErrors.name ? <span id="new-treatment-name-error" role="alert" className="mt-1 block text-[10px] font-medium text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{newTreatmentErrors.name}</span> : null}
+        <span className="mt-1 block text-[10px] text-muted-foreground">{newTreatmentName.length}/80 caracteres</span>
+      </label>
+      <label htmlFor="new-treatment-professional" className="block text-xs font-medium">Profissional responsável
+        <select id="new-treatment-professional" key={`journey-professional-${newTreatmentAttempt}`} value={newTreatmentProfessional} onChange={(event) => { setNewTreatmentProfessional(event.target.value); setNewTreatmentErrors((current) => ({ ...current, professional: undefined })); setNewTreatmentError(""); }} aria-invalid={Boolean(newTreatmentErrors.professional)} aria-describedby={newTreatmentErrors.professional ? "new-treatment-professional-error" : undefined} disabled={professionalsLoading || !professionals.length} className={cn("mt-1 h-10 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-primary disabled:opacity-60", newTreatmentErrors.professional && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")}>
+          <option value="">{professionalsLoading ? "Carregando profissionais..." : professionals.length ? "Selecione o profissional" : "Nenhum profissional disponível"}</option>
+          {professionals.map((professional) => <option key={professional.id} value={professional.id}>{professional.name}</option>)}
+        </select>
+        {newTreatmentErrors.professional ? <span id="new-treatment-professional-error" role="alert" className="mt-1 block text-[10px] font-medium text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{newTreatmentErrors.professional}</span> : null}
+        {!professionalsLoading && !professionals.length ? <span role={professionalsError ? "alert" : undefined} className="mt-1 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">{professionalsError || "Cadastre um administrador ou profissional para continuar."}{professionalsError ? <Button type="button" variant="link" size="sm" className="h-auto p-0 text-[10px]" onClick={() => { setProfessionalsError(""); setProfessionalsLoading(true); setProfessionalsRetry((retry) => retry + 1); }}>Tentar novamente</Button> : null}</span> : null}
+      </label>
+      {newTreatmentError ? <p key={`journey-error-${newTreatmentAttempt}`} role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{newTreatmentError}</p> : null}
+      <div className="flex justify-end gap-2 border-t border-border pt-4"><Button type="button" variant="outline" disabled={newTreatmentSaving} onClick={() => setNewTreatmentOpen(false)}>Cancelar</Button><Button type="submit" disabled={newTreatmentSaving || professionalsLoading || !professionals.length}>{newTreatmentSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}{newTreatmentSaving ? "Criando..." : "Criar tratamento"}</Button></div>
+    </form>
+  </Modal><Modal open={Boolean(treatmentToRemove)} title="Excluir tratamento permanentemente" description="Esta ação não pode ser desfeita." onClose={() => { if (!busyId) { setTreatmentToRemove(null); setActionError(""); } }} closeOnOverlayClick={!busyId}>
+    <div className="space-y-4">
+      <p className="text-sm">Tem certeza que deseja excluir <strong>{treatmentToRemove?.name}</strong> do banco de dados?</p>
+      <p className="rounded-md border border-[#fecdca] bg-[#fff6f5] px-3 py-2 text-xs text-[#912018]">A jornada, os orçamentos, as sessões e os acompanhamentos vinculados serão apagados permanentemente. Avaliações, procedimentos, pagamentos e agendamentos serão preservados, mas ficarão sem vínculo com esta jornada. Jornadas com orçamento aprovado ou pago não podem ser excluídas.</p>
+      {actionError ? <p role="alert" className="text-xs text-destructive">{actionError}</p> : null}
+      <div className="flex justify-end gap-2 border-t border-border pt-4"><Button type="button" variant="outline" disabled={Boolean(busyId)} onClick={() => { setTreatmentToRemove(null); setActionError(""); }}>Manter tratamento</Button><Button type="button" className="bg-[#b42318] hover:bg-[#991b1b]" disabled={Boolean(busyId)} onClick={() => void removeTreatment()}>{busyId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}{busyId ? "Excluindo..." : "Excluir permanentemente"}</Button></div>
+    </div>
+  </Modal></>;
 }
 
 function JourneyDetail({ patient, journey, onBack, onOpenClinical, onOpenEvaluation, onNewSession, onScheduleReturn, onOpenFollowUp, canWriteClinical, busy, actionError, onComplete, onCancel, onRestore }: { patient: Patient; journey: PatientJourneySummary; onBack: () => void; onOpenClinical: (tab: string) => void; onOpenEvaluation: (journey: PatientJourneySummary, evaluationId?: string) => void; onNewSession: (journey: PatientJourneySummary) => void; onScheduleReturn: (journey: PatientJourneySummary) => void; onOpenFollowUp: (journey: PatientJourneySummary, sessionId: string) => void; canWriteClinical: boolean; busy: boolean; actionError: string; onComplete: () => void; onCancel: () => void; onRestore: () => void }) {
@@ -370,7 +477,7 @@ function JourneyDetail({ patient, journey, onBack, onOpenClinical, onOpenEvaluat
 
   return <div className="space-y-3">
     <Card className="flex flex-wrap items-center justify-between gap-4 p-4 sm:p-5">
-      <div className="flex min-w-0 items-center gap-3"><span className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-primary/10 text-xl font-bold text-primary">{journey.name.slice(0, 1).toLocaleUpperCase("pt-BR")}</span><div className="min-w-0"><p className="truncate text-base font-bold">{journey.name}</p><div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"><span>{patient.name}</span><span>·</span><span>{journey.professional}</span><span>·</span><span>Desde {dateLabel(journey.createdAt)}</span><Badge variant={statusTone(journey.status)}>{journey.status === "Em andamento" ? "Em acompanhamento" : journey.status}</Badge></div></div></div>
+      <div className="flex min-w-0 items-center gap-3"><span className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-primary/10 text-xl font-bold text-primary">{journey.name.slice(0, 1).toLocaleUpperCase("pt-BR")}</span><div className="min-w-0"><p className="truncate text-base font-bold">{journey.name}</p><div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"><span>{patient.name}</span><span>·</span><span>{journey.professional}</span><span>·</span><span>Desde {dateLabel(journey.createdAt)}</span><Badge variant={statusTone(journey.status)}>{journey.status}</Badge></div></div></div>
       <div className="flex flex-wrap gap-2">{canWriteClinical && journey.status === "Em andamento" ? <Button size="sm" variant="outline" onClick={() => { setName(journey.name); setEditError(""); setEditOpen(true); }}><Pencil className="h-4 w-4" />Editar jornada</Button> : null}<Button size="sm" variant="outline" onClick={() => onNewSession(journey)}><FileText className="h-4 w-4" />Nova sessão</Button>{journey.status === "Em andamento" && canWriteClinical ? <><Button size="sm" variant="outline" disabled={busy} onClick={onCancel}>Cancelar tratamento</Button><Button size="sm" onClick={() => setCompleteOpen(true)}><Check className="h-4 w-4" />Finalizar tratamento</Button></> : journey.status === "Cancelado" && canWriteClinical ? <Button size="sm" variant="outline" disabled={busy} onClick={onRestore}>Reativar</Button> : null}</div>
     </Card>
     {actionError || loadError ? <p role="alert" className="rounded-md bg-destructive/10 p-3 text-xs text-destructive">{actionError || "Alguns dados do tratamento não puderam ser atualizados."}</p> : null}

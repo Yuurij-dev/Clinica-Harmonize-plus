@@ -3,7 +3,6 @@ import { getCurrentUser } from "@/lib/auth";
 import { denyUnless } from "@/lib/api-guards";
 import { clinicToday, dateOnly } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
-import { ensurePatientJourney } from "@/lib/patient-journey";
 import { lotBalances } from "@/lib/stock";
 
 type SessionPhotoInput = { id?: string; name?: string; phase?: string; category?: string; imageUrl?: string; sourceEvaluationPhotoId?: string; width?: number; height?: number };
@@ -64,7 +63,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!body?.journeyId || !body.quoteId || !body.procedureId) return NextResponse.json({ message: "Informe o tratamento, orçamento e procedimento." }, { status: 400 });
   const [patient, journey, quote] = await Promise.all([
     prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true } }),
-    prisma.patientJourney.findFirst({ where: { id: body.journeyId, patientId, clinicId: user.clinicId, archivedAt: null }, select: { id: true } }),
+    prisma.patientJourney.findFirst({ where: { id: body.journeyId, patientId, clinicId: user.clinicId, archivedAt: null }, select: { id: true, professional: true } }),
     prisma.quote.findFirst({ where: { id: body.quoteId, patientId, journeyId: body.journeyId, clinicId: user.clinicId }, select: { id: true, status: true, evaluationId: true, items: true, details: true } }),
   ]);
   if (!patient || !journey || !quote || !quote.evaluationId) return NextResponse.json({ message: "Paciente, jornada ou orçamento não encontrado." }, { status: 404 });
@@ -79,16 +78,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!line) return NextResponse.json({ message: "O procedimento não pertence ao orçamento aprovado." }, { status: 400 });
   const date = body.performedAt ? new Date(body.performedAt) : new Date();
   if (!Number.isFinite(date.getTime())) return NextResponse.json({ message: "Data da sessão inválida." }, { status: 400 });
-  const journeyRecord = await ensurePatientJourney(patientId, user.clinicId, body.journeyId);
+  const assignedProfessional = journey.professional.trim() || user.name;
   const parent = await prisma.patientProcedure.upsert({
     where: { quoteId: quote.id },
-    update: { name: quote.items, journeyId: journeyRecord.id },
-    create: { clinicId: user.clinicId, patientId, journeyId: journeyRecord.id, quoteId: quote.id, name: quote.items, professional: user.name, performedAt: date },
+    update: { name: quote.items, journeyId: journey.id },
+    create: { clinicId: user.clinicId, patientId, journeyId: journey.id, quoteId: quote.id, name: quote.items, professional: assignedProfessional, performedAt: date },
     select: { id: true },
   });
   const session = await prisma.patientProcedureSession.create({ data: {
-    clinicId: user.clinicId, patientId, journeyId: journeyRecord.id, evaluationId: quote.evaluationId,
-    procedureId: parent.id, quoteId: quote.id, procedureName: procedure.name, professional: user.name,
+    clinicId: user.clinicId, patientId, journeyId: journey.id, evaluationId: quote.evaluationId,
+    procedureId: parent.id, quoteId: quote.id, procedureName: procedure.name, professional: assignedProfessional,
     performedAt: date, status: "Rascunho", createdBy: user.name, updatedBy: user.name,
     auditLog: JSON.stringify([{ at: new Date().toISOString(), actor: user.name, action: "Sessão criada", fields: ["procedimento", "profissional", "data"] }]),
   } });

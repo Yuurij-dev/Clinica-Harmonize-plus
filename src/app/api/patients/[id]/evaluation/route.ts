@@ -139,7 +139,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     // Sem evaluationId, cria uma nova avaliação em nome do usuário logado.
     const evaluation = body?.evaluationId
       ? await transaction.evaluation.update({ where: { id: body.evaluationId }, data: { ...assessment, ...(body?.status ? { status: body.status } : {}) } })
-      : await transaction.evaluation.create({ data: { patientId, clinicId: user.clinicId, journeyId: journey?.id, professional: user.name, ...assessment, status: body?.status ?? "Rascunho" } });
+      : await transaction.evaluation.create({ data: { patientId, clinicId: user.clinicId, journeyId: journey?.id, professional: journey?.professional?.trim() || user.name, ...assessment, status: body?.status ?? "Rascunho" } });
 
     await transaction.evaluationPhoto.deleteMany({ where: { evaluationId: evaluation.id } });
     if (validPhotos.length) {

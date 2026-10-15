@@ -395,6 +395,7 @@ model PatientJourney {
   patientId    String
   clinicId     String?
   name         String
+  professional String             @default("")
   status       String             @default("Em andamento")
   createdAt    DateTime           @default(now()) @db.Timestamptz(6)
   updatedAt    DateTime           @updatedAt @db.Timestamptz(6)
