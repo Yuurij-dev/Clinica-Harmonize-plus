@@ -406,7 +406,7 @@ type StoredQuoteDetails = { items: Array<{ procedureId: string; name: string; qu
 const quoteStatusLabels: Record<string, string> = { Rascunho: "Rascunho", Pendente: "Rascunho", Enviado: "Enviado", Aprovado: "Aprovado", Pago: "Pago", Recusado: "Recusado", Cancelado: "Cancelado" };
 const quotePaymentMethods = ["Cartão de crédito", "Pix", "Dinheiro", "Cartão de débito", "Boleto", "Transferência"];
 
-function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, evaluationId, breadcrumb, onReturnToEvaluation, onAdvance }: PatientExpensesProps) {
+function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, evaluationId, breadcrumb, onPaid, onReturnToEvaluation, onAdvance }: PatientExpensesProps) {
   const quoteKey = `/api/quotes?patientId=${encodeURIComponent(patientId)}&journeyId=${encodeURIComponent(journeyId ?? "")}`;
   const evaluationKey = `/api/patients/${encodeURIComponent(patientId)}/evaluation?summary=1&evaluationId=${encodeURIComponent(evaluationId ?? "")}`;
   const cachedQuotes = readClientCache<{ quotes?: PatientQuote[] }>(quoteKey);
@@ -422,6 +422,7 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
   const [newRevision, setNewRevision] = useState(false);
   const [saving, setSaving] = useState(false);
   const [statusBusy, setStatusBusy] = useState(false);
+  const [paymentBusy, setPaymentBusy] = useState(false);
   const [notice, setNotice] = useState<{ error: boolean; text: string } | null>(null);
   const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(null);
   const [lines, setLines] = useState<QuoteLineInput[]>([]);
@@ -443,7 +444,8 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
       if (!active) return;
       const nextQuotes = quoteData.quotes ?? [];
       const nextProcedures = optionData.procedures ?? [];
-      const nextQuote = nextQuotes.find((quote) => quote.evaluationId === evaluationId);
+      const nextQuote = nextQuotes.find((quote) => quote.evaluationId === evaluationId)
+        ?? nextQuotes.find((quote) => !quote.evaluationId);
       setQuotes(nextQuotes);
       setProcedures(nextProcedures);
       setCosts(optionData.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
@@ -459,14 +461,15 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
     return () => { active = false; };
   }, [patientId, journeyId, evaluationId, quoteKey, evaluationKey, retry]);
 
-  const relatedQuotes = useMemo(() => quotes.filter((quote) => quote.evaluationId === evaluationId), [quotes, evaluationId]);
+  const relatedQuotes = useMemo(() => quotes.filter((quote) => quote.evaluationId === evaluationId || !quote.evaluationId), [quotes, evaluationId]);
   const activeQuote = newRevision ? undefined : relatedQuotes.find((quote) => quote.id === selectedQuoteId) ?? relatedQuotes[0];
+  const canStartNewProposal = activeQuote?.status !== "Pago";
   const editable = !activeQuote || ["Rascunho", "Pendente"].includes(activeQuote.status);
   const catalogPrices = procedures.map((procedure) => ({ id: procedure.id, name: procedure.name, priceCents: Math.round(procedure.price * 100) }));
   const calculated = calculateQuote(lines, catalogPrices, { laborCents: Math.round(costs.laborCost * 100), facilityCents: Math.round(costs.facilityCost * 100), medicationCents: Math.round(costs.medicationCost * 100) });
   const total = calculated?.totalCents ?? 0;
   const quoteSignature = `${JSON.stringify(lines)}|${paymentMethod}|${installments}|${notes}`;
-  const savedLines = parseQuoteDetails(activeQuote?.details)?.items.map((item) => ({ procedureId: item.procedureId, quantity: item.quantity, discountCents: item.discountCents })) ?? [];
+  const savedLines = parseQuoteDetails(activeQuote?.details)?.items.map((item) => ({ procedureId: item.procedureId, quantity: item.quantity, discountCents: item.discountCents })) ?? restoreQuoteLines(activeQuote, procedures);
   const initialSignature = activeQuote ? `${JSON.stringify(savedLines)}|${activeQuote.paymentMethod ?? "Cartão de crédito"}|${activeQuote.installments ?? 1}|${activeQuote.notes ?? ""}` : "";
   const saved = Boolean(activeQuote?.id && initializedQuoteId === activeQuote.id && quoteSignature === initialSignature);
 
@@ -475,9 +478,36 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
     setNotice(null);
   }
 
-  function addProcedure(procedureId: string) {
-    if (!procedureId || lines.some((line) => line.procedureId === procedureId)) return;
-    setLines((current) => [...current, { procedureId, quantity: 1, discountCents: 0 }]);
+  function toggleProcedure(procedureId: string, checked: boolean) {
+    setLines((current) => checked
+      ? current.some((line) => line.procedureId === procedureId) ? current : [...current, { procedureId, quantity: 1, discountCents: 0 }]
+      : current.filter((line) => line.procedureId !== procedureId));
+    setNotice(null);
+  }
+
+  function startNewRevision() {
+    if (!canStartNewProposal) return;
+    if (!saved && lines.length && !window.confirm("Há alterações não salvas nesta proposta. Deseja descartá-las e iniciar outra?")) return;
+    setNewRevision(true);
+    setSelectedQuoteId(null);
+    setLines([]);
+    setPaymentMethod("Cartão de crédito");
+    setInstallments(1);
+    setNotes("");
+    setInitializedQuoteId("__new__");
+    setNotice(null);
+  }
+
+  function selectRelatedQuote(quoteId: string) {
+    const quote = relatedQuotes.find((item) => item.id === quoteId);
+    if (!quote) return;
+    setNewRevision(false);
+    setSelectedQuoteId(quote.id);
+    setLines(restoreQuoteLines(quote, procedures));
+    setPaymentMethod(quote.paymentMethod ?? "Cartão de crédito");
+    setInstallments(quote.installments ?? 1);
+    setNotes(quote.notes ?? "");
+    setInitializedQuoteId(quote.id);
     setNotice(null);
   }
 
@@ -503,12 +533,12 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
   }
 
   async function changeStatus(status: "Enviado" | "Aprovado" | "Recusado" | "Cancelado") {
-    const quote = activeQuote && saved ? activeQuote : await saveDraft();
+    const quote = activeQuote && (saved || !editable) ? activeQuote : await saveDraft();
     if (!quote) return;
     if (status === "Enviado" && !window.confirm("Confirma que a proposta já foi enviada ao paciente?")) return;
     setStatusBusy(true); setNotice(null);
     try {
-      const response = await fetch(`/api/quotes/${quote.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
+      const response = await fetch(`/api/quotes/${quote.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status, evaluationId }) });
       const data = await response.json().catch(() => ({})) as { quote?: PatientQuote; message?: string };
       if (!response.ok || !data.quote) throw new Error(data.message ?? "Não foi possível atualizar o status do orçamento.");
       invalidateClientCache(quoteKey, "/api/quotes", `/api/patients/${patientId}/history`, `/api/patients/${patientId}/profile`);
@@ -517,6 +547,54 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
       if (["Recusado", "Cancelado"].includes(status)) { setNewRevision(true); setLines([]); setPaymentMethod("Cartão de crédito"); setInstallments(1); setNotes(""); setInitializedQuoteId("__new__"); }
     } catch (error) { setNotice({ error: true, text: error instanceof Error ? error.message : "Não foi possível atualizar o orçamento." }); }
     finally { setStatusBusy(false); }
+  }
+
+  async function advanceToProcedure() {
+    if (!activeQuote || !["Aprovado", "Pago"].includes(activeQuote.status)) return;
+    if (activeQuote.evaluationId === evaluationId) {
+      onAdvance?.(activeQuote.id);
+      return;
+    }
+    setSaving(true); setNotice(null);
+    try {
+      const response = await fetch(`/api/quotes/${activeQuote.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ evaluationId }),
+      });
+      const data = await response.json().catch(() => ({})) as { quote?: PatientQuote; message?: string };
+      if (!response.ok || !data.quote) throw new Error(data.message ?? "Não foi possível vincular o orçamento à avaliação.");
+      invalidateClientCache(quoteKey, "/api/quotes", `/api/patients/${patientId}/history`, `/api/patients/${patientId}/profile`);
+      setQuotes((current) => current.map((quote) => quote.id === data.quote!.id ? data.quote! : quote));
+      onAdvance?.(data.quote.id);
+    } catch (error) {
+      setNotice({ error: true, text: error instanceof Error ? error.message : "Não foi possível avançar para o procedimento." });
+    } finally { setSaving(false); }
+  }
+
+  async function registerPayment() {
+    if (!activeQuote || ["Pago", "Recusado", "Cancelado"].includes(activeQuote.status)) return;
+    if (!window.confirm("Confirma o recebimento de " + currency.format(activeQuote.total) + "?")) return;
+    setPaymentBusy(true); setNotice(null);
+    try {
+      const response = await fetch("/api/payments", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ patientId, journeyId, value: activeQuote.total, method: activeQuote.paymentMethod ?? paymentMethod, status: "Pago", installments: activeQuote.paymentMethod === "Cartão de crédito" ? String(activeQuote.installments ?? installments) + "x" : "A vista" }),
+      });
+      const data = await response.json().catch(() => ({})) as { payment?: { id: string }; message?: string };
+      if (!response.ok || !data.payment) throw new Error(data.message ?? "Não foi possível registrar o pagamento.");
+      const quoteResponse = await fetch("/api/quotes/" + activeQuote.id, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Pago", evaluationId }),
+      });
+      const quoteData = await quoteResponse.json().catch(() => ({})) as { quote?: PatientQuote; message?: string };
+      if (!quoteResponse.ok || !quoteData.quote) {
+        throw new Error("O recebimento foi registrado, mas o status do orçamento não foi atualizado. " + (quoteData.message ?? "Atualize a página e confira o financeiro."));
+      }
+      invalidateClientCache("/api/payments", "/api/quotes", quoteKey, "/api/patients/" + patientId + "/history", "/api/patients/" + patientId + "/profile", "/api/dashboard/bootstrap");
+      setQuotes((current) => current.map((quote) => quote.id === quoteData.quote!.id ? quoteData.quote! : quote));
+      setNotice({ error: false, text: "Pagamento registrado e orçamento atualizado." });
+      onPaid?.();
+    } catch (error) {
+      setNotice({ error: true, text: error instanceof Error ? error.message : "Não foi possível registrar o pagamento." });
+    } finally { setPaymentBusy(false); }
   }
 
   function generatePdf() {
@@ -540,28 +618,41 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
       {patient && breadcrumb ? <EncounterBreadcrumb patientName={patient.name} journeyName={journeyLabel ?? "Novo atendimento"} stage="Orçamento" {...breadcrumb} /> : null}
       <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
         <div className="flex min-w-0 items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#ece9ff] text-sm font-black text-[#5147dc]">{(patient?.name ?? "Paciente").split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div className="min-w-0"><h2 className="truncate text-base font-bold text-[#242538]">{patient?.name ?? "Paciente"}</h2><p className="text-[10px] text-[#77788a]">{patient?.age ? `${patient.age} anos · ` : ""}{patient?.phone ?? "Telefone não informado"} · {patient?.status ?? "Status não informado"}</p><p className="text-[9px] text-[#858696]">Paciente desde {patient?.createdAt ? new Date(patient.createdAt).toLocaleDateString("pt-BR") : "data não informada"} · {journeyLabel ?? "Novo atendimento"} · Etapa 2 de 4</p></div></div>
-        <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={onReturnToEvaluation}><ArrowLeft className="h-4 w-4" />Voltar para avaliação</Button><Button disabled={!activeQuote || !["Aprovado", "Pago"].includes(activeQuote.status) || saving} onClick={() => { if (activeQuote) onAdvance?.(activeQuote.id); }}><ArrowRight className="h-4 w-4" />Avançar para procedimento</Button></div>
+        <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={onReturnToEvaluation}><ArrowLeft className="h-4 w-4" />Voltar para avaliação</Button><Button disabled={!activeQuote || !["Aprovado", "Pago"].includes(activeQuote.status) || saving} onClick={() => void advanceToProcedure()}>{saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}Avançar para procedimento</Button></div>
       </Card>
       <div className="flex items-center gap-2 overflow-x-auto px-2 py-1 text-[10px] font-semibold text-[#747587]" aria-label="Progresso do atendimento">{["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento"].map((stage, index) => <div key={stage} className="flex min-w-0 flex-1 items-center gap-2"><span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-full", index < 1 ? "bg-[#5147dc] text-white" : index === 1 ? "bg-[#5147dc] text-white" : "bg-[#e6e7ef] text-[#747587]")}>{index < 1 ? <Check className="h-4 w-4" /> : index + 1}</span><span className={index === 1 ? "text-[#3f35d6]" : "whitespace-nowrap"}>{stage}</span>{index < 3 ? <span className={cn("h-px min-w-3 flex-1", index < 1 ? "bg-[#5147dc]" : "bg-[#dfe0e8]")} /> : null}</div>)}</div>
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_350px]">
         <div className="space-y-4">
           <Card className="overflow-hidden">
-            <div className="border-b border-[#ececf2] px-4 py-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="text-sm font-bold text-[#27283b]">Orçamento do tratamento</h3><p className="mt-1 text-[10px] text-[#858696]">Vinculado à avaliação de {new Date(evaluation.createdAt).toLocaleDateString("pt-BR")} · {evaluation.professional || "Profissional não informado"}</p></div>{activeQuote ? <span className="rounded-full bg-[#f0efff] px-3 py-1 text-[10px] font-bold text-[#5147dc]">{quoteStatusLabels[activeQuote.status] ?? activeQuote.status}</span> : null}{activeQuote && ["Recusado", "Cancelado"].includes(activeQuote.status) ? <Button size="sm" variant="outline" type="button" onClick={() => { setSelectedQuoteId(null); setNewRevision(true); setLines([]); setPaymentMethod("Cartão de crédito"); setInstallments(1); setNotes(""); setInitializedQuoteId("__new__"); }}>Nova proposta</Button> : null}</div>
+            <div className="border-b border-[#ececf2] px-4 py-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-bold text-[#27283b]">Orçamento do tratamento</h3><p className="mt-1 text-[10px] text-[#858696]">Vinculado à avaliação de {new Date(evaluation.createdAt).toLocaleDateString("pt-BR")} · {evaluation.professional || "Profissional não informado"}</p></div><div className="flex flex-wrap items-center justify-end gap-2"><Button size="sm" type="button" variant="outline" disabled={!calculated} onClick={generatePdf}><FileDown className="h-4 w-4" />Gerar PDF</Button><Button size="sm" type="button" variant="outline" disabled={paymentBusy || saving || !activeQuote || ["Pago", "Recusado", "Cancelado"].includes(activeQuote.status)} onClick={() => void registerPayment()}><WalletCards className="h-4 w-4" />{paymentBusy ? "Registrando..." : "Registrar pagamento"}</Button><Button size="sm" type="button" disabled={saving || !editable || saved || !calculated} onClick={() => void saveDraft()}><Save className="h-4 w-4" />{saving ? "Salvando..." : saved ? "Rascunho salvo" : "Salvar rascunho"}</Button></div></div><div className="mt-2 flex flex-wrap items-center justify-end gap-2">{relatedQuotes.length ? <label className="sr-only" htmlFor="journey-quote-history">Propostas desta jornada</label> : null}{relatedQuotes.length ? <select id="journey-quote-history" aria-label="Selecionar proposta desta jornada" className="h-8 max-w-[230px] rounded-[5px] border border-[#dddde6] bg-white px-2 text-[10px]" value={newRevision ? "__new__" : activeQuote?.id ?? ""} onChange={(event) => event.target.value === "__new__" ? startNewRevision() : selectRelatedQuote(event.target.value)}>{canStartNewProposal ? <option value="__new__">Nova proposta</option> : null}{relatedQuotes.map((quote) => <option key={quote.id} value={quote.id}>{quoteStatusLabels[quote.status] ?? quote.status} · {quote.createdAt ? new Date(quote.createdAt).toLocaleDateString("pt-BR") : "Data não informada"} · {currency.format(quote.total)}</option>)}</select> : null}{activeQuote ? <span className="rounded-full bg-[#f0efff] px-3 py-1 text-[10px] font-bold text-[#5147dc]">{quoteStatusLabels[activeQuote.status] ?? activeQuote.status}</span> : null}{relatedQuotes.length && canStartNewProposal ? <Button size="sm" variant="outline" type="button" onClick={startNewRevision}>Nova proposta</Button> : null}</div>
               <div className="mt-4 rounded-[6px] bg-[#f3f1ff] px-3 py-2.5 text-xs text-[#4d4b68]"><strong className="text-[#3a31c8]">Objetivo:</strong> {evaluation.patientGoal.trim() || "Não informado na avaliação."}</div>
               <p className="mt-3 text-[10px] text-[#707184]"><strong>Queixa principal:</strong> {evaluation.chiefComplaint.trim() || "Não informado"}</p>
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-3 px-4 pb-3 pt-4"><div><h4 className="text-xs font-bold text-[#353648]">Procedimentos sugeridos</h4><p className="mt-0.5 text-[9px] text-[#858696]">Selecione do catálogo da clínica conforme o objetivo da avaliação.</p></div><label className="relative min-w-56"><select aria-label="Adicionar procedimento do catálogo" disabled={!editable || procedures.length === 0} className="h-9 w-full appearance-none rounded-[6px] border border-[#dddde6] bg-white px-3 pr-8 text-[11px] font-semibold text-[#555668] outline-none focus:border-[#5147dc] disabled:opacity-60" value="" onChange={(event) => addProcedure(event.target.value)}><option value="">{procedures.length ? "Adicionar procedimento" : "Nenhum procedimento cadastrado"}</option>{procedures.filter((procedure) => !lines.some((line) => line.procedureId === procedure.id)).map((procedure) => <option key={procedure.id} value={procedure.id}>{procedure.name} · {currency.format(procedure.price)}</option>)}</select><ChevronDown className="pointer-events-none absolute right-2.5 top-2.5 h-4 w-4 text-[#77788a]" /></label></div>
-            <div className="overflow-x-auto px-4 pb-4"><table className="w-full min-w-[720px] border-collapse text-left text-[10px]"><thead><tr className="bg-[#f7f7fb] text-[#77798d]"><th className="rounded-l-[5px] px-3 py-2.5 font-bold">Procedimento</th><th className="px-3 py-2.5 font-bold">Quantidade</th><th className="px-3 py-2.5 font-bold">Valor unitário</th><th className="px-3 py-2.5 font-bold">Desconto</th><th className="rounded-r-[5px] px-3 py-2.5 font-bold">Subtotal</th><th className="w-9" /></tr></thead><tbody>{lines.map((line) => {
-              const procedure = procedures.find((item) => item.id === line.procedureId);
-              const unitCents = Math.round((procedure?.price ?? 0) * 100);
-              const subtotal = Math.max(0, unitCents * line.quantity - line.discountCents);
-              return <tr className="border-b border-[#eeeeF3]" key={line.procedureId}><td className="px-3 py-3"><strong className="block text-[#3f4053]">{procedure?.name ?? "Procedimento indisponível"}</strong><span className="text-[9px] text-[#999aaa]">{procedure?.materials || procedure?.category || "Catálogo da clínica"}</span></td><td className="px-3 py-3"><select aria-label={`Quantidade de ${procedure?.name ?? "procedimento"}`} disabled={!editable} className="h-8 rounded-[5px] border border-[#dddde6] bg-white px-2 text-[10px]" value={line.quantity} onChange={(event) => updateLine(line.procedureId, { quantity: Number(event.target.value) })}>{Array.from({ length: 20 }, (_, index) => index + 1).map((quantity) => <option key={quantity} value={quantity}>{quantity}</option>)}</select></td><td className="px-3 py-3 font-semibold">{currency.format(unitCents / 100)}</td><td className="px-3 py-3"><input aria-label={`Desconto de ${procedure?.name ?? "procedimento"}`} disabled={!editable} className="h-8 w-28 rounded-[5px] border border-[#dddde6] px-2 text-[10px] disabled:bg-[#f4f4f8]" type="number" min="0" max={unitCents * line.quantity / 100} step="0.01" value={(line.discountCents / 100).toFixed(2)} onChange={(event) => updateLine(line.procedureId, { discountCents: Math.max(0, Math.min(unitCents * line.quantity, Math.round(Number(event.target.value) * 100))) })} /></td><td className="px-3 py-3 font-bold text-[#343548]">{currency.format(subtotal / 100)}</td><td className="px-2 py-3"><button type="button" aria-label={`Remover ${procedure?.name ?? "procedimento"}`} title="Remover item" disabled={!editable} className="rounded p-1 text-[#b42318] disabled:opacity-40" onClick={() => setLines((current) => current.filter((item) => item.procedureId !== line.procedureId))}><XCircle className="h-4 w-4" /></button></td></tr>;
-            })}{lines.length === 0 ? <tr><td className="px-3 py-8 text-center text-[#858696]" colSpan={6}>Selecione procedimentos do catálogo para montar a proposta.</td></tr> : null}</tbody></table></div>
+            <div className="px-4 pb-3 pt-4"><h4 className="text-xs font-bold text-[#353648]">Procedimentos sugeridos</h4><p className="mt-0.5 text-[9px] text-[#858696]">Selecione os procedimentos do catálogo e informe a quantidade.</p></div>
+            <div className="overflow-x-auto px-4 pb-4">
+              {procedures.length ? <table className="w-full min-w-[760px] border-collapse text-left text-[10px]">
+                <thead><tr className="bg-[#f7f7fb] text-[#77798d]"><th className="rounded-l-[5px] px-3 py-2.5 font-bold">Procedimento / Material</th><th className="px-3 py-2.5 font-bold">Qtd. / medida</th><th className="px-3 py-2.5 font-bold">Valor unitário</th><th className="px-3 py-2.5 font-bold">Desconto</th><th className="rounded-r-[5px] px-3 py-2.5 font-bold">Subtotal</th></tr></thead>
+                <tbody>{procedures.map((procedure) => {
+                  const line = lines.find((item) => item.procedureId === procedure.id);
+                  const quantity = line?.quantity ?? 1;
+                  const unitCents = Math.round(procedure.price * 100);
+                  const discountCents = line?.discountCents ?? 0;
+                  const subtotal = Math.max(0, unitCents * quantity - discountCents);
+                  return <tr className="min-h-14 border-t border-[#eeeeF3]" key={procedure.id}>
+                    <td className="px-3 py-3"><label className="flex min-w-0 cursor-pointer items-center gap-3"><input type="checkbox" checked={Boolean(line)} disabled={!editable} onChange={(event) => toggleProcedure(procedure.id, event.target.checked)} aria-label={`Selecionar ${procedure.name}`} className="h-4 w-4 shrink-0 accent-[#5147dc] disabled:cursor-not-allowed" /><span className="min-w-0"><strong className={cn("block truncate", line ? "text-[#3f4053]" : "text-[#77798d] font-medium")}>{procedure.name}</strong><span className="mt-0.5 block truncate text-[9px] text-[#999aaa]">{procedure.materials || procedure.category}</span></span></label></td>
+                    <td className="px-3 py-3"><select aria-label={`Quantidade de ${procedure.name}`} disabled={!editable || !line} className="h-8 rounded-[5px] border border-[#dddde6] bg-white px-2 text-[10px] disabled:bg-[#f4f4f8]" value={quantity} onChange={(event) => updateLine(procedure.id, { quantity: Number(event.target.value) })}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{formatQuantity(value, procedureUnit(procedure))}</option>)}</select></td>
+                    <td className="px-3 py-3 font-semibold text-[#555668]">{currency.format(procedure.price)}</td>
+                    <td className="px-3 py-3"><input aria-label={`Desconto de ${procedure.name}`} disabled={!editable || !line} className="h-8 w-24 rounded-[5px] border border-[#dddde6] px-2 text-[10px] disabled:bg-[#f4f4f8]" type="number" min="0" max={unitCents * quantity / 100} step="0.01" value={(discountCents / 100).toFixed(2)} onChange={(event) => updateLine(procedure.id, { discountCents: Math.max(0, Math.min(unitCents * quantity, Math.round(Number(event.target.value) * 100))) })} /></td>
+                    <td className={cn("px-3 py-3 font-bold", line ? "text-[#353648]" : "text-[#a2a3b0]")}>{currency.format(subtotal / 100)}</td>
+                  </tr>;
+                })}</tbody>
+              </table> : <p className="rounded-[5px] border border-dashed border-[#dddde6] px-4 py-8 text-center text-xs text-[#77788a]">Nenhum procedimento cadastrado para esta clínica.</p>}
+            </div>
           </Card>
 
           <Card className="p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><CreditCard className="h-4 w-4 text-[#5147dc]" />Condições de pagamento</h3><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{quotePaymentMethods.map((method) => <button key={method} type="button" disabled={!editable} aria-pressed={paymentMethod === method} onClick={() => { setPaymentMethod(method); if (method !== "Cartão de crédito") setInstallments(1); }} className={cn("flex min-h-14 items-center gap-2 rounded-[6px] border px-3 text-left text-[10px] font-bold transition", paymentMethod === method ? "border-[#5147dc] bg-[#f3f1ff] text-[#3f35d6]" : "border-[#e5e5ee] bg-white text-[#555668] hover:bg-[#fafafd]", !editable && "cursor-not-allowed opacity-60")}><span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-full border", paymentMethod === method ? "border-[#5147dc] bg-[#5147dc] text-white" : "border-[#c8c9d5]")}>{paymentMethod === method ? <Check className="h-3 w-3" /> : null}</span><span>{method}<small className="mt-0.5 block font-normal text-[#858696]">{method === "Cartão de crédito" ? "Parcelamento disponível" : "Pagamento à vista"}</small></span></button>)}</div>{paymentMethod === "Cartão de crédito" ? <label className="mt-3 block max-w-xs text-[10px] font-semibold text-[#68697b]">Número de parcelas<select disabled={!editable} className="mt-1 h-9 w-full rounded-[5px] border border-[#dddde6] bg-white px-2 text-xs" value={installments} onChange={(event) => setInstallments(Number(event.target.value))}>{Array.from({ length: 12 }, (_, index) => index + 1).map((count) => <option value={count} key={count}>{count}x de {currency.format(count ? Math.ceil(total / count) / 100 : 0)}</option>)}</select></label> : null}<p className="mt-2 rounded-[5px] bg-[#f7f7fb] p-2.5 text-[10px] text-[#68697b]">Forma de pagamento é apenas uma condição da proposta. Nenhum recebimento será lançado por essa seleção.</p></Card>
 
-          <Card className="p-4"><label className="block text-sm font-bold text-[#292a3d]" htmlFor="quote-notes">Observações do orçamento</label><textarea id="quote-notes" disabled={!editable} maxLength={2000} rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Condições comerciais, validade ou orientações para o paciente" className="mt-3 w-full resize-y rounded-[6px] border border-[#dddde6] bg-white p-3 text-xs text-[#454659] outline-none focus:border-[#5147dc] disabled:bg-[#f4f4f8]" /><div className="mt-2 flex flex-wrap gap-2"><Button type="button" variant="outline" disabled={saving || !calculated} onClick={generatePdf}><FileDown className="h-4 w-4" />Gerar PDF</Button>{activeQuote?.status === "Rascunho" || activeQuote?.status === "Pendente" ? <Button type="button" variant="outline" disabled={statusBusy || saving} onClick={() => void changeStatus("Enviado")}><Send className="h-4 w-4" />Registrar envio</Button> : null}<Button type="button" disabled={saving || !editable || saved} onClick={() => void saveDraft()}><Save className="h-4 w-4" />{saving ? "Salvando..." : saved ? "Rascunho salvo" : "Salvar rascunho"}</Button></div>{notice ? <p role="status" className={cn("mt-3 rounded-[5px] px-3 py-2 text-[10px] font-semibold", notice.error ? "bg-[#fff1f0] text-[#b42318]" : "bg-[#eef8f2] text-[#287a50]")}>{notice.text}</p> : null}{pdfNotice ? <p className="mt-2 text-xs text-[#b42318]">O navegador bloqueou a janela de impressão. Permita pop-ups e tente novamente.</p> : null}</Card>
+          <Card className="p-4"><label className="block text-sm font-bold text-[#292a3d]" htmlFor="quote-notes">Observações do orçamento</label><textarea id="quote-notes" disabled={!editable} maxLength={2000} rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Condições comerciais, validade ou orientações para o paciente" className="mt-3 w-full resize-y rounded-[6px] border border-[#dddde6] bg-white p-3 text-xs text-[#454659] outline-none focus:border-[#5147dc] disabled:bg-[#f4f4f8]" /><div className="mt-2 flex flex-wrap gap-2">{activeQuote?.status === "Rascunho" || activeQuote?.status === "Pendente" ? <Button type="button" variant="outline" disabled={statusBusy || saving} onClick={() => void changeStatus("Enviado")}><Send className="h-4 w-4" />Registrar envio</Button> : null}</div>{notice ? <p role="status" className={cn("mt-3 rounded-[5px] px-3 py-2 text-[10px] font-semibold", notice.error ? "bg-[#fff1f0] text-[#b42318]" : "bg-[#eef8f2] text-[#287a50]")}>{notice.text}</p> : null}{pdfNotice ? <p className="mt-2 text-xs text-[#b42318]">O navegador bloqueou a janela de impressão. Permita pop-ups e tente novamente.</p> : null}</Card>
         </div>
 
         <aside className="space-y-3 xl:sticky xl:top-24 xl:self-start">
@@ -587,9 +678,10 @@ function restoreQuoteLines(quote: PatientQuote | undefined, procedures: Procedur
   if (!quote) return [];
   const stored = parseQuoteDetails(quote.details);
   if (stored?.items.length) return stored.items.map((item) => ({ procedureId: item.procedureId, quantity: item.quantity, discountCents: item.discountCents }));
+  const legacyItems = quote.items.split(",").map((item) => item.trim());
   return procedures.flatMap((procedure) => {
-    const match = quote.items.split(", ").find((item) => item.startsWith(`${procedure.name} (`));
-    const quantity = Number(match?.match(/\((\d+)x\)/)?.[1] ?? 0);
+    const match = legacyItems.find((item) => item === procedure.name || item.startsWith(`${procedure.name} (`));
+    const quantity = Number(match?.match(/\((\d+)x\)/)?.[1] ?? (match === procedure.name ? 1 : 0));
     return quantity ? [{ procedureId: procedure.id, quantity, discountCents: 0 }] : [];
   });
 }

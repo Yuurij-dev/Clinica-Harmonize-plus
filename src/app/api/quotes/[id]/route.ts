@@ -8,10 +8,29 @@ import { calculateQuote, type QuoteLineInput } from "@/lib/quote-rules";
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const body = await request.json().catch(() => null) as { status?: string; items?: string; details?: QuoteLineInput[]; total?: number; paymentMethod?: string; installments?: number; notes?: string } | null;
+  const body = await request.json().catch(() => null) as { status?: string; items?: string; details?: QuoteLineInput[]; total?: number; paymentMethod?: string; installments?: number; notes?: string; evaluationId?: string } | null;
   const id = (await params).id;
-  const existing = await prisma.quote.findFirst({ where: { id, clinicId: user.clinicId }, select: { status: true, items: true, totalCents: true, paymentMethod: true, details: true } });
+  const existing = await prisma.quote.findFirst({ where: { id, clinicId: user.clinicId }, select: { patientId: true, journeyId: true, evaluationId: true, status: true, items: true, totalCents: true, paymentMethod: true, details: true } });
   if (!existing) return NextResponse.json({ message: "Orçamento não encontrado." }, { status: 404 });
+  const requestedEvaluationId = body?.evaluationId?.trim();
+  const existingPatientId = existing.patientId;
+  const existingJourneyId = existing.journeyId;
+  if (requestedEvaluationId && existing.evaluationId && existing.evaluationId !== requestedEvaluationId) {
+    return NextResponse.json({ message: "Este orçamento já está vinculado a outra avaliação." }, { status: 409 });
+  }
+  if (requestedEvaluationId && !existingPatientId) {
+    return NextResponse.json({ message: "Este orçamento ainda não está vinculado a um paciente." }, { status: 400 });
+  }
+  if (requestedEvaluationId && !existingJourneyId) {
+    return NextResponse.json({ message: "Este orçamento ainda não está vinculado a uma jornada." }, { status: 400 });
+  }
+  if (requestedEvaluationId && existingPatientId && existingJourneyId) {
+    const evaluation = await prisma.evaluation.findFirst({
+      where: { id: requestedEvaluationId, patientId: existingPatientId, journeyId: existingJourneyId, clinicId: user.clinicId },
+      select: { id: true },
+    });
+    if (!evaluation) return NextResponse.json({ message: "A avaliação não pertence ao mesmo paciente, clínica e jornada deste orçamento." }, { status: 400 });
+  }
   const details = body?.details === undefined ? undefined : await quoteDetails(body.details, user.clinicId);
   if (body?.details !== undefined && !details) return NextResponse.json({ message: "Revise os procedimentos, quantidades e descontos do orçamento." }, { status: 400 });
   if (body?.notes !== undefined && (typeof body.notes !== "string" || body.notes.length > 2000)) return NextResponse.json({ message: "As observações devem ter até 2.000 caracteres." }, { status: 400 });
@@ -23,6 +42,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     || Boolean(nextTotalCents !== undefined && nextTotalCents !== existing.totalCents)
     || Boolean(body?.paymentMethod && body.paymentMethod !== existing.paymentMethod)
     || Boolean(body?.details !== undefined && JSON.stringify(details) !== existing.details)
+    || Boolean(requestedEvaluationId && requestedEvaluationId !== existing.evaluationId)
     || body?.notes !== undefined
     || body?.installments !== undefined;
   if (!quoteChangeAllowed(user.role, { current: existing.status, next: body?.status, editsContent })) {
@@ -34,6 +54,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     ...(details ? { details: JSON.stringify(details) } : {}),
     ...(body?.notes !== undefined ? { notes: body.notes.trim() } : {}),
     ...(body?.installments !== undefined ? { installments: body.installments } : {}),
+    ...(requestedEvaluationId ? { evaluationId: requestedEvaluationId } : {}),
     ...(body?.paymentMethod && ["Cartão de crédito", "Cartão de débito", "Pix", "Dinheiro", "Boleto", "Transferência"].includes(body.paymentMethod) ? { paymentMethod: body.paymentMethod } : {}),
     ...(body?.status ? { status: body.status } : {}),
     updatedBy: user.name,

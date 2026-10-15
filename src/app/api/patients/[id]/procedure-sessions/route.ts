@@ -32,13 +32,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   ]);
   if (!evaluation) return NextResponse.json({ message: "A avaliação associada ao orçamento não foi encontrada." }, { status: 404 });
   const stored = parseJson<{ items?: Array<{ procedureId: string; name: string; quantity: number }> }>(quote.details, {});
-  const selected = stored.items ?? [];
-  const procedureIds = selected.map((item) => item.procedureId).filter(Boolean);
-  const [procedures, products, balances] = await Promise.all([
-    prisma.procedure.findMany({ where: { id: { in: procedureIds }, clinicId: user.clinicId }, select: { id: true, name: true, durationMinutes: true, technicalSheet: { select: { productId: true, quantity: true } } } }),
+  const storedItems = stored.items ?? [];
+  const procedureIds = storedItems.map((item) => item.procedureId).filter(Boolean);
+  const [procedureCatalog, products, balances] = await Promise.all([
+    prisma.procedure.findMany({ where: { clinicId: user.clinicId, ...(procedureIds.length ? { id: { in: procedureIds } } : {}) }, select: { id: true, name: true, durationMinutes: true, technicalSheet: { select: { productId: true, quantity: true } } } }),
     prisma.product.findMany({ where: { clinicId: user.clinicId, archivedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true, unit: true, lots: { where: { expiresOn: { gte: new Date(`${clinicToday()}T00:00:00Z`) } }, orderBy: { expiresOn: "asc" }, select: { id: true, code: true, expiresOn: true } } } }),
     lotBalances(user.clinicId),
   ]);
+  const selected = storedItems.length ? storedItems : restoreLegacyQuoteItems(quote.items, procedureCatalog);
+  const selectedProcedureIds = new Set(selected.map((item) => item.procedureId));
+  const procedures = procedureCatalog.filter((procedure) => selectedProcedureIds.has(procedure.id));
   const evaluationPhotos = evaluation.photos.map(({ imageUrl, ...photo }) => ({ ...photo, imageUrl }));
   return NextResponse.json({
     journey,
@@ -69,9 +72,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const evaluation = await prisma.evaluation.findFirst({ where: { id: quote.evaluationId!, patientId, journeyId: body.journeyId, clinicId: user.clinicId }, select: { id: true } });
   if (!evaluation) return NextResponse.json({ message: "A avaliação vinculada ao orçamento não está disponível nesta jornada." }, { status: 404 });
   const selected = parseJson<{ items?: Array<{ procedureId: string; name: string }> }>(quote.details, {}).items ?? [];
-  const line = selected.find((item) => item.procedureId === body.procedureId);
-  const procedure = line ? await prisma.procedure.findFirst({ where: { id: body.procedureId, clinicId: user.clinicId }, select: { id: true, name: true } }) : null;
+  const procedure = await prisma.procedure.findFirst({ where: { id: body.procedureId, clinicId: user.clinicId }, select: { id: true, name: true } });
+  const isLegacyItem = !selected.length && procedure && restoreLegacyQuoteItems(quote.items, [procedure]).some((item) => item.procedureId === procedure.id);
+  const line = selected.find((item) => item.procedureId === body.procedureId) ?? (isLegacyItem && procedure ? { procedureId: procedure.id, name: procedure.name } : undefined);
   if (!procedure) return NextResponse.json({ message: "O procedimento não pertence ao orçamento aprovado." }, { status: 400 });
+  if (!line) return NextResponse.json({ message: "O procedimento não pertence ao orçamento aprovado." }, { status: 400 });
   const date = body.performedAt ? new Date(body.performedAt) : new Date();
   if (!Number.isFinite(date.getTime())) return NextResponse.json({ message: "Data da sessão inválida." }, { status: 400 });
   const journeyRecord = await ensurePatientJourney(patientId, user.clinicId, body.journeyId);
@@ -92,6 +97,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
 function parseJson<T>(value: string, fallback: T): T {
   try { return JSON.parse(value) as T; } catch { return fallback; }
+}
+
+function restoreLegacyQuoteItems(value: string, procedures: Array<{ id: string; name: string }>) {
+  const items = value.split(",").map((item) => item.trim());
+  return procedures.flatMap((procedure) => {
+    const match = items.find((item) => item === procedure.name || item.startsWith(`${procedure.name} (`));
+    const quantity = Number(match?.match(/\((\d+)x\)/i)?.[1] ?? (match === procedure.name ? 1 : 0));
+    return quantity ? [{ procedureId: procedure.id, name: procedure.name, quantity }] : [];
+  });
 }
 
 function resolvePhotos(value: string, evaluationPhotos: Array<{ id: string; name: string; imageUrl: string; width: number; height: number; category: string }>) {
