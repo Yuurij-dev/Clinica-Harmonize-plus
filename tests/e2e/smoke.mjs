@@ -239,6 +239,22 @@ async function browser(homonym) {
     await page.getByRole("button", { name: "Produtos", exact: true }).click();
     await page.getByText(produto.name).first().waitFor();
     check("aba Produtos mostra o produto, tem o botão Novo produto e não mostra o material", (await page.getByText(material.name).count()) === 0 && await page.getByRole("button", { name: "Novo produto" }).isVisible());
+    // Troca de tipo pela tela: o material sai de Materiais e passa a aparecer em Produtos.
+    const trocado = (await api("POST", "/api/products", { name: `Troca de tipo ${run}`, kind: "material", unit: "frasco", costCents: 100, supplier: "Fornecedor" })).data.product;
+    await page.goto(`${baseUrl}/estoque`);
+    await page.getByRole("button", { name: "Materiais", exact: true }).click();
+    await page.getByText(trocado.name).first().waitFor();
+    await page.getByRole("row").filter({ hasText: trocado.name }).getByRole("button", { name: "Abrir" }).click();
+    await page.getByRole("button", { name: "Editar", exact: true }).click();
+    await page.locator('select[name="kind"]').selectOption("produto");
+    await page.getByRole("button", { name: /^Salvar / }).click();
+    await page.locator('select[name="kind"]').waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "Produtos", exact: true }).click();
+    await page.getByText(trocado.name).first().waitFor();
+    await page.getByRole("button", { name: "Materiais", exact: true }).click();
+    const naLista = await page.getByRole("row").filter({ hasText: trocado.name }).count();
+    const tipoGravado = (await api("GET", `/api/products/${trocado.id}`)).data.product?.kind;
+    check("trocar o tipo pela tela move o item de Materiais para Produtos", naLista === 0 && tipoGravado === "produto", `linhas em Materiais: ${naLista}, tipo: ${tipoGravado}`);
     await page.getByRole("button", { name: "Compras", exact: true }).click();
     await page.getByRole("button", { name: "Nova compra" }).first().click();
     const itemSelect = page.locator("select").filter({ has: page.locator("option", { hasText: "Selecione um item" }) }).first();
