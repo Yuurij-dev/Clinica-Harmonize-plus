@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Camera, Check, ChevronRight, CircleCheck, FileJson, ImagePlus, Info, Loader2, Maximize2, UserRound } from "lucide-react";
+import { AlertTriangle, Baby, Camera, Check, ChevronRight, CircleCheck, ClipboardPenLine, Dna, Droplet, FileJson, ImagePlus, Info, Loader2, Maximize2, ShieldAlert, Syringe, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
@@ -13,6 +13,7 @@ import { LoadingSkeleton } from "../shared";
 import { EditorToolbar } from "./editor-toolbar";
 import { EvaluationResult } from "./evaluation-result";
 import { PhotoGallery } from "./photo-gallery";
+import { EncounterBreadcrumb, type EncounterBreadcrumbActions } from "../encounter-breadcrumb";
 import type { AnnotationSnapshot, EditorTool, EvaluationPhoto, PhotoAnnotation } from "./types";
 import type { Patient } from "@/types/clinic";
 
@@ -30,20 +31,24 @@ export type ClinicalAssessment = {
   patientGoal: string;
   medicalHistory: string;
   allergies: string;
+  pregnancyStatus: string;
+  anticoagulantUse: string;
+  autoimmuneDiseases: string;
   contraindications: string;
   previousProcedures: string;
   clinicalNotes: string;
 };
 
-const emptyAssessment: ClinicalAssessment = { chiefComplaint: "", patientGoal: "", medicalHistory: "", allergies: "", contraindications: "", previousProcedures: "", clinicalNotes: "" };
+const emptyAssessment: ClinicalAssessment = { chiefComplaint: "", patientGoal: "", medicalHistory: "", allergies: "", pregnancyStatus: "", anticoagulantUse: "", autoimmuneDiseases: "", contraindications: "", previousProcedures: "", clinicalNotes: "" };
 
-export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, onSaved, encounter }: { patientId: string; evaluationId?: string; journeyId?: string; patientName: string; onSaved?: (evaluation: SavedEvaluation) => void; encounter?: { patient: Patient; onCancel: () => void; onContinue: (evaluationId: string) => void } }) {
+export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, onSaved, encounter, encounterLabel = "Novo atendimento" }: { patientId: string; evaluationId?: string; journeyId?: string; patientName: string; onSaved?: (evaluation: SavedEvaluation) => void; encounter?: { patient: Patient; onCancel: () => void; onContinue: (evaluationId: string) => void } & EncounterBreadcrumbActions; encounterLabel?: string }) {
   const [currentEvaluationId, setCurrentEvaluationId] = useState(evaluationId);
   const evaluationCacheKey = evaluationId ? `/api/patients/${patientId}/evaluation?evaluationId=${encodeURIComponent(evaluationId)}` : null;
-  const cachedEvaluation = evaluationCacheKey ? readClientCache<{ evaluation?: ({ photos?: EvaluationPhoto[]; status?: string } & Partial<ClinicalAssessment>) | null }>(evaluationCacheKey) : null;
+  const cachedEvaluation = evaluationCacheKey ? readClientCache<{ evaluation?: ({ photos?: EvaluationPhoto[]; status?: string; professional?: string } & Partial<ClinicalAssessment>) | null }>(evaluationCacheKey) : null;
   const [photos, setPhotos] = useState<EvaluationPhoto[]>(cachedEvaluation?.evaluation?.photos ?? []);
   const [assessment, setAssessment] = useState<ClinicalAssessment>({ ...emptyAssessment, ...cachedEvaluation?.evaluation });
   const [evaluationStatus, setEvaluationStatus] = useState<"Rascunho" | "Concluída">(cachedEvaluation?.evaluation?.status === "Concluída" ? "Concluída" : "Rascunho");
+  const [professional, setProfessional] = useState(cachedEvaluation?.evaluation?.professional ?? "");
   const [activePhotoId, setActivePhotoId] = useState<string | null>(null);
   const [tool, setTool] = useState<EditorTool>("select");
   const [color, setColor] = useState("#6c4cff");
@@ -93,11 +98,12 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   useEffect(() => {
     if (!evaluationCacheKey) return;
     let active = true;
-    getCachedJson<{ evaluation?: ({ photos?: EvaluationPhoto[]; status?: string } & Partial<ClinicalAssessment>) | null }>(evaluationCacheKey)
+    getCachedJson<{ evaluation?: ({ photos?: EvaluationPhoto[]; status?: string; professional?: string } & Partial<ClinicalAssessment>) | null }>(evaluationCacheKey)
       .then(async (data) => {
         if (!active) return;
         const restored = data.evaluation?.photos ?? [];
         setAssessment({ ...emptyAssessment, ...data.evaluation });
+        setProfessional(data.evaluation?.professional ?? "");
         setEvaluationStatus(data.evaluation?.status === "Rascunho" ? "Rascunho" : "Concluída");
         setLoadError(false);
         setPhotos(restored);
@@ -356,6 +362,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
       if (!response.ok || !data.evaluation) throw new Error(data.message ?? "Não foi possível salvar a avaliação.");
       setCurrentEvaluationId(data.evaluation.id);
       setEvaluationStatus(status);
+      setProfessional(data.evaluation.professional ?? professional);
       invalidateClientCache(`/api/patients/${patientId}/evaluation`, `/api/patients/${patientId}/history`, `/api/patients/${patientId}/journeys`, "/api/patients");
       setIsDirty(false);
       const previews = await Promise.all(photos.map(async (photo) => ({ photo, dataUrl: await renderExport(photo) })));
@@ -397,6 +404,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   return (
     <div className={encounter ? "space-y-4" : undefined}>
       {encounter ? <>
+        <EncounterBreadcrumb patientName={patientName} journeyName={encounterLabel} stage="Avaliação" onClients={encounter.onClients} onPatient={encounter.onPatient} onJourney={encounter.onJourney} />
         <Card className="flex flex-wrap items-center justify-between gap-4 p-4">
           <div className="flex min-w-0 items-center gap-3">
             <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[#efedff] text-sm font-black text-[#5147dc]">{patientName.split(" ").map((part) => part[0]).slice(0, 2).join("")}</div>
@@ -406,28 +414,40 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
         </Card>
         <div aria-label="Etapas do atendimento" className="grid grid-cols-4 gap-2 px-1">{["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento"].map((stage, index) => <div className="flex min-w-0 items-center gap-2" key={stage}><span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] font-bold", index === 0 ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>{index + 1}</span><span className={cn("truncate text-[10px]", index === 0 ? "font-bold text-primary" : "text-muted-foreground")}>{stage}</span>{index < 3 ? <span className="h-px flex-1 bg-border" /> : null}</div>)}</div>
       </> : null}
-      <Card className="overflow-hidden border-[#e3e5f0] bg-white p-0 text-[#25263a] shadow-[0_12px_34px_rgba(38,39,58,0.06)]">
-        <div className="flex flex-col gap-3 border-b border-[#ececf3] bg-white px-5 py-4 md:flex-row md:items-center md:justify-between">
-          <div><div className="flex items-center gap-2"><Camera className="h-4 w-4 text-[#5147dc]" /><h3 className="text-sm font-bold">{encounter ? "Avaliação clínica e fotografias" : "Fotos da avaliação"}</h3></div><p className="mt-1 text-[11px] text-[#858696]">Faça marcações sobre as fotos de {patientName} sem alterar os arquivos originais.</p></div>
+      <Card className={cn("overflow-hidden border-[#e3e5f0] bg-white p-0 text-[#25263a] shadow-[0_12px_34px_rgba(38,39,58,0.06)]", encounter && "border-0 bg-transparent shadow-none")}>
+        {!encounter ? <div className="flex flex-col gap-3 border-b border-[#ececf3] bg-white px-5 py-4 md:flex-row md:items-center md:justify-between">
+          <div><div className="flex items-center gap-2"><Camera className="h-4 w-4 text-[#5147dc]" /><h3 className="text-sm font-bold">{encounter ? "Avaliação clínica" : "Fotos da avaliação"}</h3></div><p className="mt-1 text-[11px] text-[#858696]">Registre as informações clínicas e as fotografias de {patientName}.</p></div>
           <div className="flex items-center gap-2 text-[10px] text-[#858696]"><FileJson className="h-3.5 w-3.5 text-[#5147dc]" />Marcações editáveis salvas separadamente</div>
-        </div>
+        </div> : null}
 
-        <div className={cn("grid gap-4 p-4", encounter && "lg:grid-cols-[minmax(0,1fr)_290px]")}>
+        <div className={cn("grid gap-4 p-4", encounter && "grid-cols-1 p-0 lg:grid-cols-[minmax(0,1fr)_290px]")}>
           <div className="min-w-0">
             {encounter || evaluationId ? <AssessmentForm assessment={assessment} onChange={changeAssessment} /> : null}
-            <div className="mt-4 grid gap-4 lg:grid-cols-[auto_minmax(0,1fr)]">
-              {isLoading ? <div className="grid min-h-[420px] gap-4 rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-5 lg:col-span-2"><LoadingSkeleton className="h-7 w-52" /><LoadingSkeleton className="h-3 w-80" /><div className="grid min-h-[300px] place-items-center rounded-[7px] border border-[#e4e6ef] bg-white"><div className="w-full max-w-md space-y-3 px-8"><LoadingSkeleton className="h-56 w-full" /><LoadingSkeleton className="mx-auto h-3 w-40" /><LoadingSkeleton className="mx-auto h-2.5 w-56" /></div></div></div> : loadError ? <div className="grid min-h-[360px] place-items-center rounded-lg border border-destructive/20 bg-destructive/5 p-6 text-center"><div><p className="text-sm font-semibold text-destructive">Não foi possível carregar esta avaliação.</p><Button className="mt-3" variant="outline" onClick={() => { setLoadError(false); setIsLoading(true); setLoadAttempt((value) => value + 1); }}>Tentar novamente</Button></div></div> : showResult ? <EvaluationResult onEdit={() => setShowResult(false)} previews={savedPreviews} /> : <>
-                <EditorToolbar canRedo={canRedo} canUndo={canUndo} color={color} strokeWidth={strokeWidth} hasSelection={Boolean(selectedId)} onClear={clearAnnotations} onColorChange={setColor} onStrokeWidthChange={setStrokeWidth} onDeleteSelected={deleteSelected} onExport={exportImage} onRedo={redo} onSave={() => void saveEvaluation()} onToolChange={(nextTool) => { setTool(nextTool); if (nextTool !== "select") setSelectedId(null); }} onUndo={undo} onZoomIn={() => setZoom((value) => Math.min(2.25, value + 0.15))} onZoomOut={() => setZoom((value) => Math.max(0.55, value - 0.15))} onZoomReset={() => setZoom(1)} isSaving={isSaving} tool={tool} />
-                <div className="min-w-0">
+            <section className={cn("mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)]", encounter && "rounded-md border border-[#e3e5f0] bg-white p-3 sm:p-4")} aria-label="Registro fotográfico e marcação">
+              {encounter ? <div className="flex items-center gap-2 lg:col-span-2"><Camera className="h-4 w-4 text-primary" /><h3 className="text-sm font-bold">Registro fotográfico e marcação</h3></div> : null}
+              {isLoading ? <div className="grid min-h-[420px] gap-4 rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-5 lg:col-span-2"><LoadingSkeleton className="h-7 w-52" /><LoadingSkeleton className="h-3 w-80" /><div className="grid min-h-[300px] place-items-center rounded-[7px] border border-[#e4e6ef] bg-white"><div className="w-full max-w-md space-y-3 px-8"><LoadingSkeleton className="h-56 w-full" /><LoadingSkeleton className="mx-auto h-3 w-40" /><LoadingSkeleton className="mx-auto h-2.5 w-56" /></div></div></div> : loadError ? <div className="grid min-h-[360px] place-items-center rounded-lg border border-destructive/20 bg-destructive/5 p-6 text-center"><div><p className="text-sm font-semibold text-destructive">Não foi possível carregar esta avaliação.</p><Button className="mt-3" variant="outline" onClick={() => { setLoadError(false); setIsLoading(true); setLoadAttempt((value) => value + 1); }}>Tentar novamente</Button></div></div> : showResult ? <EvaluationResult onEdit={() => setShowResult(false)} previews={savedPreviews} /> : (<>
+                <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(150px,0.45fr)_minmax(0,1fr)]">
+                  <EditorToolbar canRedo={canRedo} canUndo={canUndo} color={color} strokeWidth={strokeWidth} hasSelection={Boolean(selectedId)} onClear={clearAnnotations} onColorChange={setColor} onStrokeWidthChange={setStrokeWidth} onDeleteSelected={deleteSelected} onExport={exportImage} onRedo={redo} onSave={() => void saveEvaluation()} onToolChange={(nextTool) => { setTool(nextTool); if (nextTool !== "select") setSelectedId(null); }} onUndo={undo} onZoomIn={() => setZoom((value) => Math.min(2.25, value + 0.15))} onZoomOut={() => setZoom((value) => Math.max(0.55, value - 0.15))} onZoomReset={() => setZoom(1)} isSaving={isSaving} tool={tool} />
+                  <div className="min-w-0">
                   {encounter ? <div className="mb-3 flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={() => void openCamera()}><Camera className="h-4 w-4" />Capturar foto</Button><Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}><ImagePlus className="h-4 w-4" />Upload de fotos</Button><input ref={fileInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} />{activePhoto ? <Button size="sm" variant="outline" onClick={() => setPreviewPhoto(activePhoto)}><Maximize2 className="h-4 w-4" />Ampliar foto</Button> : null}</div> : null}
                   {activePhoto ? <EditorCanvas color={color} strokeWidth={strokeWidth} onCommitAnnotations={commitAnnotations} onPreviewAnnotations={updatePhotoAnnotations} onSelect={setSelectedId} photo={activePhoto} scale={displayScale} selectedId={selectedId} tool={tool} /> : <label className="flex min-h-[360px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed border-[#cfd3e4] bg-[#fbfbfe] px-5 text-center transition hover:border-[#5147dc] hover:bg-[#f8f7ff]"><span className="grid h-12 w-12 place-items-center rounded-full bg-[#efedff] text-[#5147dc]"><ImagePlus className="h-5 w-5" /></span><strong className="mt-4 text-sm">Adicione a primeira foto da avaliação</strong><span className="mt-1 max-w-sm text-[11px] leading-5 text-[#858696]">JPG, PNG ou WEBP. A imagem original fica preservada e as marcações são armazenadas separadamente.</span><span className="mt-4 inline-flex items-center rounded-[7px] bg-[#5147dc] px-4 py-2 text-xs font-bold text-white">Escolher foto</span><input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} /></label>}
                   {saveError ? <p role="alert" className="mt-2 text-xs text-destructive">{saveError}</p> : null}
-                  <div className="mt-4 rounded-[8px] border border-[#e3e5f0] bg-white p-3"><div className="mb-3 flex items-center justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#5147dc]">Galeria da avaliação</p><p className="mt-1 text-[11px] text-[#858696]">Cada foto possui seu próprio conjunto de marcações.</p></div>{!photos.length ? <span className="text-[10px] text-[#9a9bab]">Nenhuma foto adicionada</span> : null}</div><PhotoGallery activePhotoId={activePhotoId} onCategoryChange={changePhotoCategory} onMove={movePhoto} onRemove={removePhoto} onReplace={replacePhoto} onSelect={(photoId) => { setActivePhotoId(photoId); setSelectedId(null); setZoom(1); }} onUpload={uploadPhotos} photos={photos} /></div>
                 </div>
-              </>}
-            </div>
+                </div>
+                <aside className="space-y-3">
+                  <div className="rounded-[8px] border border-[#e3e5f0] bg-white p-3">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div><p className="text-[10px] font-bold">Fotos anexadas ({photos.length})</p><p className="mt-1 text-[9px] text-muted-foreground">Clique para selecionar; use as setas para organizar.</p></div>
+                      <button className="text-[9px] font-semibold text-primary hover:underline" type="button" onClick={() => fileInputRef.current?.click()}>Adicionar fotos</button>
+                    </div>
+                    <PhotoGallery activePhotoId={activePhotoId} onCategoryChange={changePhotoCategory} onMove={movePhoto} onRemove={removePhoto} onReplace={replacePhoto} onSelect={(photoId) => { setActivePhotoId(photoId); setSelectedId(null); setZoom(1); }} onUpload={uploadPhotos} photos={photos} />
+                  </div>
+                  <div className="rounded-[8px] border border-[#e3e5f0] bg-white p-3"><h4 className="text-[10px] font-bold">Marcação / observações sobre a foto</h4>{activePhoto ? <div className="mt-2 space-y-1.5 text-[10px] text-muted-foreground"><p>Categoria: <strong className="text-foreground">{activePhoto.category}</strong></p><p>{activePhoto.annotations.length ? `${activePhoto.annotations.length} marcação(ões) editável(is) nesta imagem.` : "Nenhuma marcação feita nesta foto."}</p><p className="truncate" title={activePhoto.name}>Arquivo: {activePhoto.name}</p></div> : <p className="mt-2 text-[10px] text-muted-foreground">Selecione ou adicione uma foto para ver suas marcações.</p>}</div>
+                </aside>
+              </>)}
+            </section>
           </div>
-          {encounter ? <aside className="space-y-3"><Card className="space-y-2 p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><UserRound className="h-4 w-4 text-primary" />Resumo do atendimento</h3>{[["Etapa atual", "Avaliação"], ["Paciente", patientName], ["Data", new Date().toLocaleDateString("pt-BR")], ["Status", currentEvaluationId ? "Rascunho salvo" : "Novo rascunho"], ["Fotos anexadas", String(photos.length)]].map(([label, value]) => <div className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2.5 py-2 text-[10px]" key={label}><span className="text-muted-foreground">{label}</span><span className="truncate font-semibold">{value}</span></div>)}</Card><Card className="space-y-2 p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><CircleCheck className="h-4 w-4 text-primary" />Checklist da avaliação</h3>{[["Queixa principal", Boolean(assessment.chiefComplaint.trim())], ["Histórico clínico", Boolean(assessment.medicalHistory.trim())], ["Fotos registradas", photos.length > 0], ["Observações clínicas", Boolean(assessment.clinicalNotes.trim())]].map(([label, done]) => <div className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-2 text-[10px]" key={String(label)}><span className={cn("grid h-4 w-4 place-items-center rounded border", done ? "border-primary bg-primary text-primary-foreground" : "border-input")}>{done ? <Check className="h-3 w-3" /> : null}</span>{label}</div>)}</Card><Card className="space-y-2 p-4"><h3 className="text-sm font-bold">Próxima ação</h3><Button className="w-full justify-between" variant="outline" onClick={() => void continueToQuote()} disabled={isSaving}>Salvar avaliação e gerar orçamento<ChevronRight className="h-4 w-4" /></Button><p className="text-[10px] text-muted-foreground">Campos sem registro permanecem como “Não informado”.</p></Card></aside> : null}
+          {encounter ? <aside className="space-y-3"><Card className="space-y-2 p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><UserRound className="h-4 w-4 text-primary" />Resumo rápido do atendimento</h3>{[["Etapa atual", "Avaliação"], ["Profissional", professional || "Não informado"], ["Data", new Date().toLocaleDateString("pt-BR")], ["Status", currentEvaluationId ? evaluationStatus : "Novo rascunho"], ["Fotos anexadas", String(photos.length)]].map(([label, value]) => <div className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2.5 py-2 text-[10px]" key={label}><span className="text-muted-foreground">{label}</span><span className="truncate font-semibold">{value}</span></div>)}</Card><Card className="space-y-2 p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><CircleCheck className="h-4 w-4 text-primary" />Checklist da avaliação</h3>{[["Anamnese preenchida", Boolean(assessment.chiefComplaint.trim() && (assessment.allergies.trim() || assessment.pregnancyStatus || assessment.anticoagulantUse || assessment.autoimmuneDiseases || assessment.previousProcedures.trim()))], ["Fotos iniciais registradas", photos.length > 0], ["Marcação realizada", photos.some((photo) => photo.annotations.length > 0)], ["Observações clínicas salvas", Boolean(assessment.clinicalNotes.trim() && !isDirty)]].map(([label, done]) => <div className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-2 text-[10px]" key={String(label)}><span className={cn("grid h-4 w-4 place-items-center rounded border", done ? "border-primary bg-primary text-primary-foreground" : "border-input")}>{done ? <Check className="h-3 w-3" /> : null}</span>{label}</div>)}</Card></aside> : null}
         </div>
 
       {notice ? (
@@ -464,10 +484,36 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
 }
 
 function AssessmentForm({ assessment, onChange }: { assessment: ClinicalAssessment; onChange: (field: keyof ClinicalAssessment, value: string) => void }) {
-  const fields: Array<{ key: keyof ClinicalAssessment; label: string; required?: boolean; rows: number }> = [
-    { key: "chiefComplaint", label: "Queixa principal", required: true, rows: 3 }, { key: "patientGoal", label: "Objetivo do paciente", rows: 3 }, { key: "medicalHistory", label: "Histórico clínico relevante", rows: 3 }, { key: "allergies", label: "Alergias", rows: 2 }, { key: "contraindications", label: "Contraindicações informadas", rows: 2 }, { key: "previousProcedures", label: "Procedimentos anteriores", rows: 2 }, { key: "clinicalNotes", label: "Observações clínicas", rows: 3 },
+  const textareaClass = "w-full resize-y rounded-[5px] border border-[#dfe1ea] bg-white px-2.5 py-2 text-[10px] font-normal text-[#25263a] outline-none placeholder:text-[#8c8d9c] focus:border-[#5147dc] focus:ring-1 focus:ring-[#5147dc]/20";
+  const controlClass = "h-8 w-full rounded-[5px] border border-[#dfe1ea] bg-white px-2 text-[10px] font-normal text-[#25263a] outline-none focus:border-[#5147dc] focus:ring-1 focus:ring-[#5147dc]/20";
+  const anamnesisFields = [
+    { key: "allergies" as const, label: "Alergias", icon: ShieldAlert },
+    { key: "pregnancyStatus" as const, label: "Gestante", icon: Baby },
+    { key: "anticoagulantUse" as const, label: "Uso de anticoagulante", icon: Droplet },
+    { key: "autoimmuneDiseases" as const, label: "Doenças autoimunes", icon: Dna },
+    { key: "previousProcedures" as const, label: "Procedimentos anteriores", icon: Syringe },
   ];
-  return <Card className="p-4"><h3 className="text-sm font-bold">Avaliação clínica</h3><p className="mt-1 text-[10px] text-muted-foreground">Registre apenas informações confirmadas durante o atendimento.</p><div className="mt-4 grid gap-3 md:grid-cols-2">{fields.map(({ key, label, required, rows }) => <label className="grid gap-1 text-[10px] font-semibold" key={key}>{label}{required ? <span className="text-destructive"> *</span> : null}<textarea className="min-h-10 resize-y rounded-md border border-input bg-background px-3 py-2 text-xs font-normal outline-none focus-visible:ring-2 focus-visible:ring-ring" rows={rows} maxLength={5000} placeholder="Não informado" value={assessment[key]} onChange={(event) => onChange(key, event.target.value)} /></label>)}</div></Card>;
+  const renderAnamnesisField = (field: typeof anamnesisFields[number]) => {
+    const Icon = field.icon;
+    return <label className="min-w-0 rounded-[5px] border border-[#e5e6ee] bg-white p-2" key={field.key}>
+      <span className="mb-1 flex items-center gap-1.5 text-[9px] font-medium text-[#6f7082]"><Icon className="h-3.5 w-3.5 shrink-0 text-[#5147dc]" aria-hidden="true" />{field.label}</span>
+      <select className={controlClass} value={assessment[field.key]} onChange={(event) => onChange(field.key, event.target.value)}><option value="">Não informado</option><option value="Não">Não</option><option value="Sim">Sim</option>{assessment[field.key] && !["Não", "Sim"].includes(assessment[field.key]) ? <option value={assessment[field.key]}>{assessment[field.key]}</option> : null}</select>
+    </label>;
+  };
+
+  return <Card className="p-3 sm:p-4">
+    <h3 className="flex items-center gap-2 text-sm font-bold"><ClipboardPenLine className="h-4 w-4 text-primary" />Avaliação clínica</h3>
+    <div className="mt-3 grid gap-3 md:grid-cols-2">
+      <label className="grid min-w-0 gap-1 text-[10px] font-semibold"><span>Queixa principal <span className="text-destructive">*</span></span><textarea className={`${textareaClass} min-h-[54px]`} rows={2} maxLength={5000} placeholder="Não informado" value={assessment.chiefComplaint} onChange={(event) => onChange("chiefComplaint", event.target.value)} /></label>
+      <label className="grid min-w-0 gap-1 text-[10px] font-semibold"><span>Objetivo do paciente</span><textarea className={`${textareaClass} min-h-[54px]`} rows={2} maxLength={5000} placeholder="Não informado" value={assessment.patientGoal} onChange={(event) => onChange("patientGoal", event.target.value)} /></label>
+      <section aria-labelledby="anamnesis-title" className="min-w-0">
+        <h4 id="anamnesis-title" className="mb-2 text-[10px] font-bold">Anamnese rápida</h4>
+        <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">{anamnesisFields.slice(0, 3).map(renderAnamnesisField)}</div>
+        <div className="mt-1.5 grid grid-cols-1 gap-1.5 sm:grid-cols-2">{anamnesisFields.slice(3).map(renderAnamnesisField)}</div>
+      </section>
+      <label className="grid min-w-0 content-start gap-1 text-[10px] font-semibold">Observações clínicas<textarea className={`${textareaClass} min-h-[116px]`} rows={5} maxLength={5000} placeholder="Não informado" value={assessment.clinicalNotes} onChange={(event) => onChange("clinicalNotes", event.target.value)} /></label>
+    </div>
+  </Card>;
 }
 
 async function readPhoto(file: File, sortOrder = 0): Promise<EvaluationPhoto> {

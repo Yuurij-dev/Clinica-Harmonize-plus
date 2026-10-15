@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import NextImage from "next/image";
-import { ArrowLeft, BadgeCheck, CalendarDays, Camera, Check, ChevronRight, CircleAlert, Clock3, CreditCard, FileImage, FileText, HeartPulse, Image as ImageIcon, Layers3, PackageCheck, Pencil, Plus, ShieldAlert, Stethoscope, Syringe, UserRound } from "lucide-react";
+import { BadgeCheck, CalendarDays, Camera, Check, ChevronDown, ChevronRight, CircleAlert, Clock3, CreditCard, FileImage, FileText, HeartPulse, Image as ImageIcon, Layers3, PackageCheck, Pencil, Plus, ShieldAlert, Stethoscope, Syringe, UserRound } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -36,7 +36,7 @@ export type PatientJourneySummary = {
 type SummaryEvent = { kind: string; title: string; detail: string; date: string; status?: string };
 type ProfileSummary = { events: SummaryEvent[]; observations: Array<{ id: string; text: string; createdAt: string; kind: string }>; counts: { appointments: number; procedures: number; evaluations: number; quotes: number; payments: number; photos: number } };
 type ProcedureSessionPhoto = { id: string; name: string; phase: string; category: string; imageUrl: string };
-type ProcedurePhotoRecord = { id?: string; name: string; professional?: string; performedAt: string; beforePhoto: string | null; afterPhoto: string | null; photoSessions?: Array<{ id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }>; sessions?: Array<{ id: string; procedureName: string; performedAt: string; photos: ProcedureSessionPhoto[] }> };
+type ProcedurePhotoRecord = { id?: string; name: string; professional?: string; status?: string; performedAt: string; beforePhoto: string | null; afterPhoto: string | null; photoSessions?: Array<{ id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }>; sessions?: Array<{ id: string; procedureName: string; performedAt: string; photos: ProcedureSessionPhoto[] }> };
 type JourneyHistory = { patient?: { appointments?: Array<{ id: string; date: string; time: string; procedure: string; professional: string; status: string }>; payments?: Array<{ id: string; value: number; method: string; status: string; date: string }>; procedureRecords?: ProcedurePhotoRecord[] } };
 type JourneyQuote = { id: string; items: string; total: number; status: string; paymentMethod?: string; createdAt: string; updatedAt?: string; approvedAt?: string | null };
 type JourneyEvaluation = { id: string; professional: string; status: string; createdAt: string; chiefComplaint: string; patientGoal: string; allergies: string; contraindications: string; previousProcedures: string; clinicalNotes: string; photos?: Array<{ id: string; name: string; imageUrl: string; category: string }> };
@@ -173,34 +173,50 @@ function QuickAccess({ icon: Icon, label, onClick }: { icon: typeof Camera; labe
   return <button type="button" className="flex min-h-16 flex-col items-center justify-center gap-1 rounded-md border border-border px-2 text-center text-[10px] font-medium text-muted-foreground transition hover:bg-muted" onClick={onClick}><Icon className="h-4 w-4 text-primary" />{label}</button>;
 }
 
-export function PatientTreatments({ patient, selectedJourneyId, onSelect, onBack, onOpenClinical, onNewTreatment, onNewSession, onScheduleReturn, onOpenFollowUp }: { patient: Patient; selectedJourneyId: string | null; onSelect: (journeyId: string | null) => void; onBack: () => void; onOpenClinical: (tab: string) => void; onNewTreatment: () => void; onNewSession: (journey: PatientJourneySummary) => void; onScheduleReturn: (journey: PatientJourneySummary) => void; onOpenFollowUp: (journey: PatientJourneySummary, sessionId: string) => void }) {
+export function PatientTreatments({ patient, selectedJourneyId, onSelect, onJourneyLabelChange, onBack, onOpenClinical, onOpenEvaluation, onNewTreatment, onNewSession, onScheduleReturn, onOpenFollowUp }: { patient: Patient; selectedJourneyId: string | null; onSelect: (journeyId: string | null) => void; onJourneyLabelChange: (label: string) => void; onBack: () => void; onOpenClinical: (tab: string) => void; onOpenEvaluation: (journey: PatientJourneySummary, evaluationId?: string) => void; onNewTreatment: () => void; onNewSession: (journey: PatientJourneySummary) => void; onScheduleReturn: (journey: PatientJourneySummary) => void; onOpenFollowUp: (journey: PatientJourneySummary, sessionId: string) => void }) {
   const key = patient.id ? journeyKey(patient.id) : "";
+  const profileKey = patient.id ? summaryKey(patient.id) : "";
   const cached = key ? readClientCache<{ journeys?: PatientJourneySummary[] }>(key) : undefined;
+  const cachedSummary = profileKey ? readClientCache<ProfileSummary>(profileKey) : undefined;
   const [journeys, setJourneys] = useState(cached?.journeys ?? []);
+  const [summary, setSummary] = useState<ProfileSummary | null>(cachedSummary ?? null);
+  const [summaryLoading, setSummaryLoading] = useState(!cachedSummary);
   const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState(false);
   const [filter, setFilter] = useState("Todos");
+  const [expandedJourneyId, setExpandedJourneyId] = useState<string | null>(() => !selectedJourneyId && cached?.journeys?.length === 1 ? cached.journeys[0].id : null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
 
   useEffect(() => {
     if (!key) return;
     let active = true;
-    getCachedJson<{ journeys?: PatientJourneySummary[] }>(key).then((data) => { if (active) setJourneys(data.journeys ?? []); }).catch(() => { if (active) setError(true); }).finally(() => { if (active) setLoading(false); });
+    getCachedJson<{ journeys?: PatientJourneySummary[] }>(key).then((data) => { if (active) { const next = data.journeys ?? []; setJourneys(next); if (!selectedJourneyId) setExpandedJourneyId(next.length === 1 ? next[0].id : null); } }).catch(() => { if (active) setError(true); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [key]);
+  }, [key, selectedJourneyId]);
+
+  useEffect(() => {
+    if (!profileKey) return;
+    let active = true;
+    getCachedJson<ProfileSummary>(profileKey).then((data) => { if (active) setSummary(data); }).catch(() => undefined).finally(() => { if (active) setSummaryLoading(false); });
+    return () => { active = false; };
+  }, [profileKey]);
 
   useEffect(() => {
     const refresh = (event: Event) => {
       const keys = (event as CustomEvent<string[]>).detail ?? [];
-      if (!keys.includes(key)) return;
-      getCachedJson<{ journeys?: PatientJourneySummary[] }>(key).then((data) => setJourneys(data.journeys ?? [])).catch(() => setError(true));
+      if (keys.includes(key)) getCachedJson<{ journeys?: PatientJourneySummary[] }>(key).then((data) => { const next = data.journeys ?? []; setJourneys(next); if (!selectedJourneyId) setExpandedJourneyId(next.length === 1 ? next[0].id : null); });
+      if (keys.includes(profileKey)) getCachedJson<ProfileSummary>(profileKey).then(setSummary).catch(() => undefined);
     };
     window.addEventListener(CLIENT_CACHE_INVALIDATED_EVENT, refresh);
     return () => window.removeEventListener(CLIENT_CACHE_INVALIDATED_EVENT, refresh);
-  }, [key]);
+  }, [key, profileKey, selectedJourneyId]);
 
   const selected = journeys.find((journey) => journey.id === selectedJourneyId);
+  useEffect(() => {
+    const index = journeys.findIndex((journey) => journey.id === selectedJourneyId);
+    onJourneyLabelChange(index >= 0 ? `Jornada ${index + 1}` : "Jornada");
+  }, [journeys, selectedJourneyId, onJourneyLabelChange]);
   const canWriteClinical = useCan("clinical:write");
   const visibleJourneys = journeys.filter((journey) => filter === "Todos" || journey.status === filter);
 
@@ -214,7 +230,9 @@ export function PatientTreatments({ patient, selectedJourneyId, onSelect, onBack
       if (!response.ok) throw new Error(data.message ?? "Não foi possível atualizar o tratamento.");
       invalidateClientCache(key, summaryKey(patient.id));
       const fresh = await getCachedJson<{ journeys?: PatientJourneySummary[] }>(key);
-      setJourneys(fresh.journeys ?? []);
+      const next = fresh.journeys ?? [];
+      setJourneys(next);
+      if (!selectedJourneyId) setExpandedJourneyId(next.length === 1 ? next[0].id : null);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Não foi possível atualizar o tratamento.");
     } finally { setBusyId(null); }
@@ -223,16 +241,49 @@ export function PatientTreatments({ patient, selectedJourneyId, onSelect, onBack
   if (loading && !journeys.length) return <Card className="space-y-4 p-5"><LoadingSkeleton className="h-6 w-56" />{[1, 2].map((item) => <LoadingSkeleton className="h-28 w-full" key={item} />)}</Card>;
   if (error && !journeys.length) return <Card className="p-6"><EmptyState title="Não foi possível carregar os tratamentos" description="Verifique sua conexão e tente novamente." /></Card>;
 
-  if (selected) return <JourneyDetail patient={patient} journey={selected} onBack={onBack} onOpenClinical={onOpenClinical} onNewSession={onNewSession} onScheduleReturn={onScheduleReturn} onOpenFollowUp={onOpenFollowUp} canWriteClinical={canWriteClinical} busy={busyId === selected.id} actionError={actionError} onComplete={() => void updateJourney(selected, "complete")} onCancel={() => void updateJourney(selected, "cancel")} onRestore={() => void updateJourney(selected, "restore")} />;
+  if (selected) return <JourneyDetail patient={patient} journey={selected} onBack={onBack} onOpenClinical={onOpenClinical} onOpenEvaluation={onOpenEvaluation} onNewSession={onNewSession} onScheduleReturn={onScheduleReturn} onOpenFollowUp={onOpenFollowUp} canWriteClinical={canWriteClinical} busy={busyId === selected.id} actionError={actionError} onComplete={() => void updateJourney(selected, "complete")} onCancel={() => void updateJourney(selected, "cancel")} onRestore={() => void updateJourney(selected, "restore")} />;
 
-  return <div className="space-y-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-base font-bold">Tratamentos</h3><p className="mt-1 text-xs text-muted-foreground">Jornadas clínicas registradas para este paciente.</p></div><Button onClick={onNewTreatment}><Plus className="h-4 w-4" />Novo tratamento</Button></div>
+  return <div className="space-y-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-base font-bold">Tratamentos da paciente</h3><p className="mt-1 text-xs text-muted-foreground">Jornadas clínicas, sessões e próximos retornos.</p></div><Button onClick={onNewTreatment}><Plus className="h-4 w-4" />Novo tratamento</Button></div>
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
+    <section className="min-w-0 space-y-4">
     <div className="flex flex-wrap gap-2" role="group" aria-label="Filtrar tratamentos">{["Todos", "Em andamento", "Concluído", "Cancelado"].map((item) => <Button key={item} variant={filter === item ? "default" : "outline"} size="sm" aria-pressed={filter === item} onClick={() => setFilter(item)}>{item}</Button>)}</div>
     {actionError ? <p role="alert" className="text-xs text-destructive">{actionError}</p> : null}
-    {!visibleJourneys.length ? <Card className="p-6"><EmptyState title={journeys.length ? "Nenhum tratamento neste filtro" : "Nenhum tratamento cadastrado"} description={journeys.length ? "Selecione outro status para ver jornadas." : "Crie um tratamento para organizar avaliações, orçamentos e atendimentos."} /></Card> : <div className="space-y-3">{visibleJourneys.map((journey) => <Card className="p-4" key={journey.id}><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h4 className="text-sm font-bold">{journey.name}</h4><Badge variant={statusTone(journey.status)}>{journey.status}</Badge></div><p className="mt-2 text-xs text-muted-foreground">{journey.professional} · Iniciado em {dateLabel(journey.createdAt)}</p><div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground"><span>{journey.sessionCount} sessões</span><span>{journey.photoCount} fotos</span><span>{journey.nextAppointment ? `Próxima: ${dateLabel(journey.nextAppointment.date)}` : "Sem próxima ação agendada"}</span></div></div><div className="flex items-center gap-2"><ProgressSteps journey={journey} /><Button size="sm" variant="outline" onClick={() => onSelect(journey.id)}>Abrir jornada <ChevronRight className="h-3.5 w-3.5" /></Button></div></div></Card>)}</div>}
+    {!visibleJourneys.length ? <Card className="p-6"><EmptyState title={journeys.length ? "Nenhum tratamento neste filtro" : "Nenhum tratamento cadastrado"} description={journeys.length ? "Selecione outro status para ver jornadas." : "Crie um tratamento para organizar avaliações, orçamentos e atendimentos."} /></Card> : <div className="space-y-3">{visibleJourneys.map((journey) => {
+      const expanded = expandedJourneyId === journey.id;
+      const stages = [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturn];
+      const stageLabels = ["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento"];
+      return <Card className="overflow-hidden p-0" key={journey.id}>
+        <div className="flex items-center gap-3 p-3 sm:p-4">
+          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-md bg-primary/10 text-primary"><Syringe className="h-5 w-5" /></span>
+          <button className="min-w-0 flex-1 text-left" type="button" aria-expanded={expanded} onClick={() => setExpandedJourneyId(expanded ? null : journey.id)}>
+            <span className="flex flex-wrap items-center gap-2"><span className="truncate text-sm font-bold">{journey.name}</span><Badge variant={statusTone(journey.status)}>{journey.status === "Em andamento" ? "Em acompanhamento" : journey.status}</Badge></span>
+            <span className="mt-1 block truncate text-[10px] text-muted-foreground">{journey.professional} · Iniciado em {dateLabel(journey.createdAt)}</span>
+          </button>
+          <ProgressSteps journey={journey} />
+          <Button className="hidden sm:inline-flex" size="sm" variant="outline" onClick={() => onSelect(journey.id)}>Abrir jornada <ChevronRight className="h-3.5 w-3.5" /></Button>
+          <Button size="icon" variant="ghost" aria-label={expanded ? "Recolher tratamento" : "Expandir tratamento"} aria-expanded={expanded} onClick={() => setExpandedJourneyId(expanded ? null : journey.id)}><ChevronDown className={`h-4 w-4 transition-transform ${expanded ? "rotate-180" : ""}`} /></Button>
+        </div>
+        {expanded ? <div className="border-t border-border px-3 pb-3 sm:px-4 sm:pb-4">
+          <div className="grid gap-3 py-3 text-[11px] sm:grid-cols-3">
+            <p><span className="text-muted-foreground">Sessões</span><strong className="ml-2">{journey.sessionCount}</strong></p>
+            <p><span className="text-muted-foreground">Fotos vinculadas</span><strong className="ml-2">{journey.photoCount}</strong></p>
+            <p><span className="text-muted-foreground">Próximo retorno</span><strong className="ml-2">{journey.nextAppointment ? dateLabel(journey.nextAppointment.date) : "Não agendado"}</strong></p>
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Etapas do tratamento">{stageLabels.map((label, index) => <div className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-2" key={label}><span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-[10px] font-bold ${stages[index] ? "bg-primary text-primary-foreground" : "border border-border bg-background text-muted-foreground"}`}>{stages[index] ? <Check className="h-3.5 w-3.5" /> : index + 1}</span><span className="truncate text-[10px] font-medium">{label}</span></div>)}</div>
+          <div className="mt-3 flex justify-end sm:hidden"><Button size="sm" variant="outline" onClick={() => onSelect(journey.id)}>Abrir jornada <ChevronRight className="h-3.5 w-3.5" /></Button></div>
+        </div> : null}
+      </Card>;
+    })}</div>}
+    </section>
+    <aside className="space-y-4">
+      <Card className="p-4"><IconHeading icon={Layers3} title="Resumo de tratamentos" /><div className="mt-3 space-y-3 text-xs"><p className="flex items-center gap-3"><CalendarDays className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{journeys.length}</strong><span className="text-muted-foreground">tratamentos</span></p><p className="flex items-center gap-3"><Clock3 className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{journeys.filter((item) => item.status === "Em andamento").length}</strong><span className="text-muted-foreground">em andamento</span></p><p className="flex items-center gap-3"><Check className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{journeys.filter((item) => item.status === "Concluído").length}</strong><span className="text-muted-foreground">concluídos</span></p><p className="flex items-center gap-3"><Camera className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{journeys.reduce((total, item) => total + item.photoCount, 0)}</strong><span className="text-muted-foreground">fotos vinculadas</span></p></div></Card>
+      <Card className="p-4"><IconHeading icon={Clock3} title="Linha do tempo clínica" />{summaryLoading && !summary ? <div className="mt-3 space-y-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : summary?.events.length ? <ol className="mt-3 space-y-3">{summary.events.slice(0, 5).map((event, index) => { const EventIcon = eventIcon(event.kind); return <li className="relative flex gap-2.5" key={`${event.kind}-${event.date}-${index}`}><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary/10 text-primary"><EventIcon className="h-3.5 w-3.5" /></span><span className="min-w-0 flex-1"><strong className="block text-[11px]">{event.title}</strong><span className="mt-0.5 block text-[10px] leading-4 text-muted-foreground">{event.detail}</span><time className="mt-1 block text-[9px] text-muted-foreground">{dateLabel(event.date)}</time></span></li>; })}</ol> : <p className="mt-3 rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">Nenhuma atividade clínica registrada.</p>}</Card>
+    </aside>
+    </div>
   </div>;
 }
 
-function JourneyDetail({ patient, journey, onBack, onOpenClinical, onNewSession, onScheduleReturn, onOpenFollowUp, canWriteClinical, busy, actionError, onComplete, onCancel, onRestore }: { patient: Patient; journey: PatientJourneySummary; onBack: () => void; onOpenClinical: (tab: string) => void; onNewSession: (journey: PatientJourneySummary) => void; onScheduleReturn: (journey: PatientJourneySummary) => void; onOpenFollowUp: (journey: PatientJourneySummary, sessionId: string) => void; canWriteClinical: boolean; busy: boolean; actionError: string; onComplete: () => void; onCancel: () => void; onRestore: () => void }) {
+function JourneyDetail({ patient, journey, onBack, onOpenClinical, onOpenEvaluation, onNewSession, onScheduleReturn, onOpenFollowUp, canWriteClinical, busy, actionError, onComplete, onCancel, onRestore }: { patient: Patient; journey: PatientJourneySummary; onBack: () => void; onOpenClinical: (tab: string) => void; onOpenEvaluation: (journey: PatientJourneySummary, evaluationId?: string) => void; onNewSession: (journey: PatientJourneySummary) => void; onScheduleReturn: (journey: PatientJourneySummary) => void; onOpenFollowUp: (journey: PatientJourneySummary, sessionId: string) => void; canWriteClinical: boolean; busy: boolean; actionError: string; onComplete: () => void; onCancel: () => void; onRestore: () => void }) {
   const patientId = patient.id ?? "";
   const historyKey = `/api/patients/${encodeURIComponent(patientId)}/history?tab=Procedimentos&journeyId=${encodeURIComponent(journey.id)}`;
   const paymentKey = `/api/patients/${encodeURIComponent(patientId)}/history?tab=Pagamentos&journeyId=${encodeURIComponent(journey.id)}`;
@@ -248,7 +299,7 @@ function JourneyDetail({ patient, journey, onBack, onOpenClinical, onNewSession,
   const [loading, setLoading] = useState(!data);
   const [loadError, setLoadError] = useState(false);
   const [photoFilter, setPhotoFilter] = useState("Antes");
-  const [expandedStage, setExpandedStage] = useState<string | null>("Pós-procedimento");
+  const [activeStage, setActiveStage] = useState(() => [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturn].findIndex((done) => !done) < 0 ? 3 : [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturn].findIndex((done) => !done));
   const [retryCount, setRetryCount] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
@@ -314,11 +365,10 @@ function JourneyDetail({ patient, journey, onBack, onOpenClinical, onNewSession,
     { title: "Pós-procedimento", subtitle: "Acompanhamento e orientações", done: journey.hasReturn, icon: Clock3, detail: appointment ? `Próximo retorno: ${dateLabel(appointment.date)} · ${appointment.status}` : journey.hasProcedure ? "Acompanhamento clínico disponível." : "Acompanhamento será disponibilizado após uma sessão." },
   ];
 
-  if (loading && !data) return <div className="space-y-4"><Button variant="ghost" onClick={onBack}><ArrowLeft className="h-4 w-4" />Tratamentos</Button><div className="grid gap-4 lg:grid-cols-[minmax(0,1.8fr)_minmax(280px,0.9fr)]"><div className="space-y-3"><LoadingSkeleton className="h-44 w-full" /><LoadingSkeleton className="h-28 w-full" /><LoadingSkeleton className="h-28 w-full" /></div><div className="space-y-3"><LoadingSkeleton className="h-56 w-full" /><LoadingSkeleton className="h-40 w-full" /></div></div></div>;
+  if (loading && !data) return <div className="space-y-4"><div className="grid gap-4 lg:grid-cols-[minmax(0,1.8fr)_minmax(280px,0.9fr)]"><div className="space-y-3"><LoadingSkeleton className="h-14 w-full" /><LoadingSkeleton className="h-44 w-full" /><LoadingSkeleton className="h-28 w-full" /></div><div className="space-y-3"><LoadingSkeleton className="h-56 w-full" /><LoadingSkeleton className="h-40 w-full" /></div></div></div>;
   if (loadError && !data) return <Card className="p-6"><EmptyState title="Não foi possível carregar esta jornada" description="Confira sua conexão e tente novamente." /><div className="mt-3 flex justify-center gap-2"><Button variant="outline" onClick={onBack}>Voltar aos tratamentos</Button><Button onClick={() => { setLoading(true); setLoadError(false); setRetryCount((value) => value + 1); }}>Tentar novamente</Button></div></Card>;
 
   return <div className="space-y-3">
-    <Button variant="ghost" onClick={onBack}><ArrowLeft className="h-4 w-4" />Tratamentos</Button>
     <Card className="flex flex-wrap items-center justify-between gap-4 p-4 sm:p-5">
       <div className="flex min-w-0 items-center gap-3"><span className="grid h-14 w-14 shrink-0 place-items-center rounded-lg bg-primary/10 text-xl font-bold text-primary">{journey.name.slice(0, 1).toLocaleUpperCase("pt-BR")}</span><div className="min-w-0"><p className="truncate text-base font-bold">{journey.name}</p><div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground"><span>{patient.name}</span><span>·</span><span>{journey.professional}</span><span>·</span><span>Desde {dateLabel(journey.createdAt)}</span><Badge variant={statusTone(journey.status)}>{journey.status === "Em andamento" ? "Em acompanhamento" : journey.status}</Badge></div></div></div>
       <div className="flex flex-wrap gap-2">{canWriteClinical && journey.status === "Em andamento" ? <Button size="sm" variant="outline" onClick={() => { setName(journey.name); setEditError(""); setEditOpen(true); }}><Pencil className="h-4 w-4" />Editar jornada</Button> : null}<Button size="sm" variant="outline" onClick={() => onNewSession(journey)}><FileText className="h-4 w-4" />Nova sessão</Button>{journey.status === "Em andamento" && canWriteClinical ? <><Button size="sm" variant="outline" disabled={busy} onClick={onCancel}>Cancelar tratamento</Button><Button size="sm" onClick={() => setCompleteOpen(true)}><Check className="h-4 w-4" />Finalizar tratamento</Button></> : journey.status === "Cancelado" && canWriteClinical ? <Button size="sm" variant="outline" disabled={busy} onClick={onRestore}>Reativar</Button> : null}</div>
@@ -326,9 +376,17 @@ function JourneyDetail({ patient, journey, onBack, onOpenClinical, onNewSession,
     {actionError || loadError ? <p role="alert" className="rounded-md bg-destructive/10 p-3 text-xs text-destructive">{actionError || "Alguns dados do tratamento não puderam ser atualizados."}</p> : null}
     <div className="grid gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(280px,0.9fr)]">
       <div className="space-y-3">
-        <Card className="p-4 sm:p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div className="flex items-center gap-2"><Layers3 className="h-5 w-5 text-primary" /><div><h3 className="text-sm font-bold">Jornada do tratamento</h3><p className="mt-1 text-[11px] text-muted-foreground">Etapas registradas para {journey.name}.</p></div></div><Button size="sm" variant="outline" onClick={() => onOpenClinical("Histórico")}><Clock3 className="h-4 w-4" />Ver histórico</Button></div>
-          <div className="mt-5 grid grid-cols-4 gap-1 sm:gap-3">{stages.map((stage, index) => <div className="relative text-center" key={stage.title}><span className={`mx-auto grid h-8 w-8 place-items-center rounded-full ${stage.done ? "bg-primary text-primary-foreground" : "border border-border bg-background text-muted-foreground"}`}>{stage.done ? <Check className="h-4 w-4" /> : index + 1}</span><p className={`mt-2 text-[10px] font-semibold ${stage.done ? "text-foreground" : "text-muted-foreground"}`}>{stage.title}</p></div>)}</div>
-          <div className="mt-4 space-y-2">{stages.map((stage, index) => { const Icon = stage.icon; const expanded = expandedStage === stage.title; return <button type="button" key={stage.title} aria-expanded={expanded} onClick={() => setExpandedStage(expanded ? null : stage.title)} className="w-full rounded-md border border-border p-3 text-left transition hover:bg-muted/30"><div className="flex items-center gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/10 text-primary">{stage.done ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}</span><span className="min-w-0 flex-1"><span className="block text-xs font-bold">{index + 1}. {stage.title}</span><span className="mt-0.5 block text-[10px] text-muted-foreground">{stage.subtitle}</span></span><Badge variant={stage.done ? "green" : "slate"}>{stage.done ? "Registrada" : "Pendente"}</Badge><ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} /></div>{expanded ? <p className="ml-12 mt-2 text-[11px] leading-5 text-muted-foreground">{stage.detail}</p> : null}</button>; })}</div>
+        <Card className="overflow-hidden p-0">
+          <nav className="grid grid-cols-4 border-b border-border" role="tablist" aria-label="Etapas do tratamento">{stages.map((stage, index) => { const active = activeStage === index; return <button id={`journey-stage-${index}`} key={stage.title} type="button" role="tab" aria-selected={active} onClick={() => { if (index === 0 && canWriteClinical) { onOpenEvaluation(journey, data?.evaluation?.id); return; } setActiveStage(index); }} className={`relative flex min-w-0 flex-col items-center gap-1.5 px-1 py-3 text-center transition hover:bg-muted/50 sm:flex-row sm:justify-center sm:gap-2 sm:px-3 ${active ? "text-primary" : "text-muted-foreground"}`}><span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-[10px] font-bold ${stage.done ? "bg-primary text-primary-foreground" : active ? "border border-primary text-primary" : "bg-muted text-muted-foreground"}`}>{stage.done ? <Check className="h-3.5 w-3.5" /> : index + 1}</span><span className="min-w-0 text-[9px] font-semibold leading-tight sm:text-xs">{stage.title}</span></button>; })}</nav>
+          <section className="p-4 sm:p-5" role="tabpanel" aria-labelledby={`journey-stage-${activeStage}`}>
+            <div className="flex flex-wrap items-start justify-between gap-3"><div className="flex items-center gap-2"><Layers3 className="h-5 w-5 text-primary" /><div><h3 className="text-sm font-bold">{stages[activeStage].title}</h3><p className="mt-1 text-[11px] text-muted-foreground">{stages[activeStage].subtitle}</p></div></div><Badge variant={stages[activeStage].done ? "green" : "slate"}>{stages[activeStage].done ? "Registrada" : "Pendente"}</Badge></div>
+            <p className="mt-4 rounded-md bg-muted/50 p-3 text-xs leading-5 text-muted-foreground">{stages[activeStage].detail}</p>
+            {activeStage === 0 ? <div className="mt-3 grid gap-2 sm:grid-cols-2">{[["Queixa principal", data?.evaluation?.chiefComplaint], ["Objetivo", data?.evaluation?.patientGoal], ["Alergias", data?.evaluation?.allergies], ["Contraindicações", data?.evaluation?.contraindications], ["Procedimentos anteriores", data?.evaluation?.previousProcedures], ["Observações", data?.evaluation?.clinicalNotes]].map(([label, value]) => <div key={label} className="rounded-md border border-border p-3"><p className="text-[10px] font-semibold text-muted-foreground">{label}</p><p className="mt-1 whitespace-pre-wrap text-xs">{value?.trim() || "Não informado"}</p></div>)}</div> : null}
+            {activeStage === 1 ? <div className="mt-3 divide-y divide-border rounded-md border border-border">{quotes.length ? quotes.map((quote) => <div className="flex flex-wrap items-center justify-between gap-2 p-3" key={quote.id}><div><p className="text-xs font-semibold">Orçamento · {dateLabel(quote.createdAt)}</p><p className="mt-1 text-[10px] text-muted-foreground">{quote.paymentMethod || "Forma de pagamento não informada"}</p></div><div className="flex items-center gap-3"><strong className="text-xs">{currency(Number(quote.total) || 0)}</strong><Badge variant={statusTone(quote.status)}>{quote.status}</Badge></div></div>) : <p className="p-3 text-xs text-muted-foreground">Nenhum orçamento vinculado a este tratamento.</p>}</div> : null}
+            {activeStage === 2 ? <div className="mt-3 divide-y divide-border rounded-md border border-border">{records.length ? records.map((record) => <div className="flex flex-wrap items-center justify-between gap-2 p-3" key={record.id}><div><p className="text-xs font-semibold">{record.name}</p><p className="mt-1 text-[10px] text-muted-foreground">{record.professional || "Profissional não informado"} · {dateLabel(record.performedAt)}</p></div><Badge variant={record.status === "Concluída" ? "green" : "slate"}>{record.status || "Registrada"}</Badge></div>) : <p className="p-3 text-xs text-muted-foreground">Nenhuma sessão registrada.</p>}</div> : null}
+            {activeStage === 3 ? <div className="mt-3 rounded-md border border-border p-3">{appointment ? <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-semibold">{appointment.procedure || "Retorno"}</p><p className="mt-1 text-[10px] text-muted-foreground">{dateLabel(appointment.date)} · {appointment.time} · {appointment.professional}</p></div><Badge variant="purple">{appointment.status}</Badge></div> : <p className="text-xs text-muted-foreground">{journey.hasProcedure ? "Ainda não há retorno agendado para esta jornada." : "O acompanhamento ficará disponível após uma sessão."}</p>}</div> : null}
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2"><Button size="sm" variant="outline" onClick={() => onOpenClinical("Histórico")}><Clock3 className="h-4 w-4" />Ver histórico</Button>{activeStage === 1 ? <Button size="sm" onClick={() => onOpenClinical("Financeiro")}><CreditCard className="h-4 w-4" />Abrir orçamento</Button> : null}{activeStage === 2 ? <Button size="sm" onClick={() => onNewSession(journey)}><Syringe className="h-4 w-4" />Nova sessão</Button> : null}{activeStage === 3 ? journey.latestCompletedSessionId ? <Button size="sm" onClick={() => onOpenFollowUp(journey, journey.latestCompletedSessionId!)}><HeartPulse className="h-4 w-4" />Registrar evolução</Button> : journey.hasProcedure ? <Button size="sm" onClick={() => onScheduleReturn(journey)}><CalendarDays className="h-4 w-4" />Agendar retorno</Button> : null : null}</div>
+          </section>
         </Card>
         <Card className="p-4 sm:p-5"><div className="flex flex-wrap items-center justify-between gap-3"><IconHeading icon={Clock3} title="Atividades da jornada" /><Button size="sm" variant="ghost" onClick={() => onOpenClinical("Histórico")}>Ver histórico <ChevronRight className="h-3.5 w-3.5" /></Button></div><div className="mt-3 space-y-2">{[...records.map((record) => ({ date: record.performedAt, title: record.name, detail: `Sessão registrada por ${record.professional || "profissional não informado"}`, icon: Syringe })), ...quotes.map((quote) => ({ date: quote.createdAt, title: "Orçamento", detail: `${quote.status} · ${currency(quote.total)}`, icon: FileText })), ...(appointment ? [{ date: appointment.date, title: appointment.procedure || "Retorno agendado", detail: `${appointment.time} · ${appointment.professional}`, icon: CalendarDays }] : [])].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5).map((event, index) => { const Icon = event.icon; return <div className="flex gap-3 border-l border-primary/30 pl-3" key={`${event.title}-${event.date}-${index}`}><Icon className="h-4 w-4 shrink-0 text-primary" /><div className="min-w-0 flex-1"><p className="text-xs font-semibold">{event.title}</p><p className="mt-0.5 text-[10px] text-muted-foreground">{event.detail}</p></div><time className="shrink-0 text-[10px] text-muted-foreground">{dateLabel(event.date)}</time></div>; })}{!records.length && !quotes.length && !appointment ? <p className="py-4 text-center text-xs text-muted-foreground">Nenhuma atividade registrada nesta jornada.</p> : null}</div></Card>
       </div>

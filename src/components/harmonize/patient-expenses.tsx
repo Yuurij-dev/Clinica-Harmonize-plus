@@ -13,6 +13,7 @@ import { LoadingSkeleton } from "./shared";
 import { calculateQuote, type QuoteLineInput } from "@/lib/quote-rules";
 import { ProcedureSessionWorkspace } from "./procedure-session-workspace";
 import { PostProcedureWorkspace } from "./post-procedure-workspace";
+import { EncounterBreadcrumb, type EncounterBreadcrumbActions } from "./encounter-breadcrumb";
 
 type ProcedureOption = {
   id: string;
@@ -31,11 +32,11 @@ type SelectedProcedure = ProcedureOption & { quantity: number; unit: string };
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 const NEW_QUOTE_ID = "__new__";
 
-type PatientExpensesProps = { patientId: string; journeyId?: string; patient?: import("@/types/clinic").Patient; onPaid?: () => void; onPaymentUndone?: () => void; mode?: "list" | "encounter" | "procedure" | "post-procedure"; evaluationId?: string; quoteId?: string; sessionId?: string; onReturnToEvaluation?: () => void; onReturnToQuote?: () => void; onAdvance?: (quoteId: string) => void; onCompleted?: (sessionId: string) => void; onFinish?: () => void };
+type PatientExpensesProps = { patientId: string; journeyId?: string; journeyLabel?: string; patient?: import("@/types/clinic").Patient; onPaid?: () => void; onPaymentUndone?: () => void; mode?: "list" | "encounter" | "procedure" | "post-procedure"; evaluationId?: string; quoteId?: string; sessionId?: string; breadcrumb?: EncounterBreadcrumbActions; onReturnToEvaluation?: () => void; onReturnToQuote?: () => void; onAdvance?: (quoteId: string) => void; onCompleted?: (sessionId: string) => void; onFinish?: () => void };
 
 export function PatientExpenses(props: PatientExpensesProps) {
-  if (props.mode === "procedure") return props.patient && props.journeyId && props.quoteId ? <ProcedureSessionWorkspace patient={props.patient} patientId={props.patientId} journeyId={props.journeyId} quoteId={props.quoteId} onBack={props.onReturnToQuote ?? (() => undefined)} onCompleted={props.onCompleted ?? (() => undefined)} /> : <Card className="p-6 text-center text-sm text-[#b42318]">Não foi possível abrir a sessão sem paciente, jornada e orçamento aprovado.</Card>;
-  if (props.mode === "post-procedure") return props.patient && props.journeyId && props.sessionId ? <PostProcedureWorkspace patient={props.patient} patientId={props.patientId} journeyId={props.journeyId} sessionId={props.sessionId} onFinish={props.onFinish ?? (() => undefined)} /> : <Card className="p-6 text-center text-sm text-[#b42318]">Não foi possível abrir o acompanhamento sem paciente, jornada e sessão.</Card>;
+  if (props.mode === "procedure") return props.patient && props.journeyId && props.quoteId ? <ProcedureSessionWorkspace patient={props.patient} patientId={props.patientId} journeyId={props.journeyId} quoteId={props.quoteId} breadcrumb={props.breadcrumb} onBack={props.onReturnToQuote ?? (() => undefined)} onCompleted={props.onCompleted ?? (() => undefined)} /> : <Card className="p-6 text-center text-sm text-[#b42318]">Não foi possível abrir a sessão sem paciente, jornada e orçamento aprovado.</Card>;
+  if (props.mode === "post-procedure") return props.patient && props.journeyId && props.sessionId ? <PostProcedureWorkspace patient={props.patient} patientId={props.patientId} journeyId={props.journeyId} sessionId={props.sessionId} breadcrumb={props.breadcrumb} onFinish={props.onFinish ?? (() => undefined)} /> : <Card className="p-6 text-center text-sm text-[#b42318]">Não foi possível abrir o acompanhamento sem paciente, jornada e sessão.</Card>;
   if (props.mode === "encounter") return <EncounterQuoteWorkspace {...props} />;
   return <PatientExpenseList {...props} />;
 }
@@ -405,7 +406,7 @@ type StoredQuoteDetails = { items: Array<{ procedureId: string; name: string; qu
 const quoteStatusLabels: Record<string, string> = { Rascunho: "Rascunho", Pendente: "Rascunho", Enviado: "Enviado", Aprovado: "Aprovado", Pago: "Pago", Recusado: "Recusado", Cancelado: "Cancelado" };
 const quotePaymentMethods = ["Cartão de crédito", "Pix", "Dinheiro", "Cartão de débito", "Boleto", "Transferência"];
 
-function EncounterQuoteWorkspace({ patientId, journeyId, patient, evaluationId, onReturnToEvaluation, onAdvance }: PatientExpensesProps) {
+function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, evaluationId, breadcrumb, onReturnToEvaluation, onAdvance }: PatientExpensesProps) {
   const quoteKey = `/api/quotes?patientId=${encodeURIComponent(patientId)}&journeyId=${encodeURIComponent(journeyId ?? "")}`;
   const evaluationKey = `/api/patients/${encodeURIComponent(patientId)}/evaluation?summary=1&evaluationId=${encodeURIComponent(evaluationId ?? "")}`;
   const cachedQuotes = readClientCache<{ quotes?: PatientQuote[] }>(quoteKey);
@@ -536,8 +537,9 @@ function EncounterQuoteWorkspace({ patientId, journeyId, patient, evaluationId, 
 
   return (
     <div className="space-y-4">
+      {patient && breadcrumb ? <EncounterBreadcrumb patientName={patient.name} journeyName={journeyLabel ?? "Novo atendimento"} stage="Orçamento" {...breadcrumb} /> : null}
       <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
-        <div className="flex min-w-0 items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#ece9ff] text-sm font-black text-[#5147dc]">{(patient?.name ?? "Paciente").split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div className="min-w-0"><h2 className="truncate text-base font-bold text-[#242538]">{patient?.name ?? "Paciente"}</h2><p className="text-[10px] text-[#77788a]">{patient?.age ? `${patient.age} anos · ` : ""}{patient?.phone ?? "Telefone não informado"} · {patient?.status ?? "Status não informado"}</p><p className="text-[9px] text-[#858696]">Paciente desde {patient?.createdAt ? new Date(patient.createdAt).toLocaleDateString("pt-BR") : "data não informada"} · Novo atendimento · Etapa 2 de 4</p></div></div>
+        <div className="flex min-w-0 items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#ece9ff] text-sm font-black text-[#5147dc]">{(patient?.name ?? "Paciente").split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div className="min-w-0"><h2 className="truncate text-base font-bold text-[#242538]">{patient?.name ?? "Paciente"}</h2><p className="text-[10px] text-[#77788a]">{patient?.age ? `${patient.age} anos · ` : ""}{patient?.phone ?? "Telefone não informado"} · {patient?.status ?? "Status não informado"}</p><p className="text-[9px] text-[#858696]">Paciente desde {patient?.createdAt ? new Date(patient.createdAt).toLocaleDateString("pt-BR") : "data não informada"} · {journeyLabel ?? "Novo atendimento"} · Etapa 2 de 4</p></div></div>
         <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={onReturnToEvaluation}><ArrowLeft className="h-4 w-4" />Voltar para avaliação</Button><Button disabled={!activeQuote || !["Aprovado", "Pago"].includes(activeQuote.status) || saving} onClick={() => { if (activeQuote) onAdvance?.(activeQuote.id); }}><ArrowRight className="h-4 w-4" />Avançar para procedimento</Button></div>
       </Card>
       <div className="flex items-center gap-2 overflow-x-auto px-2 py-1 text-[10px] font-semibold text-[#747587]" aria-label="Progresso do atendimento">{["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento"].map((stage, index) => <div key={stage} className="flex min-w-0 flex-1 items-center gap-2"><span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-full", index < 1 ? "bg-[#5147dc] text-white" : index === 1 ? "bg-[#5147dc] text-white" : "bg-[#e6e7ef] text-[#747587]")}>{index < 1 ? <Check className="h-4 w-4" /> : index + 1}</span><span className={index === 1 ? "text-[#3f35d6]" : "whitespace-nowrap"}>{stage}</span>{index < 3 ? <span className={cn("h-px min-w-3 flex-1", index < 1 ? "bg-[#5147dc]" : "bg-[#dfe0e8]")} /> : null}</div>)}</div>

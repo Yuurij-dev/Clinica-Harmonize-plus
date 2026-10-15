@@ -16,7 +16,7 @@ type EvaluationPhotoPayload = {
   annotations?: unknown[];
 };
 
-const assessmentFields = ["chiefComplaint", "patientGoal", "medicalHistory", "allergies", "contraindications", "previousProcedures", "clinicalNotes"] as const;
+const assessmentFields = ["chiefComplaint", "patientGoal", "medicalHistory", "allergies", "pregnancyStatus", "anticoagulantUse", "autoimmuneDiseases", "contraindications", "previousProcedures", "clinicalNotes"] as const;
 type AssessmentField = typeof assessmentFields[number];
 type AssessmentPayload = Partial<Record<AssessmentField, string>>;
 const photoCategories = new Set(["Frontal", "Perfil direito", "Perfil esquerdo", "Sorriso", "Outra"]);
@@ -47,7 +47,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const evaluation = await prisma.evaluation.findFirst({
       where: { patientId, clinicId: user.clinicId, ...(evaluationId ? { id: evaluationId } : {}), ...(journeyId ? { journeyId } : {}) },
       orderBy: { updatedAt: "desc" },
-      select: { id: true, journeyId: true, professional: true, status: true, createdAt: true, updatedAt: true, chiefComplaint: true, patientGoal: true, medicalHistory: true, allergies: true, contraindications: true, previousProcedures: true, clinicalNotes: true },
+      select: { id: true, journeyId: true, professional: true, status: true, createdAt: true, updatedAt: true, chiefComplaint: true, patientGoal: true, medicalHistory: true, allergies: true, pregnancyStatus: true, anticoagulantUse: true, autoimmuneDiseases: true, contraindications: true, previousProcedures: true, clinicalNotes: true },
     });
     return NextResponse.json({ evaluation });
   }
@@ -69,6 +69,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       patientGoal: evaluation.patientGoal,
       medicalHistory: evaluation.medicalHistory,
       allergies: evaluation.allergies,
+      pregnancyStatus: evaluation.pregnancyStatus,
+      anticoagulantUse: evaluation.anticoagulantUse,
+      autoimmuneDiseases: evaluation.autoimmuneDiseases,
       contraindications: evaluation.contraindications,
       previousProcedures: evaluation.previousProcedures,
       clinicalNotes: evaluation.clinicalNotes,

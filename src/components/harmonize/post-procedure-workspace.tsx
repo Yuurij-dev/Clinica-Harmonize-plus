@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import type { Patient } from "@/types/clinic";
 import { LoadingSkeleton } from "./shared";
 import { useCan } from "./current-user";
+import { EncounterBreadcrumb, type EncounterBreadcrumbActions } from "./encounter-breadcrumb";
 
 type ClinicalPhoto = { id: string; name: string; category: string; phase: string; imageUrl: string; width: number; height: number; capturedAt: string; source: string; sessionId: string | null };
 type Appointment = { id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string };
@@ -20,7 +21,7 @@ type DraftPhoto = { id: string; name: string; category: string; imageUrl: string
 const categories = ["Frontal", "Perfil direito", "Perfil esquerdo", "Sorriso", "Outra"];
 const labels = (photo: ClinicalPhoto) => `${photo.category} · ${photo.phase} · ${new Date(photo.capturedAt).toLocaleDateString("pt-BR")}`;
 
-export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionId, onFinish }: { patient: Patient; patientId: string; journeyId: string; sessionId: string; onFinish: () => void }) {
+export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionId, breadcrumb, onFinish }: { patient: Patient; patientId: string; journeyId: string; sessionId: string; breadcrumb?: EncounterBreadcrumbActions; onFinish: () => void }) {
   const canWrite = useCan("clinical:write");
   const cacheKey = `/api/patients/${encodeURIComponent(patientId)}/procedure-sessions/${encodeURIComponent(sessionId)}/follow-ups?journeyId=${encodeURIComponent(journeyId)}`;
   const cached = readClientCache<WorkspaceData>(cacheKey);
@@ -192,6 +193,7 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   if (!data) return null;
 
   return <div className="mx-auto max-w-[1400px] space-y-4 pb-8">
+    {breadcrumb ? <EncounterBreadcrumb patientName={patient.name} journeyName={data.journey.name} stage="Pós-procedimento" {...breadcrumb} /> : null}
     <button type="button" onClick={onFinish} className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-primary"><ArrowLeft className="h-4 w-4" />Voltar ao prontuário</button>
     <Card className="flex flex-wrap items-center justify-between gap-4 p-4">
       <div className="flex min-w-0 items-center gap-3"><div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-primary/10 font-bold text-primary">{initials}</div><div className="min-w-0"><h1 className="truncate text-base font-bold">{patient.name}</h1><p className="mt-1 text-xs text-muted-foreground">{data.journey.name} · {data.session.procedureName} · Sessão de {new Date(data.session.performedAt).toLocaleDateString("pt-BR")}</p><p className="mt-1 text-[11px] text-muted-foreground">Profissional: {data.session.professional} · Sessão concluída; tratamento permanece {data.journey.status.toLocaleLowerCase("pt-BR")}</p></div></div>
