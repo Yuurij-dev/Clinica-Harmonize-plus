@@ -1,6 +1,31 @@
 export type QuoteLineInput = { procedureId: string; quantity: number; discountCents: number };
 export type QuotePriceSource = { id: string; name: string; priceCents: number };
 
+export function formatMoneyInput(cents: number) {
+  return (cents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+export function parseMoneyInput(value: string) {
+  const input = value.trim().replace(/^R\$\s*/i, "").replace(/\s/g, "");
+  if (!input) return 0;
+  let whole = input;
+  let fraction = "";
+  if (input.includes(",")) {
+    const parts = input.split(",");
+    if (parts.length !== 2 || !/^\d{0,2}$/.test(parts[1]) || !/^[\d.]+$/.test(parts[0])) return null;
+    whole = parts[0].replace(/\./g, "");
+    fraction = parts[1];
+  } else if (/^\d+\.\d{0,2}$/.test(input)) {
+    [whole, fraction] = input.split(".");
+  } else if (/^\d{1,3}(?:\.\d{3})+$/.test(input)) {
+    whole = input.replace(/\./g, "");
+  } else if (!/^\d+$/.test(input)) {
+    return null;
+  }
+  const cents = Number(whole) * 100 + Number(fraction.padEnd(2, "0") || 0);
+  return Number.isSafeInteger(cents) ? cents : null;
+}
+
 export function calculateQuote(lines: QuoteLineInput[], catalog: QuotePriceSource[], costs: { laborCents: number; facilityCents: number; medicationCents: number }) {
   if (!Array.isArray(lines) || lines.length === 0 || lines.length > 50) return null;
   const items = [];

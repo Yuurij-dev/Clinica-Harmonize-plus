@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 import { useCan } from "./current-user";
 import { ListAccordion } from "./list-accordion";
 import { LoadingSkeleton } from "./shared";
-import { calculateQuote, type QuoteLineInput } from "@/lib/quote-rules";
+import { calculateQuote, formatMoneyInput, parseMoneyInput, type QuoteLineInput } from "@/lib/quote-rules";
 import { ProcedureSessionWorkspace } from "./procedure-session-workspace";
 import { PostProcedureWorkspace } from "./post-procedure-workspace";
 import { EncounterBreadcrumb, type EncounterBreadcrumbActions } from "./encounter-breadcrumb";
@@ -426,6 +426,9 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
   const [notice, setNotice] = useState<{ error: boolean; text: string } | null>(null);
   const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(null);
   const [lines, setLines] = useState<QuoteLineInput[]>([]);
+  const [discountDrafts, setDiscountDrafts] = useState<Record<string, string>>({});
+  const [discountErrors, setDiscountErrors] = useState<Record<string, string>>({});
+  const [selectionError, setSelectionError] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("Cartão de crédito");
   const [installments, setInstallments] = useState(1);
   const [notes, setNotes] = useState("");
@@ -476,12 +479,45 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
   function updateLine(procedureId: string, changes: Partial<QuoteLineInput>) {
     setLines((current) => current.map((line) => line.procedureId === procedureId ? { ...line, ...changes } : line));
     setNotice(null);
+    if (changes.discountCents !== undefined) setDiscountErrors((current) => ({ ...current, [procedureId]: "" }));
+    if (changes.quantity !== undefined) {
+      const procedure = procedures.find((item) => item.id === procedureId);
+      const line = lines.find((item) => item.procedureId === procedureId);
+      const maxCents = Math.round((procedure?.price ?? 0) * 100) * changes.quantity;
+      setDiscountDrafts((current) => { const next = { ...current }; delete next[procedureId]; return next; });
+      setDiscountErrors((current) => ({ ...current, [procedureId]: line && line.discountCents > maxCents ? "Reduza o desconto: ele ultrapassa o subtotal desta quantidade." : "" }));
+    }
+  }
+
+  function changeDiscount(procedureId: string, value: string, maximumCents: number) {
+    setDiscountDrafts((current) => ({ ...current, [procedureId]: value }));
+    const cents = parseMoneyInput(value);
+    if (cents === null) {
+      setDiscountErrors((current) => ({ ...current, [procedureId]: "Informe um valor em reais, como 0,00." }));
+      return;
+    }
+    if (cents > maximumCents) {
+      setDiscountErrors((current) => ({ ...current, [procedureId]: "O desconto não pode ultrapassar o valor do item." }));
+      return;
+    }
+    setDiscountErrors((current) => ({ ...current, [procedureId]: "" }));
+    updateLine(procedureId, { discountCents: cents });
+  }
+
+  function blurDiscount(procedureId: string) {
+    const line = lines.find((item) => item.procedureId === procedureId);
+    if (line && !discountErrors[procedureId]) setDiscountDrafts((current) => ({ ...current, [procedureId]: formatMoneyInput(line.discountCents) }));
   }
 
   function toggleProcedure(procedureId: string, checked: boolean) {
     setLines((current) => checked
       ? current.some((line) => line.procedureId === procedureId) ? current : [...current, { procedureId, quantity: 1, discountCents: 0 }]
       : current.filter((line) => line.procedureId !== procedureId));
+    if (checked) setSelectionError("");
+    else {
+      setDiscountDrafts((current) => { const next = { ...current }; delete next[procedureId]; return next; });
+      setDiscountErrors((current) => { const next = { ...current }; delete next[procedureId]; return next; });
+    }
     setNotice(null);
   }
 
@@ -491,6 +527,7 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
     setNewRevision(true);
     setSelectedQuoteId(null);
     setLines([]);
+    setDiscountDrafts({}); setDiscountErrors({}); setSelectionError("");
     setPaymentMethod("Cartão de crédito");
     setInstallments(1);
     setNotes("");
@@ -504,6 +541,7 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
     setNewRevision(false);
     setSelectedQuoteId(quote.id);
     setLines(restoreQuoteLines(quote, procedures));
+    setDiscountDrafts({}); setDiscountErrors({}); setSelectionError("");
     setPaymentMethod(quote.paymentMethod ?? "Cartão de crédito");
     setInstallments(quote.installments ?? 1);
     setNotes(quote.notes ?? "");
@@ -512,7 +550,9 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
   }
 
   async function saveDraft() {
-    if (!calculated || !evaluationId || !journeyId) { setNotice({ error: true, text: "Adicione ao menos um procedimento e confira os descontos." }); return null; }
+    if (!lines.length) { setSelectionError("Selecione ao menos um procedimento para salvar o orçamento."); return null; }
+    if (Object.values(discountErrors).some(Boolean)) return null;
+    if (!calculated || !evaluationId || !journeyId) { setNotice({ error: true, text: "Confira os procedimentos e descontos antes de salvar." }); return null; }
     setSaving(true); setNotice(null);
     try {
       const response = await fetch(activeQuote ? `/api/quotes/${activeQuote.id}` : "/api/quotes", {
@@ -598,7 +638,8 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
   }
 
   function generatePdf() {
-    if (!calculated) { setNotice({ error: true, text: "Adicione ao menos um procedimento antes de gerar a proposta." }); return; }
+    if (!lines.length) { setSelectionError("Selecione ao menos um procedimento antes de gerar a proposta."); return; }
+    if (!calculated || Object.values(discountErrors).some(Boolean)) { setNotice({ error: true, text: "Confira os procedimentos e descontos antes de gerar a proposta." }); return; }
     setPdfNotice(false);
     const popup = window.open("", "_blank", "width=900,height=720");
     if (!popup) { setPdfNotice(true); return; }
@@ -642,17 +683,18 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
                     <td className="px-3 py-3"><label className="flex min-w-0 cursor-pointer items-center gap-3"><input type="checkbox" checked={Boolean(line)} disabled={!editable} onChange={(event) => toggleProcedure(procedure.id, event.target.checked)} aria-label={`Selecionar ${procedure.name}`} className="h-4 w-4 shrink-0 accent-[#5147dc] disabled:cursor-not-allowed" /><span className="min-w-0"><strong className={cn("block truncate", line ? "text-[#3f4053]" : "text-[#77798d] font-medium")}>{procedure.name}</strong><span className="mt-0.5 block truncate text-[9px] text-[#999aaa]">{procedure.materials || procedure.category}</span></span></label></td>
                     <td className="px-3 py-3"><select aria-label={`Quantidade de ${procedure.name}`} disabled={!editable || !line} className="h-8 rounded-[5px] border border-[#dddde6] bg-white px-2 text-[10px] disabled:bg-[#f4f4f8]" value={quantity} onChange={(event) => updateLine(procedure.id, { quantity: Number(event.target.value) })}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{formatQuantity(value, procedureUnit(procedure))}</option>)}</select></td>
                     <td className="px-3 py-3 font-semibold text-[#555668]">{currency.format(procedure.price)}</td>
-                    <td className="px-3 py-3"><input aria-label={`Desconto de ${procedure.name}`} disabled={!editable || !line} className="h-8 w-24 rounded-[5px] border border-[#dddde6] px-2 text-[10px] disabled:bg-[#f4f4f8]" type="number" min="0" max={unitCents * quantity / 100} step="0.01" value={(discountCents / 100).toFixed(2)} onChange={(event) => updateLine(procedure.id, { discountCents: Math.max(0, Math.min(unitCents * quantity, Math.round(Number(event.target.value) * 100))) })} /></td>
+                    <td className="px-3 py-3"><input id={`discount-${procedure.id}`} aria-label={`Desconto de ${procedure.name}`} aria-invalid={Boolean(discountErrors[procedure.id])} aria-describedby={discountErrors[procedure.id] ? `discount-error-${procedure.id}` : undefined} disabled={!editable || !line} className={cn("h-8 w-24 rounded-[5px] border border-[#dddde6] px-2 text-[10px] disabled:bg-[#f4f4f8]", discountErrors[procedure.id] && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} type="text" inputMode="decimal" placeholder="0,00" value={discountDrafts[procedure.id] ?? formatMoneyInput(discountCents)} onChange={(event) => changeDiscount(procedure.id, event.target.value, unitCents * quantity)} onBlur={() => blurDiscount(procedure.id)} /><span className="mt-1 block text-[8px] text-[#858696]">Em R$ · máximo {currency.format(unitCents * quantity / 100)}</span>{discountErrors[procedure.id] ? <span id={`discount-error-${procedure.id}`} role="alert" className="mt-1 block max-w-32 text-[9px] font-medium text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{discountErrors[procedure.id]}</span> : null}</td>
                     <td className={cn("px-3 py-3 font-bold", line ? "text-[#353648]" : "text-[#a2a3b0]")}>{currency.format(subtotal / 100)}</td>
                   </tr>;
                 })}</tbody>
               </table> : <p className="rounded-[5px] border border-dashed border-[#dddde6] px-4 py-8 text-center text-xs text-[#77788a]">Nenhum procedimento cadastrado para esta clínica.</p>}
+              {selectionError ? <p key={selectionError} role="alert" className="mt-2 rounded-[5px] bg-[#fff1f0] px-3 py-2 text-[10px] font-semibold text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{selectionError}</p> : null}
             </div>
           </Card>
 
           <Card className="p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><CreditCard className="h-4 w-4 text-[#5147dc]" />Condições de pagamento</h3><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{quotePaymentMethods.map((method) => <button key={method} type="button" disabled={!editable} aria-pressed={paymentMethod === method} onClick={() => { setPaymentMethod(method); if (method !== "Cartão de crédito") setInstallments(1); }} className={cn("flex min-h-14 items-center gap-2 rounded-[6px] border px-3 text-left text-[10px] font-bold transition", paymentMethod === method ? "border-[#5147dc] bg-[#f3f1ff] text-[#3f35d6]" : "border-[#e5e5ee] bg-white text-[#555668] hover:bg-[#fafafd]", !editable && "cursor-not-allowed opacity-60")}><span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-full border", paymentMethod === method ? "border-[#5147dc] bg-[#5147dc] text-white" : "border-[#c8c9d5]")}>{paymentMethod === method ? <Check className="h-3 w-3" /> : null}</span><span>{method}<small className="mt-0.5 block font-normal text-[#858696]">{method === "Cartão de crédito" ? "Parcelamento disponível" : "Pagamento à vista"}</small></span></button>)}</div>{paymentMethod === "Cartão de crédito" ? <label className="mt-3 block max-w-xs text-[10px] font-semibold text-[#68697b]">Número de parcelas<select disabled={!editable} className="mt-1 h-9 w-full rounded-[5px] border border-[#dddde6] bg-white px-2 text-xs" value={installments} onChange={(event) => setInstallments(Number(event.target.value))}>{Array.from({ length: 12 }, (_, index) => index + 1).map((count) => <option value={count} key={count}>{count}x de {currency.format(count ? Math.ceil(total / count) / 100 : 0)}</option>)}</select></label> : null}<p className="mt-2 rounded-[5px] bg-[#f7f7fb] p-2.5 text-[10px] text-[#68697b]">Forma de pagamento é apenas uma condição da proposta. Nenhum recebimento será lançado por essa seleção.</p></Card>
 
-          <Card className="p-4"><label className="block text-sm font-bold text-[#292a3d]" htmlFor="quote-notes">Observações do orçamento</label><textarea id="quote-notes" disabled={!editable} maxLength={2000} rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Condições comerciais, validade ou orientações para o paciente" className="mt-3 w-full resize-y rounded-[6px] border border-[#dddde6] bg-white p-3 text-xs text-[#454659] outline-none focus:border-[#5147dc] disabled:bg-[#f4f4f8]" /><div className="mt-2 flex flex-wrap gap-2">{activeQuote?.status === "Rascunho" || activeQuote?.status === "Pendente" ? <Button type="button" variant="outline" disabled={statusBusy || saving} onClick={() => void changeStatus("Enviado")}><Send className="h-4 w-4" />Registrar envio</Button> : null}</div>{notice ? <p role="status" className={cn("mt-3 rounded-[5px] px-3 py-2 text-[10px] font-semibold", notice.error ? "bg-[#fff1f0] text-[#b42318]" : "bg-[#eef8f2] text-[#287a50]")}>{notice.text}</p> : null}{pdfNotice ? <p className="mt-2 text-xs text-[#b42318]">O navegador bloqueou a janela de impressão. Permita pop-ups e tente novamente.</p> : null}</Card>
+          <Card className="p-4"><label className="block text-sm font-bold text-[#292a3d]" htmlFor="quote-notes">Observações do orçamento</label><textarea id="quote-notes" disabled={!editable} maxLength={2000} rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Condições comerciais, validade ou orientações para o paciente" className="mt-3 w-full resize-y rounded-[6px] border border-[#dddde6] bg-white p-3 text-xs text-[#454659] outline-none focus:border-[#5147dc] disabled:bg-[#f4f4f8]" /><div className="mt-2 flex flex-wrap gap-2">{activeQuote?.status === "Rascunho" || activeQuote?.status === "Pendente" ? <Button type="button" variant="outline" disabled={statusBusy || saving} onClick={() => void changeStatus("Enviado")}><Send className="h-4 w-4" />Registrar envio</Button> : null}</div>{notice ? <p key={notice.text} role={notice.error ? "alert" : "status"} className={cn("mt-3 rounded-[5px] px-3 py-2 text-[10px] font-semibold", notice.error ? "bg-[#fff1f0] text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]" : "bg-[#eef8f2] text-[#287a50]")}>{notice.text}</p> : null}{pdfNotice ? <p role="alert" className="mt-2 text-xs text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">O navegador bloqueou a janela de impressão. Permita pop-ups e tente novamente.</p> : null}</Card>
         </div>
 
         <aside className="space-y-3 xl:sticky xl:top-24 xl:self-start">

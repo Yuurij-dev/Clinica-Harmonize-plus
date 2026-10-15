@@ -102,7 +102,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const body = await request.json().catch(() => null) as ({ evaluationId?: string; journeyId?: string; photos?: EvaluationPhotoPayload[]; assessment?: AssessmentPayload; status?: string } | null);
   const photos = body?.photos;
   if (!Array.isArray(photos)) return NextResponse.json({ message: "Envie as fotos da avaliação." }, { status: 400 });
-  const existingEvaluation = body?.evaluationId ? await prisma.evaluation.findFirst({ where: { id: body.evaluationId, patientId, clinicId: user.clinicId }, select: { id: true, journeyId: true } }) : null;
+  const existingEvaluation = body?.evaluationId ? await prisma.evaluation.findFirst({ where: { id: body.evaluationId, patientId, clinicId: user.clinicId }, select: { id: true, journeyId: true, chiefComplaint: true } }) : null;
   if (body?.evaluationId && !existingEvaluation) {
     return NextResponse.json({ message: "Avaliação não encontrada." }, { status: 404 });
   }
@@ -127,6 +127,9 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       }
       if (value !== undefined) assessment[field] = value.trim();
     }
+  }
+  if (body?.status === "Concluída" && !(assessment.chiefComplaint ?? existingEvaluation?.chiefComplaint ?? "").trim()) {
+    return NextResponse.json({ message: "Informe a queixa principal para concluir a avaliação." }, { status: 400 });
   }
   const journey = existingEvaluation ? null : await ensurePatientJourney(patientId, user.clinicId, body?.journeyId);
 

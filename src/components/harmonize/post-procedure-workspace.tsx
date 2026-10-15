@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { appointmentSlotError, latestAppointmentStart } from "@/lib/clinic-time";
+import { validateFollowUpDraft } from "@/lib/follow-up-rules";
 import { cn } from "@/lib/utils";
 import type { Patient } from "@/types/clinic";
 import { LoadingSkeleton } from "./shared";
@@ -31,6 +32,10 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [photoError, setPhotoError] = useState("");
+  const [followUpError, setFollowUpError] = useState("");
+  const [followUpValidation, setFollowUpValidation] = useState<{ content?: string; guidance?: string; photos?: string; appointment?: string }>({});
+  const [followUpValidationAttempt, setFollowUpValidationAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
   const [observations, setObservations] = useState("");
   const [complications, setComplications] = useState("");
@@ -51,6 +56,8 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   const [appointmentHours, setAppointmentHours] = useState<AppointmentHours | null>(() => readClientCache<AppointmentHours>("/api/appointments/options") ?? null);
   const [appointmentHoursRetry, setAppointmentHoursRetry] = useState(0);
   const [appointmentFormError, setAppointmentFormError] = useState("");
+  const [appointmentDateError, setAppointmentDateError] = useState("");
+  const [appointmentTimeError, setAppointmentTimeError] = useState("");
   const [appointmentErrorAnimation, setAppointmentErrorAnimation] = useState(0);
   const [booking, setBooking] = useState(false);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState("");
@@ -111,13 +118,13 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   useEffect(() => () => streamRef.current?.getTracks().forEach((track) => track.stop()), []);
 
   async function openCamera() {
-    setError("");
+    setPhotoError("");
     try {
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
       setCameraOpen(true);
     } catch {
-      setError("Não foi possível acessar a câmera. Verifique a permissão do navegador ou envie uma foto.");
+      setPhotoError("Não foi possível acessar a câmera. Verifique a permissão do navegador ou envie uma foto.");
     }
   }
 
@@ -141,13 +148,15 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
     canvas.getContext("2d")?.drawImage(video, 0, 0);
     const imageUrl = canvas.toDataURL("image/jpeg", 0.96);
     setPhotos((current) => [...current, { id: crypto.randomUUID(), name: `Evolução ${category.toLocaleLowerCase("pt-BR")}`, category, imageUrl, width: canvas.width, height: canvas.height }]);
+    setPhotoError("");
+    setFollowUpValidation((current) => ({ ...current, photos: undefined, content: undefined }));
     closeCamera();
   }
 
   async function addFiles(files: FileList | null) {
     if (!files) return;
-    setError("");
-    if (photos.length + files.length > 12) { setError("Você pode incluir até 12 imagens por registro."); return; }
+    setPhotoError("");
+    if (photos.length + files.length > 12) { setPhotoError("Você pode incluir até 12 imagens por registro."); return; }
     const next: DraftPhoto[] = [];
     try {
       for (const file of Array.from(files)) {
@@ -159,8 +168,9 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
       }
       if (photos.reduce((sum, photo) => sum + photo.imageUrl.length, 0) + next.reduce((sum, photo) => sum + photo.imageUrl.length, 0) > 24_000_000) throw new Error("Salve este registro antes de incluir mais imagens.");
       setPhotos((current) => [...current, ...next]);
+      setFollowUpValidation((current) => ({ ...current, photos: undefined, content: undefined }));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível ler as imagens.");
+      setPhotoError(reason instanceof Error ? reason.message : "Não foi possível ler as imagens.");
     } finally {
       if (fileInput.current) fileInput.current.value = "";
     }
@@ -168,7 +178,14 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
 
   async function saveFollowUp() {
     if (!data || saving) return;
-    setSaving(true); setError(""); setNotice("");
+    const validation = validateFollowUpDraft({ guidanceText, guidanceSent: guidanceConfirmed, observations, complications, photoCount: photos.length, appointmentId: selectedAppointmentId });
+    if (Object.keys(validation).length) {
+      setFollowUpValidation(validation);
+      setFollowUpValidationAttempt((current) => current + 1);
+      setFollowUpError("");
+      return;
+    }
+    setSaving(true); setFollowUpError(""); setFollowUpValidation({}); setNotice("");
     try {
       const response = await fetch(cacheKey, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ professional: data.session.professional, observations, complications, guidanceText, guidanceSent: guidanceConfirmed, photos, ...(selectedAppointmentId ? { appointmentId: selectedAppointmentId } : {}) }) });
       const result = await response.json().catch(() => ({})) as { message?: string };
@@ -178,24 +195,40 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
       setObservations(""); setComplications(""); setGuidanceText(""); setGuidanceConfirmed(false); setPhotos([]); setSelectedAppointmentId("");
       setNotice("Acompanhamento registrado no histórico clínico.");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível salvar o acompanhamento.");
+      const message = reason instanceof Error ? reason.message : "Não foi possível salvar o acompanhamento.";
+      if (/orientações que foram enviadas/i.test(message)) setFollowUpValidation({ guidance: message });
+      else if (/fotografias|imagens/i.test(message)) setFollowUpValidation({ photos: message });
+      else if (/retorno/i.test(message)) setFollowUpValidation({ appointment: message });
+      else if (/Adicione uma orientação/i.test(message)) setFollowUpValidation({ content: message });
+      else setFollowUpError(message);
+      setFollowUpValidationAttempt((current) => current + 1);
     } finally { setSaving(false); }
   }
 
   async function scheduleReturn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!data || booking) return;
+    if (!appointmentDate || !appointmentTime) {
+      setAppointmentDateError(appointmentDate ? "" : "Informe a data do retorno.");
+      setAppointmentTimeError(appointmentTime ? "" : "Informe o horário do retorno.");
+      setAppointmentFormError("");
+      setAppointmentErrorAnimation((value) => value + 1);
+      return;
+    }
     if (!appointmentHours) {
       setAppointmentFormError("Não foi possível carregar o horário de funcionamento da clínica. Tente novamente.");
       setAppointmentErrorAnimation((value) => value + 1);
       return;
     }
-    const error = appointmentSlotError(appointmentDate, appointmentTime, appointmentHours.openingTime, appointmentHours.closingTime);
-    if (error) {
-      setAppointmentFormError(error);
+    const slotError = appointmentSlotError(appointmentDate, appointmentTime, appointmentHours.openingTime, appointmentHours.closingTime);
+    if (slotError) {
+      if (/data|passou/i.test(slotError)) setAppointmentDateError(slotError);
+      else setAppointmentTimeError(slotError);
+      setAppointmentFormError("");
       setAppointmentErrorAnimation((value) => value + 1);
       return;
     }
+    setAppointmentDateError(""); setAppointmentTimeError("");
     setBooking(true); setError(""); setAppointmentNotice(""); setAppointmentFormError("");
     try {
       const response = await fetch("/api/appointments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, journeyId: data.session.journeyId, procedure: `Retorno - ${data.session.procedureName}`, professional: data.session.professional, date: appointmentDate, time: appointmentTime, notes: appointmentNotes }) });
@@ -203,10 +236,13 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
       if (!response.ok || !result.appointment) throw new Error(result.message ?? "Não foi possível agendar o retorno.");
       invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/history`, `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`);
       setAppointmentNotice(`Retorno agendado para ${new Date(result.appointment.date).toLocaleDateString("pt-BR")} às ${result.appointment.time}.`);
-      setAppointmentOpen(false); setAppointmentDate(""); setAppointmentTime(""); setAppointmentNotes("");
+      setAppointmentOpen(false); setAppointmentDate(""); setAppointmentTime(""); setAppointmentNotes(""); setAppointmentDateError(""); setAppointmentTimeError("");
       await reload();
     } catch (reason) {
-      setAppointmentFormError(reason instanceof Error ? reason.message : "Não foi possível agendar o retorno.");
+      const message = reason instanceof Error ? reason.message : "Não foi possível agendar o retorno.";
+      if (/data|passou/i.test(message)) setAppointmentDateError(message);
+      else if (/horário|funcionamento|disponível/i.test(message)) setAppointmentTimeError(message);
+      else setAppointmentFormError(message);
       setAppointmentErrorAnimation((value) => value + 1);
     } finally { setBooking(false); }
   }
@@ -252,32 +288,33 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
           {allPhotos.length ? <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">{allPhotos.map((photo) => <button key={`${photo.source}-${photo.id}`} type="button" onClick={() => photo.phase === "Antes" ? setBeforeId(photo.id) : setAfterId(photo.id)} onDoubleClick={() => setPreview(photo)} aria-label={`Selecionar e ampliar ${photo.name}`} className={cn("overflow-hidden rounded-md border text-left", photo.id === selectedBefore?.id || photo.id === selectedAfter?.id ? "border-primary ring-1 ring-primary" : "border-border")}><img src={photo.imageUrl} alt={photo.name} className="aspect-square w-full bg-muted object-contain" /><span className="block truncate px-1.5 py-1 text-[9px] text-muted-foreground">{photo.category} · {photo.phase}</span></button>)}</div> : null}
         </Card>
 
-      <Card className="space-y-3 p-4 sm:p-5"><h2 className="flex items-center gap-2 text-sm font-bold"><ShieldCheck className="h-4 w-4 text-primary" />Orientações pós-procedimento</h2><p className="text-xs text-muted-foreground">Registre o texto e confirme somente depois de enviar por um canal da clínica.</p><textarea value={guidanceText} onChange={(event) => setGuidanceText(event.target.value)} maxLength={5000} rows={4} placeholder="Orientações repassadas ao paciente..." className="w-full rounded-md border border-border bg-background p-3 text-xs outline-none focus:border-primary" /><label className="flex items-start gap-2 text-xs text-muted-foreground"><input type="checkbox" checked={guidanceConfirmed} onChange={(event) => setGuidanceConfirmed(event.target.checked)} className="mt-0.5 accent-primary" />Confirmo que estas orientações foram efetivamente enviadas ao paciente.</label></Card>
+      <Card className={cn("space-y-3 p-4 sm:p-5", followUpValidation.guidance && "border-[#d92d20]")}><h2 className="flex items-center gap-2 text-sm font-bold"><ShieldCheck className="h-4 w-4 text-primary" />Orientações pós-procedimento</h2><p className="text-xs text-muted-foreground">Registre o texto e confirme somente depois de enviar por um canal da clínica.</p><textarea key={`guidance-${followUpValidationAttempt}`} aria-invalid={Boolean(followUpValidation.guidance)} aria-describedby={followUpValidation.guidance ? "follow-up-guidance-error" : undefined} value={guidanceText} onChange={(event) => { setGuidanceText(event.target.value); setFollowUpValidation((current) => ({ ...current, guidance: undefined, content: undefined })); }} maxLength={5000} rows={4} placeholder="Orientações repassadas ao paciente..." className={cn("w-full rounded-md border border-border bg-background p-3 text-xs outline-none focus:border-primary", followUpValidation.guidance && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} />{followUpValidation.guidance ? <p id="follow-up-guidance-error" role="alert" className="text-[10px] font-medium text-[#b42318]">{followUpValidation.guidance}</p> : null}<label className="flex items-start gap-2 text-xs text-muted-foreground"><input type="checkbox" checked={guidanceConfirmed} onChange={(event) => { setGuidanceConfirmed(event.target.checked); if (event.target.checked && guidanceText.trim()) setFollowUpValidation((current) => ({ ...current, guidance: undefined })); }} className="mt-0.5 accent-primary" />Confirmo que estas orientações foram efetivamente enviadas ao paciente.</label></Card>
 
-        <Card className="space-y-4 p-4 sm:p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="flex items-center gap-2 text-sm font-bold"><Camera className="h-4 w-4 text-primary" />Fotografias de evolução</h2><p className="mt-1 text-xs text-muted-foreground">Novos arquivos serão vinculados a esta sessão e preservados sem retoques.</p></div><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void openCamera()}><Camera className="h-4 w-4" />Capturar</Button><Button variant="outline" size="sm" onClick={() => fileInput.current?.click()}><Upload className="h-4 w-4" />Enviar fotos</Button><input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" multiple hidden onChange={(event) => void addFiles(event.target.files)} /></div></div>
+        <Card className={cn("space-y-4 p-4 sm:p-5", (followUpValidation.photos || photoError) && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")}><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="flex items-center gap-2 text-sm font-bold"><Camera className="h-4 w-4 text-primary" />Fotografias de evolução</h2><p className="mt-1 text-xs text-muted-foreground">Novos arquivos serão vinculados a esta sessão e preservados sem retoques.</p></div><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void openCamera()}><Camera className="h-4 w-4" />Capturar</Button><Button variant="outline" size="sm" onClick={() => fileInput.current?.click()}><Upload className="h-4 w-4" />Enviar fotos</Button><input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" multiple hidden onChange={(event) => void addFiles(event.target.files)} /></div></div>
+          {followUpValidation.photos || photoError ? <p key={`photo-error-${followUpValidationAttempt}`} role="alert" className="text-[10px] font-medium text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{followUpValidation.photos ?? photoError}</p> : null}
           <div className="grid gap-2 sm:grid-cols-[minmax(160px,0.45fr)_1fr]"><label className="text-[10px] font-semibold text-muted-foreground">Categoria<select value={category} onChange={(event) => setCategory(event.target.value)} className="mt-1 h-9 w-full rounded-md border border-border bg-background px-2 text-xs">{categories.map((item) => <option key={item}>{item}</option>)}</select></label><div className="flex items-end text-[10px] text-muted-foreground">{photos.length ? `${photos.length} foto(s) aguardando salvamento neste registro` : `${allPhotos.length} fotografia(s) disponíveis no histórico desta jornada`}</div></div>
           {photos.length ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{photos.map((photo) => <div key={photo.id} className="relative overflow-hidden rounded-md border border-border"><button type="button" onClick={() => setPreview(photo)} className="block w-full"><img src={photo.imageUrl} alt={photo.name} className="aspect-[4/3] w-full bg-muted object-contain" /><span className="block truncate px-2 py-1 text-[10px]">{photo.category} · {photo.name}</span></button><button type="button" aria-label={`Remover ${photo.name}`} onClick={() => setPhotos((current) => current.filter((item) => item.id !== photo.id))} className="absolute right-1 top-1 rounded bg-black/60 p-1 text-white"><X className="h-3.5 w-3.5" /></button></div>)}</div> : null}
           {cameraOpen ? <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Capturar fotografia"><div className="w-full max-w-2xl rounded-md bg-background p-4"><div className="mb-3 flex items-center justify-between"><h3 className="text-sm font-bold">Capturar fotografia de evolução</h3><Button variant="ghost" size="icon" aria-label="Fechar câmera" onClick={closeCamera}><X className="h-4 w-4" /></Button></div><video ref={videoRef} autoPlay playsInline className="max-h-[65vh] w-full rounded-md bg-black object-contain" /><div className="mt-3 flex justify-end gap-2"><Button variant="outline" onClick={closeCamera}>Cancelar</Button><Button onClick={() => void capturePhoto()}><Camera className="h-4 w-4" />Capturar</Button></div></div></div> : null}
         </Card>
 
-        <Card className="space-y-3 p-4 sm:p-5"><h2 className="flex items-center gap-2 text-sm font-bold"><CircleAlert className="h-4 w-4 text-primary" />Evolução e intercorrências</h2><label className="block text-[10px] font-semibold text-muted-foreground">Observações clínicas<textarea value={observations} onChange={(event) => setObservations(event.target.value)} maxLength={5000} rows={4} placeholder="Evolução observada, resposta ao tratamento e conduta..." className="mt-1 w-full rounded-md border border-border bg-background p-3 text-xs outline-none focus:border-primary" /></label><label className="block text-[10px] font-semibold text-muted-foreground">Intercorrências registradas<textarea value={complications} onChange={(event) => setComplications(event.target.value)} maxLength={5000} rows={3} placeholder="Registre intercorrências ou informe que não houve, quando aplicável..." className="mt-1 w-full rounded-md border border-border bg-background p-3 text-xs outline-none focus:border-primary" /></label><label className="block text-[10px] font-semibold text-muted-foreground">Vincular retorno atendido<select value={selectedAppointmentId} onChange={(event) => setSelectedAppointmentId(event.target.value)} className="mt-1 h-9 w-full rounded-md border border-border bg-background px-2 text-xs"><option value="">Sem retorno associado</option>{attendedAppointments.map((appointment) => <option key={appointment.id} value={appointment.id}>{new Date(appointment.date).toLocaleDateString("pt-BR")} · {appointment.procedure}</option>)}</select></label><Button disabled={saving || !canWrite} onClick={() => void saveFollowUp()}><Save className="h-4 w-4" />{saving ? "Salvando..." : "Salvar evolução"}</Button></Card>
+        <Card className={cn("space-y-3 p-4 sm:p-5", followUpValidation.content && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")}><h2 className="flex items-center gap-2 text-sm font-bold"><CircleAlert className="h-4 w-4 text-primary" />Evolução e intercorrências</h2>{followUpValidation.content ? <p key={`content-error-${followUpValidationAttempt}`} role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-[10px] font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{followUpValidation.content}</p> : null}<label className="block text-[10px] font-semibold text-muted-foreground">Observações clínicas<textarea value={observations} onChange={(event) => { setObservations(event.target.value); setFollowUpValidation((current) => ({ ...current, content: undefined })); }} maxLength={5000} rows={4} placeholder="Evolução observada, resposta ao tratamento e conduta..." className="mt-1 w-full rounded-md border border-border bg-background p-3 text-xs outline-none focus:border-primary" /></label><label className="block text-[10px] font-semibold text-muted-foreground">Intercorrências registradas<textarea value={complications} onChange={(event) => { setComplications(event.target.value); setFollowUpValidation((current) => ({ ...current, content: undefined })); }} maxLength={5000} rows={3} placeholder="Registre intercorrências ou informe que não houve, quando aplicável..." className="mt-1 w-full rounded-md border border-border bg-background p-3 text-xs outline-none focus:border-primary" /></label><label className="block text-[10px] font-semibold text-muted-foreground">Vincular retorno atendido<select aria-invalid={Boolean(followUpValidation.appointment)} value={selectedAppointmentId} onChange={(event) => { setSelectedAppointmentId(event.target.value); setFollowUpValidation((current) => ({ ...current, appointment: undefined, content: undefined })); }} className={cn("mt-1 h-9 w-full rounded-md border border-border bg-background px-2 text-xs", followUpValidation.appointment && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")}><option value="">Sem retorno associado</option>{attendedAppointments.map((appointment) => <option key={appointment.id} value={appointment.id}>{new Date(appointment.date).toLocaleDateString("pt-BR")} · {appointment.procedure}</option>)}</select>{followUpValidation.appointment ? <span role="alert" className="mt-1 block text-[9px] font-medium text-[#b42318]">{followUpValidation.appointment}</span> : null}</label><Button disabled={saving || !canWrite} onClick={() => void saveFollowUp()}><Save className="h-4 w-4" />{saving ? "Salvando..." : "Salvar evolução"}</Button>{followUpError ? <p key={followUpValidationAttempt} role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-[10px] font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{followUpError}</p> : null}</Card>
 
         <Card className="space-y-3 p-4 sm:p-5"><h2 className="flex items-center gap-2 text-sm font-bold"><Clock3 className="h-4 w-4 text-primary" />Histórico da jornada</h2><ol className="space-y-2">{data.sessions.map((session) => <li key={session.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/50 px-3 py-2"><span className="text-xs"><strong>{session.procedureName}</strong><span className="text-muted-foreground"> · {new Date(session.performedAt).toLocaleDateString("pt-BR")} · {session.professional}</span></span><span className="text-[10px] text-muted-foreground">Sessão concluída</span></li>)}{data.journey.appointments.filter((appointment) => /retorno/i.test(appointment.procedure)).map((appointment) => <li key={appointment.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2"><span className="text-xs"><strong>{new Date(appointment.date).toLocaleDateString("pt-BR")} · {appointment.time}</strong><span className="text-muted-foreground"> · {appointment.procedure}</span></span><span className="text-[10px] text-muted-foreground">{appointment.status}</span></li>)}</ol><h3 className="pt-2 text-xs font-bold">Registros clínicos</h3>{data.followUps.length ? <ol className="space-y-3">{[...data.followUps].reverse().map((record) => <li key={record.id} className="border-l-2 border-primary/30 pl-3"><div className="flex flex-wrap justify-between gap-2"><strong className="text-xs">{new Date(record.occurredAt).toLocaleString("pt-BR")} · {record.professional}</strong><span className="text-[10px] text-muted-foreground">Registrado por {record.createdBy}</span></div>{record.guidanceSentAt ? <p className="mt-1 text-xs text-emerald-800">Orientações registradas como enviadas em {new Date(record.guidanceSentAt).toLocaleString("pt-BR")}</p> : null}{record.guidanceText ? <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{record.guidanceText}</p> : null}{record.observations ? <p className="mt-1 whitespace-pre-wrap text-xs text-foreground">{record.observations}</p> : null}{record.complications ? <p className="mt-1 whitespace-pre-wrap text-xs text-amber-800">Intercorrência: {record.complications}</p> : null}{record.appointment ? <p className="mt-1 text-xs text-muted-foreground">Retorno: {new Date(record.appointment.date).toLocaleDateString("pt-BR")} · {record.appointment.status}</p> : null}{record.photos.length ? <div className="mt-2 flex gap-2">{record.photos.map((photo) => <img key={photo.id} src={photo.imageUrl} alt={photo.name} className="h-16 w-16 rounded border border-border object-contain" />)}</div> : null}<p className="mt-1 text-[9px] text-muted-foreground">Atualizado {new Date(record.updatedAt).toLocaleString("pt-BR")}</p></li>)}</ol> : <p className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">Nenhum registro adicional de acompanhamento.</p>}</Card>
       </div>
 
       <aside className="space-y-4 xl:sticky xl:top-20 xl:self-start">
         <Card className="space-y-2 p-4"><h2 className="text-sm font-bold">Resumo do pós</h2><Summary label="Tratamento" value={data.journey.name} /><Summary label="Etapa" value={data.journey.status} /><Summary label="Sessão" value={new Date(data.session.performedAt).toLocaleDateString("pt-BR")} /><Summary label="Profissional" value={data.session.professional} /><Summary label="Fotos da jornada" value={String(allPhotos.length)} /><Summary label="Registros de acompanhamento" value={String(data.followUps.length)} /></Card>
-        <Card className="space-y-2 p-4"><h2 className="text-sm font-bold">Próximos retornos</h2>{upcomingAppointments.length ? upcomingAppointments.map((appointment) => <div key={appointment.id} className="rounded-md bg-muted/50 px-3 py-2 text-xs"><strong>{new Date(appointment.date).toLocaleDateString("pt-BR")} · {appointment.time}</strong><p className="mt-0.5 text-muted-foreground">{appointment.procedure} · {appointment.professional}</p><span className="text-[10px] text-muted-foreground">{appointment.status}</span></div>) : <p className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">Nenhum retorno agendado.</p>}<Button className="w-full" variant="outline" onClick={() => { setAppointmentNotice(""); setAppointmentFormError(""); setAppointmentOpen(true); }}><CalendarDays className="h-4 w-4" />Agendar retorno</Button></Card>
+        <Card className="space-y-2 p-4"><h2 className="text-sm font-bold">Próximos retornos</h2>{upcomingAppointments.length ? upcomingAppointments.map((appointment) => <div key={appointment.id} className="rounded-md bg-muted/50 px-3 py-2 text-xs"><strong>{new Date(appointment.date).toLocaleDateString("pt-BR")} · {appointment.time}</strong><p className="mt-0.5 text-muted-foreground">{appointment.procedure} · {appointment.professional}</p><span className="text-[10px] text-muted-foreground">{appointment.status}</span></div>) : <p className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">Nenhum retorno agendado.</p>}<Button className="w-full" variant="outline" onClick={() => { setAppointmentNotice(""); setAppointmentFormError(""); setAppointmentDateError(""); setAppointmentTimeError(""); setAppointmentOpen(true); }}><CalendarDays className="h-4 w-4" />Agendar retorno</Button></Card>
         <Card className="space-y-2 p-4"><h2 className="text-sm font-bold">Checklist do pós-procedimento</h2>{[["Fotos iniciais disponíveis", beforePhotos.length > 0], ["Resultado da sessão disponível", afterPhotos.length > 0], ["Orientações registradas", data.followUps.some((item) => Boolean(item.guidanceSentAt))], ["Retorno agendado", upcomingAppointments.length > 0], ["Evolução clínica registrada", data.followUps.some((item) => Boolean(item.observations || item.complications))]].map(([label, done]) => <div key={String(label)} className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-2 text-[11px]"><span className={cn("grid h-4 w-4 place-items-center rounded border", done ? "border-primary bg-primary text-primary-foreground" : "border-border")}>{done ? <Check className="h-3 w-3" /> : null}</span>{label}</div>)}</Card>
         <Card className="space-y-2 border-emerald-200 bg-emerald-50/60 p-4"><h2 className="flex items-center gap-2 text-sm font-bold text-emerald-950"><ShieldCheck className="h-4 w-4" />Sessão concluída</h2><p className="text-xs text-emerald-900">Finalizar este atendimento não conclui o tratamento. A jornada permanece consultável e só é encerrada por ação explícita de usuário autorizado.</p><Button className="w-full" variant="outline" onClick={finishAttendance}><ArrowLeft className="h-4 w-4" />Finalizar atendimento</Button></Card>
       </aside>
     </div>
     {appointmentOpen ? (
       <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-labelledby="return-title">
-        <form onSubmit={(event) => void scheduleReturn(event)} className="w-full max-w-md space-y-4 rounded-md border border-border bg-background p-5 shadow-xl">
+        <form noValidate onSubmit={(event) => void scheduleReturn(event)} className="w-full max-w-md space-y-4 rounded-md border border-border bg-background p-5 shadow-xl">
           <div className="flex items-start justify-between"><div><h2 id="return-title" className="text-base font-bold">Agendar retorno</h2><p className="mt-1 text-xs text-muted-foreground">O agendamento será criado na agenda da clínica e vinculado a esta jornada.</p></div><Button type="button" variant="ghost" size="icon" aria-label="Fechar" onClick={() => setAppointmentOpen(false)}><X className="h-4 w-4" /></Button></div>
-          <label className="block text-xs font-medium">Data<input required type="date" value={appointmentDate} onChange={(event) => { setAppointmentDate(event.target.value); setAppointmentFormError(""); }} min={localDateToday()} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3" /></label>
-          <label className="block text-xs font-medium">Horário<input required type="time" value={appointmentTime} onChange={(event) => { setAppointmentTime(event.target.value); setAppointmentFormError(""); }} min={appointmentHours?.openingTime} max={appointmentLatestStart ?? undefined} disabled={appointmentHoursLoading || !appointmentHours || !appointmentHasSlots} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 disabled:opacity-60" />{appointmentHours ? <span className="mt-1 block text-[10px] text-muted-foreground">{appointmentHasSlots ? `Horários disponíveis: ${appointmentHours.openingTime} às ${appointmentLatestStart}.` : "Não há horários disponíveis para a duração deste retorno."}</span> : null}</label>
+          <label className="block text-xs font-medium">Data<input key={`appointment-date-${appointmentErrorAnimation}`} required aria-invalid={Boolean(appointmentDateError)} aria-describedby={appointmentDateError ? "appointment-date-error" : undefined} type="date" value={appointmentDate} onChange={(event) => { setAppointmentDate(event.target.value); setAppointmentDateError(""); setAppointmentFormError(""); }} min={localDateToday()} className={cn("mt-1 h-10 w-full rounded-md border border-border bg-background px-3", appointmentDateError && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} />{appointmentDateError ? <span id="appointment-date-error" role="alert" className="mt-1 block text-[10px] font-medium text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{appointmentDateError}</span> : null}</label>
+          <label className="block text-xs font-medium">Horário<input key={`appointment-time-${appointmentErrorAnimation}`} required aria-invalid={Boolean(appointmentTimeError)} aria-describedby={appointmentTimeError ? "appointment-time-error" : undefined} type="time" value={appointmentTime} onChange={(event) => { setAppointmentTime(event.target.value); setAppointmentTimeError(""); setAppointmentFormError(""); }} min={appointmentHours?.openingTime} max={appointmentLatestStart ?? undefined} disabled={appointmentHoursLoading || !appointmentHours || !appointmentHasSlots} className={cn("mt-1 h-10 w-full rounded-md border border-border bg-background px-3 disabled:opacity-60", appointmentTimeError && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} />{appointmentTimeError ? <span id="appointment-time-error" role="alert" className="mt-1 block text-[10px] font-medium text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{appointmentTimeError}</span> : null}{appointmentHours ? <span className="mt-1 block text-[10px] text-muted-foreground">{appointmentHasSlots ? `Horários disponíveis: ${appointmentHours.openingTime} às ${appointmentLatestStart}.` : "Não há horários disponíveis para a duração deste retorno."}</span> : null}</label>
           <label className="block text-xs font-medium">Observação<textarea value={appointmentNotes} onChange={(event) => { setAppointmentNotes(event.target.value); setAppointmentFormError(""); }} maxLength={500} rows={3} className="mt-1 w-full rounded-md border border-border bg-background p-3" /></label>
           {appointmentFormError ? <div key={appointmentErrorAnimation} role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{appointmentFormError}<Button className="ml-2 h-auto p-0 text-xs" variant="link" type="button" onClick={() => { setAppointmentHours(null); setAppointmentFormError(""); setAppointmentHoursRetry((value) => value + 1); }}>Tentar novamente</Button></div> : null}
           <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setAppointmentOpen(false)}>Cancelar</Button><Button type="submit" disabled={booking || appointmentHoursLoading || !appointmentHours || !appointmentHasSlots}>{booking ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}Confirmar retorno</Button></div>

@@ -66,6 +66,9 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   const [showResult, setShowResult] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [photoUploadError, setPhotoUploadError] = useState("");
+  const [assessmentError, setAssessmentError] = useState("");
+  const [assessmentValidationAttempt, setAssessmentValidationAttempt] = useState(0);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
@@ -185,18 +188,20 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
 
   async function uploadPhotos(files: FileList | null) {
     if (!files?.length) return;
+    setPhotoUploadError("");
     const selectedFiles = Array.from(files);
     const accepted = selectedFiles.filter((file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type) && file.size <= 6_000_000);
-    if (accepted.length !== selectedFiles.length) showNotice("Envie imagens JPG, PNG ou WEBP de até 6 MB.", "info");
+    if (accepted.length !== selectedFiles.length) setPhotoUploadError("Alguns arquivos foram ignorados. Use JPG, PNG ou WEBP de até 6 MB.");
+    if (photos.length + accepted.length > 20) { setPhotoUploadError("A avaliação aceita até 20 fotos. Remova uma imagem ou selecione menos arquivos."); return; }
     let loaded: EvaluationPhoto[];
     try {
       loaded = await Promise.all(accepted.map((file, index) => readPhoto(file, photos.length + index)));
     } catch (error) {
-      showNotice(error instanceof Error ? error.message : "Não foi possível ler uma das imagens.", "info");
+      setPhotoUploadError(error instanceof Error ? error.message : "Não foi possível ler uma das imagens.");
       return;
     }
     if (!loaded.length) {
-      showNotice("Escolha imagens JPG, PNG ou WEBP de até 6 MB.", "info");
+      setPhotoUploadError("Escolha imagens JPG, PNG ou WEBP de até 6 MB.");
       return;
     }
     setPhotos((current) => [...current, ...loaded]);
@@ -270,8 +275,9 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
 
   async function replacePhoto(photoId: string, file?: File) {
     if (!file) return;
+    setPhotoUploadError("");
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 6_000_000) {
-      showNotice("Envie uma imagem JPG, PNG ou WEBP de até 6 MB.", "info");
+      setPhotoUploadError("Envie uma imagem JPG, PNG ou WEBP de até 6 MB.");
       return;
     }
     try {
@@ -283,7 +289,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
       setIsDirty(true);
       showNotice("Foto substituída. As marcações anteriores foram removidas.", "info");
     } catch (error) {
-      showNotice(error instanceof Error ? error.message : "Não foi possível abrir a imagem selecionada.", "info");
+      setPhotoUploadError(error instanceof Error ? error.message : "Não foi possível abrir a imagem selecionada.");
     }
   }
 
@@ -314,7 +320,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     const video = cameraVideoRef.current;
     if (!video || !video.videoWidth || !video.videoHeight) return;
     if (video.videoWidth * video.videoHeight > 25_000_000) {
-      showNotice("A resolução da câmera excede o limite seguro de 25 megapixels.", "info");
+      setPhotoUploadError("A resolução da câmera excede o limite seguro de 25 megapixels.");
       return;
     }
     const canvas = document.createElement("canvas");
@@ -334,6 +340,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     setAssessment((current) => ({ ...current, [field]: value }));
     setIsDirty(true);
     setSaveError("");
+    if (field === "chiefComplaint" && value.trim()) setAssessmentError("");
   }
 
   function deleteSelected() {
@@ -382,6 +389,11 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   }
 
   async function continueToQuote() {
+    if (!assessment.chiefComplaint.trim()) {
+      setAssessmentError("Informe a queixa principal para avançar.");
+      setAssessmentValidationAttempt((current) => current + 1);
+      return;
+    }
     const savedEvaluationId = await saveEvaluation("Concluída");
     if (savedEvaluationId) encounter?.onContinue(savedEvaluationId);
   }
@@ -422,7 +434,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
 
         <div className={cn("grid gap-4 p-4", encounter && "grid-cols-1 p-0 lg:grid-cols-[minmax(0,1fr)_290px]")}>
           <div className="min-w-0">
-            {encounter || evaluationId ? <AssessmentForm assessment={assessment} onChange={changeAssessment} /> : null}
+            {encounter || evaluationId ? <AssessmentForm assessment={assessment} error={assessmentError} validationAttempt={assessmentValidationAttempt} onChange={changeAssessment} /> : null}
             <section className={cn("mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)]", encounter && "rounded-md border border-[#e3e5f0] bg-white p-3 sm:p-4")} aria-label="Registro fotográfico e marcação">
               {encounter ? <div className="flex items-center gap-2 lg:col-span-2"><Camera className="h-4 w-4 text-primary" /><h3 className="text-sm font-bold">Registro fotográfico e marcação</h3></div> : null}
               {isLoading ? <div className="grid min-h-[420px] gap-4 rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-5 lg:col-span-2"><LoadingSkeleton className="h-7 w-52" /><LoadingSkeleton className="h-3 w-80" /><div className="grid min-h-[300px] place-items-center rounded-[7px] border border-[#e4e6ef] bg-white"><div className="w-full max-w-md space-y-3 px-8"><LoadingSkeleton className="h-56 w-full" /><LoadingSkeleton className="mx-auto h-3 w-40" /><LoadingSkeleton className="mx-auto h-2.5 w-56" /></div></div></div> : loadError ? <div className="grid min-h-[360px] place-items-center rounded-lg border border-destructive/20 bg-destructive/5 p-6 text-center"><div><p className="text-sm font-semibold text-destructive">Não foi possível carregar esta avaliação.</p><Button className="mt-3" variant="outline" onClick={() => { setLoadError(false); setIsLoading(true); setLoadAttempt((value) => value + 1); }}>Tentar novamente</Button></div></div> : showResult ? <EvaluationResult onEdit={() => setShowResult(false)} previews={savedPreviews} /> : (<>
@@ -431,7 +443,8 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
                   <div className="min-w-0">
                   {encounter ? <div className="mb-3 flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={() => void openCamera()}><Camera className="h-4 w-4" />Capturar foto</Button><Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}><ImagePlus className="h-4 w-4" />Upload de fotos</Button><input ref={fileInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} />{activePhoto ? <Button size="sm" variant="outline" onClick={() => setPreviewPhoto(activePhoto)}><Maximize2 className="h-4 w-4" />Ampliar foto</Button> : null}</div> : null}
                   {activePhoto ? <EditorCanvas color={color} strokeWidth={strokeWidth} onCommitAnnotations={commitAnnotations} onPreviewAnnotations={updatePhotoAnnotations} onSelect={setSelectedId} photo={activePhoto} scale={displayScale} selectedId={selectedId} tool={tool} /> : <label className="flex min-h-[360px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed border-[#cfd3e4] bg-[#fbfbfe] px-5 text-center transition hover:border-[#5147dc] hover:bg-[#f8f7ff]"><span className="grid h-12 w-12 place-items-center rounded-full bg-[#efedff] text-[#5147dc]"><ImagePlus className="h-5 w-5" /></span><strong className="mt-4 text-sm">Adicione a primeira foto da avaliação</strong><span className="mt-1 max-w-sm text-[11px] leading-5 text-[#858696]">JPG, PNG ou WEBP. A imagem original fica preservada e as marcações são armazenadas separadamente.</span><span className="mt-4 inline-flex items-center rounded-[7px] bg-[#5147dc] px-4 py-2 text-xs font-bold text-white">Escolher foto</span><input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} /></label>}
-                  {saveError ? <p role="alert" className="mt-2 text-xs text-destructive">{saveError}</p> : null}
+                  {photoUploadError ? <p role="alert" className="mt-2 text-xs font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{photoUploadError}</p> : null}
+                  {saveError ? <p role="alert" className="mt-2 text-xs text-destructive animate-[hp-shake_0.42s_ease-in-out]">{saveError}</p> : null}
                 </div>
                 </div>
                 <aside className="space-y-3">
@@ -483,7 +496,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   );
 }
 
-function AssessmentForm({ assessment, onChange }: { assessment: ClinicalAssessment; onChange: (field: keyof ClinicalAssessment, value: string) => void }) {
+function AssessmentForm({ assessment, error, validationAttempt, onChange }: { assessment: ClinicalAssessment; error?: string; validationAttempt?: number; onChange: (field: keyof ClinicalAssessment, value: string) => void }) {
   const textareaClass = "w-full resize-y rounded-[5px] border border-[#dfe1ea] bg-white px-2.5 py-2 text-[10px] font-normal text-[#25263a] outline-none placeholder:text-[#8c8d9c] focus:border-[#5147dc] focus:ring-1 focus:ring-[#5147dc]/20";
   const controlClass = "h-8 w-full rounded-[5px] border border-[#dfe1ea] bg-white px-2 text-[10px] font-normal text-[#25263a] outline-none focus:border-[#5147dc] focus:ring-1 focus:ring-[#5147dc]/20";
   const anamnesisFields = [
@@ -504,7 +517,7 @@ function AssessmentForm({ assessment, onChange }: { assessment: ClinicalAssessme
   return <Card className="p-3 sm:p-4">
     <h3 className="flex items-center gap-2 text-sm font-bold"><ClipboardPenLine className="h-4 w-4 text-primary" />Avaliação clínica</h3>
     <div className="mt-3 grid gap-3 md:grid-cols-2">
-      <label className="grid min-w-0 gap-1 text-[10px] font-semibold"><span>Queixa principal <span className="text-destructive">*</span></span><textarea className={`${textareaClass} min-h-[54px]`} rows={2} maxLength={5000} placeholder="Não informado" value={assessment.chiefComplaint} onChange={(event) => onChange("chiefComplaint", event.target.value)} /></label>
+      <label className="grid min-w-0 gap-1 text-[10px] font-semibold"><span>Queixa principal <span className="text-destructive">*</span></span><textarea key={`chief-complaint-${validationAttempt ?? 0}`} aria-invalid={Boolean(error)} aria-describedby={error ? "chief-complaint-error" : undefined} className={cn(textareaClass, "min-h-[54px]", error && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} rows={2} maxLength={5000} placeholder="Descreva a queixa principal" value={assessment.chiefComplaint} onChange={(event) => onChange("chiefComplaint", event.target.value)} />{error ? <span id="chief-complaint-error" role="alert" className="text-[9px] font-medium text-[#b42318]">{error}</span> : null}</label>
       <label className="grid min-w-0 gap-1 text-[10px] font-semibold"><span>Objetivo do paciente</span><textarea className={`${textareaClass} min-h-[54px]`} rows={2} maxLength={5000} placeholder="Não informado" value={assessment.patientGoal} onChange={(event) => onChange("patientGoal", event.target.value)} /></label>
       <section aria-labelledby="anamnesis-title" className="min-w-0">
         <h4 id="anamnesis-title" className="mb-2 text-[10px] font-bold">Anamnese rápida</h4>
