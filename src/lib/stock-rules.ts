@@ -37,6 +37,25 @@ export function isStockUnit(value: unknown): value is StockUnit {
   return typeof value === "string" && (stockUnits as readonly string[]).includes(value);
 }
 
+// Tipo do item do estoque. Só organiza as telas: as regras são as mesmas para os dois.
+export const stockKinds = ["material", "produto"] as const;
+export type StockKind = (typeof stockKinds)[number];
+export const stockKindLabels: Record<StockKind, { singular: string; plural: string }> = {
+  material: { singular: "Material", plural: "Materiais" },
+  produto: { singular: "Produto", plural: "Produtos" },
+};
+
+export function isStockKind(value: unknown): value is StockKind {
+  return typeof value === "string" && (stockKinds as readonly string[]).includes(value);
+}
+
+// Agrupa os itens para listas de seleção: Materiais antes de Produtos, sem grupo vazio.
+export function groupByKind<T extends { kind: string }>(items: T[]) {
+  return stockKinds
+    .map((kind) => ({ kind, label: stockKindLabels[kind].plural, items: items.filter((item) => item.kind === kind) }))
+    .filter((group) => group.items.length);
+}
+
 // Lê quantidades digitadas no formato brasileiro ("1.000,25").
 export function parseQuantity(text: string) {
   const normalized = text.trim().replace(/\./g, "").replace(",", ".");

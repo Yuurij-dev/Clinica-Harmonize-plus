@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { allocateLots, attendanceKind, procedureSelectionsFromAppointment, stockAlerts, convertMaterialsText, manualMovement, describeTechnicalSheet, formatQuantity, lotBalance, lotStatus, materialBalance, parseQuantity, validateQuantity } from "../src/lib/stock-rules.ts";
+import { allocateLots, attendanceKind, procedureSelectionsFromAppointment, stockAlerts, convertMaterialsText, manualMovement, describeTechnicalSheet, formatQuantity, lotBalance, lotStatus, materialBalance, parseQuantity, validateQuantity, isStockKind, groupByKind, stockKindLabels } from "../src/lib/stock-rules.ts";
 
 test("lot balance sums signed movements without floating point noise", () => {
   assert.equal(lotBalance([{ quantity: 0.1 }, { quantity: 0.2 }]), 0.3);
@@ -142,4 +142,20 @@ test("pending outputs and material checks become alerts", () => {
   ]);
   assert.deepEqual(stockAlerts({ ...base, pendingOutputs: 1, pendingChecks: 0 }).map((alert) => alert.message), ["1 saída de estoque pendente por falta de saldo"]);
   assert.deepEqual(stockAlerts(base), []);
+});
+
+test("stock kind accepts only material and produto", () => {
+  assert.equal(isStockKind("material"), true);
+  assert.equal(isStockKind("produto"), true);
+  assert.equal(isStockKind("Produto"), false);
+  assert.equal(isStockKind(""), false);
+  assert.equal(isStockKind(undefined), false);
+  assert.equal(stockKindLabels.produto.plural, "Produtos");
+});
+
+test("items are grouped by kind for selects, materials first, without empty groups", () => {
+  const items = [{ id: "a", kind: "produto" }, { id: "b", kind: "material" }, { id: "c", kind: "produto" }];
+  assert.deepEqual(groupByKind(items).map((group) => [group.label, group.items.map((item) => item.id)]), [["Materiais", ["b"]], ["Produtos", ["a", "c"]]]);
+  assert.deepEqual(groupByKind([{ id: "x", kind: "material" }]).map((group) => group.label), ["Materiais"]);
+  assert.deepEqual(groupByKind([]), []);
 });
