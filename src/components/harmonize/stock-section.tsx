@@ -290,7 +290,7 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
   }
 
   return (
-    <Modal open onClose={onClose} title={detail?.name ?? "Item"} description={detail ? `${stockKindLabels[detail.kind].singular} · ${detail.supplier}` : undefined}>
+    <Modal open onClose={onClose} title={detail?.name ?? "Item"} description={detail ? `${(stockKindLabels[detail.kind] ?? stockKindLabels.material).singular} · ${detail.supplier}` : undefined}>
       {!detail ? <div className="grid place-items-center py-10"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div> : (
         <div className="space-y-5">
           <div className="grid gap-3 sm:grid-cols-3">

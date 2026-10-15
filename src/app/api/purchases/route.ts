@@ -18,7 +18,7 @@ export async function GET() {
     take: 100,
     select: {
       id: true, supplier: true, invoiceNumber: true, purchasedOn: true, paymentMethod: true, installments: true, status: true,
-      items: { select: { quantity: true, unitPriceCents: true, product: { select: { name: true, unit: true } }, lot: { select: { code: true } } } },
+      items: { select: { quantity: true, unitPriceCents: true, product: { select: { name: true, unit: true, kind: true } }, lot: { select: { code: true } } } },
       expenses: { select: { status: true } },
     },
   });
@@ -27,7 +27,7 @@ export async function GET() {
       ...purchase,
       purchasedOn: dateOnly(purchase.purchasedOn),
       totalCents: items.reduce((sum, item) => sum + Math.round(item.quantity * item.unitPriceCents), 0),
-      items: items.map((item) => ({ name: item.product.name, unit: item.product.unit, lotCode: item.lot.code, quantity: item.quantity, unitPriceCents: item.unitPriceCents })),
+      items: items.map((item) => ({ name: item.product.name, kind: item.product.kind, unit: item.product.unit, lotCode: item.lot.code, quantity: item.quantity, unitPriceCents: item.unitPriceCents })),
       paidInstallments: expenses.filter((expense) => expense.status === "paid").length,
     })),
   });
@@ -54,7 +54,7 @@ export async function POST(request: Request) {
     const expiresOn = parseDateOnly(raw.expiresOn);
     const quantity = Number(raw.quantity);
     const unitPriceCents = Number(raw.unitPriceCents);
-    if (!product) return NextResponse.json({ message: "Material da compra não encontrado." }, { status: 400 });
+    if (!product) return NextResponse.json({ message: "Item da compra não encontrado." }, { status: 400 });
     if (!lotCode || !expiresOn) return NextResponse.json({ message: `${product.name}: informe o lote e a validade.` }, { status: 400 });
     const quantityError = validateQuantity(quantity, product.unit);
     if (quantityError) return NextResponse.json({ message: `${product.name}: ${quantityError}` }, { status: 400 });

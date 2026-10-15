@@ -41,7 +41,7 @@ const initialScreenResources: Partial<Record<SectionId, { key: string; message: 
   agenda: { key: "/api/agenda/bootstrap", message: "Carregando os dados da agenda..." },
   clientes: { key: "/api/patients", message: "Carregando a lista de pacientes..." },
   procedimentos: { key: "/api/procedures", message: "Carregando os procedimentos..." },
-  estoque: { key: "/api/products", message: "Carregando os materiais do estoque..." },
+  estoque: { key: "/api/products", message: "Carregando o estoque..." },
   orcamentos: { key: "/api/quotes", message: "Carregando os orçamentos..." },
   pagamentos: { key: "/api/payments", message: "Carregando os pagamentos..." },
   financeiro: { key: "/api/finance/summary?period=month", message: "Carregando o resumo financeiro..." },

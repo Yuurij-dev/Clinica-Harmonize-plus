@@ -45,7 +45,6 @@ export function PendingPanel({ onSaved }: { onSaved?: (message: string) => void 
     setBusyId(null);
     if (!ok) return setError(result?.message ?? "Não foi possível concluir a saída.");
     invalidateStockCache(output.product.id);
-    invalidateClientCache(pendingKey);
     onSaved?.(`Saída de ${output.product.name} concluída.`);
   }
 

@@ -34,7 +34,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (body?.unit !== undefined && body.unit !== current.unit) {
     if (!isStockUnit(body.unit)) return NextResponse.json({ message: "Unidade inválida." }, { status: 400 });
     const movements = await prisma.stockMovement.count({ where: { clinicId: user.clinicId, productId: id } });
-    if (movements) return NextResponse.json({ message: "A unidade não pode ser trocada depois que o material teve movimentações." }, { status: 409 });
+    if (movements) return NextResponse.json({ message: "A unidade não pode ser trocada depois que o item teve movimentações." }, { status: 409 });
     data.unit = body.unit;
   }
   if (body?.kind !== undefined) {
