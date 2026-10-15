@@ -68,7 +68,7 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
   const product = await prisma.product.findFirst({ where: { id, clinicId: user.clinicId }, select: { id: true } });
   if (!product) return NextResponse.json({ message: "Item não encontrado." }, { status: 404 });
   const movements = await prisma.stockMovement.count({ where: { clinicId: user.clinicId, productId: id } });
-  if (movements) return NextResponse.json({ message: "Este material já teve movimentações. Arquive-o em vez de apagar." }, { status: 409 });
+  if (movements) return NextResponse.json({ message: "Este item já teve movimentações. Arquive-o em vez de apagar." }, { status: 409 });
   await prisma.product.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }
