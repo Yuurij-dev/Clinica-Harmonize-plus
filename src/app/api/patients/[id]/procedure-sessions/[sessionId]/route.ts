@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { denyUnless } from "@/lib/api-guards";
 import { dateOnly } from "@/lib/clinic-time";
 import { registerAttendanceOutputs, AttendanceMaterialsError } from "@/lib/attendance-materials";
+import { approvedProcedureNames } from "@/lib/procedure-session-rules";
 import { prisma } from "@/lib/prisma";
 import { lockLots, lotBalances } from "@/lib/stock";
 import { validateQuantity } from "@/lib/stock-rules";
@@ -27,7 +28,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const procedureName = typeof body?.procedureName === "string" ? body.procedureName.trim() : undefined;
   if (procedureName !== undefined) {
     const quote = await prisma.quote.findFirst({ where: { id: current.quoteId, patientId, clinicId: user.clinicId }, select: { details: true } });
-    const approvedItems = parseJson<Array<{ name?: string }>>(quote?.details ?? "", []).map((item) => item.name);
+    const approvedItems = approvedProcedureNames(quote?.details ?? "");
     if (!procedureName || procedureName.length > 180 || !approvedItems.includes(procedureName)) return NextResponse.json({ message: "O procedimento precisa corresponder a um item do orçamento aprovado." }, { status: 400 });
   }
 
@@ -65,7 +66,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (item.allocations?.some((allocation) => !product.lots.some((lot) => lot.id === allocation.lotId))) return NextResponse.json({ message: `${product.name}: lote inválido.` }, { status: 400 });
   }
   const photoSnapshot = nextPhotos ? JSON.stringify(nextPhotos) : undefined;
-  const materialSnapshot = materials ? await createMaterialSnapshot(user.clinicId, materials, productRows) : undefined;
+  const materialSnapshot = materials === undefined ? undefined : materials.length ? await createMaterialSnapshot(user.clinicId, materials, productRows) : "[]";
   const auditFields = Object.keys(body ?? {}).filter((field) => ["procedureName", "technique", "treatedAreas", "professional", "performedAt", "startedAt", "estimatedMinutes", "durationMinutes", "anesthesia", "complications", "observations", "materials", "photos"].includes(field));
   const auditLog = JSON.stringify([...parseJson<Array<{ at: string; actor: string; action: string; fields: string[] }>>(current.auditLog, []), { at: new Date().toISOString(), actor: user.name, action: finalizing ? "Sessão finalizada" : nextStatus === "Em execução" && current.status === "Rascunho" ? "Procedimento iniciado" : "Rascunho atualizado", fields: auditFields }].slice(-100));
   const updateData = {

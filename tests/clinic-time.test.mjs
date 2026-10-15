@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appointmentDay, appointmentHasPassed, appointmentInstant, appointmentWithinStartWindow, canRequestAppointmentStart, clinicNow, matchesProcedureAppointment, parseAppointmentDay } from "../src/lib/clinic-time.ts";
+import { appointmentDay, appointmentHasPassed, appointmentInstant, appointmentSlotError, appointmentWithinStartWindow, canRequestAppointmentStart, clinicNow, latestAppointmentStart, matchesProcedureAppointment, parseAppointmentDay } from "../src/lib/clinic-time.ts";
 
 const appointment = { date: "10/10/2026", time: "14:00" };
+
+test("return appointments stay inside clinic hours and allow enough time for the session", () => {
+  const now = { date: "2026-10-14", minutes: 12 * 60 };
+  assert.equal(appointmentSlotError("2026-10-15", "22:47", "08:00", "19:00", now), "Escolha um horário dentro do funcionamento da clínica (08:00 às 18:00).");
+  assert.equal(appointmentSlotError("2026-10-15", "18:00", "08:00", "19:00", now), null);
+  assert.equal(appointmentSlotError("2026-10-15", "18:01", "08:00", "19:00", now), "Escolha um horário dentro do funcionamento da clínica (08:00 às 18:00).");
+  assert.equal(latestAppointmentStart("19:00"), "18:00");
+});
 
 test("procedure start window follows the clinic appointment tolerance", () => {
   assert.equal(appointmentWithinStartWindow(appointment, 15, { date: "2026-10-10", time: "13:59" }), false);

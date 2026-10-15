@@ -7,6 +7,7 @@ import { ArrowLeft, CalendarDays, Camera, Check, ChevronLeft, ChevronRight, Circ
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
+import { appointmentSlotError, latestAppointmentStart } from "@/lib/clinic-time";
 import { cn } from "@/lib/utils";
 import type { Patient } from "@/types/clinic";
 import { LoadingSkeleton } from "./shared";
@@ -15,6 +16,7 @@ import { EncounterBreadcrumb, type EncounterBreadcrumbActions } from "./encounte
 
 type ClinicalPhoto = { id: string; name: string; category: string; phase: string; imageUrl: string; width: number; height: number; capturedAt: string; source: string; sessionId: string | null };
 type Appointment = { id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string };
+type AppointmentHours = { openingTime: string; closingTime: string };
 type FollowUp = { id: string; occurredAt: string; professional: string; guidanceText: string; guidanceSentAt: string | null; observations: string; complications: string; photos: Array<{ id: string; name: string; category: string; imageUrl: string; width: number; height: number }>; appointment: Appointment | null; createdBy: string; updatedAt: string; auditLog: Array<{ at: string; actor: string; action: string; fields: string[] }> };
 type WorkspaceData = { session: { id: string; journeyId: string; procedureName: string; professional: string; performedAt: string; status: string }; journey: { name: string; status: string; appointments: Appointment[] }; sessions: Array<{ id: string; procedureName: string; professional: string; performedAt: string }>; photos: ClinicalPhoto[]; followUps: FollowUp[] };
 type DraftPhoto = { id: string; name: string; category: string; imageUrl: string; width: number; height: number };
@@ -46,6 +48,10 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   const [appointmentDate, setAppointmentDate] = useState("");
   const [appointmentTime, setAppointmentTime] = useState("");
   const [appointmentNotes, setAppointmentNotes] = useState("");
+  const [appointmentHours, setAppointmentHours] = useState<AppointmentHours | null>(() => readClientCache<AppointmentHours>("/api/appointments/options") ?? null);
+  const [appointmentHoursRetry, setAppointmentHoursRetry] = useState(0);
+  const [appointmentFormError, setAppointmentFormError] = useState("");
+  const [appointmentErrorAnimation, setAppointmentErrorAnimation] = useState(0);
   const [booking, setBooking] = useState(false);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState("");
   const [appointmentNotice, setAppointmentNotice] = useState("");
@@ -77,6 +83,9 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   const upcomingAppointments = (data?.journey.appointments ?? []).filter((appointment) => /retorno/i.test(appointment.procedure) && ["Agendado", "Em atendimento"].includes(appointment.status));
   const allPhotos = data?.photos ?? [];
   const hasUnsavedChanges = Boolean(observations.trim() || complications.trim() || guidanceText.trim() || photos.length || selectedAppointmentId);
+  const appointmentHoursLoading = appointmentOpen && !appointmentHours && !appointmentFormError;
+  const appointmentLatestStart = appointmentHours ? latestAppointmentStart(appointmentHours.closingTime, 60) : null;
+  const appointmentHasSlots = Boolean(appointmentHours && appointmentLatestStart && appointmentHours.openingTime <= appointmentLatestStart);
 
   useEffect(() => {
     if (!hasUnsavedChanges) return;
@@ -89,6 +98,15 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
     if (!cameraOpen || !videoRef.current || !streamRef.current) return;
     videoRef.current.srcObject = streamRef.current;
   }, [cameraOpen]);
+
+  useEffect(() => {
+    if (!appointmentOpen) return;
+    let active = true;
+    getCachedJson<AppointmentHours>("/api/appointments/options")
+      .then((hours) => { if (active) setAppointmentHours(hours); })
+      .catch((reason) => { if (active) setAppointmentFormError(reason instanceof Error ? reason.message : "Não foi possível carregar o horário da clínica."); });
+    return () => { active = false; };
+  }, [appointmentOpen, appointmentHoursRetry]);
 
   useEffect(() => () => streamRef.current?.getTracks().forEach((track) => track.stop()), []);
 
@@ -167,7 +185,18 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   async function scheduleReturn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!data || booking) return;
-    setBooking(true); setError(""); setAppointmentNotice("");
+    if (!appointmentHours) {
+      setAppointmentFormError("Não foi possível carregar o horário de funcionamento da clínica. Tente novamente.");
+      setAppointmentErrorAnimation((value) => value + 1);
+      return;
+    }
+    const error = appointmentSlotError(appointmentDate, appointmentTime, appointmentHours.openingTime, appointmentHours.closingTime);
+    if (error) {
+      setAppointmentFormError(error);
+      setAppointmentErrorAnimation((value) => value + 1);
+      return;
+    }
+    setBooking(true); setError(""); setAppointmentNotice(""); setAppointmentFormError("");
     try {
       const response = await fetch("/api/appointments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, journeyId: data.session.journeyId, procedure: `Retorno - ${data.session.procedureName}`, professional: data.session.professional, date: appointmentDate, time: appointmentTime, notes: appointmentNotes }) });
       const result = await response.json().catch(() => ({})) as { appointment?: Appointment; message?: string };
@@ -177,7 +206,8 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
       setAppointmentOpen(false); setAppointmentDate(""); setAppointmentTime(""); setAppointmentNotes("");
       await reload();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Não foi possível agendar o retorno.");
+      setAppointmentFormError(reason instanceof Error ? reason.message : "Não foi possível agendar o retorno.");
+      setAppointmentErrorAnimation((value) => value + 1);
     } finally { setBooking(false); }
   }
 
@@ -199,6 +229,13 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
       <div className="flex min-w-0 items-center gap-3"><div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-primary/10 font-bold text-primary">{initials}</div><div className="min-w-0"><h1 className="truncate text-base font-bold">{patient.name}</h1><p className="mt-1 text-xs text-muted-foreground">{data.journey.name} · {data.session.procedureName} · Sessão de {new Date(data.session.performedAt).toLocaleDateString("pt-BR")}</p><p className="mt-1 text-[11px] text-muted-foreground">Profissional: {data.session.professional} · Sessão concluída; tratamento permanece {data.journey.status.toLocaleLowerCase("pt-BR")}</p></div></div>
       <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={finishAttendance}><ArrowLeft className="h-4 w-4" />Finalizar atendimento</Button></div>
     </Card>
+    <div className="flex items-center gap-2 overflow-x-auto px-2 py-1 text-[10px] font-semibold text-[#747587]" aria-label="Progresso do atendimento">
+      {["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento"].map((stage, index) => <div key={stage} className="flex min-w-0 flex-1 items-center gap-2">
+        <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-full", index < 3 ? "bg-[#5147dc] text-white" : "bg-[#5147dc] text-white")}>{index < 3 ? <Check className="h-4 w-4" /> : index + 1}</span>
+        <span className={index === 3 ? "whitespace-nowrap text-[#3f35d6]" : "whitespace-nowrap"}>{stage}</span>
+        {index < 3 ? <span className="h-px min-w-3 flex-1 bg-[#5147dc]" /> : null}
+      </div>)}
+    </div>
     {error ? <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive"><span>{error}</span><Button size="sm" variant="outline" onClick={() => void reload().catch((reason) => setError(reason instanceof Error ? reason.message : "Não foi possível carregar o acompanhamento."))}>Tentar novamente</Button></div> : null}
     {notice ? <p role="status" className="rounded-md bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">{notice}</p> : null}
     {appointmentNotice ? <p role="status" className="rounded-md bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">{appointmentNotice}</p> : null}
@@ -230,12 +267,23 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
 
       <aside className="space-y-4 xl:sticky xl:top-20 xl:self-start">
         <Card className="space-y-2 p-4"><h2 className="text-sm font-bold">Resumo do pós</h2><Summary label="Tratamento" value={data.journey.name} /><Summary label="Etapa" value={data.journey.status} /><Summary label="Sessão" value={new Date(data.session.performedAt).toLocaleDateString("pt-BR")} /><Summary label="Profissional" value={data.session.professional} /><Summary label="Fotos da jornada" value={String(allPhotos.length)} /><Summary label="Registros de acompanhamento" value={String(data.followUps.length)} /></Card>
-        <Card className="space-y-2 p-4"><h2 className="text-sm font-bold">Próximos retornos</h2>{upcomingAppointments.length ? upcomingAppointments.map((appointment) => <div key={appointment.id} className="rounded-md bg-muted/50 px-3 py-2 text-xs"><strong>{new Date(appointment.date).toLocaleDateString("pt-BR")} · {appointment.time}</strong><p className="mt-0.5 text-muted-foreground">{appointment.procedure} · {appointment.professional}</p><span className="text-[10px] text-muted-foreground">{appointment.status}</span></div>) : <p className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">Nenhum retorno agendado.</p>}<Button className="w-full" variant="outline" onClick={() => { setAppointmentNotice(""); setAppointmentOpen(true); }}><CalendarDays className="h-4 w-4" />Agendar retorno</Button></Card>
+        <Card className="space-y-2 p-4"><h2 className="text-sm font-bold">Próximos retornos</h2>{upcomingAppointments.length ? upcomingAppointments.map((appointment) => <div key={appointment.id} className="rounded-md bg-muted/50 px-3 py-2 text-xs"><strong>{new Date(appointment.date).toLocaleDateString("pt-BR")} · {appointment.time}</strong><p className="mt-0.5 text-muted-foreground">{appointment.procedure} · {appointment.professional}</p><span className="text-[10px] text-muted-foreground">{appointment.status}</span></div>) : <p className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">Nenhum retorno agendado.</p>}<Button className="w-full" variant="outline" onClick={() => { setAppointmentNotice(""); setAppointmentFormError(""); setAppointmentOpen(true); }}><CalendarDays className="h-4 w-4" />Agendar retorno</Button></Card>
         <Card className="space-y-2 p-4"><h2 className="text-sm font-bold">Checklist do pós-procedimento</h2>{[["Fotos iniciais disponíveis", beforePhotos.length > 0], ["Resultado da sessão disponível", afterPhotos.length > 0], ["Orientações registradas", data.followUps.some((item) => Boolean(item.guidanceSentAt))], ["Retorno agendado", upcomingAppointments.length > 0], ["Evolução clínica registrada", data.followUps.some((item) => Boolean(item.observations || item.complications))]].map(([label, done]) => <div key={String(label)} className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-2 text-[11px]"><span className={cn("grid h-4 w-4 place-items-center rounded border", done ? "border-primary bg-primary text-primary-foreground" : "border-border")}>{done ? <Check className="h-3 w-3" /> : null}</span>{label}</div>)}</Card>
         <Card className="space-y-2 border-emerald-200 bg-emerald-50/60 p-4"><h2 className="flex items-center gap-2 text-sm font-bold text-emerald-950"><ShieldCheck className="h-4 w-4" />Sessão concluída</h2><p className="text-xs text-emerald-900">Finalizar este atendimento não conclui o tratamento. A jornada permanece consultável e só é encerrada por ação explícita de usuário autorizado.</p><Button className="w-full" variant="outline" onClick={finishAttendance}><ArrowLeft className="h-4 w-4" />Finalizar atendimento</Button></Card>
       </aside>
     </div>
-    {appointmentOpen ? <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-labelledby="return-title"><form onSubmit={(event) => void scheduleReturn(event)} className="w-full max-w-md space-y-4 rounded-md border border-border bg-background p-5 shadow-xl"><div className="flex items-start justify-between"><div><h2 id="return-title" className="text-base font-bold">Agendar retorno</h2><p className="mt-1 text-xs text-muted-foreground">O agendamento será criado na agenda da clínica e vinculado a esta jornada.</p></div><Button type="button" variant="ghost" size="icon" aria-label="Fechar" onClick={() => setAppointmentOpen(false)}><X className="h-4 w-4" /></Button></div><label className="block text-xs font-medium">Data<input required type="date" value={appointmentDate} onChange={(event) => setAppointmentDate(event.target.value)} min={localDateToday()} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3" /></label><label className="block text-xs font-medium">Horário<input required type="time" value={appointmentTime} onChange={(event) => setAppointmentTime(event.target.value)} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3" /></label><label className="block text-xs font-medium">Observação<textarea value={appointmentNotes} onChange={(event) => setAppointmentNotes(event.target.value)} maxLength={500} rows={3} className="mt-1 w-full rounded-md border border-border bg-background p-3" /></label><div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setAppointmentOpen(false)}>Cancelar</Button><Button type="submit" disabled={booking}>{booking ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}Confirmar retorno</Button></div></form></div> : null}
+    {appointmentOpen ? (
+      <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-labelledby="return-title">
+        <form onSubmit={(event) => void scheduleReturn(event)} className="w-full max-w-md space-y-4 rounded-md border border-border bg-background p-5 shadow-xl">
+          <div className="flex items-start justify-between"><div><h2 id="return-title" className="text-base font-bold">Agendar retorno</h2><p className="mt-1 text-xs text-muted-foreground">O agendamento será criado na agenda da clínica e vinculado a esta jornada.</p></div><Button type="button" variant="ghost" size="icon" aria-label="Fechar" onClick={() => setAppointmentOpen(false)}><X className="h-4 w-4" /></Button></div>
+          <label className="block text-xs font-medium">Data<input required type="date" value={appointmentDate} onChange={(event) => { setAppointmentDate(event.target.value); setAppointmentFormError(""); }} min={localDateToday()} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3" /></label>
+          <label className="block text-xs font-medium">Horário<input required type="time" value={appointmentTime} onChange={(event) => { setAppointmentTime(event.target.value); setAppointmentFormError(""); }} min={appointmentHours?.openingTime} max={appointmentLatestStart ?? undefined} disabled={appointmentHoursLoading || !appointmentHours || !appointmentHasSlots} className="mt-1 h-10 w-full rounded-md border border-border bg-background px-3 disabled:opacity-60" />{appointmentHours ? <span className="mt-1 block text-[10px] text-muted-foreground">{appointmentHasSlots ? `Horários disponíveis: ${appointmentHours.openingTime} às ${appointmentLatestStart}.` : "Não há horários disponíveis para a duração deste retorno."}</span> : null}</label>
+          <label className="block text-xs font-medium">Observação<textarea value={appointmentNotes} onChange={(event) => { setAppointmentNotes(event.target.value); setAppointmentFormError(""); }} maxLength={500} rows={3} className="mt-1 w-full rounded-md border border-border bg-background p-3" /></label>
+          {appointmentFormError ? <div key={appointmentErrorAnimation} role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{appointmentFormError}<Button className="ml-2 h-auto p-0 text-xs" variant="link" type="button" onClick={() => { setAppointmentHours(null); setAppointmentFormError(""); setAppointmentHoursRetry((value) => value + 1); }}>Tentar novamente</Button></div> : null}
+          <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setAppointmentOpen(false)}>Cancelar</Button><Button type="submit" disabled={booking || appointmentHoursLoading || !appointmentHours || !appointmentHasSlots}>{booking ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}Confirmar retorno</Button></div>
+        </form>
+      </div>
+    ) : null}
     {preview ? <div className="fixed inset-0 z-[60] grid place-items-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Visualização da fotografia" onClick={() => setPreview(null)}><div className="relative max-h-[92vh] max-w-[92vw]" onClick={(event) => event.stopPropagation()}><img src={preview.imageUrl} alt={preview.name} className="max-h-[88vh] max-w-[90vw] object-contain" /><button type="button" aria-label="Fechar visualização" onClick={() => setPreview(null)} className="absolute -right-3 -top-3 rounded-full bg-white p-2 text-[#27283b]"><X className="h-4 w-4" /></button></div></div> : null}
   </div>;
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { appointmentInstant, clinicNow, parseAppointmentDay, parseClockMinutes } from "@/lib/clinic-time";
+import { appointmentInstant, appointmentSlotError, clinicNow, parseAppointmentDay } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 
@@ -38,15 +38,8 @@ export async function POST(request: Request) {
   const openingTime = clinic?.openingTime ?? "08:00";
   const closingTime = clinic?.closingTime ?? "19:00";
   const durationMinutes = procedure?.durationMinutes ?? 60;
-  const startMinutes = parseClockMinutes(body.time);
-  const openingMinutes = parseClockMinutes(openingTime);
-  const closingMinutes = parseClockMinutes(closingTime);
-  if (day < now.date || (day === now.date && startMinutes !== null && startMinutes <= now.minutes)) {
-    return NextResponse.json({ message: "Não é possível agendar em um horário ou data que já passou." }, { status: 400 });
-  }
-  if (startMinutes === null || openingMinutes === null || closingMinutes === null || startMinutes < openingMinutes || startMinutes + durationMinutes > closingMinutes) {
-    return NextResponse.json({ message: `Escolha um horário dentro do funcionamento da clínica (${openingTime} às ${closingTime}).` }, { status: 400 });
-  }
+  const slotError = appointmentSlotError(day, body.time, openingTime, closingTime, now, durationMinutes);
+  if (slotError) return NextResponse.json({ message: slotError }, { status: 400 });
 
   const journey = await ensurePatientJourney(patient.id, user.clinicId, body.journeyId);
   const appointment = await prisma.appointment.create({
