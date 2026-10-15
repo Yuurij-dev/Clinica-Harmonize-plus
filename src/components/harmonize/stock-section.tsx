@@ -87,7 +87,7 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
   return (
     <div>
       <SectionIntro title="Estoque" description="Materiais, produtos, lotes, validades, compras e saldo disponível da clínica." action={itemKind ? `Novo ${kindWord}` : tab === "purchases" ? "Nova compra" : undefined} onAction={() => itemKind ? setEditing({ kind: itemKind }) : setCreatingPurchase(true)} />
-      <div className="mb-4 flex gap-2">
+      <div className="mb-4 flex flex-wrap gap-2">
         <Button variant={tab === "material" ? "primary" : "secondary"} size="sm" onClick={() => setTab("material")}>Materiais</Button>
         <Button variant={tab === "produto" ? "primary" : "secondary"} size="sm" onClick={() => setTab("produto")}>Produtos</Button>
         <Button variant={tab === "purchases" ? "primary" : "secondary"} size="sm" onClick={() => setTab("purchases")}>Compras</Button>
@@ -177,7 +177,7 @@ function MaterialFormModal({ material, kind, onClose, onSaved }: { material: Sto
       <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
         <div className="sm:col-span-2"><FormField label="Nome"><input className={fieldClassName} name="name" defaultValue={material?.name ?? ""} required /></FormField></div>
         <FormField label="Fornecedor"><input className={fieldClassName} name="supplier" defaultValue={material?.supplier ?? ""} required /></FormField>
-        <FormField label="Unidade" description={material?.hasMovements ? "Não pode ser trocada: o material já teve movimentações." : undefined}>
+        <FormField label="Unidade" description={material?.hasMovements ? `Não pode ser trocada: o ${word} já teve movimentações.` : undefined}>
           <select className={fieldClassName} name="unit" defaultValue={material?.unit ?? "ml"} disabled={material?.hasMovements}>{stockUnits.map((unit) => <option key={unit}>{unit}</option>)}</select>
           {material?.hasMovements ? <input type="hidden" name="unit" value={material.unit} /> : null}
         </FormField>

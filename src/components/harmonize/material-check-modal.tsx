@@ -7,11 +7,12 @@ import { fieldClassName, Modal } from "@/components/ui/modal";
 import { invalidateClientCache } from "@/lib/client-cache";
 import { clinicToday } from "@/lib/clinic-time";
 import { sendJson } from "@/lib/send-json";
-import { allocateLots, attendanceKindLabels, formatQuantity, parseQuantity, roundQuantity, validateQuantity, type AttendanceKind } from "@/lib/stock-rules";
+import { allocateLots, attendanceKindLabels, formatQuantity, parseQuantity, roundQuantity, validateQuantity, type AttendanceKind, type StockKind } from "@/lib/stock-rules";
+import { KindOptionGroups } from "./stock-kind";
 import { formatDateOnly, invalidateStockCache } from "./stock-shared";
 
 type Lot = { id: string; code: string; expiresOn: string; balance: number };
-type Material = { id: string; name: string; unit: string; lots: Lot[] };
+type Material = { id: string; name: string; kind: StockKind; unit: string; lots: Lot[] };
 type CheckData = {
   appointment: { id: string; kind: AttendanceKind; name: string; date: string; status: string; materialsCheck: string | null; patientName: string };
   suggestions: Array<{ productId: string; quantity: number }>;
@@ -77,7 +78,7 @@ export function MaterialCheckModal({ appointmentId, onClose, onDone }: { appoint
     if (!skip) {
       for (const row of rows) {
         const material = materialOf(row.productId);
-        if (!material) return setError("Escolha o material de cada item.");
+        if (!material) return setError("Escolha o item de cada linha.");
         const quantity = parseQuantity(row.quantity);
         const quantityError = validateQuantity(quantity, material.unit);
         if (quantityError) return setError(`${material.name}: ${quantityError}`);
@@ -99,15 +100,15 @@ export function MaterialCheckModal({ appointmentId, onClose, onDone }: { appoint
     invalidateStockCache();
     invalidateClientCache("/api/stock/pending");
     const pending = result?.pending ?? [];
-    onDone(skip ? "Conferência pulada." : pending.length ? `Materiais registrados. Saída pendente por falta de saldo: ${pending.map((item) => `${formatQuantity(item.quantity, item.unit)} ${item.name}`).join(", ")}.` : "Materiais registrados no estoque.");
+    onDone(skip ? "Conferência pulada." : pending.length ? `Itens registrados. Saída pendente por falta de saldo: ${pending.map((item) => `${formatQuantity(item.quantity, item.unit)} ${item.name}`).join(", ")}.` : "Itens registrados no estoque.");
   }
 
   const kind = data?.appointment.kind;
   return (
-    <Modal open onClose={onClose} closeOnOverlayClick={false} title="Conferência de materiais" description={data ? `${attendanceKindLabels[data.appointment.kind]} · ${data.appointment.name} · ${data.appointment.patientName}` : undefined}>
+    <Modal open onClose={onClose} closeOnOverlayClick={false} title="Conferência de materiais e produtos" description={data ? `${attendanceKindLabels[data.appointment.kind]} · ${data.appointment.name} · ${data.appointment.patientName}` : undefined}>
       {!data ? (error ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{error}</p> : <div className="grid place-items-center py-10"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>) : (
         <div className="space-y-4">
-          <p className="text-xs text-muted-foreground">{kind === "procedure" ? "Confira os materiais da ficha técnica: ajuste quantidades, lotes ou adicione o que mais foi usado." : "Se usou algum material (por exemplo, num retoque), adicione abaixo. Caso contrário, pule."}</p>
+          <p className="text-xs text-muted-foreground">{kind === "procedure" ? "Confira os itens da ficha técnica: ajuste quantidades, lotes ou adicione o que mais foi usado." : "Se usou algum material ou produto (por exemplo, num retoque), adicione abaixo. Caso contrário, pule."}</p>
           {rows.map((row) => {
             const material = materialOf(row.productId);
             const quantity = parseQuantity(row.quantity);
@@ -116,12 +117,12 @@ export function MaterialCheckModal({ appointmentId, onClose, onDone }: { appoint
             return (
               <div className="space-y-2 rounded-[8px] border border-border p-3" key={row.key}>
                 <div className="grid grid-cols-[1fr_110px_auto] items-center gap-2">
-                  <select className={fieldClassName} aria-label="Material" value={row.productId} onChange={(event) => changeProduct(row, event.target.value)}>
-                    <option value="">Selecione o material</option>
-                    {data.materials.map((option) => <option key={option.id} value={option.id}>{option.name} ({option.unit})</option>)}
+                  <select className={fieldClassName} aria-label="Item" value={row.productId} onChange={(event) => changeProduct(row, event.target.value)}>
+                    <option value="">Selecione um item</option>
+                    <KindOptionGroups items={data.materials} label={(option) => `${option.name} (${option.unit})`} />
                   </select>
                   <input className={fieldClassName} aria-label="Quantidade usada" inputMode="decimal" value={row.quantity} onChange={(event) => changeQuantity(row, event.target.value)} />
-                  <Button type="button" variant="ghost" size="icon" aria-label="Remover material" onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))}><Trash2 className="h-3.5 w-3.5" /></Button>
+                  <Button type="button" variant="ghost" size="icon" aria-label="Remover item" onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))}><Trash2 className="h-3.5 w-3.5" /></Button>
                 </div>
                 {material ? <div className="space-y-1.5 pl-2">
                   {row.allocations.map((allocation) => (
@@ -140,12 +141,12 @@ export function MaterialCheckModal({ appointmentId, onClose, onDone }: { appoint
               </div>
             );
           })}
-          <Button type="button" variant="secondary" size="sm" onClick={() => setRows((current) => [...current, { key: nextKey(), productId: "", quantity: "1", allocations: [] }])}><CirclePlus className="h-3.5 w-3.5" />Adicionar material</Button>
+          <Button type="button" variant="secondary" size="sm" onClick={() => setRows((current) => [...current, { key: nextKey(), productId: "", quantity: "1", allocations: [] }])}><CirclePlus className="h-3.5 w-3.5" />Adicionar item</Button>
           {error ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{error}</p> : null}
           <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-4">
             <Button type="button" variant="ghost" disabled={saving} onClick={onClose}>Conferir depois</Button>
             {kind !== "procedure" ? <Button type="button" variant="secondary" disabled={saving} onClick={() => void submit(true)}>Pular</Button> : null}
-            <Button type="button" disabled={saving} onClick={() => void submit()}>{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}Confirmar materiais</Button>
+            <Button type="button" disabled={saving} onClick={() => void submit()}>{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}Confirmar itens</Button>
           </div>
         </div>
       )}

@@ -138,10 +138,19 @@ test("pending outputs and material checks become alerts", () => {
   const base = { materials: [], lots: [], today: "2026-10-09", warningDays: 30 };
   assert.deepEqual(stockAlerts({ ...base, pendingOutputs: 2, pendingChecks: 1 }).map((alert) => [alert.kind, alert.message]), [
     ["pending", "2 saídas de estoque pendentes por falta de saldo"],
-    ["pending", "1 conferência de materiais pendente"],
+    ["pending", "1 conferência de materiais e produtos pendente"],
   ]);
   assert.deepEqual(stockAlerts({ ...base, pendingOutputs: 1, pendingChecks: 0 }).map((alert) => alert.message), ["1 saída de estoque pendente por falta de saldo"]);
   assert.deepEqual(stockAlerts(base), []);
+});
+
+test("alerts carry the kind of the item they are about", () => {
+  const alerts = stockAlerts({
+    today: "2026-10-09", warningDays: 30,
+    materials: [{ id: "p1", name: "Ácido", kind: "produto", unit: "ml", balance: 0, minStock: 1 }],
+    lots: [{ id: "l1", productId: "m1", productName: "Agulha", productKind: "material", code: "A1", expiresOn: "2026-10-10", balance: 5 }],
+  });
+  assert.deepEqual(alerts.map((alert) => [alert.kind, alert.productKind]), [["expiring", "material"], ["below_minimum", "produto"]]);
 });
 
 test("stock kind accepts only material and produto", () => {

@@ -1109,7 +1109,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
             currency.format(procedure.price),
             procedure.duration,
             <div className="max-w-xs space-y-1" key="sheet">
-              <span className="block text-xs">{procedure.materials || <span className="text-muted-foreground">Sem materiais</span>}</span>
+              <span className="block text-xs">{procedure.materials || <span className="text-muted-foreground">Sem itens</span>}</span>
               {procedure.materialsNeedReview ? <Badge variant="amber" title="Convertida automaticamente do texto antigo. Confira as quantidades e salve.">Revisar ficha</Badge> : null}
             </div>,
             <Badge key={procedure.margin} variant="green">{procedure.margin}</Badge>,

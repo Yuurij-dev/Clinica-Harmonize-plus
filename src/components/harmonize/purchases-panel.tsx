@@ -12,6 +12,7 @@ import { sendJson } from "@/lib/send-json";
 import { formatQuantity, parseQuantity, validateQuantity } from "@/lib/stock-rules";
 import { invalidateFinanceCache, paymentMethods } from "./finance-section";
 import { EmptyState } from "./shared";
+import { KindOptionGroups } from "./stock-kind";
 import { formatDateOnly, invalidateStockCache, type StockMaterial } from "./stock-shared";
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
@@ -160,7 +161,7 @@ function PurchaseFormModal({ materials, onClose, onSaved }: { materials: StockMa
     const items = [];
     for (const row of rows) {
       const material = materials.find((item) => item.id === row.productId);
-      if (!material) return setError("Escolha o material de cada item.");
+      if (!material) return setError("Escolha o item de cada linha.");
       const quantity = parseQuantity(row.quantity);
       const quantityError = validateQuantity(quantity, material.unit);
       if (quantityError) return setError(`${material.name}: ${quantityError}`);
@@ -205,10 +206,10 @@ function PurchaseFormModal({ materials, onClose, onSaved }: { materials: StockMa
             return (
               <div className="space-y-3 rounded-[8px] border border-border p-3" key={row.key}>
                 <div className="flex items-end gap-2">
-                  <div className="min-w-0 flex-1"><FormField label="Material">
+                  <div className="min-w-0 flex-1"><FormField label="Item">
                     <select className={fieldClassName} value={row.productId} onChange={(event) => update(row.key, { productId: event.target.value })}>
-                      <option value="">Selecione o material</option>
-                      {materials.map((material) => <option key={material.id} value={material.id}>{material.name} ({material.unit})</option>)}
+                      <option value="">Selecione um item</option>
+                      <KindOptionGroups items={materials} label={(material) => `${material.name} (${material.unit})`} />
                     </select>
                   </FormField></div>
                   <Button type="button" variant="ghost" size="icon" aria-label="Remover item" disabled={rows.length === 1} onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))}><Trash2 className="h-3.5 w-3.5" /></Button>
