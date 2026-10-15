@@ -9,7 +9,7 @@ export type DateRange = { start: string; end: string };
 export type ExpenseStatus = "open" | "paid" | "cancelled";
 
 export const expenseCategories = [
-  "Materiais/Estoque",
+  "Estoque",
   "Aluguel",
   "Salários/Comissões",
   "Marketing",

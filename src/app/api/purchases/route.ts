@@ -83,7 +83,7 @@ export async function POST(request: Request) {
         await tx.expense.create({
           data: {
             clinicId: user.clinicId, description: installments > 1 ? `${label} (${part.number}/${installments})` : label,
-            category: "Materiais/Estoque", amountCents: part.amountCents, dueOn, paymentMethod: body.paymentMethod!.trim(),
+            category: "Estoque", amountCents: part.amountCents, dueOn, paymentMethod: body.paymentMethod!.trim(),
             status: body.paid ? "paid" : "open", paidOn: body.paid ? dueOn : null, source: "purchase", purchaseId: created.id, installmentNumber: part.number, createdById: user.id,
           },
         });

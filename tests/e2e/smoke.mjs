@@ -143,6 +143,8 @@ async function stock() {
   r = await api("POST", "/api/purchases", { supplier: "Fornecedor", purchasedOn: day(0), paymentMethod: "Pix", installments: 1, items: [{ productId: product.id, lotCode: `L${run}`, expiresOn: day(300), quantity: 2, unitPriceCents: 5000 }] });
   const purchaseId = r.data.purchase?.id;
   check("compra é registrada", r.status === 201, r.status);
+  r = await api("GET", "/api/expenses?period=month");
+  check("compra gera despesa na categoria Estoque", r.data.expenses?.some((expense) => expense.category === "Estoque"), JSON.stringify(r.data.expenses?.map((expense) => expense.category)));
   const balance = async () => (await api("GET", `/api/products/${product.id}`)).data.product?.lots?.reduce((sum, lot) => sum + lot.balance, 0);
   check("compra soma ao saldo", (await balance()) === 2, await balance());
   let pair = await Promise.all([api("PATCH", `/api/purchases/${purchaseId}`, { action: "cancel" }), api("PATCH", `/api/purchases/${purchaseId}`, { action: "cancel" })]);
