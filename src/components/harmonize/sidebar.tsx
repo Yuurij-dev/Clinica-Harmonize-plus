@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { visibleSections } from "@/lib/permissions";
+import { SectionWarning } from "./stock-alerts";
 
 type SidebarProps = {
   active: SectionId;
@@ -78,7 +79,10 @@ export function Sidebar({
                 <Icon className="h-4 w-4" />
                 {item.label}
               </span>
-              {isActive ? <span className="h-1.5 w-1.5 rounded-full bg-[#5147dc]" /> : null}
+              <span className="flex items-center gap-2">
+                {item.id === "estoque" || item.id === "compras" ? <SectionWarning section={item.id} enabled={role === "ADMIN"} inMenu /> : null}
+                {isActive ? <span className="h-1.5 w-1.5 rounded-full bg-[#5147dc]" /> : null}
+              </span>
             </button>
           );
         })}
@@ -93,7 +97,7 @@ export function Sidebar({
 
   return (
     <>
-      <div className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:block">
+      <div className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-40 lg:block">
         {content}
       </div>
       <Sheet open={mobileOpen} onOpenChange={(open) => { if (!open) onClose(); }} title="Navegação principal" side="left" className="p-0 lg:hidden" showCloseButton={false}>

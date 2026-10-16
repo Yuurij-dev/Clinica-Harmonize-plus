@@ -2,13 +2,15 @@
 
 import { Package } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { attendanceKindLabels, formatQuantity, type AttendanceKind } from "@/lib/stock-rules";
+import { attendanceKindLabels, formatQuantity, type AttendanceKind, type StockKind } from "@/lib/stock-rules";
+import { StockKindBadge } from "./stock-kind";
 import { formatDateOnly } from "./stock-shared";
 
 export type MaterialUsed = {
   id: string;
   appointmentId: string | null;
   name: string;
+  productKind: StockKind;
   unit: string;
   quantity: number;
   lotCode: string | null;
@@ -25,7 +27,7 @@ function attendanceLabel(item: MaterialUsed) {
 }
 
 // Materiais usados no paciente: quantidade, lote, validade e o atendimento em que foram usados.
-export function MaterialsUsedList({ items, title = "Materiais usados", showAttendance = true }: { items: MaterialUsed[]; title?: string; showAttendance?: boolean }) {
+export function MaterialsUsedList({ items, title = "Materiais e produtos usados", showAttendance = true }: { items: MaterialUsed[]; title?: string; showAttendance?: boolean }) {
   if (!items.length) return null;
   return (
     <div className="rounded-[7px] border border-[#ececf3] bg-[#fbfbfe] p-3">
@@ -33,7 +35,7 @@ export function MaterialsUsedList({ items, title = "Materiais usados", showAtten
       <ul className="space-y-1.5">
         {items.map((item) => (
           <li className={`text-xs ${item.status === "reversed" ? "text-muted-foreground line-through" : "text-[#3f4053]"}`} key={item.id}>
-            <strong>{formatQuantity(item.quantity, item.unit)} {item.name}</strong>
+            <strong>{formatQuantity(item.quantity, item.unit)} {item.name}</strong> <StockKindBadge className="ml-1 align-middle" kind={item.productKind} />
             {item.lotCode ? <span>{` · lote ${item.lotCode}`}{item.lotExpiresOn ? `, val. ${formatDateOnly(item.lotExpiresOn).slice(3)}` : ""}</span> : null}
             {showAttendance ? <span className="text-[#858696]">{` · em ${attendanceLabel(item)}`}</span> : null}
             {item.status === "reversed" ? <Badge className="ml-2 no-underline" variant="slate">Estornado</Badge> : null}

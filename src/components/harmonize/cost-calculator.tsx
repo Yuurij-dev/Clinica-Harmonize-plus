@@ -52,7 +52,7 @@ export function CostCalculator({ materials, charged = 0, patientName = "Atendime
         </div>
 
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
-          <Metric label="Custo dos materiais" value={currency.format(totalCost)} />
+          <Metric label="Custo dos materiais e produtos" value={currency.format(totalCost)} />
           <Metric label="Valor cobrado" value={currency.format(charged)} />
           <Metric label="Resultado bruto" value={currency.format(grossResult)} positive />
           <Metric label="Margem" value={`${margin.toFixed(2).replace(".", ",")}%`} positive />

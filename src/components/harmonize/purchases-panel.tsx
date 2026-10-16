@@ -9,9 +9,10 @@ import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, r
 import { clinicToday } from "@/lib/clinic-time";
 import { formatCurrency, parseCurrency } from "@/lib/input-masks";
 import { sendJson } from "@/lib/send-json";
-import { formatQuantity, parseQuantity, validateQuantity } from "@/lib/stock-rules";
+import { formatQuantity, parseQuantity, type StockKind, validateQuantity } from "@/lib/stock-rules";
 import { invalidateFinanceCache, paymentMethods } from "./finance-section";
 import { EmptyState } from "./shared";
+import { KindOptionGroups, StockKindBadge } from "./stock-kind";
 import { formatDateOnly, invalidateStockCache, type StockMaterial } from "./stock-shared";
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
@@ -26,7 +27,7 @@ type PurchaseRow = {
   status: "active" | "cancelled";
   totalCents: number;
   paidInstallments: number;
-  items: Array<{ name: string; unit: string; lotCode: string; quantity: number; unitPriceCents: number }>;
+  items: Array<{ name: string; kind: StockKind; unit: string; lotCode: string; quantity: number; unitPriceCents: number }>;
 };
 type ItemRow = { key: number; productId: string; lotCode: string; expiresOn: string; quantity: string; price: string };
 
@@ -101,7 +102,7 @@ export function PurchasesPanel({ materials, creating, onCloseCreate, onSaved }: 
                 <p className="font-bold text-foreground">{purchase.supplier}{purchase.invoiceNumber ? <span className="font-medium text-muted-foreground"> · NF {purchase.invoiceNumber}</span> : null}</p>
                 <p className="text-xs text-muted-foreground">{formatDateOnly(purchase.purchasedOn)} · {purchase.paymentMethod} · {purchase.installments > 1 ? `${purchase.paidInstallments}/${purchase.installments} parcelas pagas` : purchase.paidInstallments ? "Paga" : "A pagar"}</p>
                 <ul className="mt-2 space-y-0.5 text-xs text-foreground">
-                  {purchase.items.map((item, index) => <li key={index}>{formatQuantity(item.quantity, item.unit)} {item.name} · lote {item.lotCode} · {currency.format(item.unitPriceCents / 100)}/{item.unit}</li>)}
+                  {purchase.items.map((item, index) => <li key={index}>{formatQuantity(item.quantity, item.unit)} {item.name} <StockKindBadge kind={item.kind} /> · lote {item.lotCode} · {currency.format(item.unitPriceCents / 100)}/{item.unit}</li>)}
                 </ul>
               </div>
               <div className="flex shrink-0 items-center gap-2">
@@ -160,7 +161,7 @@ function PurchaseFormModal({ materials, onClose, onSaved }: { materials: StockMa
     const items = [];
     for (const row of rows) {
       const material = materials.find((item) => item.id === row.productId);
-      if (!material) return setError("Escolha o material de cada item.");
+      if (!material) return setError("Escolha o item de cada linha.");
       const quantity = parseQuantity(row.quantity);
       const quantityError = validateQuantity(quantity, material.unit);
       if (quantityError) return setError(`${material.name}: ${quantityError}`);
@@ -205,10 +206,10 @@ function PurchaseFormModal({ materials, onClose, onSaved }: { materials: StockMa
             return (
               <div className="space-y-3 rounded-[8px] border border-border p-3" key={row.key}>
                 <div className="flex items-end gap-2">
-                  <div className="min-w-0 flex-1"><FormField label="Material">
+                  <div className="min-w-0 flex-1"><FormField label="Item">
                     <select className={fieldClassName} value={row.productId} onChange={(event) => update(row.key, { productId: event.target.value })}>
-                      <option value="">Selecione o material</option>
-                      {materials.map((material) => <option key={material.id} value={material.id}>{material.name} ({material.unit})</option>)}
+                      <option value="">Selecione um item</option>
+                      <KindOptionGroups items={materials} label={(material) => `${material.name} (${material.unit})`} />
                     </select>
                   </FormField></div>
                   <Button type="button" variant="ghost" size="icon" aria-label="Remover item" disabled={rows.length === 1} onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))}><Trash2 className="h-3.5 w-3.5" /></Button>

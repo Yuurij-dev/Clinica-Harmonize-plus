@@ -1,9 +1,10 @@
+import type { StockKind } from "@/lib/stock-rules";
 import { invalidateClientCache } from "@/lib/client-cache";
 
 export type StockMaterial = {
   id: string;
   name: string;
-  category: string;
+  kind: StockKind;
   unit: string;
   costCents: number;
   supplier: string;
@@ -16,7 +17,7 @@ export type StockMaterial = {
 
 // Chaves de cache afetadas por qualquer mudança de material ou saldo.
 export function invalidateStockCache(productId?: string) {
-  invalidateClientCache("/api/products", ...(productId ? [`/api/products/${productId}`, `/api/products/${productId}/movements`] : []), "/api/quotes/options", "/api/stock/alerts");
+  invalidateClientCache("/api/products", ...(productId ? [`/api/products/${productId}`, `/api/products/${productId}/movements`] : []), "/api/quotes/options", "/api/stock/alerts", "/api/stock/pending");
 }
 
 export function formatDateOnly(value: string) {

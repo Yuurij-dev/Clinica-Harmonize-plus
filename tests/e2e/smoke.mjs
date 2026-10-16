@@ -131,13 +131,20 @@ async function settings() {
   check("configurações gravam e devolvem o valor salvo", r.status === 200 && r.data.settings?.appointmentToleranceMinutes === tolerance, JSON.stringify(r.data).slice(0, 160));
 }
 
-async function stock() {
-  let r = await api("POST", "/api/products", { name: `Material ${run}`, category: "Toxina", unit: "frasco", costCents: 1000, supplier: "Fornecedor", minStock: 0 });
+async function stock(patient) {
+  let r = await api("POST", "/api/products", { name: `Material ${run}`, kind: "material", unit: "frasco", costCents: 1000, supplier: "Fornecedor", minStock: 0 });
   const product = r.data.product;
   check("material é criado", r.status === 201, r.status);
+  check("item criado guarda o tipo", product?.kind === "material", product?.kind);
+  r = await api("POST", "/api/products", { name: `Sem tipo ${run}`, unit: "unidade", costCents: 100, supplier: "Fornecedor" });
+  check("item sem tipo é recusado", r.status === 400, r.status);
+  r = await api("POST", "/api/products", { name: `Tipo errado ${run}`, kind: "Produto", unit: "unidade", costCents: 100, supplier: "Fornecedor" });
+  check("tipo inválido é recusado", r.status === 400, r.status);
   r = await api("POST", "/api/purchases", { supplier: "Fornecedor", purchasedOn: day(0), paymentMethod: "Pix", installments: 1, items: [{ productId: product.id, lotCode: `L${run}`, expiresOn: day(300), quantity: 2, unitPriceCents: 5000 }] });
   const purchaseId = r.data.purchase?.id;
   check("compra é registrada", r.status === 201, r.status);
+  r = await api("GET", "/api/expenses?period=month");
+  check("compra gera despesa na categoria Estoque", r.data.expenses?.some((expense) => expense.category === "Estoque"), JSON.stringify(r.data.expenses?.map((expense) => expense.category)));
   const balance = async () => (await api("GET", `/api/products/${product.id}`)).data.product?.lots?.reduce((sum, lot) => sum + lot.balance, 0);
   check("compra soma ao saldo", (await balance()) === 2, await balance());
   let pair = await Promise.all([api("PATCH", `/api/purchases/${purchaseId}`, { action: "cancel" }), api("PATCH", `/api/purchases/${purchaseId}`, { action: "cancel" })]);
@@ -146,6 +153,32 @@ async function stock() {
   pair = await Promise.all([api("PATCH", `/api/purchases/${purchaseId}`, { action: "restore" }), api("PATCH", `/api/purchases/${purchaseId}`, { action: "restore" })]);
   check("restauração dupla simultânea: só uma passa", pair.map((item) => item.status).sort().join() === "200,409", pair.map((item) => item.status).join());
   check("saldo depois de restaurar é 2", (await balance()) === 2, await balance());
+  r = await api("PATCH", `/api/products/${product.id}`, { kind: "produto" });
+  check("tipo pode ser trocado mesmo com movimentações", r.status === 200 && r.data.product?.kind === "produto", `${r.status} ${r.data.product?.kind}`);
+  r = await api("GET", "/api/products");
+  check("lista devolve o tipo e não a categoria", r.data.products?.some((item) => item.id === product.id && item.kind === "produto" && !("category" in item)), JSON.stringify(r.data.products?.[0] ?? {}));
+  r = await api("PATCH", `/api/products/${product.id}`, { kind: "outro" });
+  check("troca para tipo inválido é recusada", r.status === 400, r.status);
+
+  // Tipo nos avisos, na conferência de materiais e nas pendências.
+  r = await api("POST", "/api/products", { name: `Faltando ${run}`, kind: "produto", unit: "unidade", costCents: 500, supplier: "Fornecedor", minStock: 10 });
+  const low = r.data.product;
+  r = await api("GET", "/api/stock/alerts");
+  const lowAlert = r.data.alerts?.find((alert) => alert.kind === "below_minimum" && alert.productId === low?.id);
+  check("aviso de abaixo do mínimo traz productKind", lowAlert?.productKind === "produto", JSON.stringify(lowAlert));
+
+  r = await api("POST", "/api/appointments", { patientId: patient.id, procedure: "Retorno estoque", professional: "Teste", time: "11:00", date: `${day(1)}T00:00:00` });
+  const attendance = r.data.appointment;
+  r = await api("PATCH", `/api/appointments/${attendance?.id}`, { status: "Atendido" });
+  check("atendimento marcado como atendido", r.status === 200, r.status);
+  r = await api("GET", `/api/appointments/${attendance?.id}/materials`);
+  const byId = Object.fromEntries((r.data.materials ?? []).map((item) => [item.id, item.kind]));
+  check("conferência de materiais devolve o tipo de cada item", r.status === 200 && byId[product.id] === "produto" && byId[low?.id] === "produto", JSON.stringify(byId));
+  r = await api("POST", `/api/appointments/${attendance?.id}/materials`, { items: [{ productId: low.id, quantity: 3 }] });
+  check("conferência sem saldo gera pendência", r.status === 200 && r.data.pending?.length === 1, `${r.status} ${JSON.stringify(r.data).slice(0, 120)}`);
+  r = await api("GET", "/api/stock/pending");
+  const output = r.data.outputs?.find((item) => item.product?.id === low.id);
+  check("pendência de saída traz product.kind", output?.product?.kind === "produto", JSON.stringify(output?.product));
 }
 
 async function loginLockout() {
@@ -196,7 +229,72 @@ async function browser(homonym) {
     await page.getByRole("cell", { name: "R$ 99,40" }).first().waitFor();
     check("tela de Orçamentos mostra R$ 99,40", true);
 
-    for (const section of ["dashboard", "agenda", "clientes", "estoque", "financeiro", "configuracoes"]) {
+    // Estoque: abre em Materiais; o produto só aparece em Produtos; a compra agrupa os itens.
+    const material = (await api("POST", "/api/products", { name: `Material tela ${run}`, kind: "material", unit: "frasco", costCents: 100, supplier: "Fornecedor" })).data.product;
+    const produto = (await api("POST", "/api/products", { name: `Produto tela ${run}`, kind: "produto", unit: "unidade", costCents: 100, supplier: "Fornecedor" })).data.product;
+    await page.goto(`${baseUrl}/estoque`);
+    await page.getByText(material.name).first().waitFor();
+    check("Estoque abre na aba Materiais e mostra o material", await page.getByRole("button", { name: "Novo material" }).isVisible());
+    check("aba Materiais não mostra o produto", (await page.getByText(produto.name).count()) === 0);
+    await page.getByRole("button", { name: "Produtos", exact: true }).click();
+    await page.getByText(produto.name).first().waitFor();
+    check("aba Produtos mostra o produto, tem o botão Novo produto e não mostra o material", (await page.getByText(material.name).count()) === 0 && await page.getByRole("button", { name: "Novo produto" }).isVisible());
+    // Troca de tipo pela tela: o material sai de Materiais e passa a aparecer em Produtos.
+    const trocado = (await api("POST", "/api/products", { name: `Troca de tipo ${run}`, kind: "material", unit: "frasco", costCents: 100, supplier: "Fornecedor" })).data.product;
+    await page.goto(`${baseUrl}/estoque`);
+    await page.getByRole("button", { name: "Materiais", exact: true }).click();
+    await page.getByText(trocado.name).first().waitFor();
+    await page.getByRole("row").filter({ hasText: trocado.name }).getByRole("button", { name: "Abrir" }).click();
+    await page.getByRole("button", { name: "Editar", exact: true }).click();
+    await page.locator('select[name="kind"]').selectOption("produto");
+    await page.getByRole("button", { name: /^Salvar / }).click();
+    await page.locator('select[name="kind"]').waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "Produtos", exact: true }).click();
+    await page.getByText(trocado.name).first().waitFor();
+    await page.getByRole("button", { name: "Materiais", exact: true }).click();
+    const naLista = await page.getByRole("row").filter({ hasText: trocado.name }).count();
+    const tipoGravado = (await api("GET", `/api/products/${trocado.id}`)).data.product?.kind;
+    check("trocar o tipo pela tela move o item de Materiais para Produtos", naLista === 0 && tipoGravado === "produto", `linhas em Materiais: ${naLista}, tipo: ${tipoGravado}`);
+    check("Estoque não tem mais as abas Compras e Pendências", (await page.getByRole("main").getByRole("button", { name: /^(Compras|Pendências)$/ }).count()) === 0);
+    // Compras e Pendências ficam numa seção própria do menu.
+    await page.getByRole("navigation").getByRole("button", { name: "Compras" }).first().click();
+    await page.waitForURL(`${baseUrl}/compras`);
+    await page.getByRole("main").getByRole("button", { name: "Pendências", exact: true }).click();
+    await page.getByLabel("Tipo de pendência").waitFor();
+    check("menu Compras abre a seção com a aba Pendências", true);
+    await page.getByRole("main").getByRole("button", { name: "Compras", exact: true }).click();
+    await page.getByRole("button", { name: "Nova compra" }).first().click();
+    const itemSelect = page.locator("select").filter({ has: page.locator("option", { hasText: "Selecione um item" }) }).first();
+    await itemSelect.locator(`optgroup[label="Materiais"] option`, { hasText: material.name }).waitFor({ state: "attached" });
+    check("seleção de item na compra agrupa em Materiais e Produtos", (await itemSelect.locator(`optgroup[label="Produtos"] option`, { hasText: produto.name }).count()) === 1);
+    // Aviso de pendência abre Compras direto na aba Pendências, mesmo já estando em Compras.
+    const attendance = (await api("POST", "/api/appointments", { patientId: homonym.id, procedure: "Pendência tela", professional: "Teste", time: "15:00", date: `${day(1)}T00:00:00` })).data.appointment;
+    await api("PATCH", `/api/appointments/${attendance.id}`, { status: "Atendido" });
+    await api("POST", `/api/appointments/${attendance.id}/materials`, { items: [{ productId: material.id, quantity: 1 }] });
+    await page.goto(`${baseUrl}/compras`);
+    await page.getByRole("button", { name: "Nova compra" }).first().waitFor();
+    await page.getByRole("button", { name: "Notificações" }).click();
+    await page.getByRole("button", { name: /saída de estoque pendente/ }).click();
+    await page.getByLabel("Tipo de pendência").waitFor();
+    check("aviso de pendência abre Compras na aba Pendências", page.url() === `${baseUrl}/compras`, page.url());
+
+    // ⚠ no título e no menu de cada seção, só com os avisos dela; passar o mouse mostra a lista.
+    const baixo = (await api("POST", "/api/products", { name: `Abaixo tela ${run}`, kind: "material", unit: "frasco", costCents: 100, supplier: "Fornecedor", minStock: 5 })).data.product;
+    await page.goto(`${baseUrl}/compras`);
+    const titleWarning = page.getByRole("main").getByRole("button", { name: /^\d+ avisos?$/ });
+    await titleWarning.hover();
+    const comprasTip = page.getByRole("main").getByRole("tooltip");
+    await comprasTip.getByText(/saída de estoque pendente/).waitFor();
+    check("⚠ de Compras mostra só as pendências", (await comprasTip.getByText(baixo.name).count()) === 0);
+    await page.goto(`${baseUrl}/estoque`);
+    await titleWarning.hover();
+    const estoqueTip = page.getByRole("main").getByRole("tooltip");
+    await estoqueTip.getByText(`${baixo.name} abaixo do mínimo`, { exact: false }).waitFor();
+    check("⚠ do Estoque mostra o item abaixo do mínimo e não as pendências", (await estoqueTip.getByText(/pendente/).count()) === 0);
+    const menu = page.getByRole("navigation");
+    check("menu mostra ⚠ em Estoque e em Compras", await menu.getByRole("button", { name: /Estoque/ }).first().getByLabel(/avisos?$/).isVisible() && await menu.getByRole("button", { name: /Compras/ }).first().getByLabel(/avisos?$/).isVisible());
+
+    for (const section of ["dashboard", "agenda", "clientes", "estoque", "compras", "financeiro", "configuracoes"]) {
       await page.goto(`${baseUrl}/${section}`, { waitUntil: "networkidle" });
     }
     check("telas principais abrem sem erro de JavaScript", pageErrors.length === 0, pageErrors.join(" | "));
@@ -233,7 +331,7 @@ const suites = {
   agenda: { needs: ["pacientes"], run: (state) => appointments(state.patient) },
   jornadas: { needs: ["orcamentos"], run: (state) => journeys(state.patient, state.quote) },
   configuracoes: { needs: [], run: () => settings() },
-  estoque: { needs: [], run: () => stock() },
+  estoque: { needs: ["pacientes"], run: (state) => stock(state.patient) },
   telas: { needs: ["orcamentos"], run: (state) => browser(state.homonym) },
   login: { needs: [], run: () => loginLockout() },
 };

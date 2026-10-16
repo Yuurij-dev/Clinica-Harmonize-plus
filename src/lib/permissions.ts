@@ -23,7 +23,7 @@ export function can(role: string | null | undefined, permission: Permission) {
   return (grants[permission] as readonly string[]).includes(role ?? "");
 }
 
-const allSections: SectionId[] = ["dashboard", "agenda", "clientes", "procedimentos", "estoque", "orcamentos", "pagamentos", "financeiro", "relatorios", "calculadora", "configuracoes"];
+const allSections: SectionId[] = ["dashboard", "agenda", "clientes", "procedimentos", "estoque", "compras", "orcamentos", "pagamentos", "financeiro", "relatorios", "calculadora", "configuracoes"];
 
 export function visibleSections(role: string | null | undefined): SectionId[] {
   if (role === "ADMIN") return allSections;
