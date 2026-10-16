@@ -102,7 +102,7 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
         </label>
         <label className="flex flex-col gap-1 text-[11px] font-semibold text-muted-foreground">Ordenar por
           <select className={`${fieldClassName} h-9 min-w-[185px] py-1 text-xs`} value={materialSort} onChange={(event) => setMaterialSort(event.target.value)}>
-            <option value="default">Nome</option><option value="cost-asc">Custo: menor primeiro</option><option value="cost-desc">Custo: maior primeiro</option><option value="balance-asc">Saldo: menor primeiro</option><option value="balance-desc">Saldo: maior primeiro</option>
+            <option value="default">Nome (A–Z)</option><option value="cost-asc">Custo: menor primeiro</option><option value="cost-desc">Custo: maior primeiro</option><option value="balance-asc">Saldo: menor primeiro</option><option value="balance-desc">Saldo: maior primeiro</option>
           </select>
         </label>
         <label className="flex h-9 items-center gap-2 text-xs font-semibold text-muted-foreground">
