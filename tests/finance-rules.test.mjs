@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { recurringOccurrences, addMonths, financeTotals, periodRange, splitInstallments } from "../src/lib/finance-rules.ts";
+import { expenseCategories, recurringOccurrences, addMonths, financeTotals, periodRange, splitInstallments } from "../src/lib/finance-rules.ts";
 
 test("period ranges follow the clinic calendar with weeks starting on Monday", () => {
   assert.deepEqual(periodRange("today", "2026-10-09"), { start: "2026-10-09", end: "2026-10-09" });
@@ -93,4 +93,9 @@ test("fixed expenses respect the end date and skip occurrences that already exis
   assert.deepEqual(recurringOccurrences(schedule, "2026-12-31"), ["2026-08-05", "2026-09-05"]);
   assert.deepEqual(recurringOccurrences(schedule, "2026-12-31", ["2026-08-05"]), ["2026-09-05"]);
   assert.deepEqual(recurringOccurrences(schedule, "2026-07-31"), []);
+});
+
+test("stock expenses use the Estoque category", () => {
+  assert.equal(expenseCategories[0], "Estoque");
+  assert.equal(expenseCategories.includes("Materiais/Estoque"), false);
 });

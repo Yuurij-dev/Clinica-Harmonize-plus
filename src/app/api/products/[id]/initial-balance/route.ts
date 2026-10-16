@@ -13,7 +13,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const productId = (await params).id;
   const body = await request.json().catch(() => null) as { lotCode?: string; expiresOn?: string; quantity?: number } | null;
   const product = await prisma.product.findFirst({ where: { id: productId, clinicId: user.clinicId, archivedAt: null }, select: { id: true, unit: true } });
-  if (!product) return NextResponse.json({ message: "Material não encontrado." }, { status: 404 });
+  if (!product) return NextResponse.json({ message: "Item não encontrado." }, { status: 404 });
   const code = body?.lotCode?.trim();
   const expiresOn = parseDateOnly(body?.expiresOn);
   const quantity = Number(body?.quantity);

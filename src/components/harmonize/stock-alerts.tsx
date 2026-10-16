@@ -8,6 +8,7 @@ import { fieldClassName, FormField } from "@/components/ui/modal";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { sendJson } from "@/lib/send-json";
 import type { StockAlert } from "@/lib/stock-rules";
+import { StockKindBadge } from "./stock-kind";
 
 const alertsKey = "/api/stock/alerts";
 
@@ -41,7 +42,7 @@ export function StockAlertItem({ alert, onOpen, variant = "boxed" }: { alert: St
   return (
     <button type="button" className={`flex items-start gap-2 text-left text-[11px] font-semibold leading-5 ${tone} ${variant === "boxed" ? `w-full rounded-md p-3 ${boxTone}` : "w-fit"}`} onClick={onOpen}>
       <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-      <span>{alert.message}</span>
+      <span>{alert.productKind ? <StockKindBadge className="mr-1.5 align-middle" kind={alert.productKind} /> : null}{alert.message}</span>
     </button>
   );
 }

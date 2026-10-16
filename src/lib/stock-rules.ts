@@ -37,6 +37,25 @@ export function isStockUnit(value: unknown): value is StockUnit {
   return typeof value === "string" && (stockUnits as readonly string[]).includes(value);
 }
 
+// Tipo do item do estoque. Só organiza as telas: as regras são as mesmas para os dois.
+export const stockKinds = ["material", "produto"] as const;
+export type StockKind = (typeof stockKinds)[number];
+export const stockKindLabels: Record<StockKind, { singular: string; plural: string }> = {
+  material: { singular: "Material", plural: "Materiais" },
+  produto: { singular: "Produto", plural: "Produtos" },
+};
+
+export function isStockKind(value: unknown): value is StockKind {
+  return typeof value === "string" && (stockKinds as readonly string[]).includes(value);
+}
+
+// Agrupa os itens para listas de seleção: Materiais antes de Produtos, sem grupo vazio.
+export function groupByKind<T extends { kind: string }>(items: T[]) {
+  return stockKinds
+    .map((kind) => ({ kind, label: stockKindLabels[kind].plural, items: items.filter((item) => item.kind === kind) }))
+    .filter((group) => group.items.length);
+}
+
 // Lê quantidades digitadas no formato brasileiro ("1.000,25").
 export function parseQuantity(text: string) {
   const normalized = text.trim().replace(/\./g, "").replace(",", ".");
@@ -54,13 +73,13 @@ export function formatQuantity(quantity: number, unit: string) {
   return `${value} ${unit}`;
 }
 
-export type StockAlert = { kind: "expired" | "expiring" | "below_minimum" | "pending"; productId: string; lotId?: string; message: string };
+export type StockAlert = { kind: "expired" | "expiring" | "below_minimum" | "pending"; productId: string; productKind?: StockKind; lotId?: string; message: string };
 
 // Avisos de estoque: lotes vencidos ou vencendo (com saldo) e materiais abaixo do mínimo.
 // Recebe só materiais e lotes ativos (não arquivados). Ordem: vencidos, vencendo, mínimo.
 export function stockAlerts(input: {
-  materials: Array<{ id: string; name: string; unit: string; balance: number; minStock: number }>;
-  lots: Array<{ id: string; productId: string; productName: string; code: string; expiresOn: string; balance: number }>;
+  materials: Array<{ id: string; name: string; kind?: StockKind; unit: string; balance: number; minStock: number }>;
+  lots: Array<{ id: string; productId: string; productName: string; productKind?: StockKind; code: string; expiresOn: string; balance: number }>;
   today: string;
   warningDays: number;
   pendingOutputs?: number;
@@ -72,17 +91,17 @@ export function stockAlerts(input: {
     .map((lot) => {
       const days = daysUntil(lot.expiresOn, input.today);
       const prefix = `Lote ${lot.code} de ${lot.productName}`;
-      if (days < 0) return { kind: "expired", productId: lot.productId, lotId: lot.id, message: `${prefix} venceu em ${lot.expiresOn.split("-").reverse().join("/")}` };
-      return { kind: "expiring", productId: lot.productId, lotId: lot.id, message: days === 0 ? `${prefix} vence hoje` : `${prefix} vence em ${days} ${days === 1 ? "dia" : "dias"}` };
+      if (days < 0) return { kind: "expired", productId: lot.productId, productKind: lot.productKind, lotId: lot.id, message: `${prefix} venceu em ${lot.expiresOn.split("-").reverse().join("/")}` };
+      return { kind: "expiring", productId: lot.productId, productKind: lot.productKind, lotId: lot.id, message: days === 0 ? `${prefix} vence hoje` : `${prefix} vence em ${days} ${days === 1 ? "dia" : "dias"}` };
     });
   const minimumAlerts: StockAlert[] = input.materials
     .filter((material) => material.balance < material.minStock)
-    .map((material) => ({ kind: "below_minimum", productId: material.id, message: `${material.name} abaixo do mínimo (${formatNumber(material.balance)} de ${formatQuantity(material.minStock, material.unit)})` }));
+    .map((material) => ({ kind: "below_minimum", productId: material.id, productKind: material.kind, message: `${material.name} abaixo do mínimo (${formatNumber(material.balance)} de ${formatQuantity(material.minStock, material.unit)})` }));
   const pendingAlerts: StockAlert[] = [];
   const outputs = input.pendingOutputs ?? 0;
   const checks = input.pendingChecks ?? 0;
   if (outputs) pendingAlerts.push({ kind: "pending", productId: "", message: outputs === 1 ? "1 saída de estoque pendente por falta de saldo" : `${outputs} saídas de estoque pendentes por falta de saldo` });
-  if (checks) pendingAlerts.push({ kind: "pending", productId: "", message: checks === 1 ? "1 conferência de materiais pendente" : `${checks} conferências de materiais pendentes` });
+  if (checks) pendingAlerts.push({ kind: "pending", productId: "", message: checks === 1 ? "1 conferência de materiais e produtos pendente" : `${checks} conferências de materiais e produtos pendentes` });
   return [...pendingAlerts, ...lotAlerts, ...minimumAlerts];
 }
 

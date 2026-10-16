@@ -1097,7 +1097,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
       <div>
         <SectionIntro
           title="Procedimentos"
-          description="Cadastro de serviços com valor sugerido, tempo estimado e a ficha técnica de materiais usada no estoque e no orçamento."
+          description="Cadastro de serviços com valor sugerido, tempo estimado e a ficha técnica de materiais e produtos usada no estoque e no orçamento."
           action="Novo procedimento"
           onAction={onCreateOpen}
         />
@@ -1109,7 +1109,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
             currency.format(procedure.price),
             procedure.duration,
             <div className="max-w-xs space-y-1" key="sheet">
-              <span className="block text-xs">{procedure.materials || <span className="text-muted-foreground">Sem materiais</span>}</span>
+              <span className="block text-xs">{procedure.materials || <span className="text-muted-foreground">Sem itens</span>}</span>
               {procedure.materialsNeedReview ? <Badge variant="amber" title="Convertida automaticamente do texto antigo. Confira as quantidades e salve.">Revisar ficha</Badge> : null}
             </div>,
             <Badge key={procedure.margin} variant="green">{procedure.margin}</Badge>,
@@ -1127,7 +1127,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
         open={procedureModalOpen}
         onClose={closeProcedureModal}
         title={editingProcedure ? "Editar procedimento" : "Novo procedimento"}
-        description="Defina preço, duração, margem e os materiais usados em cada atendimento."
+        description="Defina preço, duração, margem e os materiais e produtos usados em cada atendimento."
       >
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveProcedure}>
           <div className="sm:col-span-2"><FormField label="Nome"><input className={fieldClassName} name="name" defaultValue={editingProcedure?.name ?? ""} required /></FormField></div>
@@ -1135,7 +1135,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
           <FormField label="Valor sugerido"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="price" inputMode="decimal" defaultValue={editingProcedure ? currency.format(editingProcedure.price) : ""} placeholder="R$ 0,00" required /></FormField>
           <FormField label="Duração em minutos"><MaskedInput className={fieldClassName} formatter={(value) => formatInteger(value, 3)} name="duration" inputMode="numeric" defaultValue={editingProcedure?.duration ?? ""} placeholder="60" required /></FormField>
           <FormField label="Margem estimada (%)"><MaskedInput className={fieldClassName} formatter={formatPercent} name="margin" inputMode="numeric" defaultValue={editingProcedure?.margin ?? ""} placeholder="40%" required /></FormField>
-          <div className="sm:col-span-2"><FormField label="Ficha técnica" description="Materiais e quantidades usados em cada atendimento deste procedimento.">
+          <div className="sm:col-span-2"><FormField label="Ficha técnica" description="Materiais e produtos, com as quantidades usadas, em cada atendimento deste procedimento.">
             {editingProcedure?.materialsNeedReview ? <p className="mb-2 rounded-[7px] bg-warning/10 px-3 py-2 text-[11px] font-semibold text-warning">Ficha convertida automaticamente do texto antigo com quantidade 1. Confira e salve para concluir a revisão.</p> : null}
             <TechnicalSheetEditor materials={materialOptions} defaultValue={editingProcedure?.technicalSheet ?? []} />
           </FormField></div>

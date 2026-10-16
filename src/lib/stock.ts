@@ -31,7 +31,7 @@ export async function listMaterials(clinicId: string, includeArchived = false) {
     prisma.product.findMany({
       where: { clinicId, ...(includeArchived ? {} : { archivedAt: null }) },
       orderBy: { name: "asc" },
-      select: { id: true, name: true, category: true, unit: true, costCents: true, supplier: true, minStock: true, archivedAt: true, lots: { select: { id: true } } },
+      select: { id: true, name: true, kind: true, unit: true, costCents: true, supplier: true, minStock: true, archivedAt: true, lots: { select: { id: true } } },
     }),
     lotBalances(clinicId),
     prisma.stockMovement.groupBy({ by: ["productId"], where: { clinicId }, _count: { _all: true } }),
@@ -48,7 +48,7 @@ export async function materialDetail(clinicId: string, productId: string) {
   const product = await prisma.product.findFirst({
     where: { id: productId, clinicId },
     select: {
-      id: true, name: true, category: true, unit: true, costCents: true, supplier: true, minStock: true, archivedAt: true,
+      id: true, name: true, kind: true, unit: true, costCents: true, supplier: true, minStock: true, archivedAt: true,
       lots: { orderBy: { expiresOn: "asc" }, select: { id: true, code: true, expiresOn: true } },
     },
   });
@@ -94,11 +94,11 @@ export function serializeTechnicalSheet(rows: TechnicalSheetRow[]) {
 export async function parseTechnicalSheet(clinicId: string, value: unknown, currentProductIds: string[] = []) {
   if (!Array.isArray(value)) return { error: "Ficha técnica inválida." } as const;
   const items = value.map((item) => ({ productId: String((item as { productId?: unknown })?.productId ?? ""), quantity: Number((item as { quantity?: unknown })?.quantity) }));
-  if (new Set(items.map((item) => item.productId)).size !== items.length) return { error: "Um material aparece mais de uma vez na ficha técnica." } as const;
+  if (new Set(items.map((item) => item.productId)).size !== items.length) return { error: "Um item aparece mais de uma vez na ficha técnica." } as const;
   const products = await prisma.product.findMany({ where: { clinicId, id: { in: items.map((item) => item.productId) } }, select: { id: true, name: true, unit: true, archivedAt: true } });
   for (const item of items) {
     const product = products.find((candidate) => candidate.id === item.productId);
-    if (!product || (product.archivedAt && !currentProductIds.includes(product.id))) return { error: "Material da ficha técnica não encontrado." } as const;
+    if (!product || (product.archivedAt && !currentProductIds.includes(product.id))) return { error: "Item da ficha técnica não encontrado." } as const;
     const quantityError = validateQuantity(item.quantity, product.unit);
     if (quantityError) return { error: `${product.name}: ${quantityError}` } as const;
   }

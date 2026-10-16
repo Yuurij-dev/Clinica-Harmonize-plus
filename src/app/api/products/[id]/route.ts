@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { materialDetail } from "@/lib/stock";
-import { isStockUnit } from "@/lib/stock-rules";
+import { isStockKind, isStockUnit } from "@/lib/stock-rules";
 
 async function adminUser(requireActiveTrial = false) {
   const user = await getCurrentUser({ requireActiveTrial });
@@ -15,7 +15,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const { user, error } = await adminUser();
   if (error) return error;
   const product = await materialDetail(user.clinicId, (await params).id);
-  if (!product) return NextResponse.json({ message: "Material não encontrado." }, { status: 404 });
+  if (!product) return NextResponse.json({ message: "Item não encontrado." }, { status: 404 });
   return NextResponse.json({ product });
 }
 
@@ -25,17 +25,21 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const id = (await params).id;
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   const current = await prisma.product.findFirst({ where: { id, clinicId: user.clinicId }, select: { id: true, unit: true } });
-  if (!current) return NextResponse.json({ message: "Material não encontrado." }, { status: 404 });
+  if (!current) return NextResponse.json({ message: "Item não encontrado." }, { status: 404 });
 
   const text = (key: string) => typeof body?.[key] === "string" && String(body[key]).trim() ? String(body[key]).trim() : undefined;
-  const data: { name?: string; category?: string; supplier?: string; unit?: string; costCents?: number; minStock?: number; archivedAt?: Date | null } = {
-    name: text("name"), category: text("category"), supplier: text("supplier"),
+  const data: { name?: string; kind?: string; supplier?: string; unit?: string; costCents?: number; minStock?: number; archivedAt?: Date | null } = {
+    name: text("name"), supplier: text("supplier"),
   };
   if (body?.unit !== undefined && body.unit !== current.unit) {
     if (!isStockUnit(body.unit)) return NextResponse.json({ message: "Unidade inválida." }, { status: 400 });
     const movements = await prisma.stockMovement.count({ where: { clinicId: user.clinicId, productId: id } });
-    if (movements) return NextResponse.json({ message: "A unidade não pode ser trocada depois que o material teve movimentações." }, { status: 409 });
+    if (movements) return NextResponse.json({ message: "A unidade não pode ser trocada depois que o item teve movimentações." }, { status: 409 });
     data.unit = body.unit;
+  }
+  if (body?.kind !== undefined) {
+    if (!isStockKind(body.kind)) return NextResponse.json({ message: "Tipo inválido." }, { status: 400 });
+    data.kind = body.kind;
   }
   if (body?.costCents !== undefined) {
     const costCents = Number(body.costCents);
@@ -50,7 +54,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (typeof body?.archived === "boolean") data.archivedAt = body.archived ? new Date() : null;
   if (data.name) {
     const duplicate = await prisma.product.findFirst({ where: { clinicId: user.clinicId, name: data.name, NOT: { id } }, select: { id: true } });
-    if (duplicate) return NextResponse.json({ message: "Já existe um material com esse nome." }, { status: 409 });
+    if (duplicate) return NextResponse.json({ message: "Já existe um item com esse nome no estoque." }, { status: 409 });
   }
 
   await prisma.product.update({ where: { id }, data });
@@ -62,9 +66,9 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
   if (error) return error;
   const id = (await params).id;
   const product = await prisma.product.findFirst({ where: { id, clinicId: user.clinicId }, select: { id: true } });
-  if (!product) return NextResponse.json({ message: "Material não encontrado." }, { status: 404 });
+  if (!product) return NextResponse.json({ message: "Item não encontrado." }, { status: 404 });
   const movements = await prisma.stockMovement.count({ where: { clinicId: user.clinicId, productId: id } });
-  if (movements) return NextResponse.json({ message: "Este material já teve movimentações. Arquive-o em vez de apagar." }, { status: 409 });
+  if (movements) return NextResponse.json({ message: "Este item já teve movimentações. Arquive-o em vez de apagar." }, { status: 409 });
   await prisma.product.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }

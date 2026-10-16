@@ -24,7 +24,7 @@ export async function attendanceCheckData(clinicId: string, appointmentId: strin
   const today = clinicToday();
   const [procedures, products, balances] = await Promise.all([
     attendance.kind === "procedure" ? prisma.procedure.findMany({ where: { clinicId }, select: { name: true, technicalSheet: { select: { productId: true, quantity: true } } } }) : Promise.resolve([]),
-    prisma.product.findMany({ where: { clinicId, archivedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true, unit: true, lots: { where: { expiresOn: { gte: new Date(`${today}T00:00:00Z`) } }, orderBy: { expiresOn: "asc" }, select: { id: true, code: true, expiresOn: true } } } }),
+    prisma.product.findMany({ where: { clinicId, archivedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true, kind: true, unit: true, lots: { where: { expiresOn: { gte: new Date(`${today}T00:00:00Z`) } }, orderBy: { expiresOn: "asc" }, select: { id: true, code: true, expiresOn: true } } } }),
     lotBalances(clinicId),
   ]);
   const selectedProcedures = procedureSelectionsFromAppointment(attendance.procedure, procedures.map((procedure) => procedure.name));
@@ -39,7 +39,7 @@ export async function attendanceCheckData(clinicId: string, appointmentId: strin
     appointment: { id: attendance.id, kind: attendance.kind, name: attendance.procedure, date: attendance.date, status: attendance.status, materialsCheck: attendance.materialsCheck, patientName: attendance.patient.name },
     suggestions: [...suggestionQuantities].filter(([productId]) => products.some((product) => product.id === productId)).map(([productId, quantity]) => ({ productId, quantity })),
     materials: products.map((product) => ({
-      id: product.id, name: product.name, unit: product.unit,
+      id: product.id, name: product.name, kind: product.kind, unit: product.unit,
       lots: product.lots.map((lot) => ({ id: lot.id, code: lot.code, expiresOn: dateOnly(lot.expiresOn), balance: balances.get(lot.id) ?? 0 })).filter((lot) => lot.balance > 0),
     })),
   };
@@ -49,7 +49,7 @@ export async function attendanceCheckData(clinicId: string, appointmentId: strin
 // recusados; o que faltar de saldo vira saída pendente. Nunca bloqueia o atendimento.
 export async function registerAttendanceOutputs(tx: StockTransaction, input: { clinicId: string; userId: string; userName: string; attendance: NonNullable<Awaited<ReturnType<typeof findAttendance>>>; items: ItemInput[] }) {
   const { clinicId, attendance } = input;
-  if (new Set(input.items.map((item) => item.productId)).size !== input.items.length) throw new AttendanceMaterialsError("Um material aparece mais de uma vez.");
+  if (new Set(input.items.map((item) => item.productId)).size !== input.items.length) throw new AttendanceMaterialsError("Um item aparece mais de uma vez.");
   const products = await tx.product.findMany({ where: { clinicId, id: { in: input.items.map((item) => item.productId) } }, select: { id: true, name: true, unit: true, lots: { select: { id: true, code: true, expiresOn: true } } } });
   const allLotIds = products.flatMap((product) => product.lots.map((lot) => lot.id));
   await lockLots(tx, allLotIds);
@@ -60,7 +60,7 @@ export async function registerAttendanceOutputs(tx: StockTransaction, input: { c
 
   for (const item of input.items) {
     const product = products.find((candidate) => candidate.id === item.productId);
-    if (!product) throw new AttendanceMaterialsError("Material não encontrado.");
+    if (!product) throw new AttendanceMaterialsError("Item não encontrado.");
     const quantityError = validateQuantity(item.quantity, product.unit);
     if (quantityError) throw new AttendanceMaterialsError(`${product.name}: ${quantityError}`);
     const lots = product.lots.map((lot) => ({ id: lot.id, code: lot.code, expiresOn: dateOnly(lot.expiresOn), balance: balances.get(lot.id) ?? 0 }));

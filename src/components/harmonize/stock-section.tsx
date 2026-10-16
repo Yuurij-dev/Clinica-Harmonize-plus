@@ -7,11 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { MaskedInput } from "@/components/ui/masked-input";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
-import { procedureCategories } from "@/data/categories";
 import { sendJson } from "@/lib/send-json";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, readClientCache } from "@/lib/client-cache";
 import { formatCurrency, parseCurrency } from "@/lib/input-masks";
-import { formatQuantity, parseQuantity, stockUnits, validateQuantity, type LotStatus, type ManualReason } from "@/lib/stock-rules";
+import { formatQuantity, parseQuantity, stockKindLabels, stockKinds, stockUnits, type StockKind, validateQuantity, type LotStatus, type ManualReason } from "@/lib/stock-rules";
 import { LotUsage, ManualMovementForm, MovementHistory } from "./stock-movements";
 import { PendingPanel } from "./pending-panel";
 import { PurchasesPanel } from "./purchases-panel";
@@ -36,15 +35,21 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
   const [loading, setLoading] = useState(!readClientCache(listKey));
   const [loadError, setLoadError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
-  const [editing, setEditing] = useState<StockMaterial | "new" | null>(null);
+  const [editing, setEditing] = useState<StockMaterial | { kind: StockKind } | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"materials" | "purchases" | "pending">("materials");
+  const [tab, setTab] = useState<StockKind | "purchases" | "pending">("material");
+  const itemKind = tab === "material" || tab === "produto" ? tab : null;
+  const [statusByKind, setStatusByKind] = useState<Record<StockKind, "all" | "below" | "ok" | "archived">>({ material: "all", produto: "all" });
+  const materialStatus = statusByKind[itemKind ?? "material"];
+  const setMaterialStatus = (next: "all" | "below" | "ok" | "archived") => setStatusByKind((current) => ({ ...current, [itemKind ?? "material"]: next }));
+  const kindMaterials = useMemo(() => materials.filter((material) => material.kind === itemKind), [materials, itemKind]);
+  const kindLabel = stockKindLabels[itemKind ?? "material"];
+  const kindWord = kindLabel.singular.toLocaleLowerCase("pt-BR");
   const [creatingPurchase, setCreatingPurchase] = useState(false);
-  const [materialStatus, setMaterialStatus] = useState<"all" | "below" | "ok" | "archived">("all");
   const [materialSort, setMaterialSort] = useState("default");
 
   const visibleMaterials = useMemo(() => {
-    const filtered = materials.map((material, index) => ({ material, index })).filter(({ material }) => {
+    const filtered = kindMaterials.map((material, index) => ({ material, index })).filter(({ material }) => {
       if (materialStatus === "archived") return Boolean(material.archivedAt);
       if (material.archivedAt) return materialStatus === "all" && showArchived;
       if (materialStatus === "below") return material.belowMinimum;
@@ -57,7 +62,7 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
       filtered.sort((a, b) => (a.material[field === "cost" ? "costCents" : "balance"] - b.material[field === "cost" ? "costCents" : "balance"]) * multiplier || a.index - b.index);
     }
     return filtered.map(({ material }) => material);
-  }, [materials, materialSort, materialStatus, showArchived]);
+  }, [kindMaterials, materialSort, materialStatus, showArchived]);
 
   useEffect(() => {
     // Compras, saídas e conferências mudam saldos: recarrega quando o cache de materiais é invalidado.
@@ -70,7 +75,7 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
     let active = true;
     getCachedJson<{ products?: StockMaterial[] }>(listKey)
       .then((data) => { if (active) { setMaterials(data.products ?? []); setLoadError(""); } })
-      .catch(() => { if (active) setLoadError("Não foi possível carregar os materiais. Tente atualizar a página."); })
+      .catch(() => { if (active) setLoadError("Não foi possível carregar o estoque. Tente atualizar a página."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [listKey, refreshKey]);
@@ -81,9 +86,10 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
 
   return (
     <div>
-      <SectionIntro title="Estoque" description="Materiais, lotes, validades, compras e saldo disponível da clínica." action={tab === "materials" ? "Novo material" : tab === "purchases" ? "Nova compra" : undefined} onAction={() => tab === "materials" ? setEditing("new") : setCreatingPurchase(true)} />
-      <div className="mb-4 flex gap-2">
-        <Button variant={tab === "materials" ? "primary" : "secondary"} size="sm" onClick={() => setTab("materials")}>Materiais</Button>
+      <SectionIntro title="Estoque" description="Materiais, produtos, lotes, validades, compras e saldo disponível da clínica." action={itemKind ? `Novo ${kindWord}` : tab === "purchases" ? "Nova compra" : undefined} onAction={() => itemKind ? setEditing({ kind: itemKind }) : setCreatingPurchase(true)} />
+      <div className="mb-4 flex flex-wrap gap-2">
+        <Button variant={tab === "material" ? "primary" : "secondary"} size="sm" onClick={() => setTab("material")}>Materiais</Button>
+        <Button variant={tab === "produto" ? "primary" : "secondary"} size="sm" onClick={() => setTab("produto")}>Produtos</Button>
         <Button variant={tab === "purchases" ? "primary" : "secondary"} size="sm" onClick={() => setTab("purchases")}>Compras</Button>
         <Button variant={tab === "pending" ? "primary" : "secondary"} size="sm" onClick={() => setTab("pending")}>Pendências</Button>
       </div>
@@ -96,22 +102,22 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
         </label>
         <label className="flex flex-col gap-1 text-[11px] font-semibold text-muted-foreground">Ordenar por
           <select className={`${fieldClassName} h-9 min-w-[185px] py-1 text-xs`} value={materialSort} onChange={(event) => setMaterialSort(event.target.value)}>
-            <option value="default">Nome</option><option value="cost-asc">Custo: menor primeiro</option><option value="cost-desc">Custo: maior primeiro</option><option value="balance-asc">Saldo: menor primeiro</option><option value="balance-desc">Saldo: maior primeiro</option>
+            <option value="default">Nome (A–Z)</option><option value="cost-asc">Custo: menor primeiro</option><option value="cost-desc">Custo: maior primeiro</option><option value="balance-asc">Saldo: menor primeiro</option><option value="balance-desc">Saldo: maior primeiro</option>
           </select>
         </label>
         <label className="flex h-9 items-center gap-2 text-xs font-semibold text-muted-foreground">
-          <input type="checkbox" checked={showArchived} onChange={(event) => { setLoading(true); setShowArchived(event.target.checked); if (!event.target.checked && materialStatus === "archived") setMaterialStatus("all"); }} />
+          <input type="checkbox" checked={showArchived} onChange={(event) => { setLoading(true); setShowArchived(event.target.checked); if (!event.target.checked) setStatusByKind((current) => ({ material: current.material === "archived" ? "all" : current.material, produto: current.produto === "archived" ? "all" : current.produto })); }} />
           Mostrar arquivados
         </label>
       </div> : null}
       {loading ? <LoadingTable columns={7} /> : loadError ? (
-        <EmptyState title="Erro ao carregar materiais" description={loadError} />
-      ) : materials.length && visibleMaterials.length ? (
+        <EmptyState title="Erro ao carregar o estoque" description={loadError} />
+      ) : visibleMaterials.length ? (
         <div className="overflow-x-auto">
           <MiniTable
-            columns={["Material", "Unidade", "Saldo", "Mínimo", "Custo", "Situação", "Ação"]}
+            columns={[kindLabel.singular, "Unidade", "Saldo", "Mínimo", "Custo", "Situação", "Ação"]}
             rows={visibleMaterials.map((material) => [
-              <div key="name"><p className="font-bold text-foreground">{material.name}</p><p className="text-xs text-muted-foreground">{material.category} · {material.supplier}</p></div>,
+              <div key="name"><p className="font-bold text-foreground">{material.name}</p><p className="text-xs text-muted-foreground">{material.supplier}</p></div>,
               material.unit,
               <strong key="balance">{formatQuantity(material.balance, material.unit)}</strong>,
               formatQuantity(material.minStock, material.unit),
@@ -121,10 +127,10 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
             ])}
           />
         </div>
-      ) : materials.length ? <EmptyState title="Nenhum material encontrado" description="Nenhum material corresponde à situação selecionada. Ajuste o filtro para ver outros resultados." /> : <EmptyState title="Nenhum material cadastrado" description="Cadastre os materiais da clínica para controlar saldo, lotes e validades." />}
+      ) : kindMaterials.length ? <EmptyState title={`Nenhum ${kindWord} encontrado`} description={`Nenhum ${kindWord} corresponde à situação selecionada. Ajuste o filtro para ver outros resultados.`} /> : <EmptyState title={`Nenhum ${kindWord} cadastrado`} description={`Cadastre os ${kindLabel.plural.toLocaleLowerCase("pt-BR")} da clínica para controlar saldo, lotes e validades.`} />}
       </>}
 
-      {editing ? <MaterialFormModal material={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={(material, created) => {
+      {editing ? <MaterialFormModal material={"id" in editing ? editing : null} kind={editing.kind} onClose={() => setEditing(null)} onSaved={(material, created) => {
         setEditing(null);
         refresh(material.id);
         onSaved?.(created ? `${material.name} foi adicionado ao estoque.` : `${material.name} foi atualizado.`);
@@ -134,7 +140,8 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
   );
 }
 
-function MaterialFormModal({ material, onClose, onSaved }: { material: StockMaterial | null; onClose: () => void; onSaved: (material: StockMaterial, created: boolean) => void }) {
+function MaterialFormModal({ material, kind, onClose, onSaved }: { material: StockMaterial | null; kind: StockKind; onClose: () => void; onSaved: (material: StockMaterial, created: boolean) => void }) {
+  const word = stockKindLabels[kind].singular.toLocaleLowerCase("pt-BR");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -148,39 +155,39 @@ function MaterialFormModal({ material, onClose, onSaved }: { material: StockMate
     }
     const payload = {
       name: String(form.get("name") ?? "").trim(),
-      category: String(form.get("category") ?? ""),
       supplier: String(form.get("supplier") ?? "").trim(),
       unit: String(form.get("unit") ?? ""),
       costCents: Math.round(parseCurrency(form.get("cost")) * 100),
       minStock,
+      kind: material ? String(form.get("kind") ?? material.kind) : kind,
     };
     setSaving(true);
     setError("");
     const { ok, data } = await sendJson<{ product?: StockMaterial }>(material ? `/api/products/${material.id}` : "/api/products", material ? "PATCH" : "POST", payload);
     setSaving(false);
     if (!ok || !data?.product) {
-      setError(data?.message ?? "Não foi possível salvar o material.");
+      setError(data?.message ?? `Não foi possível salvar o ${word}.`);
       return;
     }
     onSaved(data.product, !material);
   }
 
   return (
-    <Modal open onClose={onClose} title={material ? "Editar material" : "Novo material"} description="O custo é atualizado sozinho a cada compra, mas pode ser editado aqui.">
+    <Modal open onClose={onClose} title={material ? `Editar ${word}` : `Novo ${word}`} description="O custo é atualizado sozinho a cada compra, mas pode ser editado aqui.">
       <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
         <div className="sm:col-span-2"><FormField label="Nome"><input className={fieldClassName} name="name" defaultValue={material?.name ?? ""} required /></FormField></div>
-        <FormField label="Categoria"><select className={fieldClassName} name="category" defaultValue={material?.category ?? ""} required><option value="">Selecione uma categoria</option>{procedureCategories.map((category) => <option key={category}>{category}</option>)}</select></FormField>
         <FormField label="Fornecedor"><input className={fieldClassName} name="supplier" defaultValue={material?.supplier ?? ""} required /></FormField>
-        <FormField label="Unidade" description={material?.hasMovements ? "Não pode ser trocada: o material já teve movimentações." : undefined}>
+        <FormField label="Unidade" description={material?.hasMovements ? `Não pode ser trocada: o ${word} já teve movimentações.` : undefined}>
           <select className={fieldClassName} name="unit" defaultValue={material?.unit ?? "ml"} disabled={material?.hasMovements}>{stockUnits.map((unit) => <option key={unit}>{unit}</option>)}</select>
           {material?.hasMovements ? <input type="hidden" name="unit" value={material.unit} /> : null}
         </FormField>
         <FormField label="Custo unitário"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="cost" inputMode="decimal" placeholder="R$ 0,00" defaultValue={material ? currency.format(material.costCents / 100) : ""} required /></FormField>
-        <FormField label="Estoque mínimo" description="Abaixo disso o material aparece nos avisos."><input className={fieldClassName} name="minStock" inputMode="decimal" placeholder="0" defaultValue={material ? String(material.minStock).replace(".", ",") : ""} /></FormField>
+        <FormField label="Estoque mínimo" description="Abaixo disso o item aparece nos avisos."><input className={fieldClassName} name="minStock" inputMode="decimal" placeholder="0" defaultValue={material ? String(material.minStock).replace(".", ",") : ""} /></FormField>
+        {material ? <FormField label="Tipo" description="Troque só se o item foi cadastrado na aba errada."><select className={fieldClassName} name="kind" defaultValue={material.kind}>{stockKinds.map((value) => <option key={value} value={value}>{stockKindLabels[value].singular}</option>)}</select></FormField> : null}
         {error ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{error}</p> : null}
         <div className="mt-2 flex justify-end gap-2 sm:col-span-2">
           <Button type="button" variant="secondary" disabled={saving} onClick={onClose}>Cancelar</Button>
-          <Button type="submit" disabled={saving}>{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{saving ? "Salvando..." : "Salvar material"}</Button>
+          <Button type="submit" disabled={saving}>{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{saving ? "Salvando..." : `Salvar ${word}`}</Button>
         </div>
       </form>
     </Modal>
@@ -225,7 +232,7 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
     let active = true;
     getCachedJson<{ product?: StockMaterialDetail }>(detailKey)
       .then((data) => { if (active) setDetail(data.product ?? null); })
-      .catch(() => { if (active) setError("Não foi possível carregar o material."); });
+      .catch(() => { if (active) setError("Não foi possível carregar o item."); });
     return () => { active = false; };
   }, [detailKey]);
 
@@ -262,7 +269,7 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
     const { ok, data } = await sendJson<{ product?: StockMaterialDetail }>(detailKey, "PATCH", { archived: !detail.archivedAt });
     setBusy(null);
     if (!ok || !data?.product) {
-      setError(data?.message ?? "Não foi possível atualizar o material.");
+      setError(data?.message ?? "Não foi possível atualizar o item.");
       return;
     }
     setDetail(data.product);
@@ -276,14 +283,14 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
     const { ok, data } = await sendJson<{ message?: string }>(detailKey, "DELETE");
     setBusy(null);
     if (!ok) {
-      setError(data?.message ?? "Não foi possível apagar o material.");
+      setError(data?.message ?? "Não foi possível apagar o item.");
       return;
     }
     onRemoved(`${detail.name} foi apagado.`);
   }
 
   return (
-    <Modal open onClose={onClose} title={detail?.name ?? "Material"} description={detail ? `${detail.category} · ${detail.supplier}` : undefined}>
+    <Modal open onClose={onClose} title={detail?.name ?? "Item"} description={detail ? `${(stockKindLabels[detail.kind] ?? stockKindLabels.material).singular} · ${detail.supplier}` : undefined}>
       {!detail ? <div className="grid place-items-center py-10"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div> : (
         <div className="space-y-5">
           <div className="grid gap-3 sm:grid-cols-3">
@@ -321,7 +328,7 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
                 {emptyLotCount > 0 ? <Button size="sm" variant="ghost" onClick={() => setShowEmptyLots((current) => !current)}>{showEmptyLots ? "Esconder lotes zerados" : `Mostrar lotes zerados (${emptyLotCount})`}</Button> : null}
               </div>
             ) : null}
-            {detail.lots.length ? <div className="mt-2 flex justify-end"><Button size="sm" variant={history && !history.lotId ? "secondary" : "ghost"} aria-pressed={Boolean(history && !history.lotId)} onClick={() => openPanel({ history: {} })}>Ver histórico do material</Button></div> : null}
+            {detail.lots.length ? <div className="mt-2 flex justify-end"><Button size="sm" variant={history && !history.lotId ? "secondary" : "ghost"} aria-pressed={Boolean(history && !history.lotId)} onClick={() => openPanel({ history: {} })}>Ver histórico do item</Button></div> : null}
           </div>
 
           {movementForm ? <ManualMovementForm<StockMaterialDetail> key={`movement-${movementForm.lotId}-${movementForm.reason}`} productId={detail.id} unit={detail.unit} lots={detail.lots} initial={movementForm} onCancel={() => setMovementForm(null)} onSaved={(product) => { setDetail(product); setMovementForm(null); setHistoryVersion((current) => current + 1); onChanged(`Movimentação registrada em ${product.name}.`); }} /> : null}
