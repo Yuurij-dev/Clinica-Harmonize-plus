@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import type { SectionId } from "@/types/clinic";
+import type { StockAlert } from "@/lib/stock-rules";
 import { StockAlertItem, useStockAlerts } from "./stock-alerts";
 
 type TopbarProps = {
@@ -11,6 +12,7 @@ type TopbarProps = {
   onDashboard: () => void;
   onSettings: () => void;
   onNavigate: (section: SectionId) => void;
+  onOpenStockAlert: (alert: StockAlert) => void;
   onLogout: () => Promise<void>;
   user?: { id: string; name: string; role: string; clinic?: { trialEndsAt?: string | null } } | null;
 };
@@ -46,7 +48,7 @@ function formatTrialRemaining(milliseconds: number) {
   return `${days}d ${String(hours).padStart(2, "0")}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
 }
 
-export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, user }: TopbarProps) {
+export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStockAlert, onLogout, user }: TopbarProps) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -233,7 +235,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onLogout, 
             {appointmentAlerts.length ? appointmentAlerts.map((alert) => <p className="mt-3 rounded-md bg-accent p-3 text-[11px] leading-5 text-accent-foreground" key={alert.id}>{alert.message}</p>) : <><p className="mt-3 rounded-md bg-muted p-3 text-[11px] leading-5 text-muted-foreground">Nenhum atendimento no horário neste momento.</p><p className="mt-2 rounded-md bg-muted p-3 text-[11px] leading-5 text-muted-foreground">As notificações dos próximos atendimentos aparecerão aqui.</p></>}
             {stockAlerts.length ? <>
               <p className="mt-4 text-xs font-semibold">Estoque</p>
-              <div className="mt-2 space-y-2">{stockAlerts.map((alert) => <StockAlertItem alert={alert} key={`${alert.kind}-${alert.lotId ?? alert.productId}-${alert.message}`} onOpen={() => { setNotificationsOpen(false); onNavigate("estoque"); }} />)}</div>
+              <div className="mt-2 space-y-2">{stockAlerts.map((alert) => <StockAlertItem alert={alert} key={`${alert.kind}-${alert.lotId ?? alert.productId}-${alert.message}`} onOpen={() => { setNotificationsOpen(false); onOpenStockAlert(alert); }} />)}</div>
             </> : null}
           </DropdownMenuContent>
         </DropdownMenu>

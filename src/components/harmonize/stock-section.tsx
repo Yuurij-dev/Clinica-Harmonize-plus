@@ -12,8 +12,6 @@ import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, readClientCache } from "
 import { formatCurrency, parseCurrency } from "@/lib/input-masks";
 import { formatQuantity, parseQuantity, stockKindLabels, stockKinds, stockUnits, type StockKind, validateQuantity, type LotStatus, type ManualReason } from "@/lib/stock-rules";
 import { LotUsage, ManualMovementForm, MovementHistory } from "./stock-movements";
-import { PendingPanel } from "./pending-panel";
-import { PurchasesPanel } from "./purchases-panel";
 import { EmptyState, LoadingTable, MiniTable, SectionIntro } from "./shared";
 import { formatDateOnly, invalidateStockCache, type StockMaterial } from "./stock-shared";
 
@@ -37,15 +35,13 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
   const [refreshKey, setRefreshKey] = useState(0);
   const [editing, setEditing] = useState<StockMaterial | { kind: StockKind } | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
-  const [tab, setTab] = useState<StockKind | "purchases" | "pending">("material");
-  const itemKind = tab === "material" || tab === "produto" ? tab : null;
+  const [itemKind, setItemKind] = useState<StockKind>("material");
   const [statusByKind, setStatusByKind] = useState<Record<StockKind, "all" | "below" | "ok" | "archived">>({ material: "all", produto: "all" });
-  const materialStatus = statusByKind[itemKind ?? "material"];
-  const setMaterialStatus = (next: "all" | "below" | "ok" | "archived") => setStatusByKind((current) => ({ ...current, [itemKind ?? "material"]: next }));
+  const materialStatus = statusByKind[itemKind];
+  const setMaterialStatus = (next: "all" | "below" | "ok" | "archived") => setStatusByKind((current) => ({ ...current, [itemKind]: next }));
   const kindMaterials = useMemo(() => materials.filter((material) => material.kind === itemKind), [materials, itemKind]);
-  const kindLabel = stockKindLabels[itemKind ?? "material"];
+  const kindLabel = stockKindLabels[itemKind];
   const kindWord = kindLabel.singular.toLocaleLowerCase("pt-BR");
-  const [creatingPurchase, setCreatingPurchase] = useState(false);
   const [materialSort, setMaterialSort] = useState("default");
 
   const visibleMaterials = useMemo(() => {
@@ -65,7 +61,7 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
   }, [kindMaterials, materialSort, materialStatus, showArchived]);
 
   useEffect(() => {
-    // Compras, saídas e conferências mudam saldos: recarrega quando o cache de materiais é invalidado.
+    // Compras, saídas e conferências (na seção Compras) mudam saldos: recarrega quando o cache de materiais é invalidado.
     const handle = (event: Event) => { if ((event as CustomEvent<string[]>).detail?.includes("/api/products")) setRefreshKey((current) => current + 1); };
     window.addEventListener(CLIENT_CACHE_INVALIDATED_EVENT, handle);
     return () => window.removeEventListener(CLIENT_CACHE_INVALIDATED_EVENT, handle);
@@ -86,14 +82,11 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
 
   return (
     <div>
-      <SectionIntro title="Estoque" description="Materiais, produtos, lotes, validades, compras e saldo disponível da clínica." action={itemKind ? `Novo ${kindWord}` : tab === "purchases" ? "Nova compra" : undefined} onAction={() => itemKind ? setEditing({ kind: itemKind }) : setCreatingPurchase(true)} />
+      <SectionIntro title="Estoque" description="Materiais, produtos, lotes, validades e saldo disponível da clínica." action={`Novo ${kindWord}`} onAction={() => setEditing({ kind: itemKind })} />
       <div className="mb-4 flex flex-wrap gap-2">
-        <Button variant={tab === "material" ? "primary" : "secondary"} size="sm" onClick={() => setTab("material")}>Materiais</Button>
-        <Button variant={tab === "produto" ? "primary" : "secondary"} size="sm" onClick={() => setTab("produto")}>Produtos</Button>
-        <Button variant={tab === "purchases" ? "primary" : "secondary"} size="sm" onClick={() => setTab("purchases")}>Compras</Button>
-        <Button variant={tab === "pending" ? "primary" : "secondary"} size="sm" onClick={() => setTab("pending")}>Pendências</Button>
+        <Button variant={itemKind === "material" ? "primary" : "secondary"} size="sm" onClick={() => setItemKind("material")}>Materiais</Button>
+        <Button variant={itemKind === "produto" ? "primary" : "secondary"} size="sm" onClick={() => setItemKind("produto")}>Produtos</Button>
       </div>
-      {tab === "pending" ? <PendingPanel onSaved={onSaved} /> : tab === "purchases" ? <PurchasesPanel materials={materials} creating={creatingPurchase} onCloseCreate={() => setCreatingPurchase(false)} onSaved={onSaved} /> : <>
       {!loading && !loadError ? <div className="mb-4 flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1 text-[11px] font-semibold text-muted-foreground">Situação
           <select className={`${fieldClassName} h-9 min-w-[170px] py-1 text-xs`} value={materialStatus} onChange={(event) => { const next = event.target.value as typeof materialStatus; setMaterialStatus(next); if (next === "archived" && !showArchived) { setLoading(true); setShowArchived(true); } }}>
@@ -128,7 +121,6 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
           />
         </div>
       ) : kindMaterials.length ? <EmptyState title={`Nenhum ${kindWord} encontrado`} description={`Nenhum ${kindWord} corresponde à situação selecionada. Ajuste o filtro para ver outros resultados.`} /> : <EmptyState title={`Nenhum ${kindWord} cadastrado`} description={`Cadastre os ${kindLabel.plural.toLocaleLowerCase("pt-BR")} da clínica para controlar saldo, lotes e validades.`} />}
-      </>}
 
       {editing ? <MaterialFormModal material={"id" in editing ? editing : null} kind={editing.kind} onClose={() => setEditing(null)} onSaved={(material, created) => {
         setEditing(null);

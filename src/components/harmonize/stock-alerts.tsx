@@ -47,13 +47,13 @@ export function StockAlertItem({ alert, onOpen, variant = "boxed" }: { alert: St
   );
 }
 
-export function StockAlertsCard({ onOpen }: { onOpen: () => void }) {
+export function StockAlertsCard({ onOpen }: { onOpen: (alert: StockAlert) => void }) {
   const alerts = useStockAlerts(true);
   if (!alerts.length) return null;
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center" aria-label={`${alerts.length} ${alerts.length === 1 ? "aviso de estoque" : "avisos de estoque"}`}>
       <span className="text-xs font-bold text-muted-foreground">{alerts.length} {alerts.length === 1 ? "aviso" : "avisos"}</span>
-      {alerts.map((alert) => <StockAlertItem alert={alert} key={`${alert.kind}-${alert.lotId ?? alert.productId}-${alert.message}`} onOpen={onOpen} variant="plain" />)}
+      {alerts.map((alert) => <StockAlertItem alert={alert} key={`${alert.kind}-${alert.lotId ?? alert.productId}-${alert.message}`} onOpen={() => onOpen(alert)} variant="plain" />)}
     </div>
   );
 }

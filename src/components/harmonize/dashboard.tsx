@@ -9,12 +9,13 @@ import { cn } from "@/lib/utils";
 import { CountUpValue, DetailCard, LoadingSkeleton, PageContainer, ProgressBar, StatCard, StatusBadge } from "./shared";
 import { StockAlertsCard } from "./stock-alerts";
 import type { SectionId } from "@/types/clinic";
+import type { StockAlert } from "@/lib/stock-rules";
 import { getCachedJson, readClientCache } from "@/lib/client-cache";
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
-export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onAction: (action: "client" | "appointment" | "quote" | "payment") => void; onNavigate: (section: SectionId, focus?: { date: string; time: string }) => void; userName?: string }) {
+export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "Usuário" }: { onAction: (action: "client" | "appointment" | "quote" | "payment") => void; onNavigate: (section: SectionId, focus?: { date: string; time: string }) => void; onOpenStockAlert: (alert: StockAlert) => void; userName?: string }) {
   type DashboardData = { appointmentCount: number; appointments: Array<{ id: string; date: string; time: string; procedure: string; status: string; patient?: { name: string } | null }>; patients: Array<{ name: string; status: string; lastVisit: string | null; createdAt: string }>; quotes: Array<{ id: string; items: string; total: number; status: string; patient?: { name: string } | null }>; payments: Array<{ value: number; status: string; date: string }> };
   const cachedDashboard = readClientCache<DashboardData>("/api/dashboard/bootstrap");
   const [data, setData] = useState<DashboardData | null>(cachedDashboard ?? null);
@@ -113,7 +114,7 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
         </div>
       </div>
 
-      <StockAlertsCard onOpen={() => onNavigate("estoque")} />
+      <StockAlertsCard onOpen={onOpenStockAlert} />
 
       <div className="hp-list-stagger grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         {stats.map((stat) => (
