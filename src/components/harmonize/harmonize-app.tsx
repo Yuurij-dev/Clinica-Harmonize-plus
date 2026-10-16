@@ -9,7 +9,7 @@ import { Sidebar } from "./sidebar";
 import { StockSection } from "./stock-section";
 import { PurchasesSection, type PurchasesTab } from "./purchases-section";
 import { FinanceSection } from "./finance-section";
-import { StockSettingsCard } from "./stock-alerts";
+import { StockSettingsCard, stockAlertSection } from "./stock-alerts";
 import { Topbar } from "./topbar";
 import {
   ClientsSection,
@@ -124,8 +124,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
 
   // Saídas e conferências pendentes abrem Compras já na aba Pendências; avisos de lote e saldo abrem o Estoque.
   function openStockAlert(alert: StockAlert) {
-    if (alert.kind === "pending") selectSection("compras", undefined, "pending");
-    else selectSection("estoque");
+    selectSection(stockAlertSection(alert), undefined, "pending");
   }
 
   useEffect(() => {

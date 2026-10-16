@@ -47,11 +47,13 @@ export function CountUpValue({
 
 export function SectionIntro({
   title,
+  titleAddon,
   description,
   action,
   onAction,
 }: {
   title: string;
+  titleAddon?: React.ReactNode;
   description: string;
   action?: string;
   onAction?: () => void;
@@ -59,7 +61,10 @@ export function SectionIntro({
   return (
     <div className="hp-page-enter mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div>
-        <h2 className="text-lg font-bold text-primary">{title}</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="text-lg font-bold text-primary">{title}</h2>
+          {titleAddon}
+        </div>
         <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
           {description}
         </p>
