@@ -255,13 +255,30 @@ async function browser(homonym) {
     const naLista = await page.getByRole("row").filter({ hasText: trocado.name }).count();
     const tipoGravado = (await api("GET", `/api/products/${trocado.id}`)).data.product?.kind;
     check("trocar o tipo pela tela move o item de Materiais para Produtos", naLista === 0 && tipoGravado === "produto", `linhas em Materiais: ${naLista}, tipo: ${tipoGravado}`);
-    await page.getByRole("button", { name: "Compras", exact: true }).click();
+    check("Estoque não tem mais as abas Compras e Pendências", (await page.getByRole("main").getByRole("button", { name: /^(Compras|Pendências)$/ }).count()) === 0);
+    // Compras e Pendências ficam numa seção própria do menu.
+    await page.getByRole("navigation").getByRole("button", { name: "Compras" }).first().click();
+    await page.waitForURL(`${baseUrl}/compras`);
+    await page.getByRole("main").getByRole("button", { name: "Pendências", exact: true }).click();
+    await page.getByLabel("Tipo de pendência").waitFor();
+    check("menu Compras abre a seção com a aba Pendências", true);
+    await page.getByRole("main").getByRole("button", { name: "Compras", exact: true }).click();
     await page.getByRole("button", { name: "Nova compra" }).first().click();
     const itemSelect = page.locator("select").filter({ has: page.locator("option", { hasText: "Selecione um item" }) }).first();
     await itemSelect.locator(`optgroup[label="Materiais"] option`, { hasText: material.name }).waitFor({ state: "attached" });
     check("seleção de item na compra agrupa em Materiais e Produtos", (await itemSelect.locator(`optgroup[label="Produtos"] option`, { hasText: produto.name }).count()) === 1);
+    // Aviso de pendência abre Compras direto na aba Pendências, mesmo já estando em Compras.
+    const attendance = (await api("POST", "/api/appointments", { patientId: homonym.id, procedure: "Pendência tela", professional: "Teste", time: "15:00", date: `${day(1)}T00:00:00` })).data.appointment;
+    await api("PATCH", `/api/appointments/${attendance.id}`, { status: "Atendido" });
+    await api("POST", `/api/appointments/${attendance.id}/materials`, { items: [{ productId: material.id, quantity: 1 }] });
+    await page.goto(`${baseUrl}/compras`);
+    await page.getByRole("button", { name: "Nova compra" }).first().waitFor();
+    await page.getByRole("button", { name: "Notificações" }).click();
+    await page.getByRole("button", { name: /saída de estoque pendente/ }).click();
+    await page.getByLabel("Tipo de pendência").waitFor();
+    check("aviso de pendência abre Compras na aba Pendências", page.url() === `${baseUrl}/compras`, page.url());
 
-    for (const section of ["dashboard", "agenda", "clientes", "estoque", "financeiro", "configuracoes"]) {
+    for (const section of ["dashboard", "agenda", "clientes", "estoque", "compras", "financeiro", "configuracoes"]) {
       await page.goto(`${baseUrl}/${section}`, { waitUntil: "networkidle" });
     }
     check("telas principais abrem sem erro de JavaScript", pageErrors.length === 0, pageErrors.join(" | "));

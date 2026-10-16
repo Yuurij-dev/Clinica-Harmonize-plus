@@ -7,6 +7,7 @@ import { AppToaster } from "./app-toaster";
 import { Dashboard } from "./dashboard";
 import { Sidebar } from "./sidebar";
 import { StockSection } from "./stock-section";
+import { PurchasesSection, type PurchasesTab } from "./purchases-section";
 import { FinanceSection } from "./finance-section";
 import { StockSettingsCard } from "./stock-alerts";
 import { Topbar } from "./topbar";
@@ -20,6 +21,7 @@ import {
   SettingsSection,
 } from "./sections";
 import type { SectionId } from "@/types/clinic";
+import type { StockAlert } from "@/lib/stock-rules";
 import { CLIENT_CACHE_UNAUTHORIZED_EVENT, getCachedJson, setClientCacheScope } from "@/lib/client-cache";
 import { visibleSections } from "@/lib/permissions";
 import { CurrentRoleProvider } from "./current-user";
@@ -42,6 +44,7 @@ const initialScreenResources: Partial<Record<SectionId, { key: string; message: 
   clientes: { key: "/api/patients", message: "Carregando a lista de pacientes..." },
   procedimentos: { key: "/api/procedures", message: "Carregando os procedimentos..." },
   estoque: { key: "/api/products", message: "Carregando o estoque..." },
+  compras: { key: "/api/purchases", message: "Carregando as compras..." },
   orcamentos: { key: "/api/quotes", message: "Carregando os orçamentos..." },
   pagamentos: { key: "/api/payments", message: "Carregando os pagamentos..." },
   financeiro: { key: "/api/finance/summary?period=month", message: "Carregando o resumo financeiro..." },
@@ -68,6 +71,7 @@ const sectionPaths: Record<SectionId, string> = {
   clientes: "/clientes",
   procedimentos: "/procedimentos",
   estoque: "/estoque",
+  compras: "/compras",
   orcamentos: "/orcamentos",
   pagamentos: "/pagamentos",
   financeiro: "/financeiro",
@@ -92,6 +96,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const [startup, setStartup] = useState<StartupState>({ status: "checking-session", sessionConfirmed: false, message: "Validando seu acesso..." });
   const [startupAttempt, setStartupAttempt] = useState(0);
   const [agendaFocus, setAgendaFocus] = useState<AgendaFocus | null>(null);
+  const [purchasesTab, setPurchasesTab] = useState<PurchasesTab>("purchases");
   const [undoNotice, setUndoNotice] = useState<UndoNotice>(null);
   const undoNoticeId = useRef(0);
   const trialExpired = currentUser?.trialExpired === true;
@@ -106,14 +111,21 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     return () => { window.clearTimeout(leaveTimer); window.clearTimeout(dismissTimer); };
   }, [activeUndoNoticeId]);
 
-  function selectSection(section: SectionId, focus?: AgendaFocus) {
+  function selectSection(section: SectionId, focus?: AgendaFocus, tab: PurchasesTab = "purchases") {
     if (!allowedSections.includes(section)) {
       return;
     }
     setAgendaFocus(section === "agenda" ? focus ?? null : null);
+    if (section === "compras") setPurchasesTab(tab);
     setMobileOpen(false);
     setCreateDialog(null);
     router.push(sectionPaths[section]);
+  }
+
+  // Saídas e conferências pendentes abrem Compras já na aba Pendências; avisos de lote e saldo abrem o Estoque.
+  function openStockAlert(alert: StockAlert) {
+    if (alert.kind === "pending") selectSection("compras", undefined, "pending");
+    else selectSection("estoque");
   }
 
   useEffect(() => {
@@ -249,13 +261,17 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
         role={currentUser?.role}
       />
       <div className="lg:pl-[220px]">
-        <Topbar user={currentUser} onMenu={() => setMobileOpen(true)} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onLogout={logout} />
+        <Topbar user={currentUser} onMenu={() => setMobileOpen(true)} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onOpenStockAlert={openStockAlert} onLogout={logout} />
         <main className={`mx-auto w-full ${active === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-10 pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
-          {currentUser && allowedSections.includes("dashboard") && active === "dashboard" ? <Dashboard userName={currentUser?.name} onNavigate={selectSection} /> : null}
+          {currentUser && allowedSections.includes("dashboard") && active === "dashboard" ? <Dashboard userName={currentUser?.name} onAction={(action) => {
+            const target = { client: ["clientes", "client"], appointment: ["agenda", "appointment"], quote: ["orcamentos", "quote"], payment: ["pagamentos", "payment"] }[action] as [SectionId, NonNullable<typeof createDialog>];
+            openCreate(target[0], target[1]);
+          }} onNavigate={selectSection} onOpenStockAlert={openStockAlert} /> : null}
           {currentUser && active === "agenda" ? <ScheduleSection focus={agendaFocus} openCreate={createDialog === "appointment"} onCreateOpen={() => openCreate("agenda", "appointment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && active === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => openCreate("clientes", "client")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && allowedSections.includes("procedimentos") && active === "procedimentos" ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => openCreate("procedimentos", "procedure")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && allowedSections.includes("estoque") && active === "estoque" ? <StockSection onSaved={showNotice} /> : null}
+          {currentUser && allowedSections.includes("compras") && active === "compras" ? <PurchasesSection tab={purchasesTab} onTabChange={setPurchasesTab} onSaved={showNotice} /> : null}
           {currentUser && active === "orcamentos" ? <QuotesSection openCreate={createDialog === "quote"} onCreateOpen={() => openCreate("orcamentos", "quote")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && allowedSections.includes("pagamentos") && active === "pagamentos" ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => openCreate("pagamentos", "payment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && allowedSections.includes("financeiro") && active === "financeiro" ? <FinanceSection /> : null}

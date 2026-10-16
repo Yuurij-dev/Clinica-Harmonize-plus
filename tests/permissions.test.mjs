@@ -29,11 +29,12 @@ test("papel desconhecido ou ausente não tem permissão nenhuma", () => {
 });
 
 test("menu por papel", () => {
-  assert.deepEqual(visibleSections("ADMIN"), ["dashboard", "agenda", "clientes", "procedimentos", "estoque", "orcamentos", "pagamentos", "financeiro", "relatorios", "calculadora", "configuracoes"]);
+  assert.deepEqual(visibleSections("ADMIN"), ["dashboard", "agenda", "clientes", "procedimentos", "estoque", "compras", "orcamentos", "pagamentos", "financeiro", "relatorios", "calculadora", "configuracoes"]);
   assert.deepEqual(visibleSections("PROFESSIONAL"), ["agenda", "clientes", "orcamentos"]);
   assert.deepEqual(visibleSections("STAFF"), ["agenda", "clientes", "orcamentos", "pagamentos"]);
   assert.equal(visibleSections("STAFF").includes("financeiro"), false);
   assert.equal(visibleSections("STAFF").includes("estoque"), false);
+  assert.equal(visibleSections("STAFF").includes("compras"), false);
 });
 
 test("observações: atendente só administrativas", () => {

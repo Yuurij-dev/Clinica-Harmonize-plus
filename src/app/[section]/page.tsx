@@ -6,6 +6,7 @@ const sections = new Set<SectionId>([
   "dashboard",
   "procedimentos",
   "estoque",
+  "compras",
   "clientes",
   "orcamentos",
   "pagamentos",
