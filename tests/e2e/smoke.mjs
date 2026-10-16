@@ -278,6 +278,22 @@ async function browser(homonym) {
     await page.getByLabel("Tipo de pendência").waitFor();
     check("aviso de pendência abre Compras na aba Pendências", page.url() === `${baseUrl}/compras`, page.url());
 
+    // ⚠ no título e no menu de cada seção, só com os avisos dela; passar o mouse mostra a lista.
+    const baixo = (await api("POST", "/api/products", { name: `Abaixo tela ${run}`, kind: "material", unit: "frasco", costCents: 100, supplier: "Fornecedor", minStock: 5 })).data.product;
+    await page.goto(`${baseUrl}/compras`);
+    const titleWarning = page.getByRole("main").getByRole("button", { name: /^\d+ avisos?$/ });
+    await titleWarning.hover();
+    const comprasTip = page.getByRole("main").getByRole("tooltip");
+    await comprasTip.getByText(/saída de estoque pendente/).waitFor();
+    check("⚠ de Compras mostra só as pendências", (await comprasTip.getByText(baixo.name).count()) === 0);
+    await page.goto(`${baseUrl}/estoque`);
+    await titleWarning.hover();
+    const estoqueTip = page.getByRole("main").getByRole("tooltip");
+    await estoqueTip.getByText(`${baixo.name} abaixo do mínimo`, { exact: false }).waitFor();
+    check("⚠ do Estoque mostra o item abaixo do mínimo e não as pendências", (await estoqueTip.getByText(/pendente/).count()) === 0);
+    const menu = page.getByRole("navigation");
+    check("menu mostra ⚠ em Estoque e em Compras", await menu.getByRole("button", { name: /Estoque/ }).first().getByLabel(/avisos?$/).isVisible() && await menu.getByRole("button", { name: /Compras/ }).first().getByLabel(/avisos?$/).isVisible());
+
     for (const section of ["dashboard", "agenda", "clientes", "estoque", "compras", "financeiro", "configuracoes"]) {
       await page.goto(`${baseUrl}/${section}`, { waitUntil: "networkidle" });
     }
