@@ -15,6 +15,7 @@ import { ProcedureSessionWorkspace } from "./procedure-session-workspace";
 import { PostProcedureWorkspace } from "./post-procedure-workspace";
 import { EncounterBreadcrumb, type EncounterBreadcrumbActions } from "./encounter-breadcrumb";
 import { useDraftAutosave } from "./use-draft-autosave";
+import { revealValidationTarget } from "./reveal-validation-target";
 
 type ProcedureOption = {
   id: string;
@@ -566,9 +567,9 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
   }
 
   async function saveDraft(automatic = false) {
-    if (!lines.length) { setSelectionError("Selecione ao menos um procedimento para salvar o orçamento."); return null; }
-    if (Object.values(discountErrors).some(Boolean)) return null;
-    if (!calculated || !evaluationId || !journeyId) { setNotice({ error: true, text: "Confira os procedimentos e descontos antes de salvar." }); return null; }
+    if (!lines.length) { setSelectionError("Selecione ao menos um procedimento para salvar o orçamento."); if (!automatic) revealQuoteProceduresIssue(); return null; }
+    if (Object.values(discountErrors).some(Boolean)) { if (!automatic) revealQuoteProceduresIssue(); return null; }
+    if (!calculated || !evaluationId || !journeyId) { setNotice({ error: true, text: "Confira os procedimentos e descontos antes de salvar." }); if (!automatic) revealValidationTarget("quote-notes-card", "quote-notice-error"); return null; }
     setSaving(true); if (!automatic) setNotice(null);
     try {
       const targetId = autosaveQuoteId.current;
@@ -585,13 +586,25 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
       if (!automatic) setNotice({ error: false, text: "Rascunho salvo. Nenhum pagamento foi registrado." });
       return data.quote;
     } catch (error) {
-      if (!automatic) setNotice({ error: true, text: error instanceof Error ? error.message : "Não foi possível salvar o orçamento." });
+      if (!automatic) { setNotice({ error: true, text: error instanceof Error ? error.message : "Não foi possível salvar o orçamento." }); revealValidationTarget("quote-notes-card", "quote-notice-error"); }
       return null;
     } finally { setSaving(false); }
   }
 
+  function revealQuoteProceduresIssue() {
+    const firstDiscount = Object.keys(discountErrors).find((id) => discountErrors[id]);
+    revealValidationTarget("quote-procedures-card", firstDiscount ? `discount-${firstDiscount}` : "quote-selection-error");
+  }
+
+  async function saveDraftFromButton() {
+    if (!await autosave.flush()) {
+      if (!lines.length || Object.values(discountErrors).some(Boolean)) revealQuoteProceduresIssue();
+      else revealValidationTarget("quote-header-card");
+    }
+  }
+
   async function changeStatus(status: "Enviado" | "Aprovado" | "Recusado" | "Cancelado") {
-    if (editable && !await autosave.flush()) return;
+    if (editable && !await autosave.flush()) { if (!lines.length || Object.values(discountErrors).some(Boolean)) revealQuoteProceduresIssue(); else revealValidationTarget("quote-header-card"); return; }
     const quote = activeQuote ?? await saveDraft();
     if (!quote) return;
     if (status === "Enviado" && !window.confirm("Confirma que a proposta já foi enviada ao paciente?")) return;
@@ -604,7 +617,7 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
       setQuotes((current) => current.map((item) => item.id === quote.id ? data.quote! : item));
       setNotice({ error: false, text: status === "Enviado" ? "Envio registrado." : `Orçamento ${status.toLocaleLowerCase("pt-BR")} sem registrar recebimento.` });
       if (["Recusado", "Cancelado"].includes(status)) { setNewRevision(true); setLines([]); setPaymentMethod("Cartão de crédito"); setInstallments(1); setNotes(""); setInitializedQuoteId("__new__"); }
-    } catch (error) { setNotice({ error: true, text: error instanceof Error ? error.message : "Não foi possível atualizar o orçamento." }); }
+    } catch (error) { setNotice({ error: true, text: error instanceof Error ? error.message : "Não foi possível atualizar o orçamento." }); revealValidationTarget("quote-notes-card", "quote-notice-error"); }
     finally { setStatusBusy(false); }
   }
 
@@ -626,6 +639,7 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
       onAdvance?.(data.quote.id);
     } catch (error) {
       setNotice({ error: true, text: error instanceof Error ? error.message : "Não foi possível avançar para o procedimento." });
+      revealValidationTarget("quote-notes-card", "quote-notice-error");
     } finally { setSaving(false); }
   }
 
@@ -653,15 +667,16 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
       onPaid?.();
     } catch (error) {
       setNotice({ error: true, text: error instanceof Error ? error.message : "Não foi possível registrar o pagamento." });
+      revealValidationTarget("quote-notes-card", "quote-notice-error");
     } finally { setPaymentBusy(false); }
   }
 
   function generatePdf() {
-    if (!lines.length) { setSelectionError("Selecione ao menos um procedimento antes de gerar a proposta."); return; }
-    if (!calculated || Object.values(discountErrors).some(Boolean)) { setNotice({ error: true, text: "Confira os procedimentos e descontos antes de gerar a proposta." }); return; }
+    if (!lines.length) { setSelectionError("Selecione ao menos um procedimento antes de gerar a proposta."); revealQuoteProceduresIssue(); return; }
+    if (!calculated || Object.values(discountErrors).some(Boolean)) { setNotice({ error: true, text: "Confira os procedimentos e descontos antes de gerar a proposta." }); if (Object.values(discountErrors).some(Boolean)) revealQuoteProceduresIssue(); else revealValidationTarget("quote-notes-card", "quote-notice-error"); return; }
     setPdfNotice(false);
     const popup = window.open("", "_blank", "width=900,height=720");
-    if (!popup) { setPdfNotice(true); return; }
+    if (!popup) { setPdfNotice(true); revealValidationTarget("quote-notes-card", "quote-pdf-error"); return; }
     const escape = (value: string) => value.replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[char]!);
     const rows = calculated.items.map((item) => `<tr><td>${escape(item.name)}</td><td>${item.quantity}</td><td>${currency.format(item.unitPriceCents / 100)}</td><td>${currency.format(item.discountCents / 100)}</td><td>${currency.format(item.subtotalCents / 100)}</td></tr>`).join("");
     popup.document.write(`<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Proposta Harmonize+</title><style>body{font:14px Arial,sans-serif;color:#242538;margin:48px}h1{font-size:24px}p{color:#666}table{width:100%;border-collapse:collapse;margin:28px 0}th,td{text-align:left;padding:12px;border-bottom:1px solid #ddd}th{background:#f3f2ff}.total{text-align:right;font-size:20px;font-weight:bold;color:#5147dc} @media print{body{margin:20mm}}</style><h1>Proposta de tratamento</h1><p>${escape(evaluation?.patientGoal || "Objetivo não informado")}</p><p>Status: ${escape(quoteStatusLabels[activeQuote?.status ?? "Rascunho"] ?? "Rascunho")} · ${new Date().toLocaleDateString("pt-BR")}</p><table><thead><tr><th>Procedimento</th><th>Qtd.</th><th>Valor unitário</th><th>Desconto</th><th>Subtotal</th></tr></thead><tbody>${rows}</tbody></table><p>Forma de pagamento: ${escape(paymentMethod)}${paymentMethod === "Cartão de crédito" ? ` · ${installments}x` : ""}</p>${notes ? `<p>Observações: ${escape(notes)}</p>` : ""}<p class="total">Total: ${currency.format(total / 100)}</p><script>window.onload=()=>window.print()</script></html>`);
@@ -676,15 +691,15 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
   return (
     <div className="space-y-4">
       {patient && breadcrumb ? <EncounterBreadcrumb patientName={patient.name} journeyName={journeyLabel ?? "Novo atendimento"} stage="Orçamento" onClients={() => void autosave.leave(breadcrumb.onClients)} onPatient={() => void autosave.leave(breadcrumb.onPatient)} onJourney={() => void autosave.leave(breadcrumb.onJourney)} /> : null}
-      <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
+      <Card id="quote-header-card" tabIndex={-1} className="flex scroll-mt-24 flex-wrap items-center justify-between gap-3 p-4">
         <div className="flex min-w-0 items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#ece9ff] text-sm font-black text-[#5147dc]">{(patient?.name ?? "Paciente").split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div className="min-w-0"><h2 className="truncate text-base font-bold text-[#242538]">{patient?.name ?? "Paciente"}</h2><p className="text-[10px] text-[#77788a]">{patient?.age ? `${patient.age} anos · ` : ""}{patient?.phone ?? "Telefone não informado"} · {patient?.status ?? "Status não informado"}</p><p className="text-[9px] text-[#858696]">Paciente desde {patient?.createdAt ? new Date(patient.createdAt).toLocaleDateString("pt-BR") : "data não informada"} · {journeyLabel ?? "Novo atendimento"} · Etapa 2 de 4</p></div></div>
         <div className="flex flex-wrap items-center gap-2"><span role="status" className={cn("text-[10px]", autosave.state === "error" ? "text-destructive" : "text-muted-foreground")}>{autosave.state === "saving" ? "Salvando..." : autosave.state === "pending" ? "Alterações pendentes" : autosave.state === "error" ? "Não foi possível salvar" : "Rascunho salvo"}</span>{autosave.state === "error" ? <Button size="sm" variant="outline" onClick={() => void autosave.flush()}>Tentar novamente</Button> : null}<Button variant="outline" onClick={() => void autosave.leave(() => onReturnToEvaluation?.())}><ArrowLeft className="h-4 w-4" />Voltar para avaliação</Button><Button disabled={!activeQuote || !["Aprovado", "Pago"].includes(activeQuote.status) || saving || autosave.state !== "saved"} onClick={() => void advanceToProcedure()}>{saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}Avançar para procedimento</Button></div>
       </Card>
       <div className="flex items-center gap-2 overflow-x-auto px-2 py-1 text-[10px] font-semibold text-[#747587]" aria-label="Progresso do atendimento">{["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento"].map((stage, index) => <div key={stage} className="flex min-w-0 flex-1 items-center gap-2"><span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-full", index < 1 ? "bg-[#5147dc] text-white" : index === 1 ? "bg-[#5147dc] text-white" : "bg-[#e6e7ef] text-[#747587]")}>{index < 1 ? <Check className="h-4 w-4" /> : index + 1}</span><span className={index === 1 ? "text-[#3f35d6]" : "whitespace-nowrap"}>{stage}</span>{index < 3 ? <span className={cn("h-px min-w-3 flex-1", index < 1 ? "bg-[#5147dc]" : "bg-[#dfe0e8]")} /> : null}</div>)}</div>
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_350px]">
         <div className="space-y-4">
-          <Card className="overflow-hidden">
-            <div className="border-b border-[#ececf2] px-4 py-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-bold text-[#27283b]">Orçamento do tratamento</h3><p className="mt-1 text-[10px] text-[#858696]">Vinculado à avaliação de {new Date(evaluation.createdAt).toLocaleDateString("pt-BR")} · {evaluation.professional || "Profissional não informado"}</p></div><div className="flex flex-wrap items-center justify-end gap-2"><Button size="sm" type="button" variant="outline" disabled={!calculated} onClick={generatePdf}><FileDown className="h-4 w-4" />Gerar PDF</Button><Button size="sm" type="button" variant="outline" disabled={paymentBusy || saving || !saved || autosave.state !== "saved" || !activeQuote || ["Pago", "Recusado", "Cancelado"].includes(activeQuote.status)} onClick={() => void registerPayment()}><WalletCards className="h-4 w-4" />{paymentBusy ? "Registrando..." : "Registrar pagamento"}</Button><Button size="sm" type="button" disabled={saving || !editable || saved || !calculated} onClick={() => void autosave.flush()}><Save className="h-4 w-4" />{saving ? "Salvando..." : saved ? "Rascunho salvo" : "Salvar rascunho"}</Button></div></div><div className="mt-2 flex flex-wrap items-center justify-end gap-2">{relatedQuotes.length ? <label className="sr-only" htmlFor="journey-quote-history">Propostas desta jornada</label> : null}{relatedQuotes.length ? <select id="journey-quote-history" aria-label="Selecionar proposta desta jornada" className="h-8 max-w-[230px] rounded-[5px] border border-[#dddde6] bg-white px-2 text-[10px]" value={newRevision ? "__new__" : activeQuote?.id ?? ""} onChange={(event) => event.target.value === "__new__" ? startNewRevision() : selectRelatedQuote(event.target.value)}>{canStartNewProposal ? <option value="__new__">Nova proposta</option> : null}{relatedQuotes.map((quote) => <option key={quote.id} value={quote.id}>{quoteStatusLabels[quote.status] ?? quote.status} · {quote.createdAt ? new Date(quote.createdAt).toLocaleDateString("pt-BR") : "Data não informada"} · {currency.format(quote.total)}</option>)}</select> : null}{activeQuote ? <span className="rounded-full bg-[#f0efff] px-3 py-1 text-[10px] font-bold text-[#5147dc]">{quoteStatusLabels[activeQuote.status] ?? activeQuote.status}</span> : null}{relatedQuotes.length && canStartNewProposal ? <Button size="sm" variant="outline" type="button" onClick={() => void startNewRevision()}>Nova proposta</Button> : null}</div>
+          <Card id="quote-procedures-card" tabIndex={-1} className={cn("scroll-mt-24 overflow-hidden", (selectionError || Object.values(discountErrors).some(Boolean)) && "border-destructive")}>
+            <div className="border-b border-[#ececf2] px-4 py-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-bold text-[#27283b]">Orçamento do tratamento</h3><p className="mt-1 text-[10px] text-[#858696]">Vinculado à avaliação de {new Date(evaluation.createdAt).toLocaleDateString("pt-BR")} · {evaluation.professional || "Profissional não informado"}</p></div><div className="flex flex-wrap items-center justify-end gap-2"><Button size="sm" type="button" variant="outline" disabled={!calculated} onClick={generatePdf}><FileDown className="h-4 w-4" />Gerar PDF</Button><Button size="sm" type="button" variant="outline" disabled={paymentBusy || saving || !saved || autosave.state !== "saved" || !activeQuote || ["Pago", "Recusado", "Cancelado"].includes(activeQuote.status)} onClick={() => void registerPayment()}><WalletCards className="h-4 w-4" />{paymentBusy ? "Registrando..." : "Registrar pagamento"}</Button><Button size="sm" type="button" disabled={saving || !editable || saved || !calculated} onClick={() => void saveDraftFromButton()}><Save className="h-4 w-4" />{saving ? "Salvando..." : saved ? "Rascunho salvo" : "Salvar rascunho"}</Button></div></div><div className="mt-2 flex flex-wrap items-center justify-end gap-2">{relatedQuotes.length ? <label className="sr-only" htmlFor="journey-quote-history">Propostas desta jornada</label> : null}{relatedQuotes.length ? <select id="journey-quote-history" aria-label="Selecionar proposta desta jornada" className="h-8 max-w-[230px] rounded-[5px] border border-[#dddde6] bg-white px-2 text-[10px]" value={newRevision ? "__new__" : activeQuote?.id ?? ""} onChange={(event) => event.target.value === "__new__" ? startNewRevision() : selectRelatedQuote(event.target.value)}>{canStartNewProposal ? <option value="__new__">Nova proposta</option> : null}{relatedQuotes.map((quote) => <option key={quote.id} value={quote.id}>{quoteStatusLabels[quote.status] ?? quote.status} · {quote.createdAt ? new Date(quote.createdAt).toLocaleDateString("pt-BR") : "Data não informada"} · {currency.format(quote.total)}</option>)}</select> : null}{activeQuote ? <span className="rounded-full bg-[#f0efff] px-3 py-1 text-[10px] font-bold text-[#5147dc]">{quoteStatusLabels[activeQuote.status] ?? activeQuote.status}</span> : null}{relatedQuotes.length && canStartNewProposal ? <Button size="sm" variant="outline" type="button" onClick={() => void startNewRevision()}>Nova proposta</Button> : null}</div>
               <div className="mt-4 rounded-[6px] bg-[#f3f1ff] px-3 py-2.5 text-xs text-[#4d4b68]"><strong className="text-[#3a31c8]">Objetivo:</strong> {evaluation.patientGoal.trim() || "Não informado na avaliação."}</div>
               <p className="mt-3 text-[10px] text-[#707184]"><strong>Queixa principal:</strong> {evaluation.chiefComplaint.trim() || "Não informado"}</p>
             </div>
@@ -707,13 +722,13 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
                   </tr>;
                 })}</tbody>
               </table> : <p className="rounded-[5px] border border-dashed border-[#dddde6] px-4 py-8 text-center text-xs text-[#77788a]">Nenhum procedimento cadastrado para esta clínica.</p>}
-              {selectionError ? <p key={selectionError} role="alert" className="mt-2 rounded-[5px] bg-[#fff1f0] px-3 py-2 text-[10px] font-semibold text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{selectionError}</p> : null}
+              {selectionError ? <p id="quote-selection-error" tabIndex={-1} key={selectionError} role="alert" className="mt-2 scroll-mt-24 rounded-[5px] bg-[#fff1f0] px-3 py-2 text-[10px] font-semibold text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{selectionError}</p> : null}
             </div>
           </Card>
 
           <Card className="p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><CreditCard className="h-4 w-4 text-[#5147dc]" />Condições de pagamento</h3><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{quotePaymentMethods.map((method) => <button key={method} type="button" disabled={!editable} aria-pressed={paymentMethod === method} onClick={() => { setPaymentMethod(method); if (method !== "Cartão de crédito") setInstallments(1); }} className={cn("flex min-h-14 items-center gap-2 rounded-[6px] border px-3 text-left text-[10px] font-bold transition", paymentMethod === method ? "border-[#5147dc] bg-[#f3f1ff] text-[#3f35d6]" : "border-[#e5e5ee] bg-white text-[#555668] hover:bg-[#fafafd]", !editable && "cursor-not-allowed opacity-60")}><span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-full border", paymentMethod === method ? "border-[#5147dc] bg-[#5147dc] text-white" : "border-[#c8c9d5]")}>{paymentMethod === method ? <Check className="h-3 w-3" /> : null}</span><span>{method}<small className="mt-0.5 block font-normal text-[#858696]">{method === "Cartão de crédito" ? "Parcelamento disponível" : "Pagamento à vista"}</small></span></button>)}</div>{paymentMethod === "Cartão de crédito" ? <label className="mt-3 block max-w-xs text-[10px] font-semibold text-[#68697b]">Número de parcelas<select disabled={!editable} className="mt-1 h-9 w-full rounded-[5px] border border-[#dddde6] bg-white px-2 text-xs" value={installments} onChange={(event) => setInstallments(Number(event.target.value))}>{Array.from({ length: 12 }, (_, index) => index + 1).map((count) => <option value={count} key={count}>{count}x de {currency.format(count ? Math.ceil(total / count) / 100 : 0)}</option>)}</select></label> : null}<p className="mt-2 rounded-[5px] bg-[#f7f7fb] p-2.5 text-[10px] text-[#68697b]">Forma de pagamento é apenas uma condição da proposta. Nenhum recebimento será lançado por essa seleção.</p></Card>
 
-          <Card className="p-4"><label className="block text-sm font-bold text-[#292a3d]" htmlFor="quote-notes">Observações do orçamento</label><textarea id="quote-notes" disabled={!editable} maxLength={2000} rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Condições comerciais, validade ou orientações para o paciente" className="mt-3 w-full resize-y rounded-[6px] border border-[#dddde6] bg-white p-3 text-xs text-[#454659] outline-none focus:border-[#5147dc] disabled:bg-[#f4f4f8]" /><div className="mt-2 flex flex-wrap gap-2">{activeQuote?.status === "Rascunho" || activeQuote?.status === "Pendente" ? <Button type="button" variant="outline" disabled={statusBusy || saving} onClick={() => void changeStatus("Enviado")}><Send className="h-4 w-4" />Registrar envio</Button> : null}</div>{notice ? <p key={notice.text} role={notice.error ? "alert" : "status"} className={cn("mt-3 rounded-[5px] px-3 py-2 text-[10px] font-semibold", notice.error ? "bg-[#fff1f0] text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]" : "bg-[#eef8f2] text-[#287a50]")}>{notice.text}</p> : null}{pdfNotice ? <p role="alert" className="mt-2 text-xs text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">O navegador bloqueou a janela de impressão. Permita pop-ups e tente novamente.</p> : null}</Card>
+          <Card id="quote-notes-card" tabIndex={-1} className={cn("scroll-mt-24 p-4", (notice?.error || pdfNotice) && "border-destructive")}><label className="block text-sm font-bold text-[#292a3d]" htmlFor="quote-notes">Observações do orçamento</label><textarea id="quote-notes" disabled={!editable} maxLength={2000} rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Condições comerciais, validade ou orientações para o paciente" className="mt-3 w-full resize-y rounded-[6px] border border-[#dddde6] bg-white p-3 text-xs text-[#454659] outline-none focus:border-[#5147dc] disabled:bg-[#f4f4f8]" /><div className="mt-2 flex flex-wrap gap-2">{activeQuote?.status === "Rascunho" || activeQuote?.status === "Pendente" ? <Button type="button" variant="outline" disabled={statusBusy || saving} onClick={() => void changeStatus("Enviado")}><Send className="h-4 w-4" />Registrar envio</Button> : null}</div>{notice ? <p id={notice.error ? "quote-notice-error" : undefined} tabIndex={notice.error ? -1 : undefined} key={notice.text} role={notice.error ? "alert" : "status"} className={cn("mt-3 rounded-[5px] px-3 py-2 text-[10px] font-semibold", notice.error ? "bg-[#fff1f0] text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]" : "bg-[#eef8f2] text-[#287a50]")}>{notice.text}</p> : null}{pdfNotice ? <p id="quote-pdf-error" tabIndex={-1} role="alert" className="mt-2 scroll-mt-24 text-xs text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">O navegador bloqueou a janela de impressão. Permita pop-ups e tente novamente.</p> : null}</Card>
         </div>
 
         <aside className="space-y-3 xl:sticky xl:top-24 xl:self-start">
