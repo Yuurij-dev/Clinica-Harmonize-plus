@@ -385,7 +385,7 @@ function QuoteCalculator({ patientId, journeyId, quote, onSaved, onPaid, onPayme
           <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setConfirmPayment(false)}>Cancelar</Button><Button disabled={paymentSaving} type="button" onClick={registerPayment}>{paymentSaving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}{paymentSaving ? "Registrando..." : "Confirmar pagamento"}</Button></div>
         </div>
       </Modal>
-      {paymentNotice ? <div className={`${paymentNoticeLeaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-6 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] bg-[#25263a] px-4 py-3 text-xs font-bold text-white shadow-[0_18px_45px_rgba(31,32,50,0.24)]`}><div className="flex items-center gap-3"><span className="min-w-0 flex-1">Pagamento registrado com sucesso.</span><button className="shrink-0 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-black transition hover:bg-white/20" onClick={undoPayment} disabled={!canReopen} title={canReopen ? undefined : "Só administrador ou profissional pode desfazer um pagamento"}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-[#7cffb2]" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
+      {paymentNotice ? <div className={`${paymentNoticeLeaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-6 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] border border-border bg-card px-4 py-3 text-xs font-bold text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.18)]`}><div className="flex items-center gap-3"><span className="min-w-0 flex-1">Pagamento registrado com sucesso.</span><button className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-[11px] font-black text-foreground transition hover:bg-muted/80" onClick={undoPayment} disabled={!canReopen} title={canReopen ? undefined : "Só administrador ou profissional pode desfazer um pagamento"}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-success" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
     </div>
   );
 }
@@ -408,7 +408,9 @@ type StoredQuoteDetails = { items: Array<{ procedureId: string; name: string; qu
 const quoteStatusLabels: Record<string, string> = { Rascunho: "Rascunho", Pendente: "Rascunho", Enviado: "Enviado", Aprovado: "Aprovado", Pago: "Pago", Recusado: "Recusado", Cancelado: "Cancelado" };
 const quotePaymentMethods = ["Cartão de crédito", "Pix", "Dinheiro", "Cartão de débito", "Boleto", "Transferência"];
 
-function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, evaluationId, breadcrumb, onPaid, onReturnToEvaluation, onAdvance }: PatientExpensesProps) {
+function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, evaluationId, breadcrumb, onPaid, onPaymentUndone, onReturnToEvaluation, onAdvance }: PatientExpensesProps) {
+  const canDeletePayment = useCan("payments:delete");
+  const canReopenQuote = useCan("quote:edit-closed");
   const quoteKey = `/api/quotes?patientId=${encodeURIComponent(patientId)}&journeyId=${encodeURIComponent(journeyId ?? "")}`;
   const evaluationKey = `/api/patients/${encodeURIComponent(patientId)}/evaluation?summary=1&evaluationId=${encodeURIComponent(evaluationId ?? "")}`;
   const cachedQuotes = readClientCache<{ quotes?: PatientQuote[] }>(quoteKey);
@@ -425,6 +427,14 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
   const [saving, setSaving] = useState(false);
   const [statusBusy, setStatusBusy] = useState(false);
   const [paymentBusy, setPaymentBusy] = useState(false);
+  const [confirmPayment, setConfirmPayment] = useState(false);
+  const [createdPaymentId, setCreatedPaymentId] = useState<string | null>(null);
+  const [paymentUndoQuoteId, setPaymentUndoQuoteId] = useState<string | null>(null);
+  const [paymentPriorQuoteStatus, setPaymentPriorQuoteStatus] = useState("Aprovado");
+  const [paymentUndoNotice, setPaymentUndoNotice] = useState(false);
+  const [paymentUndoLeaving, setPaymentUndoLeaving] = useState(false);
+  const [paymentUndoBusy, setPaymentUndoBusy] = useState(false);
+  const paymentUndoTimer = useRef<number | null>(null);
   const [notice, setNotice] = useState<{ error: boolean; text: string } | null>(null);
   const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(null);
   const autosaveQuoteId = useRef<string | null>(null);
@@ -471,6 +481,7 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
 
   const relatedQuotes = useMemo(() => quotes.filter((quote) => quote.evaluationId === evaluationId || !quote.evaluationId), [quotes, evaluationId]);
   const activeQuote = newRevision ? undefined : relatedQuotes.find((quote) => quote.id === selectedQuoteId) ?? relatedQuotes[0];
+  const canUndoRegisteredPayment = canDeletePayment && canReopenQuote;
   const canStartNewProposal = activeQuote?.status !== "Pago";
   const editable = !activeQuote || ["Rascunho", "Pendente"].includes(activeQuote.status);
   const catalogPrices = procedures.map((procedure) => ({ id: procedure.id, name: procedure.name, priceCents: Math.round(procedure.price * 100) }));
@@ -488,6 +499,10 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
     save: async () => Boolean(await saveDraft(true)),
   });
 
+  useEffect(() => () => {
+    if (paymentUndoTimer.current !== null) window.clearTimeout(paymentUndoTimer.current);
+  }, []);
+
   function updateLine(procedureId: string, changes: Partial<QuoteLineInput>) {
     setLines((current) => current.map((line) => line.procedureId === procedureId ? { ...line, ...changes } : line));
     setNotice(null);
@@ -499,6 +514,32 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
       setDiscountDrafts((current) => { const next = { ...current }; delete next[procedureId]; return next; });
       setDiscountErrors((current) => ({ ...current, [procedureId]: line && line.discountCents > maxCents ? "Reduza o desconto: ele ultrapassa o subtotal desta quantidade." : "" }));
     }
+  }
+
+  function showPaymentUndoNotice(paymentId: string, quoteId: string, priorStatus: string) {
+    if (paymentUndoTimer.current !== null) window.clearTimeout(paymentUndoTimer.current);
+    setCreatedPaymentId(paymentId);
+    setPaymentUndoQuoteId(quoteId);
+    setPaymentPriorQuoteStatus(priorStatus);
+    setPaymentUndoLeaving(false);
+    setPaymentUndoNotice(true);
+    paymentUndoTimer.current = window.setTimeout(() => {
+      setPaymentUndoLeaving(true);
+      paymentUndoTimer.current = window.setTimeout(() => {
+        setPaymentUndoNotice(false);
+        setPaymentUndoLeaving(false);
+        setCreatedPaymentId(null);
+        setPaymentUndoQuoteId(null);
+        paymentUndoTimer.current = null;
+      }, 240);
+    }, 6260);
+  }
+
+  function openPaymentConfirmation() {
+    if (!activeQuote || ["Pago", "Recusado", "Cancelado"].includes(activeQuote.status)) return;
+    setNotice(null);
+    setPaymentPriorQuoteStatus(activeQuote.status);
+    setConfirmPayment(true);
   }
 
   function changeDiscount(procedureId: string, value: string, maximumCents: number) {
@@ -645,8 +686,8 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
 
   async function registerPayment() {
     if (!activeQuote || ["Pago", "Recusado", "Cancelado"].includes(activeQuote.status)) return;
-    if (!window.confirm("Confirma o recebimento de " + currency.format(activeQuote.total) + "?")) return;
     setPaymentBusy(true); setNotice(null);
+    const priorStatus = activeQuote.status;
     try {
       const response = await fetch("/api/payments", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -654,6 +695,8 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
       });
       const data = await response.json().catch(() => ({})) as { payment?: { id: string }; message?: string };
       if (!response.ok || !data.payment) throw new Error(data.message ?? "Não foi possível registrar o pagamento.");
+      showPaymentUndoNotice(data.payment.id, activeQuote.id, priorStatus);
+      setConfirmPayment(false);
       const quoteResponse = await fetch("/api/quotes/" + activeQuote.id, {
         method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Pago", evaluationId }),
       });
@@ -669,6 +712,40 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
       setNotice({ error: true, text: error instanceof Error ? error.message : "Não foi possível registrar o pagamento." });
       revealValidationTarget("quote-notes-card", "quote-notice-error");
     } finally { setPaymentBusy(false); }
+  }
+
+  async function undoPayment() {
+    if (!createdPaymentId || paymentUndoBusy) return;
+    setPaymentUndoBusy(true);
+    try {
+      const response = await fetch(`/api/payments/${createdPaymentId}`, { method: "DELETE" });
+      const data = await response.json().catch(() => ({})) as { message?: string };
+      if (!response.ok) throw new Error(data.message ?? "Não foi possível desfazer o pagamento.");
+
+      const quoteResponse = paymentUndoQuoteId ? await fetch(`/api/quotes/${paymentUndoQuoteId}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: paymentPriorQuoteStatus, evaluationId }),
+      }) : null;
+      const quoteData = quoteResponse ? await quoteResponse.json().catch(() => ({})) as { quote?: PatientQuote; message?: string } : null;
+      invalidateClientCache("/api/payments", "/api/quotes", quoteKey, "/api/patients/" + patientId + "/history", "/api/patients/" + patientId + "/profile", "/api/dashboard/bootstrap");
+      if (paymentUndoTimer.current !== null) window.clearTimeout(paymentUndoTimer.current);
+      paymentUndoTimer.current = null;
+      setPaymentUndoNotice(false);
+      setPaymentUndoLeaving(false);
+      setCreatedPaymentId(null);
+      setPaymentUndoQuoteId(null);
+
+      if (!quoteResponse?.ok || !quoteData?.quote) {
+        setNotice({ error: true, text: "Pagamento desfeito, mas não foi possível restaurar o status do orçamento. Atualize a página e confira o financeiro." });
+        onPaymentUndone?.();
+        return;
+      }
+      setQuotes((current) => current.map((quote) => quote.id === quoteData.quote!.id ? quoteData.quote! : quote));
+      setNotice({ error: false, text: "Pagamento desfeito." });
+      onPaymentUndone?.();
+    } catch (error) {
+      setNotice({ error: true, text: error instanceof Error ? error.message : "Não foi possível desfazer o pagamento." });
+      revealValidationTarget("quote-notes-card", "quote-notice-error");
+    } finally { setPaymentUndoBusy(false); }
   }
 
   function generatePdf() {
@@ -699,7 +776,7 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_350px]">
         <div className="space-y-4">
           <Card id="quote-procedures-card" tabIndex={-1} className={cn("scroll-mt-24 overflow-hidden", (selectionError || Object.values(discountErrors).some(Boolean)) && "border-destructive")}>
-            <div className="border-b border-[#ececf2] px-4 py-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-bold text-[#27283b]">Orçamento do tratamento</h3><p className="mt-1 text-[10px] text-[#858696]">Vinculado à avaliação de {new Date(evaluation.createdAt).toLocaleDateString("pt-BR")} · {evaluation.professional || "Profissional não informado"}</p></div><div className="flex flex-wrap items-center justify-end gap-2"><Button size="sm" type="button" variant="outline" disabled={!calculated} onClick={generatePdf}><FileDown className="h-4 w-4" />Gerar PDF</Button><Button size="sm" type="button" variant="outline" disabled={paymentBusy || saving || !saved || autosave.state !== "saved" || !activeQuote || ["Pago", "Recusado", "Cancelado"].includes(activeQuote.status)} onClick={() => void registerPayment()}><WalletCards className="h-4 w-4" />{paymentBusy ? "Registrando..." : "Registrar pagamento"}</Button><Button size="sm" type="button" disabled={saving || !editable || saved || !calculated} onClick={() => void saveDraftFromButton()}><Save className="h-4 w-4" />{saving ? "Salvando..." : saved ? "Rascunho salvo" : "Salvar rascunho"}</Button></div></div><div className="mt-2 flex flex-wrap items-center justify-end gap-2">{relatedQuotes.length ? <label className="sr-only" htmlFor="journey-quote-history">Propostas desta jornada</label> : null}{relatedQuotes.length ? <select id="journey-quote-history" aria-label="Selecionar proposta desta jornada" className="h-8 max-w-[230px] rounded-[5px] border border-[#dddde6] bg-white px-2 text-[10px]" value={newRevision ? "__new__" : activeQuote?.id ?? ""} onChange={(event) => event.target.value === "__new__" ? startNewRevision() : selectRelatedQuote(event.target.value)}>{canStartNewProposal ? <option value="__new__">Nova proposta</option> : null}{relatedQuotes.map((quote) => <option key={quote.id} value={quote.id}>{quoteStatusLabels[quote.status] ?? quote.status} · {quote.createdAt ? new Date(quote.createdAt).toLocaleDateString("pt-BR") : "Data não informada"} · {currency.format(quote.total)}</option>)}</select> : null}{activeQuote ? <span className="rounded-full bg-[#f0efff] px-3 py-1 text-[10px] font-bold text-[#5147dc]">{quoteStatusLabels[activeQuote.status] ?? activeQuote.status}</span> : null}{relatedQuotes.length && canStartNewProposal ? <Button size="sm" variant="outline" type="button" onClick={() => void startNewRevision()}>Nova proposta</Button> : null}</div>
+            <div className="border-b border-[#ececf2] px-4 py-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-bold text-[#27283b]">Orçamento do tratamento</h3><p className="mt-1 text-[10px] text-[#858696]">Vinculado à avaliação de {new Date(evaluation.createdAt).toLocaleDateString("pt-BR")} · {evaluation.professional || "Profissional não informado"}</p></div><div className="flex flex-wrap items-center justify-end gap-2"><Button size="sm" type="button" variant="outline" disabled={!calculated} onClick={generatePdf}><FileDown className="h-4 w-4" />Gerar PDF</Button><Button size="sm" type="button" variant="outline" disabled={paymentBusy || saving || !saved || autosave.state !== "saved" || !activeQuote || ["Pago", "Recusado", "Cancelado"].includes(activeQuote.status)} onClick={openPaymentConfirmation}><WalletCards className="h-4 w-4" />{paymentBusy ? "Registrando..." : "Registrar pagamento"}</Button><Button size="sm" type="button" disabled={saving || !editable || saved || !calculated} onClick={() => void saveDraftFromButton()}><Save className="h-4 w-4" />{saving ? "Salvando..." : saved ? "Rascunho salvo" : "Salvar rascunho"}</Button></div></div><div className="mt-2 flex flex-wrap items-center justify-end gap-2">{relatedQuotes.length ? <label className="sr-only" htmlFor="journey-quote-history">Propostas desta jornada</label> : null}{relatedQuotes.length ? <select id="journey-quote-history" aria-label="Selecionar proposta desta jornada" className="h-8 max-w-[230px] rounded-[5px] border border-[#dddde6] bg-white px-2 text-[10px]" value={newRevision ? "__new__" : activeQuote?.id ?? ""} onChange={(event) => event.target.value === "__new__" ? startNewRevision() : selectRelatedQuote(event.target.value)}>{canStartNewProposal ? <option value="__new__">Nova proposta</option> : null}{relatedQuotes.map((quote) => <option key={quote.id} value={quote.id}>{quoteStatusLabels[quote.status] ?? quote.status} · {quote.createdAt ? new Date(quote.createdAt).toLocaleDateString("pt-BR") : "Data não informada"} · {currency.format(quote.total)}</option>)}</select> : null}{activeQuote ? <span className="rounded-full bg-[#f0efff] px-3 py-1 text-[10px] font-bold text-[#5147dc]">{quoteStatusLabels[activeQuote.status] ?? activeQuote.status}</span> : null}{relatedQuotes.length && canStartNewProposal ? <Button size="sm" variant="outline" type="button" onClick={() => void startNewRevision()}>Nova proposta</Button> : null}</div>
               <div className="mt-4 rounded-[6px] bg-[#f3f1ff] px-3 py-2.5 text-xs text-[#4d4b68]"><strong className="text-[#3a31c8]">Objetivo:</strong> {evaluation.patientGoal.trim() || "Não informado na avaliação."}</div>
               <p className="mt-3 text-[10px] text-[#707184]"><strong>Queixa principal:</strong> {evaluation.chiefComplaint.trim() || "Não informado"}</p>
             </div>
@@ -738,6 +815,14 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
           <Card className="space-y-2 p-4"><h3 className="text-sm font-bold">Próximas ações</h3>{activeQuote?.status === "Enviado" ? <><Button className="w-full justify-between" type="button" variant="outline" disabled={statusBusy} onClick={() => void changeStatus("Aprovado")}><span className="flex items-center gap-2"><BadgeCheck className="h-4 w-4 text-[#16805d]" />Aprovar proposta</span><ArrowRight className="h-4 w-4" /></Button><Button className="w-full justify-between" type="button" variant="outline" disabled={statusBusy} onClick={() => void changeStatus("Recusado")}><span className="flex items-center gap-2"><XCircle className="h-4 w-4 text-[#b42318]" />Registrar recusa</span><ArrowRight className="h-4 w-4" /></Button></> : null}{activeQuote && !["Aprovado", "Pago", "Recusado", "Cancelado"].includes(activeQuote.status) ? <Button className="w-full justify-between" type="button" variant="outline" disabled={statusBusy} onClick={() => void changeStatus("Cancelado")}><span className="flex items-center gap-2"><Ban className="h-4 w-4 text-[#b42318]" />Cancelar orçamento</span><ArrowRight className="h-4 w-4" /></Button> : null}{activeQuote ? <p className="flex items-center gap-2 pt-1 text-[9px] text-[#77788a]"><Clock3 className="h-3.5 w-3.5" />Última alteração: {activeQuote.updatedAt ? new Date(activeQuote.updatedAt).toLocaleString("pt-BR") : "Não informado"} · {activeQuote.updatedBy || activeQuote.createdBy || "Responsável não informado"}</p> : null}</Card>
         </aside>
       </div>
+      <Modal open={confirmPayment} onClose={() => { if (!paymentBusy) setConfirmPayment(false); }} title="Confirmar pagamento" description="Confira o valor e a forma antes de registrar o recebimento.">
+        <div className="space-y-4">
+          <div className="rounded-[6px] border border-[#e5e5ee] bg-[#fafafd] p-4"><p className="text-xs text-[#77788a]">Valor a registrar</p><p className="mt-1 text-xl font-black text-[#5147dc]">{currency.format(activeQuote?.total ?? 0)}</p><p className="mt-2 text-xs text-[#555668]">Forma: <strong>{activeQuote?.paymentMethod ?? paymentMethod}</strong>{(activeQuote?.paymentMethod ?? paymentMethod) === "Cartão de crédito" ? <> · {activeQuote?.installments ?? installments}x</> : null}</p></div>
+          <p className="text-xs leading-5 text-[#65708b]">Tem certeza que deseja registrar este pagamento como recebido?</p>
+          <div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={paymentBusy} onClick={() => setConfirmPayment(false)}>Cancelar</Button><Button type="button" disabled={paymentBusy} onClick={() => void registerPayment()}>{paymentBusy ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <WalletCards className="h-4 w-4" />}{paymentBusy ? "Registrando..." : "Confirmar pagamento"}</Button></div>
+        </div>
+      </Modal>
+      {paymentUndoNotice ? <div className={`${paymentUndoLeaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-6 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] border border-border bg-card px-4 py-3 text-xs font-bold text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.18)]`} role="status"><div className="flex items-center gap-3"><span className="min-w-0 flex-1">Pagamento registrado com sucesso.</span><button className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-[11px] font-black text-foreground transition hover:bg-muted/80 disabled:cursor-not-allowed disabled:opacity-50" onClick={() => void undoPayment()} disabled={!canUndoRegisteredPayment || paymentUndoBusy} title={canUndoRegisteredPayment ? undefined : "Somente administradores podem desfazer um pagamento"}>{paymentUndoBusy ? "Desfazendo..." : "Desfazer"}</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-success" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
     </div>
   );
 }
