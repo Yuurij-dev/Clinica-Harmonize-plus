@@ -22,6 +22,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   if (!session) return NextResponse.json({ message: "Sessão não encontrada." }, { status: 404 });
   if (session.status !== "Concluída") return NextResponse.json({ message: "O acompanhamento fica disponível após a conclusão da sessão." }, { status: 409 });
   if (requestedJourneyId && requestedJourneyId !== session.journeyId) return NextResponse.json({ message: "A sessão não pertence a este tratamento." }, { status: 404 });
+  const draft = await prisma.patientProcedureFollowUpDraft.findUnique({ where: { sessionId }, select: { guidanceText: true, guidanceConfirmed: true, observations: true, complications: true, photos: true, appointmentId: true, updatedAt: true } });
   const sessions = await prisma.patientProcedureSession.findMany({
     where: { patientId, clinicId: user.clinicId, journeyId: session.journeyId, status: "Concluída" },
     orderBy: [{ performedAt: "asc" }, { createdAt: "asc" }],
@@ -51,7 +52,38 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     photos,
     sessions: sessions.map(({ id, procedureName, professional, performedAt }) => ({ id, procedureName, professional, performedAt })),
     followUps: allFollowUps.sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime()).map(({ photos: storedPhotos, ...record }) => ({ ...record, photos: parseJson<FollowUpPhotoInput[]>(storedPhotos, []) })),
+    draft: draft ? { ...draft, photos: parseJson<FollowUpPhotoInput[]>(draft.photos, []) } : null,
   });
+}
+
+export async function PUT(request: Request, { params }: { params: Promise<{ id: string; sessionId: string }> }) {
+  const user = await getCurrentUser({ requireActiveTrial: true });
+  if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user.role, "clinical:write");
+  if (denied) return denied;
+  const { id: patientId, sessionId } = await params;
+  const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  const session = await prisma.patientProcedureSession.findFirst({ where: { id: sessionId, patientId, clinicId: user.clinicId, status: "Concluída" }, select: { id: true, journeyId: true } });
+  if (!session) return NextResponse.json({ message: "Sessão concluída não encontrada." }, { status: 404 });
+  const guidanceText = typeof body?.guidanceText === "string" ? body.guidanceText : "";
+  const observations = typeof body?.observations === "string" ? body.observations : "";
+  const complications = typeof body?.complications === "string" ? body.complications : "";
+  const appointmentId = typeof body?.appointmentId === "string" && body.appointmentId ? body.appointmentId : null;
+  const photos = Array.isArray(body?.photos) ? body.photos as FollowUpPhotoInput[] : [];
+  if (guidanceText.length > 5000 || observations.length > 5000 || complications.length > 5000 || photos.length > 12 || photos.some((photo) => !isValidPhoto(photo)) || new Set(photos.map((photo) => photo.id)).size !== photos.length || photos.reduce((total, photo) => total + photo.imageUrl.length, 0) > 24_000_000) {
+    return NextResponse.json({ message: "Revise os textos e fotografias do rascunho." }, { status: 400 });
+  }
+  if (appointmentId) {
+    const appointment = await prisma.appointment.findFirst({ where: { id: appointmentId, clinicId: user.clinicId, patientId, journeyId: session.journeyId, procedure: { contains: "Retorno", mode: "insensitive" }, status: { in: ["Atendido", "Finalizado"] } }, select: { id: true } });
+    if (!appointment) return NextResponse.json({ message: "Selecione um retorno atendido deste tratamento." }, { status: 400 });
+  }
+  const draft = await prisma.patientProcedureFollowUpDraft.upsert({
+    where: { sessionId },
+    create: { sessionId, guidanceText, guidanceConfirmed: body?.guidanceConfirmed === true, observations, complications, photos: JSON.stringify(photos), appointmentId },
+    update: { guidanceText, guidanceConfirmed: body?.guidanceConfirmed === true, observations, complications, photos: JSON.stringify(photos), appointmentId },
+    select: { updatedAt: true },
+  });
+  return NextResponse.json({ draft });
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string; sessionId: string }> }) {
@@ -89,7 +121,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const at = new Date().toISOString();
   let record;
   try {
-    record = await prisma.patientProcedureFollowUp.create({
+    record = await prisma.$transaction(async (tx) => {
+      const created = await tx.patientProcedureFollowUp.create({
     data: {
       clinicId: user.clinicId, patientId, journeyId: session.journeyId, sessionId,
       appointmentId, occurredAt, professional,
@@ -99,6 +132,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       auditLog: JSON.stringify([{ at, actor: user.name, action: "Acompanhamento registrado", fields: [guidanceText ? "orientações" : "", observations ? "observações" : "", complications ? "intercorrências" : "", photos.length ? "fotografias" : "", appointmentId ? "retorno" : ""].filter(Boolean) }]),
     },
     include: { appointment: { select: { id: true, date: true, time: true, procedure: true, professional: true, status: true, notes: true } } },
+      });
+      await tx.patientProcedureFollowUpDraft.deleteMany({ where: { sessionId } });
+      return created;
     });
   } catch (error) {
     if (isUniqueConstraintError(error)) return NextResponse.json({ message: "Este retorno já possui registro clínico." }, { status: 409 });

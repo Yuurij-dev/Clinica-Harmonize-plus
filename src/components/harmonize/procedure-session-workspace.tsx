@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Camera, Check, CheckCircle2, Clock3, FileText, ImagePlus, Loader2, Plus, Save, ShieldAlert, Syringe, Trash2, UserRound, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ArrowLeft, ArrowRight, Camera, Check, CheckCircle2, Clock3, FileText, ImagePlus, Loader2, Plus, ShieldAlert, Syringe, Trash2, UserRound, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import type { Patient } from "@/types/clinic";
 import { LoadingSkeleton } from "./shared";
 import { EncounterBreadcrumb, type EncounterBreadcrumbActions } from "./encounter-breadcrumb";
+import { useDraftAutosave } from "./use-draft-autosave";
 
 type SessionPhoto = { id: string; name: string; phase: "Antes" | "Imediatamente após"; category: string; imageUrl: string; sourceEvaluationPhotoId?: string; width: number; height: number };
 type Allocation = { lotId: string; quantity: number; code?: string; expiresOn?: string };
@@ -31,6 +32,9 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
   const [selectedProcedureId, setSelectedProcedureId] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [draft, setDraft] = useState<Omit<Session, "id" | "updatedAt"> & { id?: string; updatedAt?: string } | null>(null);
+  const [editRevision, setEditRevision] = useState(0);
+  const editRevisionRef = useRef(0);
+  const [hydrated, setHydrated] = useState(false);
   const [busy, setBusy] = useState<"save" | "start" | "finish" | "new" | "" >("");
   const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
   const [noticeAnimation, setNoticeAnimation] = useState(0);
@@ -61,7 +65,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
       setSelectedProcedureId((current) => current || initialId);
       const latest = result.sessions[0];
       if (latest) { setSessionId(latest.id); setDraft(toDraft(latest)); }
-    }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Não foi possível carregar a sessão."); }).finally(() => { if (active) setLoading(false); });
+    }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Não foi possível carregar a sessão."); }).finally(() => { if (active) { setLoading(false); setHydrated(true); } });
     return () => { active = false; };
   }, [key, retry]);
 
@@ -82,11 +86,14 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
   const photos = draft?.photos ?? [];
   const materials = draft?.materials ?? [];
   const doneChecklist = [Boolean(draft?.technique.trim() && draft?.treatedAreas.trim()), materials.every((item) => item.allocations.length > 0), photos.some((photo) => photo.phase === "Antes") && photos.some((photo) => photo.phase === "Imediatamente após"), draft?.status === "Concluída"];
-  const canWrite = Boolean(draft && draft.status !== "Concluída");
-  const changedMaterials = useMemo(() => materials.map((item) => ({ productId: item.productId, quantity: item.quantity, allocations: item.allocations.map((allocation) => ({ lotId: allocation.lotId, quantity: allocation.quantity })) })), [materials]);
+  const canWrite = Boolean(draft && draft.status !== "Concluída" && busy !== "finish");
+  const changedMaterials = materials.map((item) => ({ productId: item.productId, quantity: item.quantity, allocations: item.allocations.map((allocation) => ({ lotId: allocation.lotId, quantity: allocation.quantity })) }));
+  const autosave = useDraftAutosave({ scope: `${patientId}:${sessionId}`, revision: editRevision, enabled: hydrated && Boolean(sessionId && canWrite), save: async () => save(undefined, true) });
 
   function patchDraft(changes: Partial<Session>) {
     setDraft((current) => current ? { ...current, ...changes } : current);
+    editRevisionRef.current += 1;
+    setEditRevision(editRevisionRef.current);
     setInvalidFields((current) => {
       const next = new Set(current);
       if (typeof changes.technique === "string" && changes.technique.trim()) next.delete("technique");
@@ -121,7 +128,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
     finally { setBusy(""); }
   }
 
-  async function save(status: "Rascunho" | "Em execução" | "Concluída" = draft?.status === "Em execução" ? "Em execução" : "Rascunho") {
+  async function save(status: "Rascunho" | "Em execução" | "Concluída" = draft?.status === "Em execução" ? "Em execução" : "Rascunho", automatic = false) {
     if (!draft || !sessionId || !journeyId) return false;
     if (status === "Concluída") {
       const missing = new Set<string>();
@@ -136,27 +143,33 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
         return false;
       }
     }
-    const mode = status === "Concluída" ? "finish" : status === "Em execução" ? "start" : "save";
+    const mode = status === "Concluída" ? "finish" : status === "Em execução" && !automatic ? "start" : "save";
     setBusy(mode); setNotice(null);
+    const startedRevision = editRevisionRef.current;
     const savedPhotos = draft.photos.map((photo) => photo.sourceEvaluationPhotoId ? { id: photo.id, name: photo.name, phase: photo.phase, category: photo.category, sourceEvaluationPhotoId: photo.sourceEvaluationPhotoId } : photo);
     try {
       const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/procedure-sessions/${encodeURIComponent(sessionId)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...draft, status, materials: changedMaterials, photos: savedPhotos, ...(status === "Em execução" && !draft.startedAt ? { startedAt: new Date().toISOString() } : {}) }) });
       const result = await response.json().catch(() => ({})) as { session?: Session; pending?: unknown[]; message?: string };
       if (!response.ok || !result.session) throw new Error(result.message ?? "Não foi possível salvar a sessão.");
       const updated = { ...result.session, materials: result.session.materials ?? materials, photos: result.session.photos ?? savedPhotos };
-      setDraft(toDraft(updated));
+      if (startedRevision === editRevisionRef.current) setDraft(toDraft(updated));
       setData((current) => current ? { ...current, sessions: [updated, ...current.sessions.filter((item) => item.id !== updated.id)] } : current);
       invalidateClientCache(key, `/api/patients/${patientId}/history`, `/api/patients/${patientId}/journeys`, `/api/patients/${patientId}/profile`, "/api/dashboard/bootstrap");
-      showNotice(status === "Concluída" ? `Sessão concluída.${result.pending?.length ? " Há materiais sem saldo que ficaram como saída pendente." : ""}` : status === "Em execução" ? "Início da sessão registrado." : "Rascunho salvo.");
+      if (!automatic) showNotice(status === "Concluída" ? `Sessão concluída.${result.pending?.length ? " Há materiais sem saldo que ficaram como saída pendente." : ""}` : status === "Em execução" ? "Início da sessão registrado." : "Rascunho salvo.");
       if (status === "Concluída") onCompleted(updated.id);
       return true;
-    } catch (reason) { showNotice(reason instanceof Error ? reason.message : "Não foi possível salvar a sessão.", true); return false; }
+    } catch (reason) { if (!automatic) showNotice(reason instanceof Error ? reason.message : "Não foi possível salvar a sessão.", true); return false; }
     finally { setBusy(""); }
   }
 
   async function finish() {
     if (!window.confirm("Finalizar esta sessão? A ação registra os materiais utilizados no estoque e não encerra o tratamento.")) return;
+    if (!await autosave.flush()) return;
     await save("Concluída");
+  }
+
+  async function start() {
+    if (await autosave.flush()) await save("Em execução");
   }
 
   function addSuggestedMaterials() {
@@ -238,16 +251,16 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
   const selectedSession = data.sessions.find((item) => item.id === sessionId);
   return (
     <div className="space-y-4">
-      {breadcrumb ? <EncounterBreadcrumb patientName={patient.name} journeyName={data.journey.name} stage="Procedimento" {...breadcrumb} /> : null}
+      {breadcrumb ? <EncounterBreadcrumb patientName={patient.name} journeyName={data.journey.name} stage="Procedimento" onClients={() => void autosave.leave(breadcrumb.onClients)} onPatient={() => void autosave.leave(breadcrumb.onPatient)} onJourney={() => void autosave.leave(breadcrumb.onJourney)} /> : null}
       <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
         <div className="flex min-w-0 items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#ece9ff] text-sm font-black text-[#5147dc]">{patient.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div className="min-w-0"><h2 className="truncate text-base font-bold">{patient.name}</h2><p className="text-[10px] text-[#747587]">{procedure?.name ?? draft.procedureName} · Sessão clínica · {data.journey.name}</p><p className="text-[9px] text-[#858696]">{patient.age ? `${patient.age} anos · ` : ""}{patient.phone} · {draft.status}</p></div></div>
-        <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={Boolean(busy) || !canWrite} onClick={() => void save()}><Save className="h-4 w-4" />{busy === "save" ? "Salvando..." : "Salvar rascunho"}</Button><Button variant="outline" onClick={onBack}><ArrowLeft className="h-4 w-4" />Voltar ao orçamento</Button>{draft.status === "Concluída" ? <Button onClick={() => onCompleted(sessionId)}>Acompanhamento <ArrowRight className="h-4 w-4" /></Button> : draft.status === "Rascunho" ? <Button disabled={Boolean(busy)} onClick={() => void save("Em execução")}>{busy === "start" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clock3 className="h-4 w-4" />}Iniciar procedimento</Button> : <Button disabled={Boolean(busy)} onClick={() => void finish()}>{busy === "finish" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}Finalizar sessão</Button>}</div>
+        <div className="flex flex-wrap items-center gap-2"><span role="status" className={cn("text-[10px]", autosave.state === "error" ? "text-destructive" : "text-muted-foreground")}>{autosave.state === "saving" ? "Salvando..." : autosave.state === "pending" ? "Alterações pendentes" : autosave.state === "error" ? "Não foi possível salvar" : "Rascunho salvo"}</span>{autosave.state === "error" ? <Button size="sm" variant="outline" onClick={() => void autosave.flush()}>Tentar novamente</Button> : null}<Button variant="outline" onClick={() => void autosave.leave(onBack)}><ArrowLeft className="h-4 w-4" />Voltar ao orçamento</Button>{draft.status === "Concluída" ? <Button onClick={() => onCompleted(sessionId)}>Acompanhamento <ArrowRight className="h-4 w-4" /></Button> : draft.status === "Rascunho" ? <Button disabled={Boolean(busy)} onClick={() => void start()}>{busy === "start" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clock3 className="h-4 w-4" />}Iniciar procedimento</Button> : <Button disabled={Boolean(busy)} onClick={() => void finish()}>{busy === "finish" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}Finalizar sessão</Button>}</div>
       </Card>
       <div className="flex items-center gap-2 overflow-x-auto px-2 py-1 text-[10px] font-semibold text-[#747587]" aria-label="Progresso do atendimento">{["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento"].map((step, index) => <div key={step} className="flex min-w-0 flex-1 items-center gap-2"><span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-full", index < 2 ? "bg-[#5147dc] text-white" : index === 2 ? "bg-[#5147dc] text-white" : "bg-[#e6e7ef]")}>{index < 2 ? <Check className="h-4 w-4" /> : index + 1}</span><span className={index === 2 ? "whitespace-nowrap text-[#3f35d6]" : "whitespace-nowrap"}>{step}</span>{index < 3 ? <span className={cn("h-px min-w-3 flex-1", index < 2 ? "bg-[#5147dc]" : "bg-[#dfe0e8]")} /> : null}</div>)}</div>
       {notice ? <p key={noticeAnimation} role={notice.error ? "alert" : "status"} className={cn("rounded-[5px] px-3 py-2 text-xs font-semibold", notice.error ? "bg-[#fff1f0] text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]" : "bg-[#eef8f2] text-[#287a50]")}>{notice.text}</p> : null}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
         <div className="space-y-4">
-          {data.sessions.length ? <Card className="flex flex-wrap items-center gap-2 p-3">{data.sessions.length > 1 ? <label className="text-xs font-semibold">Sessões desta jornada<select className="ml-2 h-9 max-w-full rounded-[5px] border border-[#dddde6] bg-white px-2 text-xs" value={sessionId} onChange={(event) => { const next = data.sessions.find((item) => item.id === event.target.value); if (next) { setSessionId(next.id); setDraft(toDraft(next)); setSelectedProcedureId(data.procedures.find((procedureItem) => procedureItem.name === next.procedureName)?.id ?? ""); } }}>{data.sessions.map((item, index) => <option key={item.id} value={item.id}>Sessão {data.sessions.length - index} · {new Date(item.performedAt).toLocaleDateString("pt-BR")} · {item.status}</option>)}</select></label> : <span className="text-xs font-semibold">Sessão · {new Date(draft.performedAt).toLocaleDateString("pt-BR")} · {draft.status}</span>}<Button type="button" variant="outline" size="sm" disabled={Boolean(busy) || draft.status !== "Concluída"} onClick={() => void createSession()}><Plus className="h-4 w-4" />Nova sessão</Button></Card> : null}
+          {data.sessions.length ? <Card className="flex flex-wrap items-center gap-2 p-3">{data.sessions.length > 1 ? <label className="text-xs font-semibold">Sessões desta jornada<select className="ml-2 h-9 max-w-full rounded-[5px] border border-[#dddde6] bg-white px-2 text-xs" value={sessionId} onChange={(event) => { const next = data.sessions.find((item) => item.id === event.target.value); if (next) void autosave.leave(() => { setSessionId(next.id); setDraft(toDraft(next)); setSelectedProcedureId(data.procedures.find((procedureItem) => procedureItem.name === next.procedureName)?.id ?? ""); }); }}>{data.sessions.map((item, index) => <option key={item.id} value={item.id}>Sessão {data.sessions.length - index} · {new Date(item.performedAt).toLocaleDateString("pt-BR")} · {item.status}</option>)}</select></label> : <span className="text-xs font-semibold">Sessão · {new Date(draft.performedAt).toLocaleDateString("pt-BR")} · {draft.status}</span>}<Button type="button" variant="outline" size="sm" disabled={Boolean(busy) || draft.status !== "Concluída"} onClick={() => void createSession()}><Plus className="h-4 w-4" />Nova sessão</Button></Card> : null}
           <Card className="p-4">
             <h3 className="flex items-center gap-2 text-sm font-bold"><Syringe className="h-4 w-4 text-[#5147dc]" />Registro do procedimento</h3>
             <div className="mt-3 grid gap-3 rounded-[5px] bg-[#f7f7fb] p-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -282,7 +295,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
         </div>
         <aside className="space-y-3 xl:sticky xl:top-24 xl:self-start"><Card className="space-y-2 p-4"><h3 className="text-sm font-bold">Resumo da sessão</h3><Summary label="Etapa atual" value="Procedimento" /><Summary label="Profissional" value={draft.professional || "Não informado"} /><Summary label="Início" value={draft.startedAt ? new Date(draft.startedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "Ainda não iniciado"} /><Summary label="Término" value={draft.endedAt ? new Date(draft.endedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "Em aberto"} /><Summary label="Fotos anexadas" value={String(photos.length)} />{selectedSession ? <p className="border-t border-[#ececf2] pt-2 text-[9px] text-[#77788a]">Última alteração em {new Date(selectedSession.updatedAt).toLocaleString("pt-BR")} por {selectedSession.updatedBy || "responsável não informado"}</p> : null}</Card>
           <Card className="space-y-2 p-4"><h3 className="text-sm font-bold">Checklist do procedimento</h3>{[["Técnica e região informadas", doneChecklist[0]], ["Produtos e lotes registrados", doneChecklist[1] && materials.length > 0], ["Fotos antes e depois anexadas", doneChecklist[2]], ["Sessão concluída", doneChecklist[3]]].map(([label, done]) => <div key={String(label)} className="flex items-center gap-2 rounded-[5px] bg-[#f7f7fb] px-2.5 py-2 text-[10px]"><span className={cn("grid h-4 w-4 place-items-center rounded-[3px] border", done ? "border-[#5147dc] bg-[#5147dc] text-white" : "border-[#c9cad6]")}>{done ? <Check className="h-3 w-3" /> : null}</span>{label}</div>)}</Card>
-          <Card className="space-y-2 p-4"><h3 className="text-sm font-bold">Próximas ações</h3><Button className="w-full justify-between" variant="outline" disabled={Boolean(busy) || !canWrite} onClick={() => void save()}><span className="flex items-center gap-2"><Save className="h-4 w-4" />Salvar sessão</span><ArrowRight className="h-4 w-4" /></Button>{draft.status === "Concluída" ? <Button className="w-full justify-between" variant="outline" onClick={() => onCompleted(sessionId)}><span className="flex items-center gap-2"><Clock3 className="h-4 w-4" />Abrir acompanhamento</span><ArrowRight className="h-4 w-4" /></Button> : draft.status === "Rascunho" ? <Button className="w-full justify-between" disabled={Boolean(busy)} onClick={() => void save("Em execução")}><span className="flex items-center gap-2"><Clock3 className="h-4 w-4" />Iniciar procedimento</span><ArrowRight className="h-4 w-4" /></Button> : <Button className="w-full justify-between" disabled={Boolean(busy)} onClick={() => void finish()}><span className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4" />Finalizar sessão</span><ArrowRight className="h-4 w-4" /></Button>}</Card></aside>
+          <Card className="space-y-2 p-4"><h3 className="text-sm font-bold">Próximas ações</h3>{draft.status === "Concluída" ? <Button className="w-full justify-between" variant="outline" onClick={() => onCompleted(sessionId)}><span className="flex items-center gap-2"><Clock3 className="h-4 w-4" />Abrir acompanhamento</span><ArrowRight className="h-4 w-4" /></Button> : draft.status === "Rascunho" ? <Button className="w-full justify-between" disabled={Boolean(busy)} onClick={() => void start()}><span className="flex items-center gap-2"><Clock3 className="h-4 w-4" />Iniciar procedimento</span><ArrowRight className="h-4 w-4" /></Button> : <Button className="w-full justify-between" disabled={Boolean(busy)} onClick={() => void finish()}><span className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4" />Finalizar sessão</span><ArrowRight className="h-4 w-4" /></Button>}</Card></aside>
       </div>
       {preview ? <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true" aria-label="Visualização da fotografia" onClick={() => setPreview(null)}><div className="relative max-h-[90vh] max-w-[90vw]" onClick={(event) => event.stopPropagation()}><img src={preview.imageUrl} alt={preview.name} className="max-h-[85vh] max-w-[88vw] object-contain" /><button type="button" aria-label="Fechar visualização" onClick={() => setPreview(null)} className="absolute -right-3 -top-3 rounded-full bg-white p-2 text-[#27283b]"><X className="h-4 w-4" /></button></div></div> : null}
     </div>

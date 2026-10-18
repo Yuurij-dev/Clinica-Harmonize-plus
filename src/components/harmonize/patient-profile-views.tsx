@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import NextImage from "next/image";
-import { BadgeCheck, CalendarDays, Camera, Check, ChevronDown, ChevronRight, CircleAlert, Clock3, CreditCard, FileImage, FileText, HeartPulse, Image as ImageIcon, Layers3, Loader2, PackageCheck, Pencil, Plus, ShieldAlert, Stethoscope, Syringe, Trash2, UserRound } from "lucide-react";
+import { BadgeCheck, CalendarDays, Camera, Check, ChevronDown, ChevronRight, CircleAlert, Clock3, CreditCard, FileImage, FileText, HeartPulse, Image as ImageIcon, Layers3, Loader2, PackageCheck, Pencil, Plus, Search, ShieldAlert, Stethoscope, Syringe, Trash2, UserRound } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 export type PatientJourneySummary = {
   id: string;
   name: string;
+  procedureNames?: string[];
   status: string;
   createdAt: string;
   hasEvaluation: boolean;
@@ -187,6 +188,7 @@ export function PatientTreatments({ patient, selectedJourneyId, onSelect, onJour
   const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState(false);
   const [filter, setFilter] = useState("Todos");
+  const [procedureSearch, setProcedureSearch] = useState("");
   const [expandedJourneyId, setExpandedJourneyId] = useState<string | null>(() => !selectedJourneyId && cached?.journeys?.length === 1 ? cached.journeys[0].id : null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
@@ -244,7 +246,13 @@ export function PatientTreatments({ patient, selectedJourneyId, onSelect, onJour
   }, [journeys, selectedJourneyId, onJourneyLabelChange]);
   const canWriteClinical = useCan("clinical:write");
   const activeJourneys = journeys.filter((journey) => journey.status !== "Cancelado");
-  const visibleJourneys = activeJourneys.filter((journey) => filter === "Todos" || journey.status === filter);
+  const normalizedSearch = procedureSearch.trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
+  const visibleJourneys = activeJourneys.filter((journey) => {
+    const matchesStatus = filter === "Todos" || journey.status === filter;
+    const searchValues = [journey.name, ...(journey.procedureNames ?? [])];
+    const matchesProcedure = !normalizedSearch || searchValues.some((name) => name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR").includes(normalizedSearch));
+    return matchesStatus && matchesProcedure;
+  });
 
   function openNewTreatment() {
     const cachedProfessionals = readClientCache<{ professionals: Array<{ id: string; name: string }> }>(professionalsKey);
@@ -327,9 +335,9 @@ export function PatientTreatments({ patient, selectedJourneyId, onSelect, onJour
   return <><div className="space-y-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-base font-bold">Tratamentos da paciente</h3><p className="mt-1 text-xs text-muted-foreground">Jornadas clínicas, sessões e próximos retornos.</p></div><Button onClick={openNewTreatment}><Plus className="h-4 w-4" />Novo tratamento</Button></div>
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,0.8fr)]">
     <section className="min-w-0 space-y-4">
-    <div className="flex flex-wrap gap-2" role="group" aria-label="Filtrar tratamentos">{["Todos", "Em andamento", "Concluído"].map((item) => <Button key={item} variant={filter === item ? "default" : "outline"} size="sm" aria-pressed={filter === item} onClick={() => setFilter(item)}>{item}</Button>)}</div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex flex-wrap gap-2" role="group" aria-label="Filtrar tratamentos">{["Todos", "Em andamento", "Concluído"].map((item) => <Button key={item} variant={filter === item ? "default" : "outline"} size="sm" aria-pressed={filter === item} onClick={() => setFilter(item)}>{item}</Button>)}</div><label className="relative block w-full sm:w-64"><Search aria-hidden="true" className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><input type="search" value={procedureSearch} onChange={(event) => setProcedureSearch(event.target.value)} placeholder="Pesquisar procedimento" aria-label="Pesquisar pelo nome do procedimento" className="h-9 w-full rounded-md border border-input bg-background pl-9 pr-3 text-xs outline-none focus:border-primary" /></label></div>
     {actionError ? <p role="alert" className="text-xs text-destructive">{actionError}</p> : null}
-    {!visibleJourneys.length ? <Card className="p-6"><EmptyState title={journeys.length ? "Nenhum tratamento neste filtro" : "Nenhum tratamento cadastrado"} description={journeys.length ? "Selecione outro status para ver jornadas." : "Crie um tratamento para organizar avaliações, orçamentos e atendimentos."} /></Card> : <div className="space-y-3">{visibleJourneys.map((journey) => {
+    {!visibleJourneys.length ? <Card className="p-6"><EmptyState title={procedureSearch.trim() ? "Nenhum procedimento encontrado" : journeys.length ? "Nenhum tratamento neste filtro" : "Nenhum tratamento cadastrado"} description={procedureSearch.trim() ? "Tente pesquisar por outro nome de procedimento." : journeys.length ? "Selecione outro status para ver jornadas." : "Crie um tratamento para organizar avaliações, orçamentos e atendimentos."} /></Card> : <div className="space-y-3">{visibleJourneys.map((journey) => {
       const expanded = expandedJourneyId === journey.id;
       const stages = [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturn];
       const stageLabels = ["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento"];

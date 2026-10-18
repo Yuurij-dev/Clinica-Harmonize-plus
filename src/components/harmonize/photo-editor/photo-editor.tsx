@@ -14,6 +14,7 @@ import { EditorToolbar } from "./editor-toolbar";
 import { EvaluationResult } from "./evaluation-result";
 import { PhotoGallery } from "./photo-gallery";
 import { EncounterBreadcrumb, type EncounterBreadcrumbActions } from "../encounter-breadcrumb";
+import { useDraftAutosave } from "../use-draft-autosave";
 import type { AnnotationSnapshot, EditorTool, EvaluationPhoto, PhotoAnnotation } from "./types";
 import type { Patient } from "@/types/clinic";
 
@@ -43,6 +44,7 @@ const emptyAssessment: ClinicalAssessment = { chiefComplaint: "", patientGoal: "
 
 export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, onSaved, encounter, encounterLabel = "Novo atendimento" }: { patientId: string; evaluationId?: string; journeyId?: string; patientName: string; onSaved?: (evaluation: SavedEvaluation) => void; encounter?: { patient: Patient; onCancel: () => void; onContinue: (evaluationId: string) => void } & EncounterBreadcrumbActions; encounterLabel?: string }) {
   const [currentEvaluationId, setCurrentEvaluationId] = useState(evaluationId);
+  const currentEvaluationIdRef = useRef(evaluationId);
   const evaluationCacheKey = evaluationId ? `/api/patients/${patientId}/evaluation?evaluationId=${encodeURIComponent(evaluationId)}` : null;
   const cachedEvaluation = evaluationCacheKey ? readClientCache<{ evaluation?: ({ photos?: EvaluationPhoto[]; status?: string; professional?: string } & Partial<ClinicalAssessment>) | null }>(evaluationCacheKey) : null;
   const [photos, setPhotos] = useState<EvaluationPhoto[]>(cachedEvaluation?.evaluation?.photos ?? []);
@@ -65,6 +67,9 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   const [isSaving, setIsSaving] = useState(false);
   const [showResult, setShowResult] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
+  const [editRevision, setEditRevision] = useState(0);
+  const editRevisionRef = useRef(0);
+  const [hydrated, setHydrated] = useState(!evaluationCacheKey);
   const [saveError, setSaveError] = useState("");
   const [photoUploadError, setPhotoUploadError] = useState("");
   const [assessmentError, setAssessmentError] = useState("");
@@ -84,6 +89,13 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   const displayScale = fitScale * zoom;
   const canUndo = Boolean(activePhotoId && past[activePhotoId]?.length);
   const canRedo = Boolean(activePhotoId && future[activePhotoId]?.length);
+  const autosave = useDraftAutosave({ scope: `${patientId}:${journeyId ?? ""}`, revision: editRevision, enabled: isEncounterMode && hydrated && !loadError, save: async () => Boolean(await saveEvaluation("Rascunho", true)) });
+
+  function markDirty() {
+    editRevisionRef.current += 1;
+    setEditRevision(editRevisionRef.current);
+    setIsDirty(true);
+  }
 
   useEffect(() => {
     if (cameraVideoRef.current && cameraStream) cameraVideoRef.current.srcObject = cameraStream;
@@ -92,19 +104,13 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   useEffect(() => () => cameraStream?.getTracks().forEach((track) => track.stop()), [cameraStream]);
 
   useEffect(() => {
-    if (!isEncounterMode || !isDirty) return;
-    const onBeforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [isEncounterMode, isDirty]);
-
-  useEffect(() => {
     if (!evaluationCacheKey) return;
     let active = true;
     getCachedJson<{ evaluation?: ({ photos?: EvaluationPhoto[]; status?: string; professional?: string } & Partial<ClinicalAssessment>) | null }>(evaluationCacheKey)
       .then(async (data) => {
         if (!active) return;
         const restored = data.evaluation?.photos ?? [];
+        currentEvaluationIdRef.current = evaluationId;
         setAssessment({ ...emptyAssessment, ...data.evaluation });
         setProfessional(data.evaluation?.professional ?? "");
         setEvaluationStatus(data.evaluation?.status === "Rascunho" ? "Rascunho" : "Concluída");
@@ -125,10 +131,10 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
         }
       })
       .finally(() => {
-        if (active) setIsLoading(false);
+        if (active) { setIsLoading(false); setHydrated(true); }
       });
     return () => { active = false; };
-  }, [evaluationCacheKey, isEncounterMode, loadAttempt]);
+  }, [evaluationCacheKey, evaluationId, isEncounterMode, loadAttempt]);
 
   useEffect(() => {
     if (!notice) return;
@@ -145,7 +151,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     setPhotos((current) => current.map((photo) => (
       photo.id === activePhotoId ? { ...photo, annotations: next } : photo
     )));
-    setIsDirty(true);
+    markDirty();
   }
 
   function commitAnnotations(next: PhotoAnnotation[], previous: AnnotationSnapshot) {
@@ -206,7 +212,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     }
     setPhotos((current) => [...current, ...loaded]);
     setActivePhotoId((current) => current ?? loaded[0].id);
-    setIsDirty(true);
+    markDirty();
     showNotice(`${loaded.length} foto${loaded.length > 1 ? "s" : ""} adicionada${loaded.length > 1 ? "s" : ""}.`);
   }
 
@@ -219,7 +225,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   function executeRemovePhoto(photoId: string) {
     const remaining = photos.filter((item) => item.id !== photoId).map((photo, sortOrder) => ({ ...photo, sortOrder }));
     setPhotos(remaining);
-    setIsDirty(true);
+    markDirty();
     setPast((current) => omitKey(current, photoId));
     setFuture((current) => omitKey(current, photoId));
     if (activePhotoId === photoId) {
@@ -260,7 +266,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
 
   function changePhotoCategory(photoId: string, category: EvaluationPhoto["category"]) {
     setPhotos((current) => current.map((photo) => photo.id === photoId ? { ...photo, category } : photo));
-    setIsDirty(true);
+    markDirty();
   }
 
   function movePhoto(photoId: string, direction: -1 | 1) {
@@ -270,7 +276,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     const reordered = [...photos];
     [reordered[index], reordered[destination]] = [reordered[destination], reordered[index]];
     setPhotos(reordered.map((photo, sortOrder) => ({ ...photo, sortOrder })));
-    setIsDirty(true);
+    markDirty();
   }
 
   async function replacePhoto(photoId: string, file?: File) {
@@ -286,7 +292,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
       const replacement = await readPhoto(file, previous.sortOrder);
       const next = { ...replacement, id: previous.id, category: previous.category, annotations: [] };
       setPhotos((current) => current.map((photo) => photo.id === photoId ? next : photo));
-      setIsDirty(true);
+      markDirty();
       showNotice("Foto substituída. As marcações anteriores foram removidas.", "info");
     } catch (error) {
       setPhotoUploadError(error instanceof Error ? error.message : "Não foi possível abrir a imagem selecionada.");
@@ -331,14 +337,14 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     const photo: EvaluationPhoto = { id: `photo-${crypto.randomUUID()}`, name: `captura-${new Date().toISOString()}.jpg`, imageUrl, width: canvas.width, height: canvas.height, category: "Frontal", sortOrder: photos.length, annotations: [] };
     setPhotos((current) => [...current, photo]);
     setActivePhotoId(photo.id);
-    setIsDirty(true);
+    markDirty();
     closeCamera();
     showNotice("Foto capturada e adicionada à avaliação.");
   }
 
   function changeAssessment(field: keyof ClinicalAssessment, value: string) {
     setAssessment((current) => ({ ...current, [field]: value }));
-    setIsDirty(true);
+    markDirty();
     setSaveError("");
     if (field === "chiefComplaint" && value.trim()) setAssessmentError("");
   }
@@ -352,36 +358,40 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     setSelectedId(null);
   }
 
-  async function saveEvaluation(status: "Rascunho" | "Concluída" = encounter ? "Rascunho" : evaluationStatus) {
+  async function saveEvaluation(status: "Rascunho" | "Concluída" = encounter ? "Rascunho" : evaluationStatus, automatic = false) {
     if (!encounter && !photos.length) {
       showNotice("Adicione pelo menos uma foto antes de salvar a avaliação.", "info");
       return null;
     }
     setIsSaving(true);
     setSaveError("");
+    const startedRevision = editRevisionRef.current;
     try {
       const response = await fetch(`/api/patients/${patientId}/evaluation`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ evaluationId: currentEvaluationId, journeyId, photos, assessment, status }),
+        body: JSON.stringify({ evaluationId: currentEvaluationIdRef.current, journeyId, photos, assessment, status }),
       });
       const data = await response.json().catch(() => ({})) as { evaluation?: SavedEvaluation; message?: string };
       if (!response.ok || !data.evaluation) throw new Error(data.message ?? "Não foi possível salvar a avaliação.");
       setCurrentEvaluationId(data.evaluation.id);
+      currentEvaluationIdRef.current = data.evaluation.id;
       setEvaluationStatus(status);
       setProfessional(data.evaluation.professional ?? professional);
       invalidateClientCache(`/api/patients/${patientId}/evaluation`, `/api/patients/${patientId}/history`, `/api/patients/${patientId}/journeys`, "/api/patients");
-      setIsDirty(false);
-      const previews = await Promise.all(photos.map(async (photo) => ({ photo, dataUrl: await renderExport(photo) })));
-      setSavedPreviews(previews);
+      if (startedRevision === editRevisionRef.current) setIsDirty(false);
+      if (!automatic) {
+        const previews = await Promise.all(photos.map(async (photo) => ({ photo, dataUrl: await renderExport(photo) })));
+        setSavedPreviews(previews);
+      }
       if (!encounter) setShowResult(true);
-      onSaved?.(data.evaluation);
-      showNotice(status === "Concluída" ? "Avaliação concluída." : "Rascunho salvo com as imagens originais e marcações separadas.");
+      if (!automatic) onSaved?.(data.evaluation);
+      if (!automatic) showNotice(status === "Concluída" ? "Avaliação concluída." : "Rascunho salvo com as imagens originais e marcações separadas.");
       return data.evaluation.id;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Não foi possível salvar a avaliação.";
       setSaveError(message);
-      showNotice(message, "info");
+      if (!automatic) showNotice(message, "info");
       return null;
     } finally {
       setIsSaving(false);
@@ -394,13 +404,13 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
       setAssessmentValidationAttempt((current) => current + 1);
       return;
     }
+    if (!await autosave.flush()) return;
     const savedEvaluationId = await saveEvaluation("Concluída");
     if (savedEvaluationId) encounter?.onContinue(savedEvaluationId);
   }
 
-  function cancelEncounter() {
-    if (isDirty && !window.confirm("Há alterações ainda não salvas. Deseja sair sem salvar?")) return;
-    encounter?.onCancel();
+  async function returnToTreatments() {
+    await autosave.leave(() => encounter?.onCancel());
   }
 
   async function exportImage() {
@@ -416,13 +426,13 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   return (
     <div className={encounter ? "space-y-4" : undefined}>
       {encounter ? <>
-        <EncounterBreadcrumb patientName={patientName} journeyName={encounterLabel} stage="Avaliação" onClients={encounter.onClients} onPatient={encounter.onPatient} onJourney={encounter.onJourney} />
+        <EncounterBreadcrumb patientName={patientName} journeyName={encounterLabel} stage="Avaliação" onClients={() => void autosave.leave(encounter.onClients)} onPatient={() => void autosave.leave(encounter.onPatient)} onJourney={() => void autosave.leave(encounter.onJourney)} />
         <Card className="flex flex-wrap items-center justify-between gap-4 p-4">
           <div className="flex min-w-0 items-center gap-3">
             <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[#efedff] text-sm font-black text-[#5147dc]">{patientName.split(" ").map((part) => part[0]).slice(0, 2).join("")}</div>
             <div className="min-w-0"><h2 className="truncate text-base font-bold">{patientName}</h2><p className="mt-1 flex flex-wrap gap-x-3 text-[10px] text-muted-foreground"><span>{encounter.patient.age ? `${encounter.patient.age} anos` : "Idade não informada"}</span><span>{encounter.patient.phone || "Telefone não informado"}</span></p><div className="mt-1.5 flex flex-wrap gap-2"><span className="rounded-full bg-emerald-50 px-2 py-1 text-[9px] font-semibold text-emerald-700">{encounter.patient.status}</span><span className="rounded-full bg-muted px-2 py-1 text-[9px] text-muted-foreground">Paciente desde {encounter.patient.createdAt ? new Date(encounter.patient.createdAt).toLocaleDateString("pt-BR") : "data indisponível"}</span></div></div>
           </div>
-          <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={isSaving} onClick={() => void saveEvaluation("Rascunho")}><FileJson className="h-4 w-4" />{isSaving ? "Salvando..." : "Salvar rascunho"}</Button><Button variant="secondary" onClick={cancelEncounter}>Cancelar</Button><Button disabled={isSaving} onClick={() => void continueToQuote()}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Avançar para orçamento<ChevronRight className="h-4 w-4" /></Button></div>
+          <div className="flex flex-wrap items-center gap-2"><span role="status" className={cn("text-[10px]", autosave.state === "error" ? "text-destructive" : "text-muted-foreground")}>{autosave.state === "saving" ? "Salvando..." : autosave.state === "pending" ? "Alterações pendentes" : autosave.state === "error" ? "Não foi possível salvar" : "Rascunho salvo"}</span>{autosave.state === "error" ? <Button size="sm" variant="outline" onClick={() => void autosave.flush()}>Tentar novamente</Button> : null}<Button variant="secondary" onClick={() => void returnToTreatments()}>Voltar aos tratamentos</Button><Button disabled={isSaving} onClick={() => void continueToQuote()}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Avançar para orçamento<ChevronRight className="h-4 w-4" /></Button></div>
         </Card>
         <div aria-label="Etapas do atendimento" className="grid grid-cols-4 gap-2 px-1">{["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento"].map((stage, index) => <div className="flex min-w-0 items-center gap-2" key={stage}><span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] font-bold", index === 0 ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>{index + 1}</span><span className={cn("truncate text-[10px]", index === 0 ? "font-bold text-primary" : "text-muted-foreground")}>{stage}</span>{index < 3 ? <span className="h-px flex-1 bg-border" /> : null}</div>)}</div>
       </> : null}
@@ -439,7 +449,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
               {encounter ? <div className="flex items-center gap-2 lg:col-span-2"><Camera className="h-4 w-4 text-primary" /><h3 className="text-sm font-bold">Registro fotográfico e marcação</h3></div> : null}
               {isLoading ? <div className="grid min-h-[420px] gap-4 rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-5 lg:col-span-2"><LoadingSkeleton className="h-7 w-52" /><LoadingSkeleton className="h-3 w-80" /><div className="grid min-h-[300px] place-items-center rounded-[7px] border border-[#e4e6ef] bg-white"><div className="w-full max-w-md space-y-3 px-8"><LoadingSkeleton className="h-56 w-full" /><LoadingSkeleton className="mx-auto h-3 w-40" /><LoadingSkeleton className="mx-auto h-2.5 w-56" /></div></div></div> : loadError ? <div className="grid min-h-[360px] place-items-center rounded-lg border border-destructive/20 bg-destructive/5 p-6 text-center"><div><p className="text-sm font-semibold text-destructive">Não foi possível carregar esta avaliação.</p><Button className="mt-3" variant="outline" onClick={() => { setLoadError(false); setIsLoading(true); setLoadAttempt((value) => value + 1); }}>Tentar novamente</Button></div></div> : showResult ? <EvaluationResult onEdit={() => setShowResult(false)} previews={savedPreviews} /> : (<>
                 <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(150px,0.45fr)_minmax(0,1fr)]">
-                  <EditorToolbar canRedo={canRedo} canUndo={canUndo} color={color} strokeWidth={strokeWidth} hasSelection={Boolean(selectedId)} onClear={clearAnnotations} onColorChange={setColor} onStrokeWidthChange={setStrokeWidth} onDeleteSelected={deleteSelected} onExport={exportImage} onRedo={redo} onSave={() => void saveEvaluation()} onToolChange={(nextTool) => { setTool(nextTool); if (nextTool !== "select") setSelectedId(null); }} onUndo={undo} onZoomIn={() => setZoom((value) => Math.min(2.25, value + 0.15))} onZoomOut={() => setZoom((value) => Math.max(0.55, value - 0.15))} onZoomReset={() => setZoom(1)} isSaving={isSaving} tool={tool} />
+                  <EditorToolbar canRedo={canRedo} canUndo={canUndo} color={color} strokeWidth={strokeWidth} hasSelection={Boolean(selectedId)} onClear={clearAnnotations} onColorChange={setColor} onStrokeWidthChange={setStrokeWidth} onDeleteSelected={deleteSelected} onExport={exportImage} onRedo={redo} onSave={() => { if (encounter) void autosave.flush(); else void saveEvaluation(); }} onToolChange={(nextTool) => { setTool(nextTool); if (nextTool !== "select") setSelectedId(null); }} onUndo={undo} onZoomIn={() => setZoom((value) => Math.min(2.25, value + 0.15))} onZoomOut={() => setZoom((value) => Math.max(0.55, value - 0.15))} onZoomReset={() => setZoom(1)} isSaving={isSaving} tool={tool} />
                   <div className="min-w-0">
                   {encounter ? <div className="mb-3 flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={() => void openCamera()}><Camera className="h-4 w-4" />Capturar foto</Button><Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}><ImagePlus className="h-4 w-4" />Upload de fotos</Button><input ref={fileInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} />{activePhoto ? <Button size="sm" variant="outline" onClick={() => setPreviewPhoto(activePhoto)}><Maximize2 className="h-4 w-4" />Ampliar foto</Button> : null}</div> : null}
                   {activePhoto ? <EditorCanvas color={color} strokeWidth={strokeWidth} onCommitAnnotations={commitAnnotations} onPreviewAnnotations={updatePhotoAnnotations} onSelect={setSelectedId} photo={activePhoto} scale={displayScale} selectedId={selectedId} tool={tool} /> : <label className="flex min-h-[360px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed border-[#cfd3e4] bg-[#fbfbfe] px-5 text-center transition hover:border-[#5147dc] hover:bg-[#f8f7ff]"><span className="grid h-12 w-12 place-items-center rounded-full bg-[#efedff] text-[#5147dc]"><ImagePlus className="h-5 w-5" /></span><strong className="mt-4 text-sm">Adicione a primeira foto da avaliação</strong><span className="mt-1 max-w-sm text-[11px] leading-5 text-[#858696]">JPG, PNG ou WEBP. A imagem original fica preservada e as marcações são armazenadas separadamente.</span><span className="mt-4 inline-flex items-center rounded-[7px] bg-[#5147dc] px-4 py-2 text-xs font-bold text-white">Escolher foto</span><input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} /></label>}

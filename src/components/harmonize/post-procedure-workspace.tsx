@@ -14,12 +14,13 @@ import type { Patient } from "@/types/clinic";
 import { LoadingSkeleton } from "./shared";
 import { useCan } from "./current-user";
 import { EncounterBreadcrumb, type EncounterBreadcrumbActions } from "./encounter-breadcrumb";
+import { useDraftAutosave } from "./use-draft-autosave";
 
 type ClinicalPhoto = { id: string; name: string; category: string; phase: string; imageUrl: string; width: number; height: number; capturedAt: string; source: string; sessionId: string | null };
 type Appointment = { id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string };
 type AppointmentHours = { openingTime: string; closingTime: string };
 type FollowUp = { id: string; occurredAt: string; professional: string; guidanceText: string; guidanceSentAt: string | null; observations: string; complications: string; photos: Array<{ id: string; name: string; category: string; imageUrl: string; width: number; height: number }>; appointment: Appointment | null; createdBy: string; updatedAt: string; auditLog: Array<{ at: string; actor: string; action: string; fields: string[] }> };
-type WorkspaceData = { session: { id: string; journeyId: string; procedureName: string; professional: string; performedAt: string; status: string }; journey: { name: string; status: string; appointments: Appointment[] }; sessions: Array<{ id: string; procedureName: string; professional: string; performedAt: string }>; photos: ClinicalPhoto[]; followUps: FollowUp[] };
+type WorkspaceData = { session: { id: string; journeyId: string; procedureName: string; professional: string; performedAt: string; status: string }; journey: { name: string; status: string; appointments: Appointment[] }; sessions: Array<{ id: string; procedureName: string; professional: string; performedAt: string }>; photos: ClinicalPhoto[]; followUps: FollowUp[]; draft: { guidanceText: string; guidanceConfirmed: boolean; observations: string; complications: string; photos: DraftPhoto[]; appointmentId: string | null } | null };
 type DraftPhoto = { id: string; name: string; category: string; imageUrl: string; width: number; height: number };
 const categories = ["Frontal", "Perfil direito", "Perfil esquerdo", "Sorriso", "Outra"];
 const labels = (photo: ClinicalPhoto) => `${photo.category} · ${photo.phase} · ${new Date(photo.capturedAt).toLocaleDateString("pt-BR")}`;
@@ -37,6 +38,8 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   const [followUpValidation, setFollowUpValidation] = useState<{ content?: string; guidance?: string; photos?: string; appointment?: string }>({});
   const [followUpValidationAttempt, setFollowUpValidationAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [draftRevision, setDraftRevision] = useState(0);
+  const [hydrated, setHydrated] = useState(false);
   const [observations, setObservations] = useState("");
   const [complications, setComplications] = useState("");
   const [guidanceText, setGuidanceText] = useState("");
@@ -68,6 +71,23 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   const streamRef = useRef<MediaStream | null>(null);
   const compareRef = useRef<HTMLDivElement>(null);
   const initials = patient.name.split(" ").map((part) => part[0]).slice(0, 2).join("");
+  const autosave = useDraftAutosave({ scope: `${patientId}:${sessionId}`, revision: draftRevision, enabled: hydrated && canWrite, save: saveDraft });
+
+  function markDraftChanged() { setDraftRevision((current) => current + 1); }
+
+  async function saveDraft() {
+    try {
+      const response = await fetch(cacheKey, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ observations, complications, guidanceText, guidanceConfirmed, photos, appointmentId: selectedAppointmentId }) });
+      const result = await response.json().catch(() => ({})) as { message?: string };
+      if (!response.ok) throw new Error(result.message ?? "Não foi possível salvar o rascunho.");
+      invalidateClientCache(cacheKey);
+      setFollowUpError("");
+      return true;
+    } catch (reason) {
+      setFollowUpError(reason instanceof Error ? reason.message : "Não foi possível salvar o rascunho.");
+      return false;
+    }
+  }
 
   const reload = useCallback(async () => {
     const fresh = await getCachedJson<WorkspaceData>(cacheKey);
@@ -78,7 +98,7 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
 
   useEffect(() => {
     let active = true;
-    getCachedJson<WorkspaceData>(cacheKey).then((next) => { if (active) setData(next); }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Não foi possível carregar o acompanhamento."); }).finally(() => { if (active) setLoading(false); });
+    getCachedJson<WorkspaceData>(cacheKey).then((next) => { if (active) { setData(next); setObservations(next.draft?.observations ?? ""); setComplications(next.draft?.complications ?? ""); setGuidanceText(next.draft?.guidanceText ?? ""); setGuidanceConfirmed(next.draft?.guidanceConfirmed ?? false); setPhotos(next.draft?.photos ?? []); setSelectedAppointmentId(next.draft?.appointmentId ?? ""); } }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Não foi possível carregar o acompanhamento."); }).finally(() => { if (active) { setLoading(false); setHydrated(true); } });
     return () => { active = false; };
   }, [cacheKey]);
 
@@ -89,17 +109,9 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   const attendedAppointments = (data?.journey.appointments ?? []).filter((appointment) => /retorno/i.test(appointment.procedure) && ["Atendido", "Finalizado"].includes(appointment.status));
   const upcomingAppointments = (data?.journey.appointments ?? []).filter((appointment) => /retorno/i.test(appointment.procedure) && ["Agendado", "Em atendimento"].includes(appointment.status));
   const allPhotos = data?.photos ?? [];
-  const hasUnsavedChanges = Boolean(observations.trim() || complications.trim() || guidanceText.trim() || photos.length || selectedAppointmentId);
   const appointmentHoursLoading = appointmentOpen && !appointmentHours && !appointmentFormError;
   const appointmentLatestStart = appointmentHours ? latestAppointmentStart(appointmentHours.closingTime, 60) : null;
   const appointmentHasSlots = Boolean(appointmentHours && appointmentLatestStart && appointmentHours.openingTime <= appointmentLatestStart);
-
-  useEffect(() => {
-    if (!hasUnsavedChanges) return;
-    const warnBeforeLeaving = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
-    window.addEventListener("beforeunload", warnBeforeLeaving);
-    return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
-  }, [hasUnsavedChanges]);
 
   useEffect(() => {
     if (!cameraOpen || !videoRef.current || !streamRef.current) return;
@@ -134,9 +146,8 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
     setCameraOpen(false);
   }
 
-  function finishAttendance() {
-    if (hasUnsavedChanges && !window.confirm("Há dados de acompanhamento ainda não salvos. Deseja sair sem registrá-los?")) return;
-    onFinish();
+  async function finishAttendance() {
+    await autosave.leave(onFinish);
   }
 
   async function capturePhoto() {
@@ -148,6 +159,7 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
     canvas.getContext("2d")?.drawImage(video, 0, 0);
     const imageUrl = canvas.toDataURL("image/jpeg", 0.96);
     setPhotos((current) => [...current, { id: crypto.randomUUID(), name: `Evolução ${category.toLocaleLowerCase("pt-BR")}`, category, imageUrl, width: canvas.width, height: canvas.height }]);
+    markDraftChanged();
     setPhotoError("");
     setFollowUpValidation((current) => ({ ...current, photos: undefined, content: undefined }));
     closeCamera();
@@ -168,6 +180,7 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
       }
       if (photos.reduce((sum, photo) => sum + photo.imageUrl.length, 0) + next.reduce((sum, photo) => sum + photo.imageUrl.length, 0) > 24_000_000) throw new Error("Salve este registro antes de incluir mais imagens.");
       setPhotos((current) => [...current, ...next]);
+      markDraftChanged();
       setFollowUpValidation((current) => ({ ...current, photos: undefined, content: undefined }));
     } catch (reason) {
       setPhotoError(reason instanceof Error ? reason.message : "Não foi possível ler as imagens.");
@@ -185,6 +198,7 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
       setFollowUpError("");
       return;
     }
+    if (!await autosave.flush()) return;
     setSaving(true); setFollowUpError(""); setFollowUpValidation({}); setNotice("");
     try {
       const response = await fetch(cacheKey, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ professional: data.session.professional, observations, complications, guidanceText, guidanceSent: guidanceConfirmed, photos, ...(selectedAppointmentId ? { appointmentId: selectedAppointmentId } : {}) }) });
@@ -259,8 +273,8 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   if (!data) return null;
 
   return <div className="mx-auto max-w-[1400px] space-y-4 pb-8">
-    {breadcrumb ? <EncounterBreadcrumb patientName={patient.name} journeyName={data.journey.name} stage="Pós-procedimento" {...breadcrumb} /> : null}
-    <button type="button" onClick={onFinish} className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-primary"><ArrowLeft className="h-4 w-4" />Voltar ao prontuário</button>
+    {breadcrumb ? <EncounterBreadcrumb patientName={patient.name} journeyName={data.journey.name} stage="Pós-procedimento" onClients={() => void autosave.leave(breadcrumb.onClients)} onPatient={() => void autosave.leave(breadcrumb.onPatient)} onJourney={() => void autosave.leave(breadcrumb.onJourney)} /> : null}
+    <button type="button" onClick={() => void autosave.leave(onFinish)} className="flex items-center gap-2 text-xs font-semibold text-muted-foreground hover:text-primary"><ArrowLeft className="h-4 w-4" />Voltar ao prontuário</button>
     <Card className="flex flex-wrap items-center justify-between gap-4 p-4">
       <div className="flex min-w-0 items-center gap-3"><div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-primary/10 font-bold text-primary">{initials}</div><div className="min-w-0"><h1 className="truncate text-base font-bold">{patient.name}</h1><p className="mt-1 text-xs text-muted-foreground">{data.journey.name} · {data.session.procedureName} · Sessão de {new Date(data.session.performedAt).toLocaleDateString("pt-BR")}</p><p className="mt-1 text-[11px] text-muted-foreground">Profissional: {data.session.professional} · Sessão concluída; tratamento permanece {data.journey.status.toLocaleLowerCase("pt-BR")}</p></div></div>
       <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={finishAttendance}><ArrowLeft className="h-4 w-4" />Finalizar atendimento</Button></div>
@@ -272,6 +286,7 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
         {index < 3 ? <span className="h-px min-w-3 flex-1 bg-[#5147dc]" /> : null}
       </div>)}
     </div>
+    <div role="status" className={cn("flex items-center gap-2 text-[10px]", autosave.state === "error" ? "text-destructive" : "text-muted-foreground")}>{autosave.state === "saving" ? "Salvando rascunho..." : autosave.state === "pending" ? "Alterações pendentes" : autosave.state === "error" ? "Não foi possível salvar o rascunho" : "Rascunho salvo"}{autosave.state === "error" ? <Button size="sm" variant="outline" onClick={() => void autosave.flush()}>Tentar novamente</Button> : null}</div>
     {error ? <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive"><span>{error}</span><Button size="sm" variant="outline" onClick={() => void reload().catch((reason) => setError(reason instanceof Error ? reason.message : "Não foi possível carregar o acompanhamento."))}>Tentar novamente</Button></div> : null}
     {notice ? <p role="status" className="rounded-md bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">{notice}</p> : null}
     {appointmentNotice ? <p role="status" className="rounded-md bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800">{appointmentNotice}</p> : null}
@@ -288,16 +303,16 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
           {allPhotos.length ? <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">{allPhotos.map((photo) => <button key={`${photo.source}-${photo.id}`} type="button" onClick={() => photo.phase === "Antes" ? setBeforeId(photo.id) : setAfterId(photo.id)} onDoubleClick={() => setPreview(photo)} aria-label={`Selecionar e ampliar ${photo.name}`} className={cn("overflow-hidden rounded-md border text-left", photo.id === selectedBefore?.id || photo.id === selectedAfter?.id ? "border-primary ring-1 ring-primary" : "border-border")}><img src={photo.imageUrl} alt={photo.name} className="aspect-square w-full bg-muted object-contain" /><span className="block truncate px-1.5 py-1 text-[9px] text-muted-foreground">{photo.category} · {photo.phase}</span></button>)}</div> : null}
         </Card>
 
-      <Card className={cn("space-y-3 p-4 sm:p-5", followUpValidation.guidance && "border-[#d92d20]")}><h2 className="flex items-center gap-2 text-sm font-bold"><ShieldCheck className="h-4 w-4 text-primary" />Orientações pós-procedimento</h2><p className="text-xs text-muted-foreground">Registre o texto e confirme somente depois de enviar por um canal da clínica.</p><textarea key={`guidance-${followUpValidationAttempt}`} aria-invalid={Boolean(followUpValidation.guidance)} aria-describedby={followUpValidation.guidance ? "follow-up-guidance-error" : undefined} value={guidanceText} onChange={(event) => { setGuidanceText(event.target.value); setFollowUpValidation((current) => ({ ...current, guidance: undefined, content: undefined })); }} maxLength={5000} rows={4} placeholder="Orientações repassadas ao paciente..." className={cn("w-full rounded-md border border-border bg-background p-3 text-xs outline-none focus:border-primary", followUpValidation.guidance && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} />{followUpValidation.guidance ? <p id="follow-up-guidance-error" role="alert" className="text-[10px] font-medium text-[#b42318]">{followUpValidation.guidance}</p> : null}<label className="flex items-start gap-2 text-xs text-muted-foreground"><input type="checkbox" checked={guidanceConfirmed} onChange={(event) => { setGuidanceConfirmed(event.target.checked); if (event.target.checked && guidanceText.trim()) setFollowUpValidation((current) => ({ ...current, guidance: undefined })); }} className="mt-0.5 accent-primary" />Confirmo que estas orientações foram efetivamente enviadas ao paciente.</label></Card>
+        <Card className={cn("space-y-3 p-4 sm:p-5", followUpValidation.guidance && "border-[#d92d20]")}><h2 className="flex items-center gap-2 text-sm font-bold"><ShieldCheck className="h-4 w-4 text-primary" />Orientações pós-procedimento</h2><p className="text-xs text-muted-foreground">Registre o texto e confirme somente depois de enviar por um canal da clínica.</p><textarea key={`guidance-${followUpValidationAttempt}`} aria-invalid={Boolean(followUpValidation.guidance)} aria-describedby={followUpValidation.guidance ? "follow-up-guidance-error" : undefined} value={guidanceText} onChange={(event) => { setGuidanceText(event.target.value); markDraftChanged(); setFollowUpValidation((current) => ({ ...current, guidance: undefined, content: undefined })); }} maxLength={5000} rows={4} placeholder="Orientações repassadas ao paciente..." className={cn("w-full rounded-md border border-border bg-background p-3 text-xs outline-none focus:border-primary", followUpValidation.guidance && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} />{followUpValidation.guidance ? <p id="follow-up-guidance-error" role="alert" className="text-[10px] font-medium text-[#b42318]">{followUpValidation.guidance}</p> : null}<label className="flex items-start gap-2 text-xs text-muted-foreground"><input type="checkbox" checked={guidanceConfirmed} onChange={(event) => { setGuidanceConfirmed(event.target.checked); markDraftChanged(); if (event.target.checked && guidanceText.trim()) setFollowUpValidation((current) => ({ ...current, guidance: undefined })); }} className="mt-0.5 accent-primary" />Confirmo que estas orientações foram efetivamente enviadas ao paciente.</label></Card>
 
         <Card className={cn("space-y-4 p-4 sm:p-5", (followUpValidation.photos || photoError) && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")}><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="flex items-center gap-2 text-sm font-bold"><Camera className="h-4 w-4 text-primary" />Fotografias de evolução</h2><p className="mt-1 text-xs text-muted-foreground">Novos arquivos serão vinculados a esta sessão e preservados sem retoques.</p></div><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void openCamera()}><Camera className="h-4 w-4" />Capturar</Button><Button variant="outline" size="sm" onClick={() => fileInput.current?.click()}><Upload className="h-4 w-4" />Enviar fotos</Button><input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" multiple hidden onChange={(event) => void addFiles(event.target.files)} /></div></div>
           {followUpValidation.photos || photoError ? <p key={`photo-error-${followUpValidationAttempt}`} role="alert" className="text-[10px] font-medium text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{followUpValidation.photos ?? photoError}</p> : null}
           <div className="grid gap-2 sm:grid-cols-[minmax(160px,0.45fr)_1fr]"><label className="text-[10px] font-semibold text-muted-foreground">Categoria<select value={category} onChange={(event) => setCategory(event.target.value)} className="mt-1 h-9 w-full rounded-md border border-border bg-background px-2 text-xs">{categories.map((item) => <option key={item}>{item}</option>)}</select></label><div className="flex items-end text-[10px] text-muted-foreground">{photos.length ? `${photos.length} foto(s) aguardando salvamento neste registro` : `${allPhotos.length} fotografia(s) disponíveis no histórico desta jornada`}</div></div>
-          {photos.length ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{photos.map((photo) => <div key={photo.id} className="relative overflow-hidden rounded-md border border-border"><button type="button" onClick={() => setPreview(photo)} className="block w-full"><img src={photo.imageUrl} alt={photo.name} className="aspect-[4/3] w-full bg-muted object-contain" /><span className="block truncate px-2 py-1 text-[10px]">{photo.category} · {photo.name}</span></button><button type="button" aria-label={`Remover ${photo.name}`} onClick={() => setPhotos((current) => current.filter((item) => item.id !== photo.id))} className="absolute right-1 top-1 rounded bg-black/60 p-1 text-white"><X className="h-3.5 w-3.5" /></button></div>)}</div> : null}
+          {photos.length ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{photos.map((photo) => <div key={photo.id} className="relative overflow-hidden rounded-md border border-border"><button type="button" onClick={() => setPreview(photo)} className="block w-full"><img src={photo.imageUrl} alt={photo.name} className="aspect-[4/3] w-full bg-muted object-contain" /><span className="block truncate px-2 py-1 text-[10px]">{photo.category} · {photo.name}</span></button><button type="button" aria-label={`Remover ${photo.name}`} onClick={() => { setPhotos((current) => current.filter((item) => item.id !== photo.id)); markDraftChanged(); }} className="absolute right-1 top-1 rounded bg-black/60 p-1 text-white"><X className="h-3.5 w-3.5" /></button></div>)}</div> : null}
           {cameraOpen ? <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Capturar fotografia"><div className="w-full max-w-2xl rounded-md bg-background p-4"><div className="mb-3 flex items-center justify-between"><h3 className="text-sm font-bold">Capturar fotografia de evolução</h3><Button variant="ghost" size="icon" aria-label="Fechar câmera" onClick={closeCamera}><X className="h-4 w-4" /></Button></div><video ref={videoRef} autoPlay playsInline className="max-h-[65vh] w-full rounded-md bg-black object-contain" /><div className="mt-3 flex justify-end gap-2"><Button variant="outline" onClick={closeCamera}>Cancelar</Button><Button onClick={() => void capturePhoto()}><Camera className="h-4 w-4" />Capturar</Button></div></div></div> : null}
         </Card>
 
-        <Card className={cn("space-y-3 p-4 sm:p-5", followUpValidation.content && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")}><h2 className="flex items-center gap-2 text-sm font-bold"><CircleAlert className="h-4 w-4 text-primary" />Evolução e intercorrências</h2>{followUpValidation.content ? <p key={`content-error-${followUpValidationAttempt}`} role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-[10px] font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{followUpValidation.content}</p> : null}<label className="block text-[10px] font-semibold text-muted-foreground">Observações clínicas<textarea value={observations} onChange={(event) => { setObservations(event.target.value); setFollowUpValidation((current) => ({ ...current, content: undefined })); }} maxLength={5000} rows={4} placeholder="Evolução observada, resposta ao tratamento e conduta..." className="mt-1 w-full rounded-md border border-border bg-background p-3 text-xs outline-none focus:border-primary" /></label><label className="block text-[10px] font-semibold text-muted-foreground">Intercorrências registradas<textarea value={complications} onChange={(event) => { setComplications(event.target.value); setFollowUpValidation((current) => ({ ...current, content: undefined })); }} maxLength={5000} rows={3} placeholder="Registre intercorrências ou informe que não houve, quando aplicável..." className="mt-1 w-full rounded-md border border-border bg-background p-3 text-xs outline-none focus:border-primary" /></label><label className="block text-[10px] font-semibold text-muted-foreground">Vincular retorno atendido<select aria-invalid={Boolean(followUpValidation.appointment)} value={selectedAppointmentId} onChange={(event) => { setSelectedAppointmentId(event.target.value); setFollowUpValidation((current) => ({ ...current, appointment: undefined, content: undefined })); }} className={cn("mt-1 h-9 w-full rounded-md border border-border bg-background px-2 text-xs", followUpValidation.appointment && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")}><option value="">Sem retorno associado</option>{attendedAppointments.map((appointment) => <option key={appointment.id} value={appointment.id}>{new Date(appointment.date).toLocaleDateString("pt-BR")} · {appointment.procedure}</option>)}</select>{followUpValidation.appointment ? <span role="alert" className="mt-1 block text-[9px] font-medium text-[#b42318]">{followUpValidation.appointment}</span> : null}</label><Button disabled={saving || !canWrite} onClick={() => void saveFollowUp()}><Save className="h-4 w-4" />{saving ? "Salvando..." : "Salvar evolução"}</Button>{followUpError ? <p key={followUpValidationAttempt} role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-[10px] font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{followUpError}</p> : null}</Card>
+        <Card className={cn("space-y-3 p-4 sm:p-5", followUpValidation.content && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")}><h2 className="flex items-center gap-2 text-sm font-bold"><CircleAlert className="h-4 w-4 text-primary" />Evolução e intercorrências</h2>{followUpValidation.content ? <p key={`content-error-${followUpValidationAttempt}`} role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-[10px] font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{followUpValidation.content}</p> : null}<label className="block text-[10px] font-semibold text-muted-foreground">Observações clínicas<textarea value={observations} onChange={(event) => { setObservations(event.target.value); markDraftChanged(); setFollowUpValidation((current) => ({ ...current, content: undefined })); }} maxLength={5000} rows={4} placeholder="Evolução observada, resposta ao tratamento e conduta..." className="mt-1 w-full rounded-md border border-border bg-background p-3 text-xs outline-none focus:border-primary" /></label><label className="block text-[10px] font-semibold text-muted-foreground">Intercorrências registradas<textarea value={complications} onChange={(event) => { setComplications(event.target.value); markDraftChanged(); setFollowUpValidation((current) => ({ ...current, content: undefined })); }} maxLength={5000} rows={3} placeholder="Registre intercorrências ou informe que não houve, quando aplicável..." className="mt-1 w-full rounded-md border border-border bg-background p-3 text-xs outline-none focus:border-primary" /></label><label className="block text-[10px] font-semibold text-muted-foreground">Vincular retorno atendido<select aria-invalid={Boolean(followUpValidation.appointment)} value={selectedAppointmentId} onChange={(event) => { setSelectedAppointmentId(event.target.value); markDraftChanged(); setFollowUpValidation((current) => ({ ...current, appointment: undefined, content: undefined })); }} className={cn("mt-1 h-9 w-full rounded-md border border-border bg-background px-2 text-xs", followUpValidation.appointment && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")}><option value="">Sem retorno associado</option>{attendedAppointments.map((appointment) => <option key={appointment.id} value={appointment.id}>{new Date(appointment.date).toLocaleDateString("pt-BR")} · {appointment.procedure}</option>)}</select>{followUpValidation.appointment ? <span role="alert" className="mt-1 block text-[9px] font-medium text-[#b42318]">{followUpValidation.appointment}</span> : null}</label><Button disabled={saving || !canWrite} onClick={() => void saveFollowUp()}><Save className="h-4 w-4" />{saving ? "Salvando..." : "Registrar evolução"}</Button>{followUpError ? <p key={followUpValidationAttempt} role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-[10px] font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{followUpError}</p> : null}</Card>
 
         <Card className="space-y-3 p-4 sm:p-5"><h2 className="flex items-center gap-2 text-sm font-bold"><Clock3 className="h-4 w-4 text-primary" />Histórico da jornada</h2><ol className="space-y-2">{data.sessions.map((session) => <li key={session.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/50 px-3 py-2"><span className="text-xs"><strong>{session.procedureName}</strong><span className="text-muted-foreground"> · {new Date(session.performedAt).toLocaleDateString("pt-BR")} · {session.professional}</span></span><span className="text-[10px] text-muted-foreground">Sessão concluída</span></li>)}{data.journey.appointments.filter((appointment) => /retorno/i.test(appointment.procedure)).map((appointment) => <li key={appointment.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2"><span className="text-xs"><strong>{new Date(appointment.date).toLocaleDateString("pt-BR")} · {appointment.time}</strong><span className="text-muted-foreground"> · {appointment.procedure}</span></span><span className="text-[10px] text-muted-foreground">{appointment.status}</span></li>)}</ol><h3 className="pt-2 text-xs font-bold">Registros clínicos</h3>{data.followUps.length ? <ol className="space-y-3">{[...data.followUps].reverse().map((record) => <li key={record.id} className="border-l-2 border-primary/30 pl-3"><div className="flex flex-wrap justify-between gap-2"><strong className="text-xs">{new Date(record.occurredAt).toLocaleString("pt-BR")} · {record.professional}</strong><span className="text-[10px] text-muted-foreground">Registrado por {record.createdBy}</span></div>{record.guidanceSentAt ? <p className="mt-1 text-xs text-emerald-800">Orientações registradas como enviadas em {new Date(record.guidanceSentAt).toLocaleString("pt-BR")}</p> : null}{record.guidanceText ? <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{record.guidanceText}</p> : null}{record.observations ? <p className="mt-1 whitespace-pre-wrap text-xs text-foreground">{record.observations}</p> : null}{record.complications ? <p className="mt-1 whitespace-pre-wrap text-xs text-amber-800">Intercorrência: {record.complications}</p> : null}{record.appointment ? <p className="mt-1 text-xs text-muted-foreground">Retorno: {new Date(record.appointment.date).toLocaleDateString("pt-BR")} · {record.appointment.status}</p> : null}{record.photos.length ? <div className="mt-2 flex gap-2">{record.photos.map((photo) => <img key={photo.id} src={photo.imageUrl} alt={photo.name} className="h-16 w-16 rounded border border-border object-contain" />)}</div> : null}<p className="mt-1 text-[9px] text-muted-foreground">Atualizado {new Date(record.updatedAt).toLocaleString("pt-BR")}</p></li>)}</ol> : <p className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">Nenhum registro adicional de acompanhamento.</p>}</Card>
       </div>

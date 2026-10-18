@@ -327,7 +327,7 @@ export function PatientDetail({
         setEncounterQuoteId(approvedQuote?.id ?? journey.latestCompletedQuoteId ?? undefined);
         setEncounterPostProcedureSessionId(journey.latestCompletedSessionId ?? undefined);
 
-        if (!journey.hasEvaluation) {
+        if (!journey.hasEvaluation || !evaluation || evaluation.status === "Rascunho") {
           setEncounterMode(true);
         } else if (!journey.hasPaidQuote) {
           if (!evaluation?.id) throw new Error("A avaliação desta jornada não foi encontrada para continuar ao orçamento.");

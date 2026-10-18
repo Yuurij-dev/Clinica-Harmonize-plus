@@ -248,6 +248,7 @@ model PatientProcedureSession {
   stockMovements   StockMovement[]
   pendingOutputs   PendingStockOutput[]
   followUps        PatientProcedureFollowUp[]
+  followUpDraft    PatientProcedureFollowUpDraft?
 
   @@index([clinicId, patientId, performedAt])
   @@index([journeyId, performedAt])
@@ -442,6 +443,18 @@ model PatientProcedureFollowUp {
   @@index([clinicId, patientId, occurredAt])
   @@index([journeyId, occurredAt])
   @@index([sessionId, occurredAt])
+}
+
+model PatientProcedureFollowUpDraft {
+  sessionId         String                  @id
+  guidanceText      String                  @default("")
+  guidanceConfirmed Boolean                 @default(false)
+  observations      String                  @default("")
+  complications     String                  @default("")
+  photos            String                  @default("[]")
+  appointmentId     String?
+  updatedAt         DateTime                @updatedAt @db.Timestamptz(6)
+  session           PatientProcedureSession @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
 
 model StockLot {

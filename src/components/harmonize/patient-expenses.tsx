@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, ArrowRight, BadgeCheck, Ban, CalendarPlus, Check, ChevronDown, CirclePlus, Clock3, CreditCard, FileDown, Info, LoaderCircle, Save, Send, WalletCards, XCircle } from "lucide-react";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
@@ -14,6 +14,7 @@ import { calculateQuote, formatMoneyInput, parseMoneyInput, type QuoteLineInput 
 import { ProcedureSessionWorkspace } from "./procedure-session-workspace";
 import { PostProcedureWorkspace } from "./post-procedure-workspace";
 import { EncounterBreadcrumb, type EncounterBreadcrumbActions } from "./encounter-breadcrumb";
+import { useDraftAutosave } from "./use-draft-autosave";
 
 type ProcedureOption = {
   id: string;
@@ -425,6 +426,7 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [notice, setNotice] = useState<{ error: boolean; text: string } | null>(null);
   const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(null);
+  const autosaveQuoteId = useRef<string | null>(null);
   const [lines, setLines] = useState<QuoteLineInput[]>([]);
   const [discountDrafts, setDiscountDrafts] = useState<Record<string, string>>({});
   const [discountErrors, setDiscountErrors] = useState<Record<string, string>>({});
@@ -433,6 +435,7 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
   const [installments, setInstallments] = useState(1);
   const [notes, setNotes] = useState("");
   const [initializedQuoteId, setInitializedQuoteId] = useState<string | null>(null);
+  const [draftGeneration, setDraftGeneration] = useState(0);
   const [pdfNotice, setPdfNotice] = useState(false);
   const [pdfGenerated, setPdfGenerated] = useState(false);
 
@@ -454,6 +457,7 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
       setCosts(optionData.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
       setEvaluation(evaluationData.evaluation ?? null);
       setSelectedQuoteId(nextQuote?.id ?? null);
+      autosaveQuoteId.current = nextQuote?.id ?? null;
       setLines(restoreQuoteLines(nextQuote, nextProcedures));
       setPaymentMethod(nextQuote?.paymentMethod ?? "Cartão de crédito");
       setInstallments(nextQuote?.installments ?? 1);
@@ -475,6 +479,13 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
   const savedLines = parseQuoteDetails(activeQuote?.details)?.items.map((item) => ({ procedureId: item.procedureId, quantity: item.quantity, discountCents: item.discountCents })) ?? restoreQuoteLines(activeQuote, procedures);
   const initialSignature = activeQuote ? `${JSON.stringify(savedLines)}|${activeQuote.paymentMethod ?? "Cartão de crédito"}|${activeQuote.installments ?? 1}|${activeQuote.notes ?? ""}` : "";
   const saved = Boolean(activeQuote?.id && initializedQuoteId === activeQuote.id && quoteSignature === initialSignature);
+  const autosave = useDraftAutosave({
+    scope: `${patientId}:${journeyId}:${evaluationId}:${draftGeneration}`,
+    revision: quoteSignature,
+    enabled: !loading && !loadError && initializedQuoteId !== null && editable,
+    canSave: lines.length > 0 && Boolean(calculated) && !Object.values(discountErrors).some(Boolean),
+    save: async () => Boolean(await saveDraft(true)),
+  });
 
   function updateLine(procedureId: string, changes: Partial<QuoteLineInput>) {
     setLines((current) => current.map((line) => line.procedureId === procedureId ? { ...line, ...changes } : line));
@@ -521,11 +532,13 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
     setNotice(null);
   }
 
-  function startNewRevision() {
+  async function startNewRevision() {
     if (!canStartNewProposal) return;
-    if (!saved && lines.length && !window.confirm("Há alterações não salvas nesta proposta. Deseja descartá-las e iniciar outra?")) return;
+    if (!await autosave.flush() && !window.confirm("As alterações não foram salvas. Deseja iniciar outra proposta e perdê-las?")) return;
+    setDraftGeneration((current) => current + 1);
     setNewRevision(true);
     setSelectedQuoteId(null);
+    autosaveQuoteId.current = null;
     setLines([]);
     setDiscountDrafts({}); setDiscountErrors({}); setSelectionError("");
     setPaymentMethod("Cartão de crédito");
@@ -535,11 +548,14 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
     setNotice(null);
   }
 
-  function selectRelatedQuote(quoteId: string) {
+  async function selectRelatedQuote(quoteId: string) {
     const quote = relatedQuotes.find((item) => item.id === quoteId);
     if (!quote) return;
+    if (!await autosave.flush() && !window.confirm("As alterações não foram salvas. Deseja abrir outra proposta e perdê-las?")) return;
+    setDraftGeneration((current) => current + 1);
     setNewRevision(false);
     setSelectedQuoteId(quote.id);
+    autosaveQuoteId.current = quote.id;
     setLines(restoreQuoteLines(quote, procedures));
     setDiscountDrafts({}); setDiscountErrors({}); setSelectionError("");
     setPaymentMethod(quote.paymentMethod ?? "Cartão de crédito");
@@ -549,31 +565,34 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
     setNotice(null);
   }
 
-  async function saveDraft() {
+  async function saveDraft(automatic = false) {
     if (!lines.length) { setSelectionError("Selecione ao menos um procedimento para salvar o orçamento."); return null; }
     if (Object.values(discountErrors).some(Boolean)) return null;
     if (!calculated || !evaluationId || !journeyId) { setNotice({ error: true, text: "Confira os procedimentos e descontos antes de salvar." }); return null; }
-    setSaving(true); setNotice(null);
+    setSaving(true); if (!automatic) setNotice(null);
     try {
-      const response = await fetch(activeQuote ? `/api/quotes/${activeQuote.id}` : "/api/quotes", {
-        method: activeQuote ? "PATCH" : "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ patientId, journeyId, evaluationId, details: lines, paymentMethod, installments, notes, status: activeQuote ? undefined : "Rascunho" }),
+      const targetId = autosaveQuoteId.current;
+      const response = await fetch(targetId ? `/api/quotes/${targetId}` : "/api/quotes", {
+        method: targetId ? "PATCH" : "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ patientId, journeyId, evaluationId, details: lines, paymentMethod, installments, notes, status: targetId ? undefined : "Rascunho" }),
       });
       const data = await response.json().catch(() => ({})) as { quote?: PatientQuote; message?: string };
       if (!response.ok || !data.quote) throw new Error(data.message ?? "Não foi possível salvar o orçamento.");
       invalidateClientCache(quoteKey, "/api/quotes", `/api/patients/${patientId}/history`, `/api/patients/${patientId}/profile`, "/api/dashboard/bootstrap");
       setQuotes((current) => current.some((quote) => quote.id === data.quote!.id) ? current.map((quote) => quote.id === data.quote!.id ? data.quote! : quote) : [data.quote!, ...current]);
       setSelectedQuoteId(data.quote.id); setNewRevision(false); setInitializedQuoteId(data.quote.id);
-      setNotice({ error: false, text: "Rascunho salvo. Nenhum pagamento foi registrado." });
+      autosaveQuoteId.current = data.quote.id;
+      if (!automatic) setNotice({ error: false, text: "Rascunho salvo. Nenhum pagamento foi registrado." });
       return data.quote;
     } catch (error) {
-      setNotice({ error: true, text: error instanceof Error ? error.message : "Não foi possível salvar o orçamento." });
+      if (!automatic) setNotice({ error: true, text: error instanceof Error ? error.message : "Não foi possível salvar o orçamento." });
       return null;
     } finally { setSaving(false); }
   }
 
   async function changeStatus(status: "Enviado" | "Aprovado" | "Recusado" | "Cancelado") {
-    const quote = activeQuote && (saved || !editable) ? activeQuote : await saveDraft();
+    if (editable && !await autosave.flush()) return;
+    const quote = activeQuote ?? await saveDraft();
     if (!quote) return;
     if (status === "Enviado" && !window.confirm("Confirma que a proposta já foi enviada ao paciente?")) return;
     setStatusBusy(true); setNotice(null);
@@ -656,16 +675,16 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
 
   return (
     <div className="space-y-4">
-      {patient && breadcrumb ? <EncounterBreadcrumb patientName={patient.name} journeyName={journeyLabel ?? "Novo atendimento"} stage="Orçamento" {...breadcrumb} /> : null}
+      {patient && breadcrumb ? <EncounterBreadcrumb patientName={patient.name} journeyName={journeyLabel ?? "Novo atendimento"} stage="Orçamento" onClients={() => void autosave.leave(breadcrumb.onClients)} onPatient={() => void autosave.leave(breadcrumb.onPatient)} onJourney={() => void autosave.leave(breadcrumb.onJourney)} /> : null}
       <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
         <div className="flex min-w-0 items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#ece9ff] text-sm font-black text-[#5147dc]">{(patient?.name ?? "Paciente").split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div className="min-w-0"><h2 className="truncate text-base font-bold text-[#242538]">{patient?.name ?? "Paciente"}</h2><p className="text-[10px] text-[#77788a]">{patient?.age ? `${patient.age} anos · ` : ""}{patient?.phone ?? "Telefone não informado"} · {patient?.status ?? "Status não informado"}</p><p className="text-[9px] text-[#858696]">Paciente desde {patient?.createdAt ? new Date(patient.createdAt).toLocaleDateString("pt-BR") : "data não informada"} · {journeyLabel ?? "Novo atendimento"} · Etapa 2 de 4</p></div></div>
-        <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={onReturnToEvaluation}><ArrowLeft className="h-4 w-4" />Voltar para avaliação</Button><Button disabled={!activeQuote || !["Aprovado", "Pago"].includes(activeQuote.status) || saving} onClick={() => void advanceToProcedure()}>{saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}Avançar para procedimento</Button></div>
+        <div className="flex flex-wrap items-center gap-2"><span role="status" className={cn("text-[10px]", autosave.state === "error" ? "text-destructive" : "text-muted-foreground")}>{autosave.state === "saving" ? "Salvando..." : autosave.state === "pending" ? "Alterações pendentes" : autosave.state === "error" ? "Não foi possível salvar" : "Rascunho salvo"}</span>{autosave.state === "error" ? <Button size="sm" variant="outline" onClick={() => void autosave.flush()}>Tentar novamente</Button> : null}<Button variant="outline" onClick={() => void autosave.leave(() => onReturnToEvaluation?.())}><ArrowLeft className="h-4 w-4" />Voltar para avaliação</Button><Button disabled={!activeQuote || !["Aprovado", "Pago"].includes(activeQuote.status) || saving || autosave.state !== "saved"} onClick={() => void advanceToProcedure()}>{saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}Avançar para procedimento</Button></div>
       </Card>
       <div className="flex items-center gap-2 overflow-x-auto px-2 py-1 text-[10px] font-semibold text-[#747587]" aria-label="Progresso do atendimento">{["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento"].map((stage, index) => <div key={stage} className="flex min-w-0 flex-1 items-center gap-2"><span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-full", index < 1 ? "bg-[#5147dc] text-white" : index === 1 ? "bg-[#5147dc] text-white" : "bg-[#e6e7ef] text-[#747587]")}>{index < 1 ? <Check className="h-4 w-4" /> : index + 1}</span><span className={index === 1 ? "text-[#3f35d6]" : "whitespace-nowrap"}>{stage}</span>{index < 3 ? <span className={cn("h-px min-w-3 flex-1", index < 1 ? "bg-[#5147dc]" : "bg-[#dfe0e8]")} /> : null}</div>)}</div>
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_350px]">
         <div className="space-y-4">
           <Card className="overflow-hidden">
-            <div className="border-b border-[#ececf2] px-4 py-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-bold text-[#27283b]">Orçamento do tratamento</h3><p className="mt-1 text-[10px] text-[#858696]">Vinculado à avaliação de {new Date(evaluation.createdAt).toLocaleDateString("pt-BR")} · {evaluation.professional || "Profissional não informado"}</p></div><div className="flex flex-wrap items-center justify-end gap-2"><Button size="sm" type="button" variant="outline" disabled={!calculated} onClick={generatePdf}><FileDown className="h-4 w-4" />Gerar PDF</Button><Button size="sm" type="button" variant="outline" disabled={paymentBusy || saving || !activeQuote || ["Pago", "Recusado", "Cancelado"].includes(activeQuote.status)} onClick={() => void registerPayment()}><WalletCards className="h-4 w-4" />{paymentBusy ? "Registrando..." : "Registrar pagamento"}</Button><Button size="sm" type="button" disabled={saving || !editable || saved || !calculated} onClick={() => void saveDraft()}><Save className="h-4 w-4" />{saving ? "Salvando..." : saved ? "Rascunho salvo" : "Salvar rascunho"}</Button></div></div><div className="mt-2 flex flex-wrap items-center justify-end gap-2">{relatedQuotes.length ? <label className="sr-only" htmlFor="journey-quote-history">Propostas desta jornada</label> : null}{relatedQuotes.length ? <select id="journey-quote-history" aria-label="Selecionar proposta desta jornada" className="h-8 max-w-[230px] rounded-[5px] border border-[#dddde6] bg-white px-2 text-[10px]" value={newRevision ? "__new__" : activeQuote?.id ?? ""} onChange={(event) => event.target.value === "__new__" ? startNewRevision() : selectRelatedQuote(event.target.value)}>{canStartNewProposal ? <option value="__new__">Nova proposta</option> : null}{relatedQuotes.map((quote) => <option key={quote.id} value={quote.id}>{quoteStatusLabels[quote.status] ?? quote.status} · {quote.createdAt ? new Date(quote.createdAt).toLocaleDateString("pt-BR") : "Data não informada"} · {currency.format(quote.total)}</option>)}</select> : null}{activeQuote ? <span className="rounded-full bg-[#f0efff] px-3 py-1 text-[10px] font-bold text-[#5147dc]">{quoteStatusLabels[activeQuote.status] ?? activeQuote.status}</span> : null}{relatedQuotes.length && canStartNewProposal ? <Button size="sm" variant="outline" type="button" onClick={startNewRevision}>Nova proposta</Button> : null}</div>
+            <div className="border-b border-[#ececf2] px-4 py-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-bold text-[#27283b]">Orçamento do tratamento</h3><p className="mt-1 text-[10px] text-[#858696]">Vinculado à avaliação de {new Date(evaluation.createdAt).toLocaleDateString("pt-BR")} · {evaluation.professional || "Profissional não informado"}</p></div><div className="flex flex-wrap items-center justify-end gap-2"><Button size="sm" type="button" variant="outline" disabled={!calculated} onClick={generatePdf}><FileDown className="h-4 w-4" />Gerar PDF</Button><Button size="sm" type="button" variant="outline" disabled={paymentBusy || saving || !saved || autosave.state !== "saved" || !activeQuote || ["Pago", "Recusado", "Cancelado"].includes(activeQuote.status)} onClick={() => void registerPayment()}><WalletCards className="h-4 w-4" />{paymentBusy ? "Registrando..." : "Registrar pagamento"}</Button><Button size="sm" type="button" disabled={saving || !editable || saved || !calculated} onClick={() => void autosave.flush()}><Save className="h-4 w-4" />{saving ? "Salvando..." : saved ? "Rascunho salvo" : "Salvar rascunho"}</Button></div></div><div className="mt-2 flex flex-wrap items-center justify-end gap-2">{relatedQuotes.length ? <label className="sr-only" htmlFor="journey-quote-history">Propostas desta jornada</label> : null}{relatedQuotes.length ? <select id="journey-quote-history" aria-label="Selecionar proposta desta jornada" className="h-8 max-w-[230px] rounded-[5px] border border-[#dddde6] bg-white px-2 text-[10px]" value={newRevision ? "__new__" : activeQuote?.id ?? ""} onChange={(event) => event.target.value === "__new__" ? startNewRevision() : selectRelatedQuote(event.target.value)}>{canStartNewProposal ? <option value="__new__">Nova proposta</option> : null}{relatedQuotes.map((quote) => <option key={quote.id} value={quote.id}>{quoteStatusLabels[quote.status] ?? quote.status} · {quote.createdAt ? new Date(quote.createdAt).toLocaleDateString("pt-BR") : "Data não informada"} · {currency.format(quote.total)}</option>)}</select> : null}{activeQuote ? <span className="rounded-full bg-[#f0efff] px-3 py-1 text-[10px] font-bold text-[#5147dc]">{quoteStatusLabels[activeQuote.status] ?? activeQuote.status}</span> : null}{relatedQuotes.length && canStartNewProposal ? <Button size="sm" variant="outline" type="button" onClick={() => void startNewRevision()}>Nova proposta</Button> : null}</div>
               <div className="mt-4 rounded-[6px] bg-[#f3f1ff] px-3 py-2.5 text-xs text-[#4d4b68]"><strong className="text-[#3a31c8]">Objetivo:</strong> {evaluation.patientGoal.trim() || "Não informado na avaliação."}</div>
               <p className="mt-3 text-[10px] text-[#707184]"><strong>Queixa principal:</strong> {evaluation.chiefComplaint.trim() || "Não informado"}</p>
             </div>

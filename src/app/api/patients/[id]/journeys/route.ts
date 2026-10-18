@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { appointmentHasPassed, clinicNow } from "@/lib/clinic-time";
+import { approvedProcedureNames } from "@/lib/procedure-session-rules";
 import { prisma } from "@/lib/prisma";
 
 async function getPatient(patientId: string, clinicId: string) {
@@ -17,10 +18,10 @@ const journeyProgressSelect = {
   updatedAt: true,
   archivedAt: true,
   evaluations: { orderBy: { createdAt: "asc" }, take: 1, select: { id: true, professional: true } },
-  quotes: { select: { id: true, status: true, createdAt: true } },
+  quotes: { select: { id: true, status: true, createdAt: true, items: true, details: true } },
   appointments: { orderBy: [{ date: "desc" }, { time: "desc" }], select: { id: true, date: true, time: true, procedure: true, professional: true, status: true } },
   procedures: { orderBy: { performedAt: "desc" }, take: 10, select: { id: true, name: true, professional: true, performedAt: true } },
-  procedureSessions: { orderBy: { performedAt: "desc" }, take: 20, select: { id: true, procedureId: true, quoteId: true, professional: true, performedAt: true, status: true } },
+  procedureSessions: { orderBy: { performedAt: "desc" }, take: 20, select: { id: true, procedureId: true, procedureName: true, quoteId: true, professional: true, performedAt: true, status: true } },
   _count: { select: { procedures: true, appointments: true, procedureSessions: true } },
 } satisfies Prisma.PatientJourneySelect;
 
@@ -57,6 +58,12 @@ async function serializeJourneys(patientId: string, clinicId: string, journeys: 
   return journeys.map((journey) => ({
     id: journey.id,
     name: journey.name,
+    procedureNames: [...new Set([
+      ...journey.procedures.map((procedure) => procedure.name),
+      ...journey.procedureSessions.map((session) => session.procedureName),
+      ...journey.quotes.flatMap((quote) => [...approvedProcedureNames(quote.details), quote.items]),
+      ...journey.appointments.filter((appointment) => !appointment.procedure.toLocaleLowerCase("pt-BR").includes("retorno")).map((appointment) => appointment.procedure),
+    ].map((name) => name.trim()).filter(Boolean))],
     createdAt: journey.createdAt,
     hasEvaluation: journey.evaluations.length > 0,
     hasPaidQuote: journey.quotes.some((quote) => ["Pago", "Aprovado"].includes(quote.status)),
