@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import NextImage from "next/image";
 import { BadgeCheck, CalendarDays, Camera, Check, ChevronDown, ChevronRight, CircleAlert, Clock3, CreditCard, FileImage, FileText, HeartPulse, Image as ImageIcon, Layers3, Loader2, PackageCheck, Pencil, Plus, Search, ShieldAlert, Stethoscope, Syringe, Trash2, UserRound } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +25,7 @@ export type PatientJourneySummary = {
   hasProcedure: boolean;
   hasBeforePhoto: boolean;
   hasAfterPhoto: boolean;
+  hasReturnScheduled: boolean;
   hasReturn: boolean;
   sessionCount: number;
   latestCompletedSessionId: string | null;
@@ -100,7 +102,7 @@ export function PatientOverview({ patient, onOpen, onOpenJourney, onNewAppointme
   const pendingEvents = useMemo(() => summary?.events.filter((event) => event.kind === "Material" || (event.kind === "Agendamento" && event.status === "Agendado") || (event.kind === "Orçamento" && ["Pendente", "Aguardando aprovação"].includes(event.status ?? ""))).slice(0, 3) ?? [], [summary]);
   const clinicalAlerts = useMemo(() => summary?.observations.filter((observation) => observation.kind === "clinical").slice(0, 2) ?? [], [summary]);
   const lastVisit = summary?.events.find((event) => event.kind === "Procedimento" || (event.kind === "Agendamento" && ["Atendido", "Finalizado"].includes(event.status ?? "")));
-  const steps = journey ? [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturn, journey.status === "Concluído"] : [];
+  const steps = journey ? [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturnScheduled || journey.hasReturn, journey.hasReturn, journey.status === "Concluído"] : [];
   const progress = steps.length ? Math.round((steps.filter(Boolean).length / steps.length) * 100) : 0;
 
   return <div className="space-y-4">
@@ -112,12 +114,12 @@ export function PatientOverview({ patient, onOpen, onOpenJourney, onNewAppointme
           <div className="flex flex-wrap items-start justify-between gap-3"><IconHeading icon={Layers3} title="Tratamento em andamento" />{journey ? <Badge variant={statusTone(journey.status)}>{journey.status}</Badge> : null}</div>
           <h3 className="mt-3 text-lg font-bold text-foreground">{journey?.name ?? "Nenhum tratamento ativo"}</h3>
           {journey ? <>
-            <div className="mt-5 grid grid-cols-5 gap-1" aria-label={`Progresso do tratamento: ${progress}%`}>
-              {["Avaliação", "Orçamento", "Procedimento", "Pós", "Concluído"].map((step, index) => {
+            <div className="mt-5 grid grid-cols-6 gap-1" aria-label={`Progresso do tratamento: ${progress}%`}>
+              {["Avaliação", "Orçamento", "Procedimento", "Pós", "Retorno", "Concluído"].map((step, index) => {
                 const done = steps[index];
-                const current = !done && index < 4 && (index === 0 || steps[index - 1]);
+                const current = !done && index < 5 && (index === 0 || steps[index - 1]);
                 return <div className="relative min-w-0 text-center" key={step}>
-                  {index < 4 ? <span aria-hidden="true" className={`absolute left-1/2 top-3.5 h-0.5 w-full ${done ? "bg-primary" : "bg-border"}`} /> : null}
+                  {index < 5 ? <span aria-hidden="true" className={`absolute left-1/2 top-3.5 h-0.5 w-full ${done ? "bg-primary" : "bg-border"}`} /> : null}
                   <span className={`relative mx-auto grid h-7 w-7 place-items-center rounded-full border text-[10px] font-bold ${done ? "border-primary bg-primary text-primary-foreground" : current ? "border-primary bg-background text-primary ring-4 ring-primary/10" : "border-border bg-background text-muted-foreground"}`}>{done ? <Check className="h-3.5 w-3.5" /> : index + 1}</span>
                   <span className={`relative mt-2 block truncate text-[10px] font-medium ${current || done ? "text-foreground" : "text-muted-foreground"}`}>{step}</span>
                 </div>;
@@ -339,8 +341,8 @@ export function PatientTreatments({ patient, selectedJourneyId, onSelect, onJour
     {actionError ? <p role="alert" className="text-xs text-destructive">{actionError}</p> : null}
     {!visibleJourneys.length ? <Card className="p-6"><EmptyState title={procedureSearch.trim() ? "Nenhum procedimento encontrado" : journeys.length ? "Nenhum tratamento neste filtro" : "Nenhum tratamento cadastrado"} description={procedureSearch.trim() ? "Tente pesquisar por outro nome de procedimento." : journeys.length ? "Selecione outro status para ver jornadas." : "Crie um tratamento para organizar avaliações, orçamentos e atendimentos."} /></Card> : <div className="space-y-3">{visibleJourneys.map((journey) => {
       const expanded = expandedJourneyId === journey.id;
-      const stages = [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturn];
-      const stageLabels = ["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento"];
+      const stages = [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturnScheduled || journey.hasReturn, journey.hasReturn, journey.status === "Concluído"];
+      const stageLabels = ["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento", "Retorno", "Concluído"];
       return <Card className="overflow-hidden p-0" key={journey.id}>
         <div className="flex items-center gap-3 p-3 sm:p-4">
           <span className="grid h-11 w-11 shrink-0 place-items-center rounded-md bg-primary/10 text-primary"><Syringe className="h-5 w-5" /></span>
@@ -359,7 +361,7 @@ export function PatientTreatments({ patient, selectedJourneyId, onSelect, onJour
             <p><span className="text-muted-foreground">Fotos vinculadas</span><strong className="ml-2">{journey.photoCount}</strong></p>
             <p><span className="text-muted-foreground">Próximo retorno</span><strong className="ml-2">{journey.nextAppointment ? dateLabel(journey.nextAppointment.date) : "Não agendado"}</strong></p>
           </div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Etapas do tratamento">{stageLabels.map((label, index) => <div className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-2" key={label}><span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-[10px] font-bold ${stages[index] ? "bg-primary text-primary-foreground" : "border border-border bg-background text-muted-foreground"}`}>{stages[index] ? <Check className="h-3.5 w-3.5" /> : index + 1}</span><span className="truncate text-[10px] font-medium">{label}</span></div>)}</div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6" aria-label="Etapas do tratamento">{stageLabels.map((label, index) => <div className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-2" key={label}><span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-[10px] font-bold ${stages[index] ? "bg-primary text-primary-foreground" : "border border-border bg-background text-muted-foreground"}`}>{stages[index] ? <Check className="h-3.5 w-3.5" /> : index + 1}</span><span className="truncate text-[10px] font-medium">{label}</span></div>)}</div>
           <div className="mt-3 flex justify-end sm:hidden"><Button size="sm" variant="outline" onClick={() => onSelect(journey.id)}>Abrir jornada <ChevronRight className="h-3.5 w-3.5" /></Button></div>
         </div> : null}
       </Card>;
@@ -414,7 +416,11 @@ function JourneyDetail({ patient, journey, onBack, onOpenClinical, onOpenEvaluat
   const [loading, setLoading] = useState(!data);
   const [loadError, setLoadError] = useState(false);
   const [photoFilter, setPhotoFilter] = useState("Antes");
-  const [activeStage, setActiveStage] = useState(() => [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturn].findIndex((done) => !done) < 0 ? 3 : [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturn].findIndex((done) => !done));
+  const [activeStage, setActiveStage] = useState(() => {
+    const completedStages = [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturnScheduled || journey.hasReturn, journey.hasReturn];
+    const firstIncomplete = completedStages.findIndex((done) => !done);
+    return firstIncomplete < 0 ? completedStages.length - 1 : firstIncomplete;
+  });
   const [retryCount, setRetryCount] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
@@ -477,7 +483,8 @@ function JourneyDetail({ patient, journey, onBack, onOpenClinical, onOpenEvaluat
     { title: "Avaliação", subtitle: "Queixa, anamnese e fotos iniciais", done: journey.hasEvaluation, icon: HeartPulse, detail: data?.evaluation ? `${data.evaluation.status} · ${data.evaluation.professional} · ${dateLabel(data.evaluation.createdAt)}` : "Avaliação ainda não registrada." },
     { title: "Orçamento", subtitle: "Proposta e condições de pagamento", done: quotes.some((quote) => ["Aprovado", "Pago"].includes(quote.status)), icon: FileText, detail: quotes.length ? `${quotes.length} proposta(s) · ${quotes[0].status} · ${currency(quotes[0].total)}` : "Nenhum orçamento vinculado a este tratamento." },
     { title: "Procedimento", subtitle: "Sessões clínicas realizadas", done: journey.hasProcedure, icon: Syringe, detail: records.length ? records.map((record) => `${record.name} · ${dateLabel(record.performedAt)}`).join("; ") : "Nenhuma sessão registrada." },
-    { title: "Pós-procedimento", subtitle: "Acompanhamento e orientações", done: journey.hasReturn, icon: Clock3, detail: appointment ? `Próximo retorno: ${dateLabel(appointment.date)} · ${appointment.status}` : journey.hasProcedure ? "Acompanhamento clínico disponível." : "Acompanhamento será disponibilizado após uma sessão." },
+    { title: "Pós-procedimento", subtitle: "Acompanhamento e orientações", done: journey.hasReturnScheduled || journey.hasReturn, icon: Clock3, detail: journey.hasProcedure ? "Acompanhamento clínico e orientações após a sessão." : "Acompanhamento será disponibilizado após uma sessão." },
+    { title: "Retorno", subtitle: "Reavaliação e evolução clínica", done: journey.hasReturn, icon: CalendarDays, detail: appointment ? `Retorno: ${dateLabel(appointment.date)} · ${appointment.status}` : journey.hasProcedure ? "Ainda não há retorno agendado para esta jornada." : "O retorno ficará disponível após uma sessão." },
   ];
 
   if (loading && !data) return <div className="space-y-4"><div className="grid gap-4 lg:grid-cols-[minmax(0,1.8fr)_minmax(280px,0.9fr)]"><div className="space-y-3"><LoadingSkeleton className="h-14 w-full" /><LoadingSkeleton className="h-44 w-full" /><LoadingSkeleton className="h-28 w-full" /></div><div className="space-y-3"><LoadingSkeleton className="h-56 w-full" /><LoadingSkeleton className="h-40 w-full" /></div></div></div>;
@@ -492,15 +499,16 @@ function JourneyDetail({ patient, journey, onBack, onOpenClinical, onOpenEvaluat
     <div className="grid gap-3 lg:grid-cols-[minmax(0,1.8fr)_minmax(280px,0.9fr)]">
       <div className="space-y-3">
         <Card className="overflow-hidden p-0">
-          <nav className="grid grid-cols-4 border-b border-border" role="tablist" aria-label="Etapas do tratamento">{stages.map((stage, index) => { const active = activeStage === index; return <button id={`journey-stage-${index}`} key={stage.title} type="button" role="tab" aria-selected={active} onClick={() => { if (index === 0 && canWriteClinical) { onOpenEvaluation(journey, data?.evaluation?.id); return; } setActiveStage(index); }} className={`relative flex min-w-0 flex-col items-center gap-1.5 px-1 py-3 text-center transition hover:bg-muted/50 sm:flex-row sm:justify-center sm:gap-2 sm:px-3 ${active ? "text-primary" : "text-muted-foreground"}`}><span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-[10px] font-bold ${stage.done ? "bg-primary text-primary-foreground" : active ? "border border-primary text-primary" : "bg-muted text-muted-foreground"}`}>{stage.done ? <Check className="h-3.5 w-3.5" /> : index + 1}</span><span className="min-w-0 text-[9px] font-semibold leading-tight sm:text-xs">{stage.title}</span></button>; })}</nav>
+          <nav className="grid grid-cols-5 border-b border-border" role="tablist" aria-label="Etapas do tratamento">{stages.map((stage, index) => { const active = activeStage === index; return <button id={`journey-stage-${index}`} key={stage.title} type="button" role="tab" aria-selected={active} onClick={() => { if (index === 0 && canWriteClinical) { onOpenEvaluation(journey, data?.evaluation?.id); return; } setActiveStage(index); }} className={`relative flex min-w-0 flex-col items-center gap-1.5 px-1 py-3 text-center transition hover:bg-muted/50 sm:flex-row sm:justify-center sm:gap-2 sm:px-3 ${active ? "text-primary" : "text-muted-foreground"}`}><span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-[10px] font-bold ${stage.done ? "bg-primary text-primary-foreground" : active ? "border border-primary text-primary" : "bg-muted text-muted-foreground"}`}>{stage.done ? <Check className="h-3.5 w-3.5" /> : index + 1}</span><span className="min-w-0 text-[9px] font-semibold leading-tight sm:text-xs">{stage.title}</span></button>; })}</nav>
           <section className="p-4 sm:p-5" role="tabpanel" aria-labelledby={`journey-stage-${activeStage}`}>
             <div className="flex flex-wrap items-start justify-between gap-3"><div className="flex items-center gap-2"><Layers3 className="h-5 w-5 text-primary" /><div><h3 className="text-sm font-bold">{stages[activeStage].title}</h3><p className="mt-1 text-[11px] text-muted-foreground">{stages[activeStage].subtitle}</p></div></div><Badge variant={stages[activeStage].done ? "green" : "slate"}>{stages[activeStage].done ? "Registrada" : "Pendente"}</Badge></div>
             <p className="mt-4 rounded-md bg-muted/50 p-3 text-xs leading-5 text-muted-foreground">{stages[activeStage].detail}</p>
             {activeStage === 0 ? <div className="mt-3 grid gap-2 sm:grid-cols-2">{[["Queixa principal", data?.evaluation?.chiefComplaint], ["Objetivo", data?.evaluation?.patientGoal], ["Alergias", data?.evaluation?.allergies], ["Contraindicações", data?.evaluation?.contraindications], ["Procedimentos anteriores", data?.evaluation?.previousProcedures], ["Observações", data?.evaluation?.clinicalNotes]].map(([label, value]) => <div key={label} className="rounded-md border border-border p-3"><p className="text-[10px] font-semibold text-muted-foreground">{label}</p><p className="mt-1 whitespace-pre-wrap text-xs">{value?.trim() || "Não informado"}</p></div>)}</div> : null}
             {activeStage === 1 ? <div className="mt-3 divide-y divide-border rounded-md border border-border">{quotes.length ? quotes.map((quote) => <div className="flex flex-wrap items-center justify-between gap-2 p-3" key={quote.id}><div><p className="text-xs font-semibold">Orçamento · {dateLabel(quote.createdAt)}</p><p className="mt-1 text-[10px] text-muted-foreground">{quote.paymentMethod || "Forma de pagamento não informada"}</p></div><div className="flex items-center gap-3"><strong className="text-xs">{currency(Number(quote.total) || 0)}</strong><Badge variant={statusTone(quote.status)}>{quote.status}</Badge></div></div>) : <p className="p-3 text-xs text-muted-foreground">Nenhum orçamento vinculado a este tratamento.</p>}</div> : null}
             {activeStage === 2 ? <div className="mt-3 divide-y divide-border rounded-md border border-border">{records.length ? records.map((record) => <div className="flex flex-wrap items-center justify-between gap-2 p-3" key={record.id}><div><p className="text-xs font-semibold">{record.name}</p><p className="mt-1 text-[10px] text-muted-foreground">{record.professional || "Profissional não informado"} · {dateLabel(record.performedAt)}</p></div><Badge variant={record.status === "Concluída" ? "green" : "slate"}>{record.status || "Registrada"}</Badge></div>) : <p className="p-3 text-xs text-muted-foreground">Nenhuma sessão registrada.</p>}</div> : null}
-            {activeStage === 3 ? <div className="mt-3 rounded-md border border-border p-3">{appointment ? <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-semibold">{appointment.procedure || "Retorno"}</p><p className="mt-1 text-[10px] text-muted-foreground">{dateLabel(appointment.date)} · {appointment.time} · {appointment.professional}</p></div><Badge variant="purple">{appointment.status}</Badge></div> : <p className="text-xs text-muted-foreground">{journey.hasProcedure ? "Ainda não há retorno agendado para esta jornada." : "O acompanhamento ficará disponível após uma sessão."}</p>}</div> : null}
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-2"><Button size="sm" variant="outline" onClick={() => onOpenClinical("Histórico")}><Clock3 className="h-4 w-4" />Ver histórico</Button>{activeStage === 1 ? <Button size="sm" onClick={() => onOpenClinical("Financeiro")}><CreditCard className="h-4 w-4" />Abrir orçamento</Button> : null}{activeStage === 2 ? <Button size="sm" onClick={() => onNewSession(journey)}><Syringe className="h-4 w-4" />Nova sessão</Button> : null}{activeStage === 3 ? journey.latestCompletedSessionId ? <Button size="sm" onClick={() => onOpenFollowUp(journey, journey.latestCompletedSessionId!)}><HeartPulse className="h-4 w-4" />Registrar evolução</Button> : journey.hasProcedure ? <Button size="sm" onClick={() => onScheduleReturn(journey)}><CalendarDays className="h-4 w-4" />Agendar retorno</Button> : null : null}</div>
+            {activeStage === 3 ? <div className="mt-3 rounded-md border border-border p-3"><p className="text-xs text-muted-foreground">{journey.hasProcedure ? "Acompanhamento clínico e orientações após a sessão." : "O acompanhamento ficará disponível após uma sessão."}</p></div> : null}
+            {activeStage === 4 ? <div className="mt-3 rounded-md border border-border p-3">{appointment ? <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-semibold">{appointment.procedure || "Retorno"}</p><p className="mt-1 text-[10px] text-muted-foreground">{dateLabel(appointment.date)} · {appointment.time} · {appointment.professional}</p></div><Badge variant="purple">{appointment.status}</Badge></div> : <p className="text-xs text-muted-foreground">{journey.hasProcedure ? "Ainda não há retorno agendado para esta jornada." : "O retorno ficará disponível após uma sessão."}</p>}</div> : null}
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2"><Button size="sm" variant="outline" onClick={() => onOpenClinical("Histórico")}><Clock3 className="h-4 w-4" />Ver histórico</Button>{activeStage === 1 ? <Button size="sm" onClick={() => onOpenClinical("Financeiro")}><CreditCard className="h-4 w-4" />Abrir orçamento</Button> : null}{activeStage === 2 ? <Button size="sm" onClick={() => onNewSession(journey)}><Syringe className="h-4 w-4" />Nova sessão</Button> : null}{activeStage === 3 && journey.latestCompletedSessionId ? <Button size="sm" onClick={() => onOpenFollowUp(journey, journey.latestCompletedSessionId!)}><HeartPulse className="h-4 w-4" />Registrar evolução</Button> : null}{activeStage === 4 && journey.hasProcedure && !journey.hasReturnScheduled ? <Button size="sm" onClick={() => onScheduleReturn(journey)}><CalendarDays className="h-4 w-4" />Agendar retorno</Button> : null}</div>
           </section>
         </Card>
         <Card className="p-4 sm:p-5"><div className="flex flex-wrap items-center justify-between gap-3"><IconHeading icon={Clock3} title="Atividades da jornada" /><Button size="sm" variant="ghost" onClick={() => onOpenClinical("Histórico")}>Ver histórico <ChevronRight className="h-3.5 w-3.5" /></Button></div><div className="mt-3 space-y-2">{[...records.map((record) => ({ date: record.performedAt, title: record.name, detail: `Sessão registrada por ${record.professional || "profissional não informado"}`, icon: Syringe })), ...quotes.map((quote) => ({ date: quote.createdAt, title: "Orçamento", detail: `${quote.status} · ${currency(quote.total)}`, icon: FileText })), ...(appointment ? [{ date: appointment.date, title: appointment.procedure || "Retorno agendado", detail: `${appointment.time} · ${appointment.professional}`, icon: CalendarDays }] : [])].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5).map((event, index) => { const Icon = event.icon; return <div className="flex gap-3 border-l border-primary/30 pl-3" key={`${event.title}-${event.date}-${index}`}><Icon className="h-4 w-4 shrink-0 text-primary" /><div className="min-w-0 flex-1"><p className="text-xs font-semibold">{event.title}</p><p className="mt-0.5 text-[10px] text-muted-foreground">{event.detail}</p></div><time className="shrink-0 text-[10px] text-muted-foreground">{dateLabel(event.date)}</time></div>; })}{!records.length && !quotes.length && !appointment ? <p className="py-4 text-center text-xs text-muted-foreground">Nenhuma atividade registrada nesta jornada.</p> : null}</div></Card>
@@ -517,8 +525,19 @@ function JourneyDetail({ patient, journey, onBack, onOpenClinical, onOpenEvaluat
 }
 
 function ProgressSteps({ journey }: { journey: PatientJourneySummary }) {
-  const flags = [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturn];
-  return <div className="hidden items-center gap-1 sm:flex" aria-label="Etapas do tratamento">{flags.map((done, index) => <span key={index} className={`h-1.5 w-6 rounded-full ${done ? "bg-primary" : "bg-muted"}`} />)}</div>;
+  const labels = ["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento", "Retorno", "Concluído"];
+  const flags = [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturnScheduled || journey.hasReturn, journey.hasReturn, journey.status === "Concluído"];
+  const [hoveredStage, setHoveredStage] = useState<{ label: string; x: number; y: number } | null>(null);
+
+  function showTooltip(event: React.MouseEvent<HTMLSpanElement> | React.FocusEvent<HTMLSpanElement>, label: string) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setHoveredStage({ label, x: rect.left + rect.width / 2, y: rect.top - 8 });
+  }
+
+  return <>
+    <div className="hidden items-center gap-1 sm:flex" aria-label="Etapas do tratamento">{flags.map((done, index) => <span key={labels[index]} aria-label={labels[index]} tabIndex={0} onMouseEnter={(event) => showTooltip(event, labels[index])} onMouseLeave={() => setHoveredStage(null)} onFocus={(event) => showTooltip(event, labels[index])} onBlur={() => setHoveredStage(null)} className={`h-1.5 w-6 rounded-full transition-transform duration-150 ease-out hover:z-10 hover:scale-150 focus-visible:z-10 focus-visible:scale-150 ${done ? "bg-primary" : "bg-muted"}`} />)}</div>
+    {hoveredStage && typeof document !== "undefined" ? createPortal(<div role="tooltip" className="pointer-events-none fixed z-[2000] -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md bg-foreground px-2.5 py-1.5 text-[11px] font-medium text-background shadow-lg" style={{ left: hoveredStage.x, top: hoveredStage.y }}>{hoveredStage.label}</div>, document.body) : null}
+  </>;
 }
 
 export function PatientFiles({ patientId, selectedJourneyId, onJourneyChange, onOpenEvaluations }: { patientId: string; selectedJourneyId: string | null; onJourneyChange: (id: string) => void; onOpenEvaluations: () => void }) {

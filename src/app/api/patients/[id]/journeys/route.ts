@@ -70,6 +70,7 @@ async function serializeJourneys(patientId: string, clinicId: string, journeys: 
     hasProcedure: journey.procedureSessions.some((session) => session.status === "Concluída") || journey.procedures.some((procedure) => !journey.procedureSessions.some((session) => session.procedureId === procedure.id)),
     hasBeforePhoto: beforeIds.has(journey.id),
     hasAfterPhoto: afterIds.has(journey.id),
+    hasReturnScheduled: journey.appointments.some((appointment) => appointment.procedure.toLocaleLowerCase("pt-BR").includes("retorno") && ["Agendado", "Em atendimento", "Atendido", "Finalizado"].includes(appointment.status)),
     hasReturn: journey.appointments.some((appointment) => appointment.procedure.toLocaleLowerCase("pt-BR").includes("retorno") && ["Atendido", "Finalizado"].includes(appointment.status)),
     status: journey.archivedAt ? "Cancelado" : journey.status,
     sessionCount: journey._count.procedureSessions,
