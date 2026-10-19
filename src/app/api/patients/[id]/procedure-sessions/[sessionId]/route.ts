@@ -47,6 +47,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const professional = typeof body?.professional === "string" ? body.professional.trim() : current.professional;
   const nextPhotos = photos ?? undefined;
   const materials = Array.isArray(body?.materials) ? body.materials as Material[] : undefined;
+  if (nextStatus === "Em execução" && current.status === "Rascunho" && !nextPhotos?.some((photo) => photo.phase === "Antes")) return NextResponse.json({ message: "Registre uma foto de antes antes de iniciar o procedimento." }, { status: 400 });
   if (finalizing && (!technique || !treatedAreas || !professional)) return NextResponse.json({ message: "Informe a técnica, a região tratada e o profissional antes de finalizar." }, { status: 400 });
   if (finalizing && (!nextPhotos || !nextPhotos.some((photo) => photo.phase === "Antes") || !nextPhotos.some((photo) => photo.phase === "Imediatamente após"))) return NextResponse.json({ message: "Registre ao menos uma foto antes e uma imediatamente após a sessão." }, { status: 400 });
   if (materials && new Set(materials.map((item) => item.productId)).size !== materials.length) return NextResponse.json({ message: "Um produto aparece mais de uma vez. Ajuste a lista de materiais." }, { status: 400 });
