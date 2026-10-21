@@ -168,3 +168,9 @@ test("items are grouped by kind for selects, materials first, without empty grou
   assert.deepEqual(groupByKind([{ id: "x", kind: "material" }]).map((group) => group.label), ["Materiais"]);
   assert.deepEqual(groupByKind([]), []);
 });
+
+test("agendamento 'Procedimento - A + B' casa com o catálogo sem prefixo e separa por ' + '", async () => {
+  const { procedureSelectionsFromAppointment } = await import("../src/lib/stock-rules.ts");
+  assert.deepEqual(procedureSelectionsFromAppointment("Procedimento - Botox + Preenchimento", ["Botox", "Preenchimento", "Peeling"]), [{ name: "Botox", quantity: 1 }, { name: "Preenchimento", quantity: 1 }]);
+  assert.deepEqual(procedureSelectionsFromAppointment("Botox (2x), Peeling", ["Botox", "Peeling"]), [{ name: "Botox", quantity: 2 }, { name: "Peeling", quantity: 1 }]);
+});

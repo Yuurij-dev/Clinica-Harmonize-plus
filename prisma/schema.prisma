@@ -30,23 +30,23 @@ model User {
 }
 
 model Clinic {
-  id                          String               @id @default(cuid())
+  id                          String                     @id @default(cuid())
   name                        String
-  slug                        String               @unique
-  laborCost                   Int                  @default(0)
-  facilityCost                Int                  @default(0)
-  medicationCost              Int                  @default(0)
-  appointmentToleranceMinutes Int                  @default(15)
-  openingTime                 String               @default("08:00")
-  closingTime                 String               @default("19:00")
-  professionalOpeningTime     String               @default("09:00")
-  professionalClosingTime     String               @default("18:00")
-  professionalHourlyCost      Float                @default(0)
-  expiryWarningDays           Int                  @default(30)
-  trialStartedAt              DateTime?            @db.Timestamptz(6)
-  trialEndsAt                 DateTime?            @db.Timestamptz(6)
-  createdAt                   DateTime             @default(now()) @db.Timestamptz(6)
-  updatedAt                   DateTime             @default(now()) @updatedAt @db.Timestamptz(6)
+  slug                        String                     @unique
+  laborCost                   Int                        @default(0)
+  facilityCost                Int                        @default(0)
+  medicationCost              Int                        @default(0)
+  appointmentToleranceMinutes Int                        @default(15)
+  openingTime                 String                     @default("08:00")
+  closingTime                 String                     @default("19:00")
+  professionalOpeningTime     String                     @default("09:00")
+  professionalClosingTime     String                     @default("18:00")
+  professionalHourlyCost      Float                      @default(0)
+  expiryWarningDays           Int                        @default(30)
+  trialStartedAt              DateTime?                  @db.Timestamptz(6)
+  trialEndsAt                 DateTime?                  @db.Timestamptz(6)
+  createdAt                   DateTime                   @default(now()) @db.Timestamptz(6)
+  updatedAt                   DateTime                   @default(now()) @updatedAt @db.Timestamptz(6)
   memberships                 ClinicMembership[]
   patients                    Patient[]
   appointments                Appointment[]
@@ -56,7 +56,13 @@ model Clinic {
   payments                    Payment[]
   products                    Product[]
   patientProcedures           PatientProcedure[]
+  procedureSessions           PatientProcedureSession[]
+  procedureFollowUps          PatientProcedureFollowUp[]
   journeys                    PatientJourney[]
+  patientAnamneses            PatientAnamnesis[]
+  clinicalDocuments           ClinicalDocument[]
+  clinicalPhotos              ClinicalPhoto[]
+  clinicalFileAudits          ClinicalFileAudit[]
   stockLots                   StockLot[]
   stockMovements              StockMovement[]
   expenses                    Expense[]
@@ -79,28 +85,33 @@ model ClinicMembership {
 }
 
 model Patient {
-  id                  String               @id @default(cuid())
+  id                  String                     @id @default(cuid())
   clinicId            String?
   name                String
   cpf                 String?
   phone               String
   age                 Int
-  status              String               @default("Ativa")
-  lastVisit           DateTime?            @db.Timestamptz(6)
-  nextReturn          DateTime?            @db.Timestamptz(6)
-  totalValue          Int                  @default(0)
-  createdAt           DateTime             @default(now()) @db.Timestamptz(6)
-  updatedAt           DateTime             @default(now()) @updatedAt @db.Timestamptz(6)
+  status              String                     @default("Ativa")
+  lastVisit           DateTime?                  @db.Timestamptz(6)
+  nextReturn          DateTime?                  @db.Timestamptz(6)
+  totalValue          Int                        @default(0)
+  createdAt           DateTime                   @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime                   @default(now()) @updatedAt @db.Timestamptz(6)
   appointments        Appointment[]
   evaluations         Evaluation[]
   quotes              Quote[]
   payments            Payment[]
   procedureRecords    PatientProcedure[]
+  procedureSessions   PatientProcedureSession[]
+  procedureFollowUps  PatientProcedureFollowUp[]
   observations        PatientObservation[]
   journeys            PatientJourney[]
+  anamneses           PatientAnamnesis[]
+  clinicalDocuments   ClinicalDocument[]
+  clinicalPhotos      ClinicalPhoto[]
   stockMovements      StockMovement[]
   pendingStockOutputs PendingStockOutput[]
-  clinic              Clinic?              @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  clinic              Clinic?                    @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([clinicId, cpf])
   @@index([clinicId])
@@ -121,25 +132,26 @@ model PatientObservation {
 }
 
 model Appointment {
-  id                  String               @id @default(cuid())
+  id                  String                    @id @default(cuid())
   clinicId            String?
-  date                DateTime             @db.Timestamptz(6)
+  date                DateTime                  @db.Timestamptz(6)
   time                String
   patientId           String
   journeyId           String?
   procedure           String
   professional        String
-  notes               String               @default("")
+  notes               String                    @default("")
   status              String
   materialsCheck      String?
-  materialsCheckedAt  DateTime?            @db.Timestamptz(6)
+  materialsCheckedAt  DateTime?                 @db.Timestamptz(6)
   stockMovements      StockMovement[]
   pendingStockOutputs PendingStockOutput[]
-  createdAt           DateTime             @default(now()) @db.Timestamptz(6)
-  updatedAt           DateTime             @default(now()) @updatedAt @db.Timestamptz(6)
-  patient             Patient              @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  journey             PatientJourney?      @relation(fields: [journeyId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  clinic              Clinic?              @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  procedureFollowUp   PatientProcedureFollowUp?
+  createdAt           DateTime                  @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime                  @default(now()) @updatedAt @db.Timestamptz(6)
+  patient             Patient                   @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  journey             PatientJourney?           @relation(fields: [journeyId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  clinic              Clinic?                   @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([patientId, date])
   @@index([journeyId, date])
@@ -184,6 +196,7 @@ model PatientProcedure {
   patient       Patient                        @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   journey       PatientJourney?                @relation(fields: [journeyId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   photoSessions PatientProcedurePhotoSession[]
+  sessions      PatientProcedureSession[]
 
   @@index([clinicId])
   @@index([patientId, performedAt])
@@ -203,18 +216,79 @@ model PatientProcedurePhotoSession {
   @@index([procedureId, createdAt])
 }
 
+model PatientProcedureSession {
+  id               String                         @id @default(cuid())
+  clinicId         String
+  patientId        String
+  journeyId        String
+  evaluationId     String
+  procedureId      String
+  quoteId          String
+  procedureName    String
+  technique        String                         @default("")
+  treatedAreas     String                         @default("")
+  professional     String
+  performedAt      DateTime                       @db.Timestamptz(6)
+  startedAt        DateTime?                      @db.Timestamptz(6)
+  endedAt          DateTime?                      @db.Timestamptz(6)
+  estimatedMinutes Int?
+  durationMinutes  Int?
+  anesthesia       String                         @default("")
+  complications    String                         @default("")
+  observations     String                         @default("")
+  materials        String                         @default("[]")
+  photos           String                         @default("[]")
+  auditLog         String                         @default("[]")
+  status           String                         @default("Rascunho")
+  createdBy        String
+  updatedBy        String
+  completedBy      String?
+  completedAt      DateTime?                      @db.Timestamptz(6)
+  createdAt        DateTime                       @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime                       @updatedAt @db.Timestamptz(6)
+  clinic           Clinic                         @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  patient          Patient                        @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  journey          PatientJourney                 @relation(fields: [journeyId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  evaluation       Evaluation                     @relation(fields: [evaluationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  procedure        PatientProcedure               @relation(fields: [procedureId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  quote            Quote                          @relation(fields: [quoteId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  stockMovements   StockMovement[]
+  pendingOutputs   PendingStockOutput[]
+  followUps        PatientProcedureFollowUp[]
+  followUpDraft    PatientProcedureFollowUpDraft?
+
+  @@index([clinicId, patientId, performedAt])
+  @@index([journeyId, performedAt])
+  @@index([procedureId, performedAt])
+  @@index([evaluationId])
+  @@index([quoteId])
+}
+
 model Evaluation {
-  id           String            @id @default(cuid())
-  clinicId     String?
-  patientId    String
-  journeyId    String?
-  professional String            @default("")
-  createdAt    DateTime          @default(now()) @db.Timestamptz(6)
-  updatedAt    DateTime          @default(now()) @updatedAt @db.Timestamptz(6)
-  patient      Patient           @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  journey      PatientJourney?   @relation(fields: [journeyId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  photos       EvaluationPhoto[]
-  clinic       Clinic?           @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                 String                    @id @default(cuid())
+  clinicId           String?
+  patientId          String
+  journeyId          String?
+  professional       String                    @default("")
+  chiefComplaint     String                    @default("")
+  patientGoal        String                    @default("")
+  medicalHistory     String                    @default("")
+  allergies          String                    @default("")
+  pregnancyStatus    String                    @default("")
+  anticoagulantUse   String                    @default("")
+  autoimmuneDiseases String                    @default("")
+  contraindications  String                    @default("")
+  previousProcedures String                    @default("")
+  clinicalNotes      String                    @default("")
+  status             String                    @default("Rascunho")
+  createdAt          DateTime                  @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime                  @default(now()) @updatedAt @db.Timestamptz(6)
+  patient            Patient                   @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  journey            PatientJourney?           @relation(fields: [journeyId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  photos             EvaluationPhoto[]
+  procedureSessions  PatientProcedureSession[]
+  quotes             Quote[]
+  clinic             Clinic?                   @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([patientId])
   @@index([clinicId])
@@ -249,25 +323,42 @@ model Product {
 }
 
 model Quote {
-  id            String          @id @default(cuid())
-  clinicId      String?
-  patientId     String?
-  journeyId     String?
-  items         String
-  totalCents    Int
-  paymentMethod String          @default("Cartão de crédito")
-  status        String          @default("Pendente")
-  expires       DateTime?       @db.Timestamptz(6)
-  createdAt     DateTime        @default(now()) @db.Timestamptz(6)
-  updatedAt     DateTime        @default(now()) @updatedAt @db.Timestamptz(6)
-  clinic        Clinic?         @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  patient       Patient?        @relation(fields: [patientId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  journey       PatientJourney? @relation(fields: [journeyId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  id                String                    @id @default(cuid())
+  clinicId          String?
+  patientId         String?
+  journeyId         String?
+  evaluationId      String?
+  items             String
+  details           String                    @default("[]")
+  notes             String                    @default("")
+  installments      Int                       @default(1)
+  totalCents        Int
+  paymentMethod     String                    @default("Cartão de crédito")
+  status            String                    @default("Pendente")
+  createdBy         String                    @default("")
+  updatedBy         String                    @default("")
+  approvedBy        String?
+  approvedAt        DateTime?                 @db.Timestamptz(6)
+  sentBy            String?
+  sentAt            DateTime?                 @db.Timestamptz(6)
+  refusedBy         String?
+  refusedAt         DateTime?                 @db.Timestamptz(6)
+  cancelledBy       String?
+  cancelledAt       DateTime?                 @db.Timestamptz(6)
+  expires           DateTime?                 @db.Timestamptz(6)
+  createdAt         DateTime                  @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime                  @default(now()) @updatedAt @db.Timestamptz(6)
+  clinic            Clinic?                   @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  patient           Patient?                  @relation(fields: [patientId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  journey           PatientJourney?           @relation(fields: [journeyId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  evaluation        Evaluation?               @relation(fields: [evaluationId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  procedureSessions PatientProcedureSession[]
 
   @@index([clinicId])
   @@index([clinicId, createdAt])
   @@index([patientId])
   @@index([journeyId])
+  @@index([evaluationId])
 }
 
 model Payment {
@@ -299,6 +390,8 @@ model EvaluationPhoto {
   imageUrl     String
   width        Int
   height       Int
+  category     String     @default("Outra")
+  sortOrder    Int        @default(0)
   annotations  String     @default("[]")
   createdAt    DateTime   @default(now()) @db.Timestamptz(6)
   updatedAt    DateTime   @default(now()) @updatedAt @db.Timestamptz(6)
@@ -308,23 +401,205 @@ model EvaluationPhoto {
 }
 
 model PatientJourney {
-  id           String             @id @default(cuid())
-  patientId    String
-  clinicId     String?
-  name         String
-  createdAt    DateTime           @default(now()) @db.Timestamptz(6)
-  updatedAt    DateTime           @updatedAt @db.Timestamptz(6)
-  archivedAt   DateTime?          @db.Timestamptz(6)
-  patient      Patient            @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  clinic       Clinic?            @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  appointments Appointment[]
-  evaluations  Evaluation[]
-  quotes       Quote[]
-  payments     Payment[]
-  procedures   PatientProcedure[]
+  id                 String                     @id @default(cuid())
+  patientId          String
+  clinicId           String?
+  name               String
+  professional       String                     @default("")
+  status             String                     @default("Em andamento")
+  createdAt          DateTime                   @default(now()) @db.Timestamptz(6)
+  updatedAt          DateTime                   @updatedAt @db.Timestamptz(6)
+  archivedAt         DateTime?                  @db.Timestamptz(6)
+  patient            Patient                    @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  clinic             Clinic?                    @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  appointments       Appointment[]
+  evaluations        Evaluation[]
+  quotes             Quote[]
+  payments           Payment[]
+  procedures         PatientProcedure[]
+  procedureSessions  PatientProcedureSession[]
+  procedureFollowUps PatientProcedureFollowUp[]
 
   @@index([patientId, createdAt])
   @@index([clinicId])
+}
+
+model PatientProcedureFollowUp {
+  id              String                  @id @default(cuid())
+  clinicId        String
+  patientId       String
+  journeyId       String
+  sessionId       String
+  appointmentId   String?                 @unique
+  occurredAt      DateTime                @default(now()) @db.Timestamptz(6)
+  professional    String
+  complaints      String                  @default("")
+  guidanceText    String                  @default("")
+  guidanceSentAt  DateTime?               @db.Timestamptz(6)
+  observations    String                  @default("")
+  complications   String                  @default("")
+  photos          String                  @default("[]")
+  removedPhotoIds String                  @default("[]")
+  auditLog        String                  @default("[]")
+  createdBy       String
+  updatedBy       String
+  createdAt       DateTime                @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime                @updatedAt @db.Timestamptz(6)
+  clinic          Clinic                  @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  patient         Patient                 @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  journey         PatientJourney          @relation(fields: [journeyId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  session         PatientProcedureSession @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  appointment     Appointment?            @relation(fields: [appointmentId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([clinicId, patientId, occurredAt])
+  @@index([journeyId, occurredAt])
+  @@index([sessionId, occurredAt])
+}
+
+model PatientProcedureFollowUpDraft {
+  sessionId         String                  @id
+  complaints        String                  @default("")
+  guidanceText      String                  @default("")
+  guidanceConfirmed Boolean                 @default(false)
+  observations      String                  @default("")
+  complications     String                  @default("")
+  photos            String                  @default("[]")
+  removedPhotoIds   String                  @default("[]")
+  appointmentId     String?
+  updatedAt         DateTime                @updatedAt @db.Timestamptz(6)
+  session           PatientProcedureSession @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+// Anamnese versionada do paciente. Uma versão concluída nunca tem o conteúdo alterado: editar gera nova versão (rascunho).
+// status: RASCUNHO | CONCLUIDA | PENDENTE_REVISAO (pendência explícita, nunca inferida só pelo tempo decorrido).
+model PatientAnamnesis {
+  id                String    @id @default(cuid())
+  clinicId          String
+  patientId         String
+  version           Int
+  status            String    @default("RASCUNHO")
+  schemaVersion     Int       @default(1)
+  content           String    @default("{}")
+  origin            String    @default("empty")
+  basedOnVersion    Int?
+  createdBy         String
+  updatedBy         String
+  completedBy       String?
+  completedAt       DateTime? @db.Timestamptz(6)
+  reviewRequestedBy String?
+  reviewRequestedAt DateTime? @db.Timestamptz(6)
+  reviewReason      String    @default("")
+  reviewConfirmedBy String?
+  reviewConfirmedAt DateTime? @db.Timestamptz(6)
+  auditLog          String    @default("[]")
+  createdAt         DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @db.Timestamptz(6)
+  clinic            Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  patient           Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([patientId, version])
+  @@index([clinicId, patientId, status])
+}
+
+// Documentos clínicos enviados (PDF/imagem). Metadados aqui; bytes em ClinicalDocumentBlob (driver db) ou no bucket (driver supabase).
+// category: TERMOS | EXAMES | RECEITAS | ORIENTACOES | DECLARACOES | OUTROS. signatureStatus: NAO_APLICAVEL | PENDENTE | ASSINADO.
+model ClinicalDocument {
+  id              String                @id @default(cuid())
+  clinicId        String
+  patientId       String
+  journeyId       String?
+  encounterType   String?
+  encounterId     String?
+  category        String                @default("OUTROS")
+  name            String
+  originalName    String
+  mimeType        String
+  sizeBytes       Int
+  sha256          String
+  storageDriver   String                @default("db")
+  storageKey      String?
+  signatureStatus String                @default("NAO_APLICAVEL")
+  uploadedBy      String
+  uploadedByName  String
+  uploadedAt      DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime              @updatedAt @db.Timestamptz(6)
+  archivedAt      DateTime?             @db.Timestamptz(6)
+  archivedBy      String?
+  archiveReason   String                @default("")
+  clinic          Clinic                @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  patient         Patient               @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  blob            ClinicalDocumentBlob?
+
+  @@index([clinicId, patientId, archivedAt, uploadedAt])
+  @@index([clinicId, patientId, category])
+  @@index([journeyId])
+}
+
+model ClinicalDocumentBlob {
+  documentId String           @id
+  data       Bytes
+  document   ClinicalDocument @relation(fields: [documentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+// Fotos novas enviadas pela galeria. As fotos antigas (avaliação/sessão/retorno) continuam onde estão e são lidas por referência.
+// phase: ANTES | DEPOIS | EVOLUCAO | OUTRA.
+model ClinicalPhoto {
+  id             String             @id @default(cuid())
+  clinicId       String
+  patientId      String
+  journeyId      String?
+  encounterType  String?
+  encounterId    String?
+  phase          String             @default("OUTRA")
+  category       String             @default("Outra")
+  name           String
+  mimeType       String
+  sizeBytes      Int
+  width          Int
+  height         Int
+  sha256         String
+  storageDriver  String             @default("db")
+  storageKey     String?
+  takenAt        DateTime           @default(now()) @db.Timestamptz(6)
+  uploadedBy     String
+  uploadedByName String
+  createdAt      DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime           @updatedAt @db.Timestamptz(6)
+  archivedAt     DateTime?          @db.Timestamptz(6)
+  archivedBy     String?
+  clinic         Clinic             @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  patient        Patient            @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  blob           ClinicalPhotoBlob?
+
+  @@index([clinicId, patientId, archivedAt, takenAt])
+  @@index([journeyId])
+}
+
+model ClinicalPhotoBlob {
+  photoId String        @id
+  data    Bytes
+  photo   ClinicalPhoto @relation(fields: [photoId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+// Trilha de rastreabilidade de documentos e fotos (sem conteúdo). Sem FK para o arquivo: sobrevive à exclusão definitiva.
+// fileKind: DOCUMENT | PHOTO. action: UPLOAD | VIEW | DOWNLOAD | RENAME | RECATEGORIZE | LINK | SIGNATURE | ARCHIVE | UNARCHIVE | DELETE.
+model ClinicalFileAudit {
+  id        String   @id @default(cuid())
+  clinicId  String
+  patientId String
+  fileKind  String
+  fileId    String
+  action    String
+  actorId   String
+  actorName String
+  fileName  String   @default("")
+  category  String   @default("")
+  note      String   @default("")
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  clinic    Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([clinicId, patientId, createdAt])
+  @@index([fileId])
 }
 
 model StockLot {
@@ -345,38 +620,41 @@ model StockLot {
 }
 
 model StockMovement {
-  id             String         @id @default(cuid())
-  clinicId       String
-  productId      String
-  lotId          String
-  type           String
-  quantity       Float
-  reason         String?
-  notes          String         @default("")
-  userId         String?
-  userName       String         @default("")
-  createdAt      DateTime       @default(now()) @db.Timestamptz(6)
-  clinic         Clinic         @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  product        Product        @relation(fields: [productId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  lot            StockLot       @relation(fields: [lotId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  purchaseId     String?
-  purchase       Purchase?      @relation(fields: [purchaseId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  appointmentId  String?
-  appointment    Appointment?   @relation(fields: [appointmentId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  patientId      String?
-  patient        Patient?       @relation(fields: [patientId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  attendanceKind String?
-  attendanceName String?
-  attendanceDate DateTime?      @db.Timestamptz(6)
-  reversesId     String?        @unique
-  reverses       StockMovement? @relation("StockReversal", fields: [reversesId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  reversedBy     StockMovement? @relation("StockReversal")
+  id                 String                   @id @default(cuid())
+  clinicId           String
+  productId          String
+  lotId              String
+  type               String
+  quantity           Float
+  reason             String?
+  notes              String                   @default("")
+  userId             String?
+  userName           String                   @default("")
+  createdAt          DateTime                 @default(now()) @db.Timestamptz(6)
+  clinic             Clinic                   @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  product            Product                  @relation(fields: [productId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  lot                StockLot                 @relation(fields: [lotId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  purchaseId         String?
+  purchase           Purchase?                @relation(fields: [purchaseId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  appointmentId      String?
+  appointment        Appointment?             @relation(fields: [appointmentId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  procedureSessionId String?
+  procedureSession   PatientProcedureSession? @relation(fields: [procedureSessionId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  patientId          String?
+  patient            Patient?                 @relation(fields: [patientId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  attendanceKind     String?
+  attendanceName     String?
+  attendanceDate     DateTime?                @db.Timestamptz(6)
+  reversesId         String?                  @unique
+  reverses           StockMovement?           @relation("StockReversal", fields: [reversesId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  reversedBy         StockMovement?           @relation("StockReversal")
 
   @@index([appointmentId])
   @@index([patientId])
   @@index([lotId])
   @@index([clinicId, createdAt])
   @@index([productId, createdAt])
+  @@index([procedureSessionId])
 }
 
 model Expense {
@@ -478,25 +756,28 @@ model RecurringExpense {
 }
 
 model PendingStockOutput {
-  id             String       @id @default(cuid())
-  clinicId       String
-  productId      String
-  appointmentId  String?
-  patientId      String?
-  quantity       Float
-  status         String       @default("pending")
-  attendanceKind String
-  attendanceName String
-  attendanceDate DateTime     @db.Timestamptz(6)
-  createdAt      DateTime     @default(now()) @db.Timestamptz(6)
-  resolvedAt     DateTime?    @db.Timestamptz(6)
-  clinic         Clinic       @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  product        Product      @relation(fields: [productId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  appointment    Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  patient        Patient?     @relation(fields: [patientId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  id                 String                   @id @default(cuid())
+  clinicId           String
+  productId          String
+  appointmentId      String?
+  procedureSessionId String?
+  patientId          String?
+  quantity           Float
+  status             String                   @default("pending")
+  attendanceKind     String
+  attendanceName     String
+  attendanceDate     DateTime                 @db.Timestamptz(6)
+  createdAt          DateTime                 @default(now()) @db.Timestamptz(6)
+  resolvedAt         DateTime?                @db.Timestamptz(6)
+  clinic             Clinic                   @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  product            Product                  @relation(fields: [productId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  appointment        Appointment?             @relation(fields: [appointmentId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  procedureSession   PatientProcedureSession? @relation(fields: [procedureSessionId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  patient            Patient?                 @relation(fields: [patientId], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@index([clinicId, status])
   @@index([appointmentId])
+  @@index([procedureSessionId])
 }
 
 enum UserRole {

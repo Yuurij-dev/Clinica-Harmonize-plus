@@ -47,7 +47,7 @@ export async function attendanceCheckData(clinicId: string, appointmentId: strin
 
 // Registra as saídas do atendimento numa transação. Lotes vencidos e quantidades inválidas são
 // recusados; o que faltar de saldo vira saída pendente. Nunca bloqueia o atendimento.
-export async function registerAttendanceOutputs(tx: StockTransaction, input: { clinicId: string; userId: string; userName: string; attendance: NonNullable<Awaited<ReturnType<typeof findAttendance>>>; items: ItemInput[] }) {
+export async function registerAttendanceOutputs(tx: StockTransaction, input: { clinicId: string; userId: string; userName: string; attendance: NonNullable<Awaited<ReturnType<typeof findAttendance>>>; items: ItemInput[]; procedureSessionId?: string }) {
   const { clinicId, attendance } = input;
   if (new Set(input.items.map((item) => item.productId)).size !== input.items.length) throw new AttendanceMaterialsError("Um item aparece mais de uma vez.");
   const products = await tx.product.findMany({ where: { clinicId, id: { in: input.items.map((item) => item.productId) } }, select: { id: true, name: true, unit: true, lots: { select: { id: true, code: true, expiresOn: true } } } });
@@ -56,7 +56,7 @@ export async function registerAttendanceOutputs(tx: StockTransaction, input: { c
   const balances = await lotBalances(clinicId, { lotId: { in: allLotIds } }, tx);
   const today = clinicToday();
   const pending: Array<{ name: string; unit: string; quantity: number }> = [];
-  const attendanceData = { appointmentId: attendance.id, patientId: attendance.patientId, attendanceKind: attendance.kind, attendanceName: attendance.procedure, attendanceDate: attendance.date };
+  const attendanceData = { ...(input.procedureSessionId ? { procedureSessionId: input.procedureSessionId } : { appointmentId: attendance.id }), patientId: attendance.patientId, attendanceKind: attendance.kind, attendanceName: attendance.procedure, attendanceDate: attendance.date };
 
   for (const item of input.items) {
     const product = products.find((candidate) => candidate.id === item.productId);

@@ -17,6 +17,7 @@ function policyFor(key: string): CachePolicy {
   if (key.startsWith("/api/agenda/bootstrap")) return { freshFor: 20_000, retainFor: 90_000 };
   if (key.startsWith("/api/dashboard/bootstrap")) return { freshFor: 45_000, retainFor: 180_000 };
   if (key.includes("/history?")) return { freshFor: 30_000, retainFor: 120_000 };
+  if (key.includes("/follow-ups")) return { freshFor: 30_000, retainFor: 90_000 };
   if (key.includes("/evaluation?") && !key.includes("list=1")) return { freshFor: 60_000, retainFor: 120_000 };
   if (key.startsWith("/api/clinic/") || key === "/api/team" || key === "/api/procedures" || key === "/api/products" || key === "/api/quotes/options") {
     return { freshFor: 300_000, retainFor: 900_000 };
@@ -25,7 +26,7 @@ function policyFor(key: string): CachePolicy {
 }
 
 function isPhotoKey(key: string) {
-  return key.includes("/history?") || (key.includes("/evaluation?") && !key.includes("list=1"));
+  return key.includes("/history?") || key.includes("/follow-ups") || (key.includes("/evaluation?") && !key.includes("list=1"));
 }
 
 function remove(key: string) {
@@ -103,8 +104,36 @@ export const CLIENT_CACHE_INVALIDATED_EVENT = "client-cache:invalidated";
 export const CLIENT_CACHE_UNAUTHORIZED_EVENT = "client-cache:unauthorized";
 
 export function invalidateClientCache(...keys: string[]) {
-  for (const cachedKey of cache.keys()) {
-    if (keys.some((key) => cachedKey === key || cachedKey.startsWith(`${key}?`))) remove(cachedKey);
+  const affected = new Set(keys);
+  for (const key of keys) {
+    const patientResource = key.match(/^\/api\/patients\/([^/?]+)\/(history|evaluation|observations|procedures)(?:[/?]|$)/);
+    if (patientResource) {
+      const patientPrefix = `/api/patients/${patientResource[1]}`;
+      affected.add(`${patientPrefix}/profile`);
+      affected.add(`${patientPrefix}/journeys`);
+      affected.add(`${patientPrefix}/encounters`);
+      // A galeria de fotos e a lista de documentos (itens de sistema) derivam desses registros.
+      affected.add(`${patientPrefix}/photos`);
+      if (patientResource[2] === "evaluation") affected.add(`${patientPrefix}/documents`);
+      // A anamnese também lê a avaliação como fallback.
+      if (patientResource[2] === "evaluation") affected.add(`${patientPrefix}/anamnesis`);
+    }
+    // A lista de atendimentos é derivada de jornadas, sessões e retornos.
+    const encounterSource = key.match(/^\/api\/patients\/([^/?]+)\/(journeys|procedure-sessions)(?:[/?]|$)/);
+    if (encounterSource) { affected.add(`/api/patients/${encounterSource[1]}/encounters`); affected.add(`/api/patients/${encounterSource[1]}/photos`); }
+    // O resumo de consentimento (gate de início do procedimento) vem dos termos em Documentos clínicos.
+    const documentSource = key.match(/^\/api\/patients\/([^/?]+)\/documents(?:[/?]|$)/);
+    if (documentSource) affected.add(`/api/patients/${documentSource[1]}/procedure-sessions`);
+    const anamnesisSource = key.match(/^\/api\/patients\/([^/?]+)\/anamnesis(?:[/?]|$)/);
+    if (anamnesisSource) affected.add(`/api/patients/${anamnesisSource[1]}/documents`);
   }
-  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent<string[]>(CLIENT_CACHE_INVALIDATED_EVENT, { detail: keys }));
+  // Agendamentos e conferência de materiais alteram o próximo retorno e as pendências de qualquer paciente em cache.
+  if (keys.some((key) => key.startsWith("/api/agenda/bootstrap") || key.startsWith("/api/appointments") || key.startsWith("/api/stock/pending"))) {
+    for (const cachedKey of cache.keys()) { const match = cachedKey.match(/^(\/api\/patients\/[^/?]+\/encounters)(?:\?|$)/); if (match) affected.add(match[1]); }
+  }
+  for (const cachedKey of cache.keys()) {
+    // /photos também derruba /photos/<ref> (marcações por foto), que são derivadas dos mesmos registros.
+    if ([...affected].some((key) => cachedKey === key || cachedKey.startsWith(`${key}?`) || (key.endsWith("/photos") && cachedKey.startsWith(`${key}/`)))) remove(cachedKey);
+  }
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent<string[]>(CLIENT_CACHE_INVALIDATED_EVENT, { detail: [...affected] }));
 }

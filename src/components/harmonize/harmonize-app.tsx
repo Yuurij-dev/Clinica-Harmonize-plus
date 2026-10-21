@@ -26,6 +26,7 @@ import { CLIENT_CACHE_UNAUTHORIZED_EVENT, getCachedJson, setClientCacheScope } f
 import { visibleSections } from "@/lib/permissions";
 import { CurrentRoleProvider } from "./current-user";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
+import { guardDraftNavigation } from "./use-draft-autosave";
 
 type CurrentUser = { id: string; clinicId: string; name: string; role: string; isOwner?: boolean; trialExpired?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
 type AgendaFocus = { date: string; time: string };
@@ -111,10 +112,11 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     return () => { window.clearTimeout(leaveTimer); window.clearTimeout(dismissTimer); };
   }, [activeUndoNoticeId]);
 
-  function selectSection(section: SectionId, focus?: AgendaFocus, tab: PurchasesTab = "purchases") {
+  async function selectSection(section: SectionId, focus?: AgendaFocus, tab: PurchasesTab = "purchases") {
     if (!allowedSections.includes(section)) {
       return;
     }
+    if (!await guardDraftNavigation()) return;
     setAgendaFocus(section === "agenda" ? focus ?? null : null);
     if (section === "compras") setPurchasesTab(tab);
     setMobileOpen(false);
@@ -196,11 +198,12 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     };
   }, [router]);
 
-  function openCreate(section: SectionId, dialog: NonNullable<typeof createDialog>) {
+  async function openCreate(section: SectionId, dialog: NonNullable<typeof createDialog>) {
     if (trialExpired) {
       showNotice("O teste grátis terminou. Ative um plano para continuar alterando os dados.", undefined, "warning");
       return;
     }
+    if (!await guardDraftNavigation()) return;
     setCreateDialog(dialog);
     setMobileOpen(false);
     router.push(`${sectionPaths[section]}?create=${dialog}`);
@@ -212,6 +215,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   }
 
   async function logout() {
+    if (!await guardDraftNavigation()) return;
     try {
       await fetch("/api/auth/logout", { method: "POST" });
     } finally {

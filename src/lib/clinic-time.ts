@@ -23,6 +23,29 @@ export function parseClockMinutes(value: unknown) {
   return hours <= 23 && minutes <= 59 ? hours * 60 + minutes : null;
 }
 
+export function latestAppointmentStart(closingTime: string, durationMinutes = 60) {
+  const closing = parseClockMinutes(closingTime);
+  if (closing === null || !Number.isFinite(durationMinutes) || durationMinutes < 0) return null;
+  const latest = closing - durationMinutes;
+  if (latest < 0) return null;
+  return `${String(Math.floor(latest / 60)).padStart(2, "0")}:${String(latest % 60).padStart(2, "0")}`;
+}
+
+export function appointmentSlotError(date: string, time: string, openingTime: string, closingTime: string, now = clinicNow(), durationMinutes = 60) {
+  const start = parseClockMinutes(time);
+  const opening = parseClockMinutes(openingTime);
+  const closing = parseClockMinutes(closingTime);
+  if (!parseDateOnly(date)) return "Data inválida.";
+  if (start === null) return "Horário inválido.";
+  if (opening === null || closing === null || closing <= opening) return "O horário de funcionamento da clínica está inválido.";
+  if (date < now.date || (date === now.date && start <= now.minutes)) return "Não é possível agendar em um horário ou data que já passou.";
+  if (start < opening || start + durationMinutes > closing) {
+    const latest = latestAppointmentStart(closingTime, durationMinutes);
+    return latest ? `Escolha um horário dentro do funcionamento da clínica (${openingTime} às ${latest}).` : "Não há horário disponível dentro do funcionamento da clínica para a duração deste atendimento.";
+  }
+  return null;
+}
+
 // O dia do agendamento é guardado como meio-dia em São Paulo: cai no mesmo dia em UTC e no fuso da clínica.
 export function appointmentInstant(day: string) {
   return new Date(`${day}T12:00:00-03:00`);

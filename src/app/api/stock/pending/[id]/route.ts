@@ -21,7 +21,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       // Marca como concluída antes de baixar: um segundo pedido simultâneo espera esta linha e não acha mais "pending".
       const claimed = await tx.pendingStockOutput.updateMany({ where: { id, clinicId: user.clinicId, status: "pending" }, data: { status: "done", resolvedAt: new Date() } });
       if (!claimed.count) throw new PendingError("Saída pendente não encontrada ou já concluída.");
-      const pending = await tx.pendingStockOutput.findFirst({ where: { id, clinicId: user.clinicId }, select: { id: true, productId: true, quantity: true, appointmentId: true, patientId: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, lots: { select: { id: true, code: true, expiresOn: true } } } } } });
+      const pending = await tx.pendingStockOutput.findFirst({ where: { id, clinicId: user.clinicId }, select: { id: true, productId: true, quantity: true, appointmentId: true, procedureSessionId: true, patientId: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, lots: { select: { id: true, code: true, expiresOn: true } } } } } });
       if (!pending) throw new PendingError("Saída pendente não encontrada ou já concluída.");
       const lots = pending.product.lots;
       await lockLots(tx, lots.map((lot) => lot.id));
@@ -32,7 +32,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       const { allocations, pending: missing } = allocateLots(pending.quantity, candidates, today);
       if (missing > 0) throw new PendingError(`Saldo insuficiente de ${pending.product.name}. Registre uma compra ou ajuste antes.`);
       for (const allocation of allocations) {
-        await tx.stockMovement.create({ data: { clinicId: user.clinicId, productId: pending.productId, lotId: allocation.lotId, type: movementTypes.attendance, quantity: -allocation.quantity, notes: "Saída pendente concluída", userId: user.id, userName: user.name, appointmentId: pending.appointmentId, patientId: pending.patientId, attendanceKind: pending.attendanceKind, attendanceName: pending.attendanceName, attendanceDate: pending.attendanceDate } });
+        await tx.stockMovement.create({ data: { clinicId: user.clinicId, productId: pending.productId, lotId: allocation.lotId, type: movementTypes.attendance, quantity: -allocation.quantity, notes: "Saída pendente concluída", userId: user.id, userName: user.name, appointmentId: pending.appointmentId, procedureSessionId: pending.procedureSessionId, patientId: pending.patientId, attendanceKind: pending.attendanceKind, attendanceName: pending.attendanceName, attendanceDate: pending.attendanceDate } });
       }
     });
   } catch (error) {

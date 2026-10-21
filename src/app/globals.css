@@ -78,9 +78,15 @@ html {
   box-sizing: border-box;
 }
 
-button,
-input {
+button {
   font: inherit;
+}
+
+/* Em @layer base os utilitários (text-sm etc.) vencem; sem classe de tamanho o input continua herdando do pai. */
+@layer base {
+  input {
+    font: inherit;
+  }
 }
 
 button:not(:disabled) {

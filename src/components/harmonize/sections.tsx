@@ -12,7 +12,6 @@ import {
   CircleDollarSign,
   ChevronLeft,
   ChevronRight,
-  Clock3,
   Loader2,
   MessageCircle,
   MoreVertical,
@@ -40,6 +39,7 @@ import {
 import { CostCalculator } from "./cost-calculator";
 import { useCan } from "./current-user";
 import { PatientDetail } from "./patient-detail";
+import { useAnamnesisStartGate, type AnamnesisOpenMode } from "./anamnesis-start-gate";
 import { buildCustomerJourney } from "@/lib/customer-journey";
 import {
   formatCurrency,
@@ -60,12 +60,16 @@ import { sendJson } from "@/lib/send-json";
 import { describeTechnicalSheet } from "@/lib/stock-rules";
 import { readTechnicalSheet, TechnicalSheetEditor, type TechnicalSheetItem } from "./technical-sheet-editor";
 import { MaterialCheckModal } from "./material-check-modal";
+import { ClinicTimePicker } from "./clinic-time-picker";
+import { latestAppointmentStart } from "@/lib/clinic-time";
+import { ProcedureImage } from "./procedure-image";
 import type { Appointment, JourneyStageId, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
 
 const currency = new Intl.NumberFormat("pt-BR", {
   style: "currency",
   currency: "BRL",
 });
+const quantityFormat = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 3 });
 
 const appointmentTypeOptions = ["Consulta / retorno", "Avaliação", "Procedimento", "Outros"];
 
@@ -85,6 +89,7 @@ type ApiPatient = {
   phone: string;
   age: number;
   status: string;
+  createdAt?: string;
   lastVisit: string | null;
   nextReturn: string | null;
   totalValue: number;
@@ -128,6 +133,7 @@ function mapApiPatient(patient: ApiPatient): Patient {
     phone: patient.phone,
     age: patient.age,
     status: patient.status,
+    createdAt: patient.createdAt,
     lastVisit: patient.lastVisit ? displayDate(patient.lastVisit) : "Primeiro contato",
     lastVisitRaw: patient.lastVisit ?? undefined,
     nextReturn: patient.nextReturn ? displayDate(patient.nextReturn) : "A definir",
@@ -177,9 +183,27 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
   const [saveError, setSaveError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [query, setQuery] = useState("");
+  // Depois do cadastro, quem pode preencher anamnese decide se começa agora ou depois (não é obrigatória).
+  const canFillAnamnesis = useCan("anamnesis:write");
+  const [justCreated, setJustCreated] = useState<Patient | null>(null);
+  // Pedido de abrir a anamnese pertence a UM paciente: só vale para ele e some ao trocar de paciente ou voltar à lista.
+  const [anamnesisRequest, setAnamnesisRequest] = useState<{ patientKey: string; mode: AnamnesisOpenMode } | null>(null);
 
   useEffect(() => {
-    const syncSelectedPatient = () => setSelectedPatientName(new URLSearchParams(window.location.search).get("patient"));
+    const syncSelectedPatient = () => {
+      const params = new URLSearchParams(window.location.search);
+      const patientKey = params.get("patient");
+      const section = params.get("section");
+      setSelectedPatientName(patientKey);
+      // A Agenda (gate de anamnese) pede a anamnese por URL; o parâmetro é consumido e removido para não repetir.
+      if (patientKey && (section === "view" || section === "fill" || section === "new-version")) {
+        setAnamnesisRequest({ patientKey, mode: section });
+        params.delete("section");
+        window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+      } else {
+        setAnamnesisRequest((current) => current && current.patientKey === patientKey ? current : null);
+      }
+    };
     syncSelectedPatient();
     window.addEventListener("popstate", syncSelectedPatient);
     return () => window.removeEventListener("popstate", syncSelectedPatient);
@@ -207,6 +231,17 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
 
   function openPatient(patient: Patient) {
     const key = patient.id ?? patient.name;
+    setAnamnesisRequest((current) => current && current.patientKey === key ? current : null);
+    setSelectedPatientName(key);
+    router.push(`/clientes?patient=${encodeURIComponent(key)}`);
+  }
+
+  function continueAfterCreate(fillAnamnesis: boolean) {
+    const created = justCreated;
+    setJustCreated(null);
+    if (!created) return;
+    const key = created.id ?? created.name;
+    setAnamnesisRequest(fillAnamnesis ? { patientKey: key, mode: "fill" } : null);
     setSelectedPatientName(key);
     router.push(`/clientes?patient=${encodeURIComponent(key)}`);
   }
@@ -240,6 +275,7 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
       invalidateClientCache("/api/patients", "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
       onCreateClose();
       onSaved?.(`${savedPatient.name} foi adicionado aos clientes.`);
+      if (canFillAnamnesis) setJustCreated(savedPatient);
     } catch {
       setSaveError("Não foi possível conectar ao servidor.");
     } finally {
@@ -252,8 +288,9 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
       <PatientDetail
         key={selectedPatient.id ?? selectedPatient.name}
         patient={selectedPatient}
-        journey={journeyForPatient(selectedPatient)}
+        initialSection={anamnesisRequest && anamnesisRequest.patientKey === (selectedPatient.id ?? selectedPatient.name) ? anamnesisRequest.mode : null}
         onBack={() => {
+          setAnamnesisRequest(null);
           setSelectedPatientName(null);
           router.replace("/clientes");
         }}
@@ -291,10 +328,17 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
       <div className="hp-panel-enter mt-5 flex items-center justify-between rounded-[7px] border border-[#e2e0f1] bg-[#f7f6ff] px-4 py-3">
         <div>
           <p className="text-xs font-bold text-[#454659]">Jornada conectada ao prontuário</p>
-          <p className="mt-1 text-[10px] text-[#8d8e9e]">A etapa avança conforme avaliações, orçamentos e atendimentos são registrados.</p>
+          <p className="mt-1 text-xs text-[#8d8e9e]">A etapa avança conforme avaliações, orçamentos e atendimentos são registrados.</p>
         </div>
         <Badge variant="purple">Automática</Badge>
       </div>
+      <Modal open={Boolean(justCreated)} onClose={() => continueAfterCreate(false)} title="Cliente cadastrado" description={justCreated ? `${justCreated.name} foi adicionado aos clientes.` : undefined}>
+        <div className="space-y-4">
+          <p className="text-sm font-semibold text-[#303144]">Deseja preencher a anamnese agora?</p>
+          <p className="text-xs leading-5 text-[#77788a]">A anamnese reúne queixa, histórico de saúde, alergias e medicamentos. Ela não é obrigatória e pode ser preenchida depois, no prontuário da cliente.</p>
+          <div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="secondary" onClick={() => continueAfterCreate(false)}>Fazer depois</Button><Button type="button" onClick={() => continueAfterCreate(true)}>Preencher anamnese</Button></div>
+        </div>
+      </Modal>
       <Modal open={openCreate} onClose={onCreateClose} title="Novo cliente" description="Cadastre os dados essenciais. O perfil poderá ser completado depois.">
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={savePatient}>
           <div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div>
@@ -324,7 +368,6 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   const [patientQuery, setPatientQuery] = useState("");
   const [selectedPatientId, setSelectedPatientId] = useState("");
   const [appointmentTime, setAppointmentTime] = useState("");
-  const [timePickerOpen, setTimePickerOpen] = useState(false);
   const [invalidAppointmentFields, setInvalidAppointmentFields] = useState<Set<string>>(new Set());
   const [appointmentFormError, setAppointmentFormError] = useState("");
   const [activeView, setActiveView] = useState<"Dia" | "Semana" | "Mês">(() => focus ? "Dia" : "Semana");
@@ -402,7 +445,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
       const updated = new Map(results.filter((result): result is { id: string; status: string } => Boolean(result)).map((result) => [result.id, result.status]));
       if (!updated.size) return;
       setAppointmentRows((current) => current.map((appointment) => updated.has(appointment.id) ? { ...appointment, status: updated.get(appointment.id) ?? appointment.status } : appointment));
-      invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+      invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", ...transitions.map(({ appointment }) => `/api/patients/${appointment.patientId}/history`));
     }
 
     void markExpiredAppointments();
@@ -438,13 +481,14 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     if (!selectedPatientId) invalidFields.add("patient");
     if (!selectedDate || selectedDate < today) invalidFields.add("date");
     if (!selectedTime) invalidFields.add("time");
-    if (selectedTime && (selectedTime < openingTime || selectedTime >= closingTime)) invalidFields.add("time");
+    const latestTime = latestAppointmentStart(closingTime);
+    if (selectedTime && (selectedTime < openingTime || !latestTime || selectedTime > latestTime)) invalidFields.add("time");
     if (selectedDate === today && selectedTime && appointmentMinutes(selectedTime) <= currentMinutes) invalidFields.add("time");
     if (!String(form.get("professional"))) invalidFields.add("professional");
     if (!String(form.get("procedure"))) invalidFields.add("procedure");
     if (invalidFields.size) {
       setInvalidAppointmentFields(invalidFields);
-      setAppointmentFormError((selectedDate && selectedDate < today) || (selectedDate === today && selectedTime && appointmentMinutes(selectedTime) <= currentMinutes) ? "Não é possível agendar em um horário ou data que já passou." : !selectedTime ? "Selecione um horário para o atendimento." : invalidFields.has("time") ? `O horário deve estar dentro do período permitido: ${openingTime} às ${closingTime}.` : "Revise os campos destacados antes de continuar.");
+      setAppointmentFormError((selectedDate && selectedDate < today) || (selectedDate === today && selectedTime && appointmentMinutes(selectedTime) <= currentMinutes) ? "Não é possível agendar em um horário ou data que já passou." : !selectedTime ? "Selecione um horário para o atendimento." : invalidFields.has("time") ? `O horário deve estar dentro do período permitido: ${openingTime} às ${latestTime ?? "indisponível"}.` : "Revise os campos destacados antes de continuar.");
       window.setTimeout(() => setInvalidAppointmentFields(new Set()), 450);
       setIsSaving(false);
       return;
@@ -466,12 +510,11 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
       if (!response.ok) return;
       const data = await response.json() as { appointment: ApiAppointment };
       setAppointmentRows((current) => [...current, mapApiAppointment(data.appointment, procedureCatalog)].sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`)));
-      invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+      invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${selectedPatientId}/history`);
       onCreateClose();
       setPatientQuery("");
       setSelectedPatientId("");
       setAppointmentTime("");
-      setTimePickerOpen(false);
       onSaved?.(`Agendamento de ${patient} foi criado.`);
     } finally {
       setIsSaving(false);
@@ -479,15 +522,23 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   }
 
   const [materialCheck, setMaterialCheck] = useState<{ id: string; patientId: string } | null>(null);
+  const agendaRouter = useRouter();
+  // Mesmo gate de anamnese da ficha do cliente, aqui com o paciente do agendamento clicado.
+  const anamnesisGate = useAnamnesisStartGate({ onOpenAnamnesis: (mode, patientId) => agendaRouter.push(`/clientes?patient=${encodeURIComponent(patientId)}&section=${mode}`) });
 
-  async function advanceAppointment(target: AppointmentRow) {
+  function advanceAppointment(target: AppointmentRow) {
+    if (target.status === "Em atendimento") { void performAdvance(target); return; }
+    anamnesisGate.requestStart(() => { void performAdvance(target); }, { patientId: target.patientId });
+  }
+
+  async function performAdvance(target: AppointmentRow) {
     const nextStatus = target.status === "Em atendimento" ? "Atendido" : "Em atendimento";
     setUpdatingId(target.id);
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: nextStatus }) });
     if (!response.ok) { setUpdatingId(null); return; }
     const nextRows = appointmentRows.map((item) => item.id === target.id ? { ...item, status: nextStatus } : item);
     setAppointmentRows(nextRows);
-    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", ...(nextStatus === "Atendido" ? ["/api/patients", `/api/patients/${target.patientId}/history`] : []));
+    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`, ...(nextStatus === "Atendido" ? ["/api/patients"] : []));
     setUpdatingId(null);
     onSaved?.(`${target.patient}: ${nextStatus}.`);
     if (nextStatus === "Atendido") setMaterialCheck({ id: target.id, patientId: target.patientId });
@@ -501,12 +552,12 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Faltou" }) });
     if (!response.ok) { setUpdatingId(null); return; }
     setAppointmentRows(nextRows);
-    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
     setUpdatingId(null);
     onSaved?.(`${target.patient} foi marcado como faltou.`, () => {
       const restoredRows = nextRows.map((item) => item.id === target.id ? { ...item, status: previousStatus } : item);
       setAppointmentRows(restoredRows);
-      invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+      invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
     });
   }
 
@@ -515,7 +566,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Cancelado" }) });
     if (!response.ok) { setUpdatingId(null); return; }
     setAppointmentRows((current) => current.map((item) => item.id === target.id ? { ...item, status: "Cancelado" } : item));
-    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
     setUpdatingId(null);
     onSaved?.(`${target.patient}: agendamento cancelado.`);
   }
@@ -529,7 +580,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     setAppointmentRows((current) => current.filter((item) => item.id !== target.id));
     setDeleteTarget(null);
     setDeleteSaving(false);
-    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
     onSaved?.(`${target.patient}: agendamento excluído.`, () => {
       void fetch("/api/appointments", {
         method: "POST",
@@ -539,7 +590,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         if (!restoreResponse.ok) return;
         const data = await restoreResponse.json() as { appointment: ApiAppointment };
         setAppointmentRows((current) => [...current, mapApiAppointment(data.appointment, procedureCatalog)].sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`)));
-        invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+        invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
       });
     });
   }
@@ -680,7 +731,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
             <div className="relative grid min-w-[1040px] grid-cols-[84px_1.1fr_1fr_1.05fr_1.15fr_210px] items-center border-b border-[#f0f0f4] px-3 py-4 text-[11px] transition-colors duration-200 last:border-0 hover:bg-[#fbfbfe]" key={appointment.id}>
               <span className="absolute bottom-2 left-0 top-2 w-[3px] rounded-full" style={{ backgroundColor: rowColors[index % rowColors.length] }} />
               <strong className="text-[#5147dc]">{appointment.time}</strong>
-              <div><strong className="block text-[#3d3e51]">{appointment.procedure}</strong><span className="mt-1 block text-[9px] text-[#aaaab7]">Consulta clínica</span></div>
+              <div className="flex min-w-0 items-center gap-2"><ProcedureImage name={appointment.procedure} decorative className="h-8 w-8 rounded-sm" /><div className="min-w-0"><strong className="block truncate text-[#3d3e51]">{appointment.procedure}</strong><span className="mt-1 block text-[9px] text-[#aaaab7]">Consulta clínica</span></div></div>
               <StatusBadge status={appointment.status} />
               <div className="flex items-center gap-2"><span className="grid h-6 w-6 place-items-center rounded-full bg-[#f0efff] text-[8px] font-black text-[#5147dc]">{appointment.professional.replace("Dra. ", "").replace("Dr. ", "").slice(0, 2).toUpperCase()}</span><strong className="text-[#5a5b6e]">{appointment.professional}</strong></div>
               <div><strong className="block uppercase text-[#444557]">{appointment.patient}</strong><span className="mt-1 block text-[9px] text-[#aaaab7]">Paciente</span></div>
@@ -734,7 +785,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
             {selectedPatientId ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {selectedPatient?.name}</p> : null}
           </div>
           <FormField label="Data"><input className={cn(fieldClassName, invalidAppointmentFields.has("date") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="date" type="date" defaultValue={calendarDateKey(calendarDate)} onChange={() => clearAppointmentField("date")} required /></FormField>
-          <div className="relative"><FormField label="Horário"><ScheduleTimePicker openingTime={openingTime} closingTime={closingTime} value={appointmentTime} open={timePickerOpen} invalid={invalidAppointmentFields.has("time")} onToggle={() => setTimePickerOpen((current) => !current)} onChange={(value) => { setAppointmentTime(value); setTimePickerOpen(false); clearAppointmentField("time"); }} /></FormField><input name="time" type="hidden" value={appointmentTime} required /></div>
+          <div className="relative"><FormField label="Horário"><ClinicTimePicker openingTime={openingTime} closingTime={closingTime} latestTime={latestAppointmentStart(closingTime)} value={appointmentTime} invalid={invalidAppointmentFields.has("time")} onChange={(value) => { setAppointmentTime(value); clearAppointmentField("time"); }} /></FormField><input name="time" type="hidden" value={appointmentTime} required /></div>
           <FormField label="Profissional"><div className="relative"><select className={cn(fieldClassName, invalidAppointmentFields.has("professional") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="professional" required disabled={professionalLoading || !professionalChoices.length} onChange={() => clearAppointmentField("professional")}><option value="">{professionalLoading ? "..." : professionalChoices.length ? "Selecione o profissional" : "Nenhum profissional cadastrado"}</option>{professionalChoices.map((professional) => <option key={professional} value={professional}>{professional}</option>)}</select>{professionalLoading ? <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#5147dc]" /> : null}</div></FormField>
           <div className="sm:col-span-2"><FormField label="Tipo de consulta"><div className="relative"><select className={cn(fieldClassName, invalidAppointmentFields.has("procedure") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="procedure" required onChange={() => clearAppointmentField("procedure")}><option value="">Selecione o tipo de consulta</option>{appointmentTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></div></FormField></div>
           {appointmentFormError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{appointmentFormError}</p> : null}
@@ -744,45 +795,13 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
       <Modal open={Boolean(deleteTarget)} onClose={() => { if (!deleteSaving) setDeleteTarget(null); }} title="Excluir agendamento" description="Essa ação removerá o agendamento da agenda.">
         <div className="space-y-4"><p className="rounded-[7px] bg-[#fff7f7] px-3 py-3 text-xs font-semibold leading-5 text-[#7e3b43]">Tem certeza que deseja excluir o agendamento de <strong>{deleteTarget?.patient}</strong> às <strong>{deleteTarget?.time}</strong>? Você poderá desfazer pelo aviso exibido após a exclusão.</p><div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={deleteSaving} onClick={() => setDeleteTarget(null)}>Cancelar</Button><Button type="button" className="bg-[#b42318] hover:bg-[#991b1b]" disabled={deleteSaving} onClick={() => void deleteAppointment()}>{deleteSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{deleteSaving ? "Excluindo..." : "Excluir agendamento"}</Button></div></div>
       </Modal>
+      {anamnesisGate.gate}
       {materialCheck ? <MaterialCheckModal appointmentId={materialCheck.id} onClose={() => setMaterialCheck(null)} onDone={(message) => { invalidateClientCache(`/api/patients/${materialCheck.patientId}/history`); setMaterialCheck(null); onSaved?.(message); }} /> : null}
     </div>
   );
 }
 
 type CalendarView = "Dia" | "Semana" | "Mês";
-
-function ScheduleTimePicker({ openingTime, closingTime, value, open, invalid, onToggle, onChange }: { openingTime: string; closingTime: string; value: string; open: boolean; invalid: boolean; onToggle: () => void; onChange: (value: string) => void }) {
-  const allowedHours = getAllowedHours(openingTime, closingTime);
-  const selectedMinutes = value ? appointmentMinutes(value) : null;
-  const selectedHour = selectedMinutes === null ? null : Math.floor(selectedMinutes / 60);
-  const selectedMinute = selectedMinutes === null ? null : selectedMinutes % 60;
-  const [draftHour, setDraftHour] = useState<number | null>(selectedHour ?? allowedHours[0] ?? null);
-  const minutes = getAllowedMinutes(openingTime, closingTime, draftHour ?? undefined);
-
-  return <div className="relative">
-    <button type="button" className={cn(fieldClassName, "flex items-center justify-between text-left", invalid && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} onClick={() => { if (!open) setDraftHour(selectedHour ?? allowedHours[0] ?? null); onToggle(); }} aria-expanded={open}>
-      <span className={value ? "text-[#303144]" : "text-[#858696]"}>{value || "Selecione o horário"}</span>
-      <Clock3 className="h-4 w-4 text-[#303144]" />
-    </button>
-    {open ? <div className="absolute left-0 top-[68px] z-30 grid w-[150px] grid-cols-2 overflow-hidden rounded-[3px] border border-[#777] bg-white text-sm shadow-lg">
-      <div className="max-h-60 overflow-y-auto border-r border-[#d8d8d8] p-1">{allowedHours.map((hour) => <button type="button" className={cn("block w-full px-3 py-1.5 text-left", (draftHour ?? selectedHour) === hour ? "bg-[#087cf5] text-white" : "text-[#303144] hover:bg-[#eaf3ff]")} key={hour} onClick={() => setDraftHour(hour)}>{String(hour).padStart(2, "0")}</button>)}</div>
-      <div className="max-h-60 overflow-y-auto p-1">{minutes.map((minute) => <button type="button" className={cn("block w-full px-3 py-1.5 text-left", selectedHour === draftHour && selectedMinute === minute ? "bg-[#087cf5] text-white" : "text-[#303144] hover:bg-[#eaf3ff]")} key={minute} onClick={() => onChange(`${String(draftHour ?? allowedHours[0]).padStart(2, "0")}:${String(minute).padStart(2, "0")}`)}>{String(minute).padStart(2, "0")}</button>)}</div>
-    </div> : null}
-  </div>;
-}
-
-function getAllowedHours(openingTime: string, closingTime: string) {
-  const opening = Math.floor(appointmentMinutes(openingTime) / 60);
-  const closing = Math.floor((appointmentMinutes(closingTime) - 1) / 60);
-  return closing >= opening ? Array.from({ length: closing - opening + 1 }, (_, index) => opening + index) : [];
-}
-
-function getAllowedMinutes(openingTime: string, closingTime: string, hour: number | undefined) {
-  if (hour === undefined) return [];
-  const opening = appointmentMinutes(openingTime);
-  const closing = appointmentMinutes(closingTime);
-  return Array.from({ length: 60 }, (_, minute) => minute).filter((minute) => hour * 60 + minute >= opening && hour * 60 + minute < closing);
-}
 
 function ScheduleCalendar({ appointments, date, view, focusTime, openingTime, closingTime, loading, openMenuId, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, appointmentToleranceMinutes, updatingId }: { appointments: AppointmentRow[]; date: Date; view: CalendarView; focusTime?: string; openingTime: string; closingTime: string; loading: boolean; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; appointmentToleranceMinutes: number; updatingId: string | null }) {
   const [now, setNow] = useState(() => clinicNow());
@@ -913,7 +932,7 @@ function CalendarAppointmentCard({ appointment, top, height, column, columns, op
   const primaryLabel = appointment.status === "Em atendimento" ? "Finalizar" : isCompleted ? "Concluído" : isMissed ? "Faltou" : "Atender";
   return <div className={cn("group absolute z-10 cursor-pointer overflow-hidden rounded-[7px] border-l-[3px] p-2 text-[10px] shadow-[0_4px_12px_rgba(38,39,58,0.06)]", tone.card, past && "brightness-[0.84] saturate-[0.78]")} style={{ top, height, left: `calc(${column} * 100% / ${columns} + 4px)`, width: `calc(100% / ${columns} - 8px)` }} aria-label={`${appointment.procedure} - status: ${appointment.status}`} onClick={() => onSelect(appointment)}>
     <span className="pointer-events-none absolute -top-7 left-2 z-40 hidden whitespace-nowrap rounded-[5px] bg-[#303144] px-2 py-1 text-[10px] font-bold text-white shadow-lg group-hover:block">Status: {appointment.status}</span>
-    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><p className="mt-1 truncate text-[11px] font-black">{appointment.procedure}</p><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0">{hasMenu ? <button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button> : null}{hasMenu && open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}>{canRun ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button> : null}{showStatusGroup ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button></> : null}{showWhatsapp ? <button type="button" className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] disabled:opacity-50" disabled title="Confirmação por WhatsApp em breve">Confirmar por WhatsApp</button> : null}</div> : null}</div></div>
+    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><div className="mt-1 flex min-w-0 items-center gap-1"><ProcedureImage name={appointment.procedure} decorative className="h-5 w-5 rounded-sm" /><p className="truncate text-[11px] font-black">{appointment.procedure}</p></div><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0">{hasMenu ? <button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button> : null}{hasMenu && open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}>{canRun ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button> : null}{showStatusGroup ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button></> : null}{showWhatsapp ? <button type="button" className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] disabled:opacity-50" disabled title="Confirmação por WhatsApp em breve">Confirmar por WhatsApp</button> : null}</div> : null}</div></div>
     <span className={cn("mt-1 inline-flex rounded-full px-2 py-0.5 text-[9px] font-bold", tone.pill)}>{appointment.category || "Atendimento"}</span>
   </div>;
 }
@@ -991,6 +1010,8 @@ function formatEndTime(time: string, durationMinutes: number) {
 
 function appointmentTone(appointment: AppointmentRow) {
   const value = `${appointment.procedure} ${appointment.category}`.toLocaleLowerCase("pt-BR");
+  // "Procedimento - …" (criado pela sessão) é sempre procedimento, mesmo que o nome contenha termos do catálogo.
+  if (appointment.procedure.trim().startsWith("Procedimento - ")) return { card: "border-[#e0647d] bg-[#fff0f2] text-[#9b3a4f]", pill: "bg-[#ffe0e5] text-[#a8465b]" };
   if (value.includes("avalia")) return { card: "border-[#3d9be9] bg-[#eaf5ff] text-[#175b91]", pill: "bg-[#d7edff] text-[#2672ad]" };
   if (value.includes("consulta") || value.includes("retorno")) return { card: "border-[#6257e8] bg-[#f0eeff] text-[#3f36a9]", pill: "bg-[#e3dfff] text-[#5147dc]" };
   if (["preenchimento", "toxina", "bioestimul", "fio", "peeling", "microagul", "laser", "skin", "limpeza"].some((term) => value.includes(term))) return { card: "border-[#35ae78] bg-[#eaf8ef] text-[#247750]", pill: "bg-[#d7f1df] text-[#287a50]" };
@@ -1104,12 +1125,19 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
         {isLoading ? <LoadingTable columns={7} /> : <MiniTable
           columns={["Nome", "Categoria", "Valor sugerido", "Tempo", "Ficha técnica", "Margem", "Ação"]}
           rows={procedureRows.map((procedure, index) => [
-            <strong className="text-[#121733]" key={procedure.name}>{procedure.name}</strong>,
-            procedure.category,
-            currency.format(procedure.price),
-            procedure.duration,
-            <div className="max-w-xs space-y-1" key="sheet">
-              <span className="block text-xs">{procedure.materials || <span className="text-muted-foreground">Sem itens</span>}</span>
+            <span className="flex min-w-0 items-center gap-2" key={procedure.id}><ProcedureImage name={procedure.name} decorative className="h-8 w-8 rounded" /><strong className="truncate uppercase italic text-[#121733]">{procedure.name}</strong></span>,
+            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-medium text-[#34364b]">{procedure.category}</span>,
+            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-semibold tabular-nums text-[#34364b]">{currency.format(procedure.price)}</span>,
+            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-medium tabular-nums text-[#34364b]">{procedure.duration}</span>,
+            <div className="w-full min-w-[190px] max-w-[300px] space-y-1.5" key="sheet">
+              {procedure.technicalSheet.length ? procedure.technicalSheet.map((material, materialIndex) => (
+                <div className="flex min-w-0 items-center gap-1.5" key={`${material.productId}-${materialIndex}`}>
+                  <span className="min-w-0 flex-1 truncate rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 font-sans text-[13px] font-semibold tracking-tight text-[#34364b]" title={material.name}>{material.name}</span>
+                  <span className="shrink-0 rounded-md border border-[#e1defe] bg-[#f3f1ff] px-2 py-1.5 font-sans text-xs font-bold tabular-nums text-[#5147dc]">
+                    {quantityFormat.format(material.quantity)} {material.unit === "unidade" ? "Un" : material.unit}
+                  </span>
+                </div>
+              )) : <span className="text-xs text-muted-foreground">Sem materiais</span>}
               {procedure.materialsNeedReview ? <Badge variant="amber" title="Convertida automaticamente do texto antigo. Confira as quantidades e salve.">Revisar ficha</Badge> : null}
             </div>,
             <Badge key={procedure.margin} variant="green">{procedure.margin}</Badge>,
@@ -1130,7 +1158,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
         description="Defina preço, duração, margem e os materiais e produtos usados em cada atendimento."
       >
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveProcedure}>
-          <div className="sm:col-span-2"><FormField label="Nome"><input className={fieldClassName} name="name" defaultValue={editingProcedure?.name ?? ""} required /></FormField></div>
+          <div className="sm:col-span-2"><FormField label="Nome"><div className="flex items-center gap-2"><ProcedureImage name={editingProcedure?.name ?? "Procedimento"} decorative className="h-10 w-10 rounded" /><input className={fieldClassName} name="name" defaultValue={editingProcedure?.name ?? ""} required /></div></FormField></div>
           <FormField label="Categoria"><select className={fieldClassName} name="category" defaultValue={editingProcedure?.category ?? ""} required><option value="">Selecione uma categoria</option>{procedureCategories.map((category) => <option key={category}>{category}</option>)}</select></FormField>
           <FormField label="Valor sugerido"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="price" inputMode="decimal" defaultValue={editingProcedure ? currency.format(editingProcedure.price) : ""} placeholder="R$ 0,00" required /></FormField>
           <FormField label="Duração em minutos"><MaskedInput className={fieldClassName} formatter={(value) => formatInteger(value, 3)} name="duration" inputMode="numeric" defaultValue={editingProcedure?.duration ?? ""} placeholder="60" required /></FormField>
@@ -1263,7 +1291,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
             {selectedPatientId ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {quotePatients.find((patient) => patient.id === selectedPatientId)?.name}</p> : null}
           </div>
           <FormField label="Validade"><MaskedInput className={fieldClassName} formatter={formatDate} name="expires" inputMode="numeric" maxLength={10} placeholder="30/09/2026" required /></FormField>
-          <div className="sm:col-span-2"><FormField label="Procedimentos"><div className="flex min-h-10 flex-wrap gap-1.5 rounded-[7px] border border-[#dddfea] bg-white p-2">{selectedProcedureNames.map((name) => <span className="flex items-center gap-1 rounded-full bg-[#f0efff] px-2 py-1 text-[10px] font-bold text-[#5147dc]" key={name}>{name}<button className="text-[#5147dc] hover:text-[#b42318]" type="button" onClick={() => setSelectedProcedureNames((current) => current.filter((item) => item !== name))}>×</button></span>)}<select className="min-w-[150px] flex-1 bg-transparent text-xs font-semibold text-[#858696] outline-none" value="" disabled={optionsLoading || !quoteProcedures.length} onChange={(event) => { if (event.target.value) setSelectedProcedureNames((current) => current.includes(event.target.value) ? current : [...current, event.target.value]); }}><option value="">{optionsLoading ? "Carregando procedimentos..." : quoteProcedures.length ? "Adicionar procedimento" : "Nenhum procedimento cadastrado"}</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name} · {currency.format(procedure.price)}</option>)}</select></div><input className="sr-only" name="items" value={selectedProcedureNames.join(", ")} readOnly required /></FormField></div>
+          <div className="sm:col-span-2"><FormField label="Procedimentos"><div className="flex min-h-10 flex-wrap gap-1.5 rounded-[7px] border border-[#dddfea] bg-white p-2">{selectedProcedureNames.map((name) => <span className="flex items-center gap-1 rounded-full bg-[#f0efff] py-1 pl-1 pr-2 text-[10px] font-bold text-[#5147dc]" key={name}><ProcedureImage name={name} decorative className="h-6 w-6 rounded-full" />{name}<button className="ml-0.5 text-[#5147dc] hover:text-[#b42318]" type="button" onClick={() => setSelectedProcedureNames((current) => current.filter((item) => item !== name))}>×</button></span>)}<select className="min-w-[150px] flex-1 bg-transparent text-sm font-semibold text-[#858696] outline-none" value="" disabled={optionsLoading || !quoteProcedures.length} onChange={(event) => { if (event.target.value) setSelectedProcedureNames((current) => current.includes(event.target.value) ? current : [...current, event.target.value]); }}><option value="">{optionsLoading ? "Carregando procedimentos..." : quoteProcedures.length ? "Adicionar procedimento" : "Nenhum procedimento cadastrado"}</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name} · {currency.format(procedure.price)}</option>)}</select></div><input className="sr-only" name="items" value={selectedProcedureNames.join(", ")} readOnly required /></FormField></div>
           <div className="sm:col-span-2"><FormField label="Valor total"><MaskedInput key={selectedProcedureNames.join("|")} className={fieldClassName} formatter={formatCurrency} name="total" inputMode="decimal" defaultValue={suggestedTotal ? currency.format(suggestedTotal) : ""} placeholder="R$ 0,00" required /></FormField><p className="mt-1 text-[10px] text-[#858696]">Inclui {currency.format(procedureSubtotal)} em procedimentos e {currency.format(clinicCostsTotal)} em custos padrão da Calculadora.</p></div>
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || optionsLoading || !selectedPatientId || !selectedProcedureNames.length} type="submit">{isSaving ? "Salvando..." : "Salvar orçamento"}</Button></div>
         </form>
@@ -1549,7 +1577,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       setClinicNameInput(data.settings.name);
       onClinicNameChange?.(data.settings.name);
     }
-    invalidateClientCache("/api/clinic/cost-settings", "/api/quotes/options");
+    invalidateClientCache("/api/clinic/cost-settings", "/api/quotes/options", "/api/appointments/options", "/api/agenda/bootstrap");
     if (editing === "Agenda") setEditing(null);
   }
 

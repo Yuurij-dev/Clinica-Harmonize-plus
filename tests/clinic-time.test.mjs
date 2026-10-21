@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appointmentDay, appointmentHasPassed, appointmentInstant, appointmentWithinStartWindow, canRequestAppointmentStart, clinicNow, matchesProcedureAppointment, parseAppointmentDay } from "../src/lib/clinic-time.ts";
+import { appointmentDay, appointmentHasPassed, appointmentInstant, appointmentSlotError, appointmentWithinStartWindow, canRequestAppointmentStart, clinicNow, latestAppointmentStart, matchesProcedureAppointment, parseAppointmentDay } from "../src/lib/clinic-time.ts";
 
 const appointment = { date: "10/10/2026", time: "14:00" };
+
+test("return appointments stay inside clinic hours and allow enough time for the session", () => {
+  const now = { date: "2026-10-14", minutes: 12 * 60 };
+  assert.equal(appointmentSlotError("2026-10-15", "22:47", "08:00", "19:00", now), "Escolha um horário dentro do funcionamento da clínica (08:00 às 18:00).");
+  assert.equal(appointmentSlotError("2026-10-15", "18:00", "08:00", "19:00", now), null);
+  assert.equal(appointmentSlotError("2026-10-15", "18:01", "08:00", "19:00", now), "Escolha um horário dentro do funcionamento da clínica (08:00 às 18:00).");
+  assert.equal(latestAppointmentStart("19:00"), "18:00");
+});
 
 test("procedure start window follows the clinic appointment tolerance", () => {
   assert.equal(appointmentWithinStartWindow(appointment, 15, { date: "2026-10-10", time: "13:59" }), false);
@@ -51,4 +59,16 @@ test("an appointment only counts as missed after its own day and time plus toler
   assert.equal(appointmentHasPassed(appointment, { date: "2026-10-16", minutes: 0 }, 15), true);
   assert.equal(clinicNow(new Date("2026-10-15T02:30:00Z")).date, "2026-10-14");
   assert.equal(clinicNow(new Date("2026-10-15T02:30:00Z")).minutes, 23 * 60 + 30);
+});
+
+test("fuso da clínica (America/Sao_Paulo, UTC-3 sem horário de verão desde 2019) na virada de dia", async () => {
+  const { clinicNow, appointmentInstant, appointmentDay } = await import("../src/lib/clinic-time.ts");
+  const { appointmentStartNow } = await import("../src/lib/procedure-session-rules.ts");
+  const late = clinicNow(new Date("2026-10-21T02:30:00Z"));
+  assert.deepEqual(late, { date: "2026-10-20", minutes: 23 * 60 + 30 });
+  assert.deepEqual(appointmentStartNow(late), { day: "2026-10-20", time: "23:30" });
+  assert.equal(appointmentDay(appointmentInstant("2026-10-20")), "2026-10-20");
+  // Em novembro/janeiro não há DST: o offset segue -03:00 (03:00Z = 00:00 local).
+  assert.deepEqual(clinicNow(new Date("2026-01-15T03:00:00Z")), { date: "2026-01-15", minutes: 0 });
+  assert.deepEqual(clinicNow(new Date("2026-01-15T02:59:00Z")), { date: "2026-01-14", minutes: 23 * 60 + 59 });
 });
