@@ -111,10 +111,9 @@ export function LoginScreen({ initialMode = "login", onLogin, onChangePassword, 
       <section className="relative flex min-h-[270px] items-center justify-center overflow-hidden bg-[#4938f4] px-6 py-8 text-center text-white sm:min-h-[360px] sm:px-10 sm:py-12 lg:min-h-screen lg:px-14 lg:py-16">
         <div aria-hidden="true" className="absolute inset-0 bg-center bg-no-repeat" style={{ backgroundImage: "url('/login-brand-background.png')", backgroundSize: "100% 100%" }} />
         <div className="hp-brand-enter relative z-10 flex w-full max-w-xl flex-col items-center">
-          <div className="relative mb-2 h-[100px] w-[100px] sm:h-[120px] sm:w-[120px]">
-            <Image alt="" className="object-contain" fill priority sizes="120px" src="/harmonize-mark.png" />
-          </div>
-          <h1 className="text-5xl font-black leading-[1.05] sm:text-6xl">Harmonize+</h1>
+          <h1 className="w-full max-w-[260px] sm:max-w-[340px] lg:max-w-[420px]">
+            <Image alt="Harmonize+" className="h-auto w-full" height={300} priority src="/brand/logo-horizontal-white.svg" unoptimized width={1200} />
+          </h1>
           <p className="mt-2 text-xl font-medium sm:text-2xl">Gestão para clínicas</p>
           <p className="mt-5 hidden max-w-md text-sm leading-6 text-white/85 sm:mt-7 sm:block sm:text-base sm:leading-7">Mais organização, mais tempo para o que realmente importa: seus pacientes.</p>
           <Button className="mt-5 h-11 rounded-full bg-white px-7 font-bold text-[#4938f4] shadow-none hover:bg-[#f2f1ff] sm:mt-9 sm:h-12" onClick={mode === "login" ? openRegister : openLogin} type="button" variant="secondary">
