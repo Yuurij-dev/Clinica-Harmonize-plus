@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { appointmentInstant, clinicNow, parseAppointmentDay, parseClockMinutes } from "@/lib/clinic-time";
+import { appointmentInstant, appointmentSlotError, clinicNow, parseAppointmentDay } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
 import { ensurePatientJourney } from "@/lib/patient-journey";
+import { DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE, procedureAppointmentVariants } from "@/lib/procedure-session-rules";
 
 export async function POST(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
@@ -17,12 +18,19 @@ export async function POST(request: Request) {
     date?: string;
     notes?: string;
   } | null;
+  const textFields = body ? [body.patientId, body.journeyId, body.procedure, body.professional, body.time, body.date, body.notes] : [];
+  if (!body || textFields.some((value) => value !== undefined && typeof value !== "string")) {
+    return NextResponse.json({ message: "Dados do agendamento inválidos." }, { status: 400 });
+  }
   if (!body?.patientId || !body.procedure || !body.professional || !body.time) {
     return NextResponse.json({ message: "Selecione um paciente, procedimento, profissional e horário." }, { status: 400 });
   }
 
   const patient = await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId } });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
+  if (body.journeyId && !await prisma.patientJourney.findFirst({ where: { id: body.journeyId, patientId: patient.id, clinicId: user.clinicId, archivedAt: null }, select: { id: true } })) {
+    return NextResponse.json({ message: "Tratamento não encontrado." }, { status: 404 });
+  }
 
   const now = clinicNow();
   const day = body.date ? parseAppointmentDay(body.date) : now.date;
@@ -35,30 +43,36 @@ export async function POST(request: Request) {
   const openingTime = clinic?.openingTime ?? "08:00";
   const closingTime = clinic?.closingTime ?? "19:00";
   const durationMinutes = procedure?.durationMinutes ?? 60;
-  const startMinutes = parseClockMinutes(body.time);
-  const openingMinutes = parseClockMinutes(openingTime);
-  const closingMinutes = parseClockMinutes(closingTime);
-  if (day < now.date || (day === now.date && startMinutes !== null && startMinutes <= now.minutes)) {
-    return NextResponse.json({ message: "Não é possível agendar em um horário ou data que já passou." }, { status: 400 });
-  }
-  if (startMinutes === null || openingMinutes === null || closingMinutes === null || startMinutes < openingMinutes || startMinutes + durationMinutes > closingMinutes) {
-    return NextResponse.json({ message: `Escolha um horário dentro do funcionamento da clínica (${openingTime} às ${closingTime}).` }, { status: 400 });
-  }
+  const slotError = appointmentSlotError(day, body.time, openingTime, closingTime, now, durationMinutes);
+  if (slotError) return NextResponse.json({ message: slotError }, { status: 400 });
+
+  if ((body.notes?.length ?? 0) > 500) return NextResponse.json({ message: "A observação deve ter até 500 caracteres." }, { status: 400 });
 
   const journey = await ensurePatientJourney(patient.id, user.clinicId, body.journeyId);
-  const appointment = await prisma.appointment.create({
-    data: {
-      date: appointmentInstant(day),
-      time: body.time,
-      patientId: patient.id,
-      journeyId: journey.id,
-      procedure: body.procedure,
-      professional: body.professional,
-      notes: body.notes?.trim() ?? "",
-      status: "Agendado",
-      clinicId: user.clinicId,
-    },
-    include: { patient: { select: { name: true } } },
+  const variants = procedureAppointmentVariants(body.procedure);
+  const procedureName = body.procedure;
+  // Evita marcar o mesmo procedimento (nome puro ou "Procedimento - X") duas vezes na jornada; a trava serializa cliques simultâneos.
+  const appointment = await prisma.$transaction(async (tx) => {
+    if (variants) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${journey.id}))`;
+      const duplicate = await tx.appointment.findFirst({ where: { clinicId: user.clinicId, patientId: patient.id, journeyId: journey.id, procedure: { in: variants }, status: { in: ["Agendado", "Em atendimento"] } }, select: { id: true } });
+      if (duplicate) return null;
+    }
+    return tx.appointment.create({
+      data: {
+        date: appointmentInstant(day),
+        time: body.time!,
+        patientId: patient.id,
+        journeyId: journey.id,
+        procedure: procedureName,
+        professional: body.professional!,
+        notes: body.notes?.trim() ?? "",
+        status: "Agendado",
+        clinicId: user.clinicId,
+      },
+      include: { patient: { select: { name: true } } },
+    });
   });
+  if (!appointment) return NextResponse.json({ message: DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE }, { status: 409 });
   return NextResponse.json({ appointment }, { status: 201 });
 }

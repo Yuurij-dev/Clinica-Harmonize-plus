@@ -14,13 +14,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const body = await request.json().catch(() => null) as { reason?: string } | null;
   const reason = body?.reason?.trim();
   if (!reason) return NextResponse.json({ message: "Informe o motivo do estorno." }, { status: 400 });
-  const movement = await prisma.stockMovement.findFirst({ where: { id, clinicId: user.clinicId }, select: { id: true, type: true, productId: true, lotId: true, quantity: true, reversedBy: { select: { id: true } } } });
+  const movement = await prisma.stockMovement.findFirst({ where: { id, clinicId: user.clinicId }, select: { id: true, type: true, productId: true, lotId: true, quantity: true, appointmentId: true, procedureSessionId: true, patientId: true, attendanceKind: true, attendanceName: true, attendanceDate: true, reversedBy: { select: { id: true } } } });
   if (!movement) return NextResponse.json({ message: "Movimentação não encontrada." }, { status: 404 });
   if (movement.type !== movementTypes.attendance) return NextResponse.json({ message: "Só saídas de atendimento podem ser estornadas." }, { status: 400 });
   if (movement.reversedBy) return NextResponse.json({ message: "Esta saída já foi estornada." }, { status: 409 });
   try {
     // reversesId é único: dois estornos simultâneos da mesma saída não passam.
-    await prisma.stockMovement.create({ data: { clinicId: user.clinicId, productId: movement.productId, lotId: movement.lotId, type: movementTypes.reversal, quantity: -movement.quantity, reversesId: movement.id, notes: reason, userId: user.id, userName: user.name } });
+    await prisma.stockMovement.create({ data: { clinicId: user.clinicId, productId: movement.productId, lotId: movement.lotId, type: movementTypes.reversal, quantity: -movement.quantity, reversesId: movement.id, appointmentId: movement.appointmentId, procedureSessionId: movement.procedureSessionId, patientId: movement.patientId, attendanceKind: movement.attendanceKind, attendanceName: movement.attendanceName, attendanceDate: movement.attendanceDate, notes: reason, userId: user.id, userName: user.name } });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return NextResponse.json({ message: "Esta saída já foi estornada." }, { status: 409 });
     throw error;

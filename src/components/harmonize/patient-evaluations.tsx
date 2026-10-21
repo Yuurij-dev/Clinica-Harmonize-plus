@@ -11,13 +11,13 @@ import { LoadingSkeleton } from "./shared";
 
 const NEW_EVALUATION_ID = "__new__";
 
-export function PatientEvaluations({ patientId, patientName }: { patientId: string; patientName: string }) {
-  const listCacheKey = `/api/patients/${patientId}/evaluation?list=1`;
+export function PatientEvaluations({ patientId, patientName, journeyId, initialOpenId }: { patientId: string; patientName: string; journeyId?: string; initialOpenId?: string }) {
+  const listCacheKey = `/api/patients/${patientId}/evaluation?list=1${journeyId ? `&journeyId=${encodeURIComponent(journeyId)}` : ""}`;
   const cached = readClientCache<{ evaluations?: SavedEvaluation[] }>(listCacheKey);
   const [evaluations, setEvaluations] = useState<SavedEvaluation[]>(cached?.evaluations ?? []);
   const [loading, setLoading] = useState(!cached);
   const [loadError, setLoadError] = useState(false);
-  const [openEvaluationId, setOpenEvaluationId] = useState<string | null>(null);
+  const [openEvaluationId, setOpenEvaluationId] = useState<string | null>(initialOpenId ?? null);
   const [creatingEvaluation, setCreatingEvaluation] = useState(false);
 
   useEffect(() => {
@@ -46,12 +46,12 @@ export function PatientEvaluations({ patientId, patientName }: { patientId: stri
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h3 className="text-sm font-bold text-[#27283b]">Avaliações</h3><p className="mt-0.5 text-[10px] text-[#858696]">Clique em uma avaliação para abrir as fotos e marcações.</p></div>
+        <div><h3 className="text-sm font-bold text-[#27283b]">Avaliações</h3><p className="mt-0.5 text-xs text-[#858696]">Clique em uma avaliação para abrir as fotos e marcações.</p></div>
         <Button type="button" variant="outline" disabled={newEvaluationOpen} onClick={startNewEvaluation}><CalendarPlus className="h-4 w-4" />Adicionar avaliação</Button>
       </div>
       {newEvaluationOpen ? (
         <ListAccordion title="Nova avaliação" subtitle={new Date().toLocaleDateString("pt-BR")} open onToggle={() => { setCreatingEvaluation(false); setOpenEvaluationId(null); }}>
-          <PhotoEditor patientId={patientId} patientName={patientName} onSaved={handleSaved} />
+          <PhotoEditor patientId={patientId} journeyId={journeyId} patientName={patientName} onSaved={handleSaved} />
         </ListAccordion>
       ) : null}
       {loading ? (
@@ -66,11 +66,11 @@ export function PatientEvaluations({ patientId, patientName }: { patientId: stri
             key={evaluation.id}
             title={new Date(evaluation.createdAt).toLocaleDateString("pt-BR")}
             subtitle={evaluation.professional || "Profissional não informado"}
-            meta={<span className="rounded-full bg-[#f2f3f7] px-2 py-1 text-[10px] font-bold text-[#747587]">{evaluation.photoCount} foto{evaluation.photoCount === 1 ? "" : "s"}</span>}
+            meta={<span className="rounded-full bg-[#f2f3f7] px-2 py-1 text-xs font-bold text-[#747587]">{evaluation.photoCount} foto{evaluation.photoCount === 1 ? "" : "s"}</span>}
             open={openEvaluationId === evaluation.id}
             onToggle={() => { setCreatingEvaluation(false); setOpenEvaluationId((current) => current === evaluation.id ? null : evaluation.id); }}
           >
-            <PhotoEditor patientId={patientId} evaluationId={evaluation.id} patientName={patientName} onSaved={handleSaved} />
+            <PhotoEditor patientId={patientId} journeyId={journeyId} evaluationId={evaluation.id} patientName={patientName} onSaved={handleSaved} />
           </ListAccordion>
         ))
       )}

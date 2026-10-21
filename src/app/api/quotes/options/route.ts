@@ -14,7 +14,7 @@ export async function GET() {
       orderBy: { name: "asc" },
       select: { id: true, name: true, category: true, price: true, technicalSheet: { orderBy: { product: { name: "asc" } }, select: { quantity: true, product: { select: { name: true, unit: true } } } } },
     }),
-    prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { laborCost: true, facilityCost: true, medicationCost: true } }),
+    prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { name: true, laborCost: true, facilityCost: true, medicationCost: true } }),
   ]);
 
   // O orçamento usa a ficha técnica: descrição dos materiais e unidade do primeiro material.
@@ -22,5 +22,5 @@ export async function GET() {
     const items = technicalSheet.map((item) => ({ name: item.product.name, unit: item.product.unit, quantity: item.quantity }));
     return { ...procedure, materials: describeTechnicalSheet(items), unit: items[0]?.unit ?? null };
   });
-  return NextResponse.json({ patients, procedures: options, costs: clinic ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 } });
+  return NextResponse.json({ patients, procedures: options, clinicName: clinic?.name ?? null, costs: clinic ? { laborCost: clinic.laborCost, facilityCost: clinic.facilityCost, medicationCost: clinic.medicationCost } : { laborCost: 0, facilityCost: 0, medicationCost: 0 } });
 }

@@ -1,7 +1,10 @@
 export type EditorTool =
   | "select"
+  | "pan"
   | "pen"
+  | "point"
   | "line"
+  | "curve"
   | "arrow"
   | "ellipse"
   | "text"
@@ -14,7 +17,7 @@ export type AnnotationBase = {
 };
 
 export type LineAnnotation = AnnotationBase & {
-  type: "freehand" | "line" | "arrow";
+  type: "freehand" | "line" | "curve" | "arrow";
   points: number[];
 };
 
@@ -34,7 +37,9 @@ export type TextAnnotation = AnnotationBase & {
   fontSize: number;
 };
 
-export type PhotoAnnotation = LineAnnotation | EllipseAnnotation | TextAnnotation;
+export type PointAnnotation = AnnotationBase & { type: "point"; x: number; y: number; radius: number };
+
+export type PhotoAnnotation = LineAnnotation | EllipseAnnotation | TextAnnotation | PointAnnotation;
 
 export type EvaluationPhoto = {
   id: string;
@@ -42,6 +47,8 @@ export type EvaluationPhoto = {
   imageUrl: string;
   width: number;
   height: number;
+  category: "Frontal" | "Perfil direito" | "Perfil esquerdo" | "Sorriso" | "Outra";
+  sortOrder: number;
   annotations: PhotoAnnotation[];
 };
 

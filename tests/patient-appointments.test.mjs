@@ -40,3 +40,12 @@ test("procedure names with punctuation and Unicode match only complete names", (
   ];
   assert.deepEqual(assignProcedureAppointmentsToCards([appointment], cards, names), [appointment, undefined, undefined, undefined]);
 });
+
+test("agendamento 'Procedimento - A + B' é reconhecido pelo card e não afeta retornos", async () => {
+  const { appointmentMatchesProcedure, assignProcedureAppointmentsToCards } = await import("../src/lib/patient-appointments.ts");
+  assert.equal(appointmentMatchesProcedure("Procedimento - Botox", "Botox"), true);
+  assert.equal(appointmentMatchesProcedure("Procedimento - Botox + Preenchimento", "Botox (2x), Preenchimento"), true);
+  assert.equal(appointmentMatchesProcedure("Procedimento - Botox", "Retorno - Botox"), false);
+  const appointment = { procedure: "Procedimento - Botox + Preenchimento", status: "Agendado" };
+  assert.equal(assignProcedureAppointmentsToCards([appointment], [{ name: "Botox (2x), Preenchimento" }], [])[0], appointment);
+});

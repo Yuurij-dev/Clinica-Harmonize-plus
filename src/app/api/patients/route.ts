@@ -12,7 +12,7 @@ export async function GET() {
     orderBy: { name: "asc" },
     select: {
       id: true, name: true, cpf: true, phone: true, age: true, status: true,
-      lastVisit: true, nextReturn: true, totalValue: true,
+      lastVisit: true, nextReturn: true, totalValue: true, createdAt: true,
       procedureRecords: { orderBy: { performedAt: "desc" }, take: 1, select: { id: true } },
     },
   });

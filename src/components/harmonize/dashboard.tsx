@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { CalendarCheck, CalendarDays, ChevronRight, RotateCcw, TrendingUp, UserPlus, type LucideIcon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ProcedureImage } from "@/components/harmonize/procedure-image";
 import { inputVariants } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { CountUpValue, DetailCard, LoadingSkeleton, PageContainer, ProgressBar, StatCard, StatusBadge } from "./shared";
@@ -153,9 +154,10 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
                       {appointment.patient.name}
                     </Link>
                   ) : <p className="truncate text-sm font-bold text-[#121733]">{appointment.patient?.name ?? "Paciente"}</p>}
-                  <p className="truncate text-xs text-[#65708b]">
-                    {formatAppointmentDate(appointment.date)} · {appointment.procedure}
-                  </p>
+                  <div className="flex min-w-0 items-center gap-1.5 text-xs text-[#65708b]">
+                    <ProcedureImage name={appointment.procedure} decorative className="h-5 w-5 rounded-sm" />
+                    <p className="truncate">{formatAppointmentDate(appointment.date)} · {appointment.procedure}</p>
+                  </div>
                 </div>
                 <ChevronRight className="h-4 w-4 text-[#bbbcc8]" />
               </div>

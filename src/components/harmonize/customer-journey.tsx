@@ -69,10 +69,10 @@ export function CustomerJourney({
       <section className="min-w-0 flex-1">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <p className="text-[9px] font-bold uppercase text-[#9a9baa]">{title}</p>
-            <p className="mt-1 text-[10px] text-[#858696]">Selecione uma etapa para abrir o contexto relacionado</p>
+            <p className="text-xs font-bold uppercase text-[#9a9baa]">{title}</p>
+            <p className="mt-1 text-xs text-[#858696]">Selecione uma etapa para abrir o contexto relacionado</p>
           </div>
-          <span className="hidden items-center gap-1.5 text-[9px] font-semibold text-[#818294] xl:flex"><span className="h-1.5 w-1.5 rounded-full bg-[#2f9b67]" />Atualização automática</span>
+          <span className="hidden items-center gap-1.5 text-xs font-semibold text-[#818294] xl:flex"><span className="h-1.5 w-1.5 rounded-full bg-[#2f9b67]" />Atualização automática</span>
         </div>
         <div className="hidden md:grid" style={{ gridTemplateColumns: `repeat(${journey.length}, minmax(0, 1fr))` }}>
           {journey.map((stage, index) => (
@@ -109,10 +109,10 @@ export function CustomerJourney({
       <div className="flex flex-col gap-1 border-b border-[#eeeeF3] px-4 py-4 sm:px-5">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-[9px] font-bold uppercase text-[#9a9baa]">Acompanhamento automático</p>
+            <p className="text-xs font-bold uppercase text-[#9a9baa]">Acompanhamento automático</p>
             <h3 className="mt-1 text-sm font-bold text-[#27283b]">Jornada do cliente</h3>
           </div>
-          <div className="hidden items-center gap-2 text-[10px] font-semibold text-[#8d8e9e] sm:flex">
+          <div className="hidden items-center gap-2 text-xs font-semibold text-[#8d8e9e] sm:flex">
             <span className="h-2 w-2 rounded-full bg-[#2f9b67]" />
             Atualizada pelos eventos do paciente
           </div>
@@ -157,19 +157,19 @@ export function CustomerJourney({
             </span>
             <div>
               <p className="text-sm font-bold text-[#292a3d]">{selected.label}</p>
-              <p className={cn("mt-0.5 text-[10px] font-bold uppercase", statusColor(selected.status))}>
+              <p className={cn("mt-0.5 text-xs font-bold uppercase", statusColor(selected.status))}>
                 {statusLabels[selected.status]}
               </p>
             </div>
           </div>
-          <p className="mt-4 text-[10px] font-semibold uppercase text-[#a0a1af]">Data da etapa</p>
+          <p className="mt-4 text-xs font-semibold uppercase text-[#a0a1af]">Data da etapa</p>
           <p className="mt-1 text-xs font-bold text-[#555668]">{formatJourneyDate(selected.date)}</p>
         </div>
 
         <div className="grid gap-x-8 gap-y-4 p-5 sm:grid-cols-2 xl:grid-cols-3">
           {selected.details.length ? selected.details.map((detail) => (
             <div key={detail.label}>
-              <p className="text-[9px] font-bold uppercase text-[#a0a1af]">{detail.label}</p>
+              <p className="text-xs font-bold uppercase text-[#a0a1af]">{detail.label}</p>
               {Array.isArray(detail.value) ? (
                 <div className="mt-1.5 space-y-1">
                   {detail.value.map((item) => (
@@ -223,7 +223,7 @@ function CompactJourneyStep({
       <span className={cn("relative z-10 grid h-8 w-8 place-items-center rounded-full border bg-white transition", stageCircle(stage.status), selected && "ring-4 ring-[#5147dc]/10")}>
         {stage.status === "completed" ? <Check className="h-3.5 w-3.5" /> : stage.status === "cancelled" ? <Ban className="h-3.5 w-3.5" /> : <Icon className="h-3.5 w-3.5" />}
       </span>
-      <span className={cn("mt-2 max-w-full truncate text-[9px] font-semibold", selected ? "text-[#5147dc]" : "text-[#666779]")}>{stage.label}</span>
+      <span className={cn("mt-2 max-w-full truncate text-xs font-semibold", selected ? "text-[#5147dc]" : "text-[#666779]")}>{stage.label}</span>
     </button>
   );
 }
@@ -253,9 +253,9 @@ function JourneyStep({
       <span className={cn("relative z-10 grid h-10 w-10 place-items-center rounded-full border-2 bg-white transition", stageCircle(stage.status), selected && "ring-4 ring-[#5147dc]/10")}>
         {stage.status === "completed" ? <Check className="h-4 w-4" /> : stage.status === "cancelled" ? <Ban className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
       </span>
-      <span className={cn("mt-2 text-[11px] font-bold transition", selected ? "text-[#5147dc]" : "text-[#555668]")}>{stage.label}</span>
-      <span className={cn("mt-1 text-[8px] font-bold uppercase", statusColor(stage.status))}>{statusLabels[stage.status]}</span>
-      <span className="mt-1 text-[9px] text-[#a0a1af]">{stage.date ? formatJourneyDate(stage.date) : "Sem data"}</span>
+      <span className={cn("mt-2 text-xs font-bold transition", selected ? "text-[#5147dc]" : "text-[#555668]")}>{stage.label}</span>
+      <span className={cn("mt-1 text-xs font-bold uppercase", statusColor(stage.status))}>{statusLabels[stage.status]}</span>
+      <span className="mt-1 text-xs text-[#a0a1af]">{stage.date ? formatJourneyDate(stage.date) : "Sem data"}</span>
     </button>
   );
 }
@@ -285,9 +285,9 @@ function MobileJourneyStep({
       </span>
       <span className="min-w-0 flex-1">
         <span className={cn("block text-xs font-bold", selected ? "text-[#5147dc]" : "text-[#4f5062]")}>{stage.label}</span>
-        <span className={cn("mt-0.5 block text-[9px] font-bold uppercase", statusColor(stage.status))}>{statusLabels[stage.status]}</span>
+        <span className={cn("mt-0.5 block text-xs font-bold uppercase", statusColor(stage.status))}>{statusLabels[stage.status]}</span>
       </span>
-      <span className="text-[10px] text-[#9a9baa]">{stage.date ? formatJourneyDate(stage.date) : "Sem data"}</span>
+      <span className="text-xs text-[#9a9baa]">{stage.date ? formatJourneyDate(stage.date) : "Sem data"}</span>
     </button>
   );
 }

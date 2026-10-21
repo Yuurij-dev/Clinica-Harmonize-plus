@@ -4,7 +4,11 @@ import { can, type Permission } from "./permissions";
 const messages: Record<Permission, string> = {
   "clinical:read": "Acesso restrito à equipe clínica.",
   "clinical:write": "Acesso restrito à equipe clínica.",
+  "anamnesis:read": "A anamnese é restrita à equipe clínica.",
+  "anamnesis:write": "A anamnese é restrita à equipe clínica.",
   "appointment:run": "O atendimento é conduzido pela equipe clínica.",
+  "clinical:archive": "Apenas administrador ou profissional pode arquivar.",
+  "clinical:delete": "Apenas administradores podem excluir definitivamente.",
   "payments:access": "Acesso restrito.",
   "payments:delete": "Acesso restrito a administradores.",
   "quote:edit-closed": "Orçamento já fechado: só administrador ou profissional pode alterar.",
