@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createSavePump } from "@/lib/save-pump";
 
 type SaveState = "saved" | "pending" | "saving" | "error";
 let activeDraftGuard: (() => Promise<boolean>) | null = null;
@@ -18,18 +19,29 @@ export function useDraftAutosave({ scope, revision, enabled, save, canSave = tru
   delay?: number;
 }) {
   const [state, setState] = useState<SaveState>("saved");
-  const savedRevision = useRef<string | number>(revision);
   const latestRevision = useRef(revision);
   const latestSave = useRef(save);
   const latestCanSave = useRef(canSave);
+  const latestEnabled = useRef(enabled);
   const activeScope = useRef(scope);
   const initialized = useRef(false);
-  const inFlight = useRef<Promise<boolean> | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  latestRevision.current = revision;
-  latestSave.current = save;
-  latestCanSave.current = canSave;
+  // Gravações serializadas: dois flush/timer simultâneos nunca enviam a mesma revisão esperada ao servidor.
+  // Os getters só leem os refs quando a gravação roda (nunca durante a renderização).
+  // eslint-disable-next-line react-hooks/refs
+  const [pump] = useState(() => createSavePump<string | number>({
+    latest: () => latestRevision.current,
+    scope: () => activeScope.current,
+    save: async () => { setState("saving"); return latestSave.current(); },
+  }));
+
+  useEffect(() => {
+    latestRevision.current = revision;
+    latestSave.current = save;
+    latestCanSave.current = canSave;
+    latestEnabled.current = enabled;
+  });
 
   function clearTimer() {
     if (timer.current) clearTimeout(timer.current);
@@ -37,56 +49,43 @@ export function useDraftAutosave({ scope, revision, enabled, save, canSave = tru
   }
 
   const flush = useCallback(async function flush(): Promise<boolean> {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    if (!enabled || !initialized.current) return true;
-    if (inFlight.current) {
-      await inFlight.current;
-      if (savedRevision.current === latestRevision.current) return true;
-    }
-    if (savedRevision.current === latestRevision.current) return true;
-    if (!latestCanSave.current) { setState("error"); return false; }
-    const startedRevision = latestRevision.current;
-    const startedScope = activeScope.current;
-    setState("saving");
-    const request = latestSave.current();
-    inFlight.current = request;
-    let ok = false;
-    try { ok = await request; } catch { ok = false; }
-    if (inFlight.current === request) inFlight.current = null;
-    if (startedScope !== activeScope.current) return false;
-    if (ok) savedRevision.current = startedRevision;
-    setState(ok ? savedRevision.current === latestRevision.current ? "saved" : "pending" : "error");
-    return ok && savedRevision.current === latestRevision.current ? true : ok ? flush() : false;
-  }, [enabled]);
+    clearTimer();
+    if (!latestEnabled.current || !initialized.current) return true;
+    if (!pump.isDirty() && !pump.busy) return true;
+    if (!latestCanSave.current && pump.isDirty()) { setState("error"); return false; }
+    const ok = await pump.flush();
+    setState(ok ? (pump.isDirty() ? "pending" : "saved") : "error");
+    return ok;
+  }, [pump]);
 
   useEffect(() => {
     if (!enabled) return;
     if (!initialized.current || activeScope.current !== scope) {
       clearTimer();
       activeScope.current = scope;
-      savedRevision.current = revision;
+      pump.markSaved(revision);
       initialized.current = true;
       setState("saved");
       return;
     }
-    if (savedRevision.current === revision) { setState("saved"); return; }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- mesmo comportamento anterior: sincroniza o estado com o rascunho
+    if (!pump.isDirty()) { setState("saved"); return; }
     setState("pending");
     clearTimer();
     if (canSave) timer.current = setTimeout(() => { void flush(); }, delay);
     return clearTimer;
-  }, [scope, revision, enabled, canSave, delay, flush]);
+  }, [scope, revision, enabled, canSave, delay, flush, pump]);
 
   useEffect(() => {
     if (!enabled) return;
     const warn = (event: BeforeUnloadEvent) => {
-      if (savedRevision.current === latestRevision.current && !inFlight.current) return;
+      if (!pump.isDirty() && !pump.busy) return;
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [enabled]);
+  }, [enabled, pump]);
 
   useEffect(() => {
     if (!enabled) return;

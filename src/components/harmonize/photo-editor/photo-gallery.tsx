@@ -38,10 +38,10 @@ export function PhotoGallery({
             <Image className="object-cover" src={photo.imageUrl} alt={photo.name} fill sizes="128px" unoptimized />
           </button>
           <div className="grid gap-1.5 p-1.5">
-            <select aria-label={`Categoria de ${photo.name}`} className="h-7 w-full rounded border border-[#dfe2ee] bg-white px-1 text-[9px]" value={photo.category} onChange={(event) => onCategoryChange(photo.id, event.target.value as EvaluationPhoto["category"])}>
+            <select aria-label={`Categoria de ${photo.name}`} className="h-7 w-full rounded border border-[#dfe2ee] bg-white px-1 text-sm" value={photo.category} onChange={(event) => onCategoryChange(photo.id, event.target.value as EvaluationPhoto["category"])}>
               {["Frontal", "Perfil direito", "Perfil esquerdo", "Sorriso", "Outra"].map((category) => <option key={category}>{category}</option>)}
             </select>
-            <span className="truncate text-[9px] text-[#606176]" title={photo.name}>{photo.name}</span>
+            <span className="truncate text-xs text-[#606176]" title={photo.name}>{photo.name}</span>
           </div>
           <div className="absolute right-1 top-1 flex gap-1">
             <button aria-label={`Mover ${photo.name} para cima`} className="grid h-6 w-6 place-items-center rounded-full bg-white/95 text-[#555668] shadow-sm" type="button" onClick={() => onMove(photo.id, -1)}><ArrowUp className="h-3 w-3" /></button>
@@ -66,7 +66,7 @@ export function PhotoGallery({
       ))}
 
       <label className="grid h-[182px] w-32 cursor-pointer place-items-center rounded-[8px] border border-dashed border-[#cfd3e4] bg-[#fbfbfe] text-[#5147dc] transition hover:border-[#5147dc] hover:bg-[#f7f6ff]">
-        <span className="grid gap-1 text-center text-[10px] font-bold text-[#5147dc]">
+        <span className="grid gap-1 text-center text-xs font-bold text-[#5147dc]">
           <ImagePlus className="mx-auto h-5 w-5" />
           Foto
         </span>

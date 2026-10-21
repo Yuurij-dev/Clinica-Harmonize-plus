@@ -100,7 +100,7 @@ export function SearchFilterBar({
       <label className="group flex h-10 min-w-0 flex-1 items-center gap-3 rounded-[8px] border border-input bg-white px-4 text-xs text-muted-foreground transition-[border-color,box-shadow,background-color] duration-150 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
         <Search className="h-4 w-4 text-muted-foreground" />
         <Input
-          className="h-auto border-0 bg-transparent p-0 shadow-none focus-visible:border-0 focus-visible:ring-0"
+          className="h-auto text-sm border-0 bg-transparent p-0 shadow-none focus-visible:border-0 focus-visible:ring-0"
           placeholder={placeholder}
           value={value}
           onChange={(event) => onChange?.(event.target.value)}
@@ -176,7 +176,7 @@ export function MiniTable({
       <Table className="min-w-[720px]">
         <TableHeader>
           <TableRow className="bg-muted/60 hover:bg-muted/60">
-            {columns.map((column) => <TableHead className="h-11 px-4 text-[10px] font-semibold uppercase" key={column}>{column}</TableHead>)}
+            {columns.map((column) => <TableHead className="h-11 px-4 text-xs font-semibold uppercase" key={column}>{column}</TableHead>)}
           </TableRow>
         </TableHeader>
         <TableBody className="hp-list-stagger">
@@ -258,10 +258,10 @@ export function ProgressBar({
 export function StatCard({ label, value, detail, icon: Icon }: { label: string; value: React.ReactNode; detail?: React.ReactNode; icon?: React.ComponentType<{ className?: string }> }) {
   return <Card className="p-4">
     <div className="flex items-center justify-between gap-2">
-      <p className="text-[10px] font-bold uppercase text-muted-foreground">{label}</p>
+      <p className="text-xs font-bold uppercase text-muted-foreground">{label}</p>
       {Icon ? <Icon className="h-3.5 w-3.5 text-primary" /> : null}
     </div>
     <p className="mt-3 text-xl font-bold text-foreground">{value}</p>
-    {detail ? <p className="mt-1 text-[10px] font-medium text-muted-foreground">{detail}</p> : null}
+    {detail ? <p className="mt-1 text-xs font-medium text-muted-foreground">{detail}</p> : null}
   </Card>;
 }

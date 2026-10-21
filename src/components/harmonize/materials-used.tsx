@@ -29,7 +29,7 @@ export function MaterialsUsedList({ items, title = "Materiais usados", showAtten
   if (!items.length) return null;
   return (
     <div className="rounded-[7px] border border-[#ececf3] bg-[#fbfbfe] p-3">
-      <p className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase text-[#858696]"><Package className="h-3.5 w-3.5" />{title}</p>
+      <p className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase text-[#858696]"><Package className="h-3.5 w-3.5" />{title}</p>
       <ul className="space-y-1.5">
         {items.map((item) => (
           <li className={`text-xs ${item.status === "reversed" ? "text-muted-foreground line-through" : "text-[#3f4053]"}`} key={item.id}>

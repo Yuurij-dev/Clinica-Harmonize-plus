@@ -133,9 +133,9 @@ export function MaterialCheckModal({ appointmentId, onClose, onDone }: { appoint
                       <Button type="button" variant="ghost" size="icon" aria-label="Remover lote" onClick={() => updateRow(row.key, { allocations: row.allocations.filter((item) => item.key !== allocation.key) })}><Trash2 className="h-3 w-3" /></Button>
                     </div>
                   ))}
-                  {material.lots.length ? <Button type="button" variant="ghost" size="sm" onClick={() => updateRow(row.key, { allocations: [...row.allocations, { key: nextKey(), lotId: material.lots[0].id, quantity: missing > 0 ? quantityText(missing) : "" }] })}><Split className="h-3.5 w-3.5" />Dividir em outro lote</Button> : <p className="text-[11px] font-semibold text-warning">Nenhum lote válido com saldo.</p>}
-                  {missing > 0 ? <p className="text-[11px] font-semibold text-warning">Faltam {formatQuantity(missing, material.unit)}: ficarão como saída pendente.</p> : null}
-                  {missing < 0 ? <p className="text-[11px] font-semibold text-destructive">Os lotes somam mais que a quantidade usada.</p> : null}
+                  {material.lots.length ? <Button type="button" variant="ghost" size="sm" onClick={() => updateRow(row.key, { allocations: [...row.allocations, { key: nextKey(), lotId: material.lots[0].id, quantity: missing > 0 ? quantityText(missing) : "" }] })}><Split className="h-3.5 w-3.5" />Dividir em outro lote</Button> : <p className="text-xs font-semibold text-warning">Nenhum lote válido com saldo.</p>}
+                  {missing > 0 ? <p className="text-xs font-semibold text-warning">Faltam {formatQuantity(missing, material.unit)}: ficarão como saída pendente.</p> : null}
+                  {missing < 0 ? <p className="text-xs font-semibold text-destructive">Os lotes somam mais que a quantidade usada.</p> : null}
                 </div> : null}
               </div>
             );

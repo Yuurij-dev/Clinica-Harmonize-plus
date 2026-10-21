@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { type FormEvent, type ReactNode, type PointerEvent as ReactPointerEvent, type RefObject, useEffect, useRef, useState } from "react";
+import { type FormEvent, type ReactNode, type PointerEvent as ReactPointerEvent, type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeftRight,
   CalendarPlus,
@@ -11,8 +11,10 @@ import {
   Camera,
   ChevronDown,
   Clock3,
+  ClipboardList,
   Columns2,
   CreditCard,
+  FolderOpen,
   ChevronRight,
   Eye,
   EyeOff,
@@ -20,7 +22,6 @@ import {
   Filter,
   Loader2,
   LayoutDashboard,
-  MessageCircle,
   MessageSquare,
   Paperclip,
   PencilLine,
@@ -45,28 +46,51 @@ import { toast } from "sonner";
 import { MaterialCheckModal } from "./material-check-modal";
 import { MaterialsUsedList, type MaterialUsed } from "./materials-used";
 import { PatientExpenses } from "./patient-expenses";
+import { PatientFinance } from "./patient-finance";
 import { CustomerJourney } from "./customer-journey";
-import { PatientEvaluations } from "./patient-evaluations";
 import { PhotoEditor } from "./photo-editor/photo-editor";
 import { EmptyState, LoadingSkeleton } from "./shared";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { observationKindsFor, type ObservationKind } from "@/lib/permissions";
 import { useCan, useCurrentRole } from "./current-user";
-import { EvaluationSummaryList } from "./evaluation-summary-list";
-import { appointmentWithinStartWindow, canRequestAppointmentStart, matchesProcedureAppointment } from "@/lib/clinic-time";
-import { assignProcedureAppointmentsToCards, mergePatientAppointments, procedureCardScheduleAction } from "@/lib/patient-appointments";
+import { appointmentSlotError, appointmentWithinStartWindow, canRequestAppointmentStart, clinicNow, latestAppointmentStart, matchesProcedureAppointment } from "@/lib/clinic-time";
+import { appointmentMatchesProcedure, assignProcedureAppointmentsToCards,mergePatientAppointments, procedureCardScheduleAction } from "@/lib/patient-appointments";
 import { FormField, fieldClassName } from "@/components/ui/modal";
 import { formatCpf, formatInteger, formatPhone } from "@/lib/input-masks";
-import { PatientFiles, PatientOverview, PatientTreatments, type PatientJourneySummary } from "./patient-profile-views";
+import { PatientOverview, PatientTreatments, type PatientJourneySummary } from "./patient-profile-views";
+import { ProcedureImage } from "./procedure-image";
+import { ClinicTimePicker } from "./clinic-time-picker";
+import { clinicDateKey, type EncounterItem } from "@/lib/clinical-record-rules";
+import type { AnamnesisRequest } from "@/lib/anamnesis-rules";
+import { guardDraftNavigation } from "./use-draft-autosave";
+import { PatientAnamnesis } from "./patient-anamnesis";
+import { PatientClinicalDocuments } from "./patient-clinical-documents";
+import { PatientClinicalPhotos } from "./patient-clinical-photos";
+import { EvaluationSummaryDialog } from "./evaluation-summary-dialog";
+import { isDocumentCategory, type DocumentCategory } from "@/lib/clinical-files-rules";
+import { photoRef, type PhotoFilters } from "@/lib/photo-gallery-rules";
+import { PatientClinicalSummary } from "./patient-clinical-summary";
+import { PatientAppointmentsList } from "./patient-appointments-list";
+import { anamnesisKey, useCachedResource, type AnamnesisOverview } from "./patient-clinical-data";
+import { initialEvaluationLabel, useAnamnesisStartGate, type AnamnesisOpenMode } from "./anamnesis-start-gate";
 
 const tabs = [
   { label: "Visão geral", icon: LayoutDashboard },
   { label: "Tratamentos", icon: Syringe },
   { label: "Prontuário", icon: FileText },
-  { label: "Arquivos e fotos", icon: Camera },
   { label: "Financeiro", icon: CreditCard },
 ];
-const recordTabs = ["Dados", "Avaliação", "Procedimentos", "Agendamentos", "Observações", "Histórico"];
+// O prontuário tem 5 áreas. "Agendamentos" lista os horários da Agenda deste cliente; Observações foi para o Resumo
+// clínico e Dados virou o botão "Editar dados" do cabeçalho.
+const recordTabs = [
+  { label: "Resumo clínico", icon: FileText },
+  { label: "Agendamentos", icon: CalendarDays },
+  { label: "Anamnese", icon: ClipboardList },
+  { label: "Documentos clínicos", icon: FolderOpen },
+  { label: "Fotos", icon: Camera },
+];
+// Documentos e Fotos são telas independentes. Nomes antigos ("Avaliação", "Procedimentos", "Atendimentos", "Histórico",
+// "Arquivos e fotos") continuam aceitos por selectRecordTab e levam ao destino equivalente.
 
 function historyCacheKey(patientId: string, tab: string, journeyId?: string | null) {
   const procedureNames = ["Agendamentos", "Procedimentos"].includes(tab) ? "&includeProcedureNames=1" : "";
@@ -104,6 +128,9 @@ type PatientAppointmentRecord = {
   status: string;
   notes?: string;
   materialsCheck?: string | null;
+  // Dia no fuso da clínica (aaaa-mm-dd) e tratamento vinculado.
+  dateKey?: string;
+  journeyId?: string | null;
 };
 
 type PatientPaymentRecord = {
@@ -151,20 +178,36 @@ type ReturnAppointmentTarget = Pick<PatientProcedureRecord, "name" | "profession
 export function PatientDetail({
   patient,
   onBack,
+  initialSection = null,
 }: {
   patient: Patient;
   onBack: () => void;
+  // "anamnese": vem do cadastro ("Preencher anamnese") e abre Prontuário > Anamnese já iniciando o preenchimento.
+  initialSection?: AnamnesisOpenMode | null;
 }) {
   const router = useRouter();
   const [currentPatient, setCurrentPatient] = useState(patient);
-  const [activeTab, setActiveTab] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).has("journey") ? "Tratamentos" : "Visão geral");
-  const [recordTab, setRecordTab] = useState("Dados");
-  const [financeTab, setFinanceTab] = useState("Orçamento");
+  const [activeTab, setActiveTab] = useState(() => {
+    if (typeof window === "undefined") return "Visão geral";
+    const params = new URLSearchParams(window.location.search);
+    return params.has("journey") ? "Tratamentos" : initialSection ? "Prontuário" : "Visão geral";
+  });
+  const [recordTab, setRecordTab] = useState(() => initialSection ? "Anamnese" : "Resumo clínico");
+  const [summaryEvaluationId, setSummaryEvaluationId] = useState<string | null>(null);
+  const [photosPreset, setPhotosPreset] = useState<{ filters: Partial<PhotoFilters>; nonce: number }>({ filters: {}, nonce: 0 });
+  const [documentsPreset, setDocumentsPreset] = useState<{ category: DocumentCategory | null; nonce: number }>({ category: null, nonce: 0 });
+  // Vem do fluxo de cadastro ("Preencher anamnese") ou do gate de início de atendimento.
+  const requestCounter = useRef(1);
+  const [anamnesisRequest, setAnamnesisRequest] = useState<AnamnesisRequest | null>(() => initialSection === "fill" || initialSection === "new-version" ? { mode: initialSection, nonce: 1 } : null);
+  const [editPatientOpen, setEditPatientOpen] = useState(false);
+  const [treatmentRequest, setTreatmentRequest] = useState(0);
   const [selectedJourneyId, setSelectedJourneyId] = useState<string | null>(() => typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("journey"));
   const [selectedJourneyLabel, setSelectedJourneyLabel] = useState("Jornada");
   const [history, setHistory] = useState<PatientHistoryRecord | undefined>();
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
+  const retryAppointmentsHistory = () => { setHistoryError(false); setHistoryLoading(true); setHistoryRefreshKey((current) => current + 1); };
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState(false);
   const [returnAppointmentTarget, setReturnAppointmentTarget] = useState<ReturnAppointmentTarget | null>(null);
   const [quoteCompleted, setQuoteCompleted] = useState(false);
   const [encounterMode, setEncounterMode] = useState(false);
@@ -172,7 +215,13 @@ export function PatientDetail({
   const [encounterProcedureMode, setEncounterProcedureMode] = useState(false);
   const [encounterPostProcedureMode, setEncounterPostProcedureMode] = useState(false);
   const [encounterPostProcedureSessionId, setEncounterPostProcedureSessionId] = useState<string>();
+  const [encounterPostProcedureInitialView, setEncounterPostProcedureInitialView] = useState<"post" | "return">("post");
   const [encounterQuoteId, setEncounterQuoteId] = useState<string>();
+  // Orçamento escolhido na aba Financeiro para abrir direto na etapa de orçamento da jornada.
+  const quoteFocusRef = useRef<string | null>(null);
+  const [encounterQuoteFocusId, setEncounterQuoteFocusId] = useState<string>();
+  // Vem dos dados da jornada (procedimento já realizado): avaliação e orçamento passam a abrir só para consulta.
+  const [journeyPastProcedure, setJourneyPastProcedure] = useState(false);
   const [encounterEvaluationId, setEncounterEvaluationId] = useState<string | undefined>();
   const [encounterLabel, setEncounterLabel] = useState("Novo atendimento");
   const [journeyWorkflowLoading, setJourneyWorkflowLoading] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).has("journey"));
@@ -183,6 +232,34 @@ export function PatientDetail({
   const [pinnedRefreshKey, setPinnedRefreshKey] = useState(0);
   const pinnedJourneyKey = pinnedJourney?.key;
   const journeyPage = activeTab === "Tratamentos" && Boolean(selectedJourneyId);
+  const canWriteClinical = useCan("clinical:write");
+  // Fotos são dado clínico: a subaba nem aparece para quem não pode vê-las.
+  const canReadClinicalPhotos = useCan("clinical:read");
+  const visibleRecordTabs = canReadClinicalPhotos ? recordTabs : recordTabs.filter((tab) => tab.label !== "Fotos");
+  const journeysResource = useCachedResource<{ journeys?: PatientJourneySummary[] }>(patient.id ? `/api/patients/${encodeURIComponent(patient.id)}/journeys` : "");
+  // Sem anamnese concluída (ausente ou só rascunho), o cabeçalho oferece preenchê-la no lugar de iniciar o atendimento.
+  const anamnesisOverview = useCachedResource<AnamnesisOverview>(canWriteClinical && patient.id ? anamnesisKey(patient.id) : "").data;
+  const anamnesisUnfilled = anamnesisOverview !== undefined && !anamnesisOverview.restricted && (anamnesisOverview.state === "AUSENTE" || anamnesisOverview.state === "SOMENTE_RASCUNHO");
+  const activeJourney = (journeysResource.data?.journeys ?? []).filter((item) => item.status === "Em andamento").sort((left, right) => right.lastActivityAt.localeCompare(left.lastActivityAt))[0] ?? null;
+  const openAnamnesis = useCallback((mode: AnamnesisOpenMode) => {
+    setActiveTab("Prontuário");
+    setRecordTab("Anamnese");
+    requestCounter.current += 1;
+    setAnamnesisRequest(mode === "view" ? null : { mode, nonce: requestCounter.current });
+  }, []);
+  // Gate único: todo ponto que inicia um atendimento passa por aqui antes de seguir.
+  const startGate = useAnamnesisStartGate({ patientId: patient.id ?? "", onOpenAnamnesis: openAnamnesis });
+  // Sair da tela com a anamnese em edição salva o rascunho pendente (ou pergunta) antes de seguir.
+  const guarded = (action: () => void) => { void guardDraftNavigation().then((ok) => { if (ok) action(); }); };
+  const primaryStartLabel = activeJourney ? "Continuar atendimento" : initialEvaluationLabel;
+  // Sem saber se há tratamento ativo, "Iniciar atendimento" não pode presumir "nenhum" e abrir um tratamento novo.
+  const journeysLoading = journeysResource.loading && !journeysResource.data;
+  const journeysFailed = journeysResource.error && !journeysResource.data;
+  const requestPrimaryStart = () => {
+    if (journeysLoading) { toast.info("Carregando os tratamentos da cliente. Tente novamente em instantes."); return; }
+    if (journeysFailed) { toast.error("Não foi possível verificar os tratamentos desta cliente. Tente novamente.", { action: { label: "Tentar de novo", onClick: journeysResource.retry } }); return; }
+    startGate.requestStart(startPrimaryEncounter, { skipLabel: primaryStartLabel });
+  };
 
   useEffect(() => {
     const syncJourneyRoute = () => {
@@ -194,6 +271,7 @@ export function PatientDetail({
       setEncounterQuoteMode(false);
       setEncounterProcedureMode(false);
       setEncounterPostProcedureMode(false);
+      setEncounterPostProcedureInitialView("post");
       if (params.has("journey")) setActiveTab("Tratamentos");
     };
     window.addEventListener("popstate", syncJourneyRoute);
@@ -201,8 +279,9 @@ export function PatientDetail({
   }, []);
 
   const initials = currentPatient.name.split(" ").map((part) => part[0]).slice(0, 2).join("");
-  const historyTab = activeTab === "Prontuário" ? recordTab : activeTab === "Financeiro" && financeTab === "Pagamentos" ? "Pagamentos" : null;
-  const currentHistoryKey = patient.id && historyTab ? historyCacheKey(patient.id, historyTab, selectedJourneyId) : null;
+  // A lista de agendamentos do cliente cobre todos os tratamentos (sem filtro de jornada).
+  const historyTab = activeTab === "Prontuário" && recordTab === "Agendamentos" ? "Agendamentos" : null;
+  const currentHistoryKey = patient.id && historyTab ? historyCacheKey(patient.id, historyTab, null) : null;
   useEffect(() => {
     if (!patient.id) return;
     let cancelled = false;
@@ -244,15 +323,15 @@ export function PatientDetail({
 
   function selectTab(tab: string) {
     if (tab === activeTab) return;
-    const nestedTab = tab === "Prontuário" ? recordTab : tab === "Financeiro" && financeTab === "Pagamentos" ? "Pagamentos" : null;
-    const cached = patient.id && nestedTab && shouldLoadPatientHistory(nestedTab) ? readClientCache<PatientHistoryResponse>(historyCacheKey(patient.id, nestedTab, selectedJourneyId)) : undefined;
-    setHistory(cached ? mapPatientHistory(cached).history : undefined);
-    setHistoryLoading(Boolean(patient.id && nestedTab && shouldLoadPatientHistory(nestedTab) && !cached));
+    if (tab === "Prontuário" && recordTab === "Agendamentos") primeAppointmentsHistory();
     setActiveTab(tab);
   }
 
   function openJourney(journeyId: string | null, resolveWorkflow = true) {
+    // Abertura normal da jornada nunca herda um foco de orçamento pedido antes (e não atendido).
+    quoteFocusRef.current = null;
     setSelectedJourneyId(journeyId);
+    setJourneyPastProcedure(false);
     setActiveTab("Tratamentos");
     setJourneyWorkflowLoading(Boolean(journeyId));
     setJourneyWorkflowError("");
@@ -263,6 +342,7 @@ export function PatientDetail({
       setEncounterPostProcedureMode(false);
       setEncounterPostProcedureSessionId(undefined);
       setEncounterQuoteId(undefined);
+      setEncounterQuoteFocusId(undefined);
       setEncounterEvaluationId(undefined);
     }
     if (!journeyId) {
@@ -272,6 +352,7 @@ export function PatientDetail({
       setEncounterPostProcedureMode(false);
       setEncounterPostProcedureSessionId(undefined);
       setEncounterQuoteId(undefined);
+      setEncounterQuoteFocusId(undefined);
       setEncounterEvaluationId(undefined);
       setJourneyWorkflowLoading(false);
     }
@@ -282,22 +363,85 @@ export function PatientDetail({
     router.push(`/clientes?${params.toString()}`);
   }
 
+  function openJourneyAtQuote(journeyId: string, quoteId: string) {
+    openJourney(journeyId);
+    quoteFocusRef.current = quoteId;
+  }
+
   function returnToPatientProfile() {
     openJourney(null);
     setActiveTab("Visão geral");
   }
 
-  function selectRecordTab(tab: string) {
-    setRecordTab(tab);
-    const cached = patient.id && shouldLoadPatientHistory(tab) ? readClientCache<PatientHistoryResponse>(historyCacheKey(patient.id, tab, selectedJourneyId)) : undefined;
+  // Mostra o cache (se houver) ao abrir "Agendamentos"; sem cache, a lista começa em carregamento.
+  function primeAppointmentsHistory() {
+    const cached = patient.id ? readClientCache<PatientHistoryResponse>(historyCacheKey(patient.id, "Agendamentos", null)) : undefined;
     setHistory(cached ? mapPatientHistory(cached).history : undefined);
-    setHistoryLoading(Boolean(patient.id && shouldLoadPatientHistory(tab) && !cached));
+    setHistoryLoading(Boolean(patient.id && !cached));
+    setHistoryError(false);
+  }
+
+  // Aceita as áreas atuais e também os nomes das sub-abas antigas: "Atendimentos"/"Histórico" levam a "Agendamentos",
+  // Observações ao Resumo clínico e Dados ao botão "Editar dados". Assim os pontos de entrada existentes seguem valendo.
+  function selectRecordTab(tab: string) {
+    if (tab === "Orçamento") { selectTab("Financeiro"); return; }
+    if (tab === "Dados") { setEditPatientOpen(true); return; }
+    if (tab === "Observações") { setRecordTab("Resumo clínico"); return; }
+    if (tab === "Avaliação") { openPhotos({ view: "evaluations" }); return; }
+    if (tab === "Procedimentos") { openPhotos({ view: "procedures" }); return; }
+    if (tab === "Arquivos e fotos") { openPhotos({}); return; }
+    if (tab === "Agendamentos" || tab === "Atendimentos" || tab === "Histórico") { primeAppointmentsHistory(); setRecordTab("Agendamentos"); return; }
+    const [area, preset] = tab.split(":");
+    if (area === "Documentos clínicos") setDocumentsPreset((current) => ({ category: isDocumentCategory(preset) ? preset : null, nonce: current.nonce + 1 }));
+    setRecordTab(area);
+  }
+
+  function openPhotos(filters: Partial<PhotoFilters>) {
+    setPhotosPreset((current) => ({ filters, nonce: current.nonce + 1 }));
+    setActiveTab("Prontuário");
+    setRecordTab("Fotos");
+  }
+
+  // Diálogo de agendamento (montado dentro de Prontuário > Agendamentos), aberto a partir de qualquer ponto da ficha.
+  function openAppointmentDialog(target: ReturnAppointmentTarget) {
+    setReturnAppointmentTarget(target);
+    setActiveTab("Prontuário");
+    setRecordTab("Agendamentos");
+    primeAppointmentsHistory();
+  }
+
+  function startNewTreatment() {
+    selectTab("Tratamentos");
+    setTreatmentRequest(1);
+  }
+
+  function startPrimaryEncounter() {
+    if (activeJourney) openJourney(activeJourney.id);
+    else startNewTreatment();
+  }
+
+  function openEncounter(item: EncounterItem) {
+    // Avaliação concluída (ou sem tratamento) é consultada no painel de avaliações; o resto segue o fluxo guiado do tratamento.
+    if (item.type === "evaluation" && (item.status === "Concluído" || !item.journeyId)) {
+      setSummaryEvaluationId(item.id);
+      return;
+    }
+    if (!item.journeyId) return;
+    setEncounterPostProcedureInitialView(item.type === "followup" ? "return" : "post");
+    openJourney(item.journeyId);
+  }
+
+  async function changeMainTab(label: string) {
+    if (await guardDraftNavigation()) selectTab(label);
+  }
+
+  async function changeRecordTab(label: string) {
+    if (label === recordTab || !await guardDraftNavigation()) return;
+    selectRecordTab(label);
   }
 
   function openNewAppointment() {
-    setActiveTab("Prontuário");
-    setRecordTab("Agendamentos");
-    setReturnAppointmentTarget({ name: "", professional: "", kind: "procedure", journeyId: selectedJourneyId ?? undefined });
+    openAppointmentDialog({ name: "", professional: "", kind: "procedure", journeyId: selectedJourneyId ?? undefined });
   }
 
   function openJourneyEvaluation(journey: PatientJourneySummary, evaluationId?: string) {
@@ -309,6 +453,7 @@ export function PatientDetail({
   useEffect(() => {
     if (!journeyPage || !selectedJourneyId || !currentPatient.id) return;
     let cancelled = false;
+    const focusQuoteId = quoteFocusRef.current;
     Promise.all([
       getCachedJson<{ journeys?: PatientJourneySummary[] }>(`/api/patients/${encodeURIComponent(currentPatient.id)}/journeys`),
       getCachedJson<{ evaluations?: Array<{ id: string; status?: string; updatedAt?: string }> }>(`/api/patients/${encodeURIComponent(currentPatient.id)}/evaluation?list=1&journeyId=${encodeURIComponent(selectedJourneyId)}`),
@@ -319,16 +464,25 @@ export function PatientDetail({
         const journey = journeyData.journeys?.find((item) => item.id === selectedJourneyId);
         if (!journey) throw new Error("Não foi possível localizar este tratamento.");
         const evaluations = evaluationData.evaluations ?? [];
-        const evaluation = evaluations.find((item) => item.status === "Rascunho") ?? evaluations[0];
+        const focusedQuote = focusQuoteId ? quoteData.quotes?.find((item) => item.id === focusQuoteId) : undefined;
+        const focusedEvaluation = focusedQuote?.evaluationId ? evaluations.find((item) => item.id === focusedQuote.evaluationId && item.status !== "Rascunho") : undefined;
+        const evaluation = focusedEvaluation ?? evaluations.find((item) => item.status === "Rascunho") ?? evaluations[0];
         const approvedQuote = quoteData.quotes?.find((item) => ["Aprovado", "Pago"].includes(item.status));
         setSelectedJourneyLabel(journey.name);
         setEncounterLabel(journey.name);
         setEncounterEvaluationId(evaluation?.id);
-        setEncounterQuoteId(approvedQuote?.id ?? journey.latestCompletedQuoteId ?? undefined);
+        // Com sessão concluída, o orçamento de referência é o da própria sessão (volta do pós ao orçamento/procedimento).
+        setEncounterQuoteId(journey.latestCompletedQuoteId ?? approvedQuote?.id ?? undefined);
         setEncounterPostProcedureSessionId(journey.latestCompletedSessionId ?? undefined);
+        setJourneyPastProcedure(journey.hasProcedure || Boolean(journey.latestCompletedSessionId));
 
         if (!journey.hasEvaluation || !evaluation || evaluation.status === "Rascunho") {
           setEncounterMode(true);
+        } else if (focusedQuote) {
+          // Vindo do Financeiro: abre a etapa de orçamento (onde o pagamento é registrado) com esse orçamento selecionado.
+          quoteFocusRef.current = null;
+          setEncounterQuoteFocusId(focusedQuote.id);
+          setEncounterQuoteMode(true);
         } else if (!journey.hasPaidQuote) {
           if (!evaluation?.id) throw new Error("A avaliação desta jornada não foi encontrada para continuar ao orçamento.");
           setEncounterQuoteMode(true);
@@ -336,6 +490,8 @@ export function PatientDetail({
           if (!approvedQuote?.id && !journey.latestCompletedQuoteId) throw new Error("Não foi possível localizar o orçamento aprovado desta jornada.");
           setEncounterProcedureMode(true);
         } else if (journey.latestCompletedSessionId) {
+          // Jornada com retorno agendado ou realizado abre direto na etapa de retorno.
+          setEncounterPostProcedureInitialView(journey.hasReturnScheduled || journey.hasReturn ? "return" : "post");
           setEncounterPostProcedureMode(true);
         } else if (approvedQuote?.id || journey.latestCompletedQuoteId) {
           setEncounterQuoteId(approvedQuote?.id ?? journey.latestCompletedQuoteId ?? undefined);
@@ -358,10 +514,11 @@ export function PatientDetail({
       .then((data) => {
         if (cancelled) return;
         const mapped = mapPatientHistory(data);
-        if (historyTab !== "Pagamentos") setQuoteCompleted(mapped.hasPaidQuote);
+        setQuoteCompleted(mapped.hasPaidQuote);
         setHistory(mapped.history);
+        setHistoryError(false);
       })
-      .catch(() => { if (!cancelled) setHistory(undefined); })
+      .catch(() => { if (!cancelled) { setHistory(undefined); setHistoryError(true); } })
       .finally(() => { if (!cancelled) setHistoryLoading(false); });
     return () => { cancelled = true; };
   }, [currentHistoryKey, historyTab, historyRefreshKey]);
@@ -375,19 +532,19 @@ export function PatientDetail({
   }
 
   if (encounterMode && currentPatient.id) {
-    return <div className="mx-auto max-w-[1400px]"><PhotoEditor patientId={currentPatient.id} evaluationId={encounterEvaluationId} journeyId={selectedJourneyId ?? undefined} patientName={currentPatient.name} encounterLabel={encounterLabel} encounter={{ patient: currentPatient, onCancel: () => { setEncounterMode(false); if (journeyPage) openJourney(null); }, onContinue: (savedEvaluationId) => { setEncounterEvaluationId(savedEvaluationId); setEncounterMode(false); setEncounterQuoteMode(true); }, onClients: onBack, onPatient: returnToPatientProfile, onJourney: () => openJourney(null) }} onSaved={() => { setHistory(undefined); setHistoryLoading(true); setHistoryRefreshKey((current) => current + 1); }} /></div>;
+    return <div className="mx-auto max-w-[1400px]"><PhotoEditor patientId={currentPatient.id} evaluationId={encounterEvaluationId} journeyId={selectedJourneyId ?? undefined} patientName={currentPatient.name} encounterLabel={encounterLabel} readOnly={journeyPastProcedure} encounter={{ patient: currentPatient, onContinue: (savedEvaluationId) => { setEncounterEvaluationId(savedEvaluationId); setEncounterMode(false); setEncounterQuoteMode(true); }, onClients: onBack, onPatient: returnToPatientProfile, onJourney: () => openJourney(null) }} onSaved={() => { setHistory(undefined); setHistoryLoading(true); setHistoryRefreshKey((current) => current + 1); }} /></div>;
   }
 
   if (encounterQuoteMode && currentPatient.id) {
-    return <div className="mx-auto max-w-[1400px]"><PatientExpenses key={`${currentPatient.id}-${selectedJourneyId ?? "none"}-${encounterEvaluationId ?? "none"}`} patientId={currentPatient.id} patient={currentPatient} journeyId={selectedJourneyId ?? undefined} evaluationId={encounterEvaluationId} journeyLabel={encounterLabel} breadcrumb={{ onClients: onBack, onPatient: returnToPatientProfile, onJourney: () => openJourney(null) }} mode="encounter" onReturnToEvaluation={() => { setEncounterQuoteMode(false); setEncounterMode(true); }} onAdvance={(quoteId) => { setEncounterQuoteId(quoteId); setEncounterQuoteMode(false); setEncounterProcedureMode(true); }} /></div>;
+    return <div className="mx-auto max-w-[1400px]"><PatientExpenses key={`${currentPatient.id}-${selectedJourneyId ?? "none"}-${encounterEvaluationId ?? "none"}`} patientId={currentPatient.id} patient={currentPatient} journeyId={selectedJourneyId ?? undefined} evaluationId={encounterEvaluationId} quoteId={encounterQuoteFocusId} journeyLabel={encounterLabel} breadcrumb={{ onClients: onBack, onPatient: returnToPatientProfile, onJourney: () => openJourney(null) }} mode="encounter" readOnly={journeyPastProcedure} onReturnToEvaluation={() => { setEncounterQuoteMode(false); setEncounterMode(true); }} onAdvance={(quoteId) => { setEncounterQuoteId(quoteId); setEncounterQuoteMode(false); setEncounterProcedureMode(true); }} /></div>;
   }
 
   if (encounterProcedureMode && currentPatient.id && encounterQuoteId) {
-    return <div className="mx-auto max-w-[1400px]"><PatientExpenses key={`${currentPatient.id}-${selectedJourneyId ?? "none"}-${encounterQuoteId}`} patientId={currentPatient.id} patient={currentPatient} journeyId={selectedJourneyId ?? undefined} quoteId={encounterQuoteId} breadcrumb={{ onClients: onBack, onPatient: returnToPatientProfile, onJourney: () => openJourney(null) }} mode="procedure" onReturnToQuote={() => { setEncounterProcedureMode(false); setEncounterQuoteMode(true); }} onCompleted={(sessionId) => { setEncounterProcedureMode(false); setEncounterPostProcedureSessionId(sessionId); setEncounterPostProcedureMode(true); setActiveTab("Tratamentos"); setHistory(undefined); setHistoryLoading(true); setHistoryRefreshKey((value) => value + 1); setPinnedRefreshKey((value) => value + 1); }} /></div>;
+    return <div className="mx-auto max-w-[1400px]"><PatientExpenses key={`${currentPatient.id}-${selectedJourneyId ?? "none"}-${encounterQuoteId}`} patientId={currentPatient.id} patient={currentPatient} journeyId={selectedJourneyId ?? undefined} quoteId={encounterQuoteId} breadcrumb={{ onClients: onBack, onPatient: returnToPatientProfile, onJourney: () => openJourney(null) }} mode="procedure" onReturnToQuote={() => { setEncounterProcedureMode(false); setEncounterQuoteFocusId(encounterQuoteId); setEncounterQuoteMode(true); }} onCompleted={(sessionId) => { setJourneyPastProcedure(true); setEncounterProcedureMode(false); setEncounterPostProcedureInitialView("post"); setEncounterPostProcedureSessionId(sessionId); setEncounterPostProcedureMode(true); setActiveTab("Tratamentos"); setHistory(undefined); setHistoryLoading(true); setHistoryRefreshKey((value) => value + 1); setPinnedRefreshKey((value) => value + 1); }} /></div>;
   }
 
   if (encounterPostProcedureMode && currentPatient.id && selectedJourneyId && encounterPostProcedureSessionId) {
-    return <div className="mx-auto max-w-[1400px]"><PatientExpenses key={`${currentPatient.id}-${selectedJourneyId}-${encounterPostProcedureSessionId}`} patientId={currentPatient.id} patient={currentPatient} journeyId={selectedJourneyId} sessionId={encounterPostProcedureSessionId} breadcrumb={{ onClients: onBack, onPatient: returnToPatientProfile, onJourney: () => openJourney(null) }} mode="post-procedure" onFinish={() => { setEncounterPostProcedureMode(false); setEncounterPostProcedureSessionId(undefined); setHistory(undefined); setHistoryLoading(true); setHistoryRefreshKey((value) => value + 1); setPinnedRefreshKey((value) => value + 1); openJourney(null); }} /></div>;
+    return <div className="mx-auto max-w-[1400px]"><PatientExpenses key={`${currentPatient.id}-${selectedJourneyId}-${encounterPostProcedureSessionId}`} patientId={currentPatient.id} patient={currentPatient} journeyId={selectedJourneyId} sessionId={encounterPostProcedureSessionId} initialView={encounterPostProcedureInitialView} breadcrumb={{ onClients: onBack, onPatient: returnToPatientProfile, onJourney: () => openJourney(null) }} mode="post-procedure" onReturnToQuote={encounterQuoteId ? () => { setEncounterPostProcedureMode(false); setEncounterQuoteFocusId(encounterQuoteId); setEncounterQuoteMode(true); } : undefined} onReturnToProcedure={encounterQuoteId ? () => { setEncounterPostProcedureMode(false); setEncounterProcedureMode(true); } : undefined} onFinish={() => { setEncounterPostProcedureMode(false); setEncounterPostProcedureSessionId(undefined); setEncounterPostProcedureInitialView("post"); setHistory(undefined); setHistoryLoading(true); setHistoryRefreshKey((value) => value + 1); setPinnedRefreshKey((value) => value + 1); openJourney(null); }} /></div>;
   }
 
   if (journeyPage) return <div className="mx-auto max-w-[1400px]" />;
@@ -404,7 +561,7 @@ export function PatientDetail({
         </nav>
       ) : (
         <nav aria-label="Navegação estrutural" className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <button className="rounded-sm transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" type="button" onClick={onBack}>Clientes</button>
+          <button className="rounded-sm transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" type="button" onClick={() => guarded(onBack)}>Clientes</button>
           <ChevronRight className="h-3 w-3" aria-hidden="true" />
           <span aria-current="page" className="font-semibold text-foreground">{currentPatient.name}</span>
         </nav>
@@ -415,16 +572,20 @@ export function PatientDetail({
           <div className="flex min-w-0 items-center gap-4">
           <div className="grid h-16 w-16 shrink-0 place-items-center rounded-full border-4 border-[#f2f0ff] bg-[#e8e5ff] text-base font-black text-[#5147dc]">{initials}</div>
           <div className="min-w-0">
-            <h2 className="truncate text-lg font-bold text-[#242538]">{currentPatient.name}</h2>
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-[#77788a]">
+            <h2 className="truncate text-lg sm:text-xl font-bold text-[#242538]">{currentPatient.name}</h2>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:text-sm text-[#77788a]">
               <span className="flex items-center gap-1.5"><UserRound className="h-3 w-3" />{currentPatient.age} anos</span>
               <span className="flex items-center gap-1.5"><Phone className="h-3 w-3" />{currentPatient.phone}</span>
             </div>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <Badge variant={currentPatient.status.toLocaleLowerCase("pt-BR").includes("ativ") ? "green" : "slate"}>{currentPatient.status}</Badge>
-              <span className="rounded-full bg-[#f2f3f7] px-2.5 py-1 text-[8px] font-semibold text-[#747587]">Paciente desde {currentPatient.createdAt ? new Date(currentPatient.createdAt).toLocaleDateString("pt-BR") : "data indisponível"}</span>
+              <span className="rounded-full bg-[#f2f3f7] px-2.5 py-1 text-xs font-semibold text-[#747587]">Paciente desde {currentPatient.createdAt ? new Date(currentPatient.createdAt).toLocaleDateString("pt-BR") : "data indisponível"}</span>
             </div>
           </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" onClick={() => guarded(() => setEditPatientOpen(true))}><PencilLine className="h-4 w-4" />Editar dados</Button>
+            {canWriteClinical && anamnesisUnfilled ? <Button type="button" onClick={() => guarded(() => openAnamnesis("fill"))}><ClipboardList className="h-4 w-4" />Preencher anamnese</Button> : null}
           </div>
         </div>
 
@@ -442,7 +603,7 @@ export function PatientDetail({
           {tabs.map(({ label, icon: Icon }) => (
             <button
               className={cn(
-                "flex items-center gap-2 border-b-2 px-5 py-3 text-[10px] font-semibold transition-colors",
+                "flex items-center gap-2 border-b-2 px-5 py-3 text-sm font-semibold transition-colors",
                 activeTab === label
                   ? "border-[#5147dc] bg-[#faf9ff] text-[#5147dc]"
                   : "border-transparent text-[#77788a] hover:bg-[#faf9ff] hover:text-[#5147dc]",
@@ -451,7 +612,7 @@ export function PatientDetail({
               role="tab"
               aria-selected={activeTab === label}
               type="button"
-              onClick={() => selectTab(label)}
+              onClick={() => void changeMainTab(label)}
             >
               <Icon className="h-4 w-4 shrink-0" />
               {label}
@@ -460,56 +621,29 @@ export function PatientDetail({
         </div>
       </Card> : null}
 
-      {activeTab === "Visão geral" ? <PatientOverview patient={currentPatient} onOpen={(area, tab) => { if (tab) selectRecordTab(tab); selectTab(area); }} onOpenJourney={(journeyId) => openJourney(journeyId)} onNewAppointment={openNewAppointment} /> : null}
-      {activeTab === "Tratamentos" ? <PatientTreatments patient={currentPatient} selectedJourneyId={selectedJourneyId} onSelect={openJourney} onJourneyLabelChange={setSelectedJourneyLabel} onBack={() => openJourney(null)} onOpenClinical={(tab) => { if (tab === "Arquivos e fotos" || tab === "Financeiro") selectTab(tab); else { selectTab("Prontuário"); selectRecordTab(tab); } }} onOpenEvaluation={openJourneyEvaluation} onNewSession={(journey) => { setReturnAppointmentTarget({ name: journey.name, professional: journey.professional, kind: "procedure", journeyId: journey.id }); selectTab("Prontuário"); selectRecordTab("Procedimentos"); }} onScheduleReturn={(journey) => { setReturnAppointmentTarget({ name: journey.name, professional: journey.professional, kind: "return", journeyId: journey.id }); selectTab("Prontuário"); selectRecordTab("Procedimentos"); }} onOpenFollowUp={(journey, sessionId) => { openJourney(journey.id); setEncounterPostProcedureSessionId(sessionId); setEncounterPostProcedureMode(true); }} /> : null}
-      {activeTab === "Prontuário" ? <div className="space-y-4"><div className="flex flex-wrap gap-1 border-b border-border" role="tablist" aria-label="Seções do prontuário">{recordTabs.map((tab) => <button className={cn("border-b-2 px-3 py-2 text-xs font-medium", recordTab === tab ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground")} type="button" key={tab} role="tab" aria-selected={recordTab === tab} onClick={() => selectRecordTab(tab)}>{tab}</button>)}</div><PatientTabContent key={`record-${recordTab}-${selectedJourneyId ?? "all"}`} patient={currentPatient} activeTab={recordTab} journeyId={selectedJourneyId ?? undefined} history={history} historyLoading={historyLoading} quoteCompleted={quoteCompleted} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={() => setReturnAppointmentTarget(null)} onAppointmentCreated={(appointment) => setHistory((current) => current ? { ...current, appointments: mergePatientAppointments(current.appointments, [appointment]) } : current)} onPatientUpdated={setCurrentPatient} onProcedurePhotoUpdated={(procedureId, photo) => setHistory((current) => current ? { ...current, procedures: current.procedures.map((item) => item.id === procedureId ? { ...item, beforePhoto: photo.beforePhoto ?? "", afterPhoto: photo.afterPhoto ?? "", status: procedurePhotoStatus(photo.beforePhoto, photo.afterPhoto) } : item) } : current)} onOpenTab={selectRecordTab} pinnedJourneyKey={pinnedJourney?.key} onPinJourney={setPinnedJourney} onScheduleReturn={(procedure, kind = "return") => { setReturnAppointmentTarget({ ...procedure, kind, journeyId: selectedJourneyId ?? undefined }); }} /></div> : null}
-      {activeTab === "Arquivos e fotos" ? <PatientFiles patientId={currentPatient.id ?? ""} selectedJourneyId={selectedJourneyId} onJourneyChange={setSelectedJourneyId} onOpenEvaluations={() => { selectTab("Prontuário"); selectRecordTab("Avaliação"); }} /> : null}
-      {activeTab === "Financeiro" ? <div className="space-y-4"><div className="flex gap-1 border-b border-border" role="tablist" aria-label="Seções financeiras">{["Orçamento", "Pagamentos"].map((tab) => <button className={cn("border-b-2 px-3 py-2 text-xs font-medium", financeTab === tab ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground")} type="button" key={tab} role="tab" aria-selected={financeTab === tab} onClick={() => { setFinanceTab(tab); if (tab === "Pagamentos") { const cached = patient.id ? readClientCache<PatientHistoryResponse>(historyCacheKey(patient.id, tab, selectedJourneyId)) : undefined; setHistory(cached ? mapPatientHistory(cached).history : undefined); setHistoryLoading(Boolean(patient.id && !cached)); } }}>{tab === "Orçamento" ? "Orçamentos" : tab}</button>)}</div>{financeTab === "Orçamento" ? <PatientExpenses patientId={currentPatient.id ?? ""} journeyId={selectedJourneyId ?? undefined} onPaid={() => { setQuoteCompleted(true); setHistory(undefined); setHistoryLoading(true); setHistoryRefreshKey((current) => current + 1); }} onPaymentUndone={() => { setQuoteCompleted(false); setHistory(undefined); setHistoryLoading(true); setHistoryRefreshKey((current) => current + 1); }} /> : <PatientTabContent key={`finance-${financeTab}-${selectedJourneyId ?? "all"}`} patient={currentPatient} activeTab="Pagamentos" journeyId={selectedJourneyId ?? undefined} history={history} historyLoading={historyLoading} quoteCompleted={quoteCompleted} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={() => setReturnAppointmentTarget(null)} onAppointmentCreated={() => {}} onPatientUpdated={setCurrentPatient} onProcedurePhotoUpdated={() => {}} onOpenTab={selectRecordTab} pinnedJourneyKey={pinnedJourney?.key} onPinJourney={setPinnedJourney} onScheduleReturn={() => {}} />}</div> : null}
+      {activeTab === "Visão geral" ? <PatientOverview patient={currentPatient} onOpen={(area, tab) => { if (tab === "Dados") { setEditPatientOpen(true); return; } selectTab(area); if (tab) selectRecordTab(tab); }} onOpenJourney={(journeyId) => openJourney(journeyId)} onNewAppointment={openNewAppointment} onOpenFollowUp={(journey, sessionId) => { openJourney(journey.id); setEncounterPostProcedureSessionId(sessionId); setEncounterPostProcedureInitialView("return"); setEncounterPostProcedureMode(true); }} /> : null}
+      {activeTab === "Tratamentos" ? <PatientTreatments patient={currentPatient} onBeforeNewTreatment={(proceed) => startGate.requestStart(proceed, { skipLabel: initialEvaluationLabel })} newTreatmentRequest={treatmentRequest} onNewTreatmentRequestHandled={() => setTreatmentRequest(0)} selectedJourneyId={selectedJourneyId} onSelect={openJourney} onJourneyLabelChange={setSelectedJourneyLabel} onBack={() => openJourney(null)} onOpenClinical={(tab) => { if (tab === "Financeiro") selectTab(tab); else if (tab === "Fotos" || tab === "Arquivos e fotos") openPhotos({ journeyId: selectedJourneyId ?? "" }); else { selectTab("Prontuário"); selectRecordTab(tab); } }} onOpenEvaluation={openJourneyEvaluation} onNewSession={(journey) => openAppointmentDialog({ name: journey.name, professional: journey.professional, kind: "procedure", journeyId: journey.id })} onScheduleReturn={(journey) => openAppointmentDialog({ name: journey.name, professional: journey.professional, kind: "return", journeyId: journey.id })} onOpenFollowUp={(journey, sessionId) => { openJourney(journey.id); setEncounterPostProcedureInitialView("post"); setEncounterPostProcedureSessionId(sessionId); setEncounterPostProcedureMode(true); }} /> : null}
+      {activeTab === "Prontuário" ? <div className="space-y-4">
+        <div className="flex gap-1 overflow-x-auto border-b border-border" role="tablist" aria-label="Seções do prontuário">{visibleRecordTabs.map(({ label, icon: Icon }) => <button className={cn("flex shrink-0 items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors", recordTab === label ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground")} type="button" key={label} role="tab" aria-selected={recordTab === label} onClick={() => void changeRecordTab(label)}><Icon className="h-4 w-4 shrink-0" aria-hidden="true" />{label}</button>)}</div>
+        {recordTab === "Resumo clínico" ? <PatientClinicalSummary patientId={currentPatient.id ?? ""} onStart={() => requestPrimaryStart()} onOpenEncounter={openEncounter} onGoToAppointments={() => selectRecordTab("Agendamentos")} onGoToAnamnesis={() => openAnamnesis("view")} onGoToDocuments={() => setRecordTab("Documentos clínicos")} onGoToTreatments={() => selectTab("Tratamentos")} onReschedule={(next) => openAppointmentDialog({ name: next?.procedure ?? "", professional: next?.professional ?? "", kind: "return", journeyId: next?.journeyId ?? selectedJourneyId ?? undefined })} observations={<ObservationsTab patientId={currentPatient.id ?? ""} />} /> : null}
+        {recordTab === "Agendamentos" && currentPatient.id ? <AppointmentsTab requestStart={startGate.requestStart} patientId={currentPatient.id} history={history} loading={historyLoading} error={historyError} onRetry={retryAppointmentsHistory} journeyNames={Object.fromEntries((journeysResource.data?.journeys ?? []).map((journey) => [journey.id, journey.name]))} onNew={openNewAppointment} onOpenJourney={(journeyId) => openJourney(journeyId)} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={() => setReturnAppointmentTarget(null)} /> : null}
+        {recordTab === "Anamnese" ? currentPatient.id ? <PatientAnamnesis patientId={currentPatient.id} patientName={currentPatient.name} request={anamnesisRequest} onRequestHandled={() => setAnamnesisRequest(null)} /> : <EmptyState title="Cliente ainda não foi salvo" description="Salve o cliente antes de preencher a anamnese." /> : null}
+        {recordTab === "Documentos clínicos" && currentPatient.id ? <PatientClinicalDocuments key={`documents-${documentsPreset.nonce}`} patientId={currentPatient.id} initialCategory={documentsPreset.category} onOpenAnamnesis={() => openAnamnesis("view")} onOpenEvaluation={(evaluationId) => setSummaryEvaluationId(evaluationId)} /> : null}
+        {recordTab === "Fotos" && currentPatient.id ? <PatientClinicalPhotos key={`photos-${photosPreset.nonce}`} patientId={currentPatient.id} initialFilters={photosPreset.filters} /> : null}
+        <EvaluationSummaryDialog patientId={currentPatient.id ?? ""} evaluationId={summaryEvaluationId} onClose={() => setSummaryEvaluationId(null)} onViewPhotos={(evaluationId) => { setSummaryEvaluationId(null); openPhotos({ encounterKey: photoRef("evaluation", evaluationId) }); }} />
+      </div> : null}
+      {activeTab === "Financeiro" ? <PatientFinance patientId={currentPatient.id ?? ""} onOpenJourney={(journeyId) => openJourney(journeyId)} onRegisterPayment={openJourneyAtQuote} /> : null}
+      {startGate.gate}
+      <PatientEditModal patient={currentPatient} open={editPatientOpen} onClose={() => setEditPatientOpen(false)} onUpdated={setCurrentPatient} />
     </div>
   );
 }
 
-function PatientTabContent({ onOpenTab, pinnedJourneyKey, onPinJourney, patient, activeTab, journeyId, history, historyLoading, quoteCompleted, returnAppointmentTarget, onReturnAppointmentClose, onAppointmentCreated, onPatientUpdated, onProcedurePhotoUpdated, onScheduleReturn }: { onOpenTab: (tab: string) => void; pinnedJourneyKey?: string; onPinJourney: (journey: PinnedJourney | null) => void; patient: Patient; activeTab: string; journeyId?: string; history?: PatientHistoryRecord; historyLoading: boolean; quoteCompleted: boolean; returnAppointmentTarget: ReturnAppointmentTarget | null; onReturnAppointmentClose: () => void; onAppointmentCreated: (appointment: PatientAppointmentRecord) => void; onPatientUpdated: (patient: Patient) => void; onProcedurePhotoUpdated: (procedureId: string, photo: { beforePhoto: string | null; afterPhoto: string | null }) => void; onScheduleReturn: (procedure: ReturnAppointmentTarget, kind?: "return" | "procedure") => void }) {
-  const canReadClinical = useCan("clinical:read");
-
-  if (activeTab === "Avaliação") {
-    if (!canReadClinical) return patient.id ? <EvaluationSummaryList patientId={patient.id} /> : null;
-    return patient.id ? <PatientEvaluations patientId={patient.id} patientName={patient.name} journeyId={journeyId} /> : <EmptyState title="Cliente ainda não foi salvo" description="Salve o cliente antes de adicionar fotos à avaliação." />;
-  }
-
-  if (activeTab === "Histórico") {
-    return <HistoryTab patient={patient} history={history} loading={historyLoading} />;
-  }
-
-  if (activeTab === "Procedimentos") {
-    if (!quoteCompleted && !historyLoading) return <EmptyState title="Procedimento bloqueado" description="Quite o orçamento para liberar o acesso ao procedimento." />;
-    return <>
-      <ProceduresTab patientId={patient.id ?? ""} onOpenTab={onOpenTab} pinnedJourneyKey={pinnedJourneyKey} onPinJourney={onPinJourney} history={history} loading={historyLoading} onProcedurePhotoUpdated={onProcedurePhotoUpdated} onScheduleReturn={onScheduleReturn} />
-      {returnAppointmentTarget ? <AppointmentsTab patientId={patient.id ?? ""} history={history} loading={historyLoading} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={onReturnAppointmentClose} onAppointmentCreated={onAppointmentCreated} onScheduleReturn={onScheduleReturn} hidden /> : null}
-    </>;
-  }
-
-  if (activeTab === "Agendamentos") {
-    return <AppointmentsTab patientId={patient.id ?? ""} history={history} loading={historyLoading} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={onReturnAppointmentClose} onAppointmentCreated={onAppointmentCreated} onScheduleReturn={onScheduleReturn} />;
-  }
-
-  if (activeTab === "Observações") {
-    return <ObservationsTab patientId={patient.id ?? ""} />;
-  }
-
-  if (activeTab === "Pagamentos") {
-    return <PaymentsTab history={history} />;
-  }
-
-  return <PatientDataTab patient={patient} onUpdated={onPatientUpdated} />;
-}
-
-function PatientDataTab({ patient, onUpdated }: { patient: Patient; onUpdated: (patient: Patient) => void }) {
-  const [editing, setEditing] = useState(false);
+// Edição dos dados cadastrais (antes na sub-aba "Dados"); agora um modal aberto pelo cabeçalho.
+function PatientEditModal({ patient, open, onClose, onUpdated }: { patient: Patient; open: boolean; onClose: () => void; onUpdated: (patient: Patient) => void }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [invalidFields, setInvalidFields] = useState<Set<string>>(new Set());
-  const [savedPatient, setSavedPatient] = useState(patient);
 
   async function savePatient(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -531,52 +665,39 @@ function PatientDataTab({ patient, onUpdated }: { patient: Patient; onUpdated: (
     }
     setSaving(true);
     setError("");
-    const response = await fetch(`/api/patients/${patient.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, cpf, phone, age }) });
-    const data = await response.json().catch(() => null) as { patient?: Patient; message?: string } | null;
-    setSaving(false);
-    if (!response.ok || !data?.patient) {
-      setError(data?.message ?? "Não foi possível atualizar os dados.");
-      if (response.status === 409 || data?.message?.toLowerCase().includes("cpf")) {
-        setInvalidFields(new Set(["cpf"]));
-        window.setTimeout(() => setInvalidFields(new Set()), 450);
+    try {
+      const response = await fetch(`/api/patients/${patient.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, cpf, phone, age }) });
+      const data = await response.json().catch(() => null) as { patient?: Patient; message?: string } | null;
+      if (!response.ok || !data?.patient) {
+        setError(data?.message ?? "Não foi possível atualizar os dados.");
+        if (response.status === 409 || data?.message?.toLowerCase().includes("cpf")) {
+          setInvalidFields(new Set(["cpf"]));
+          window.setTimeout(() => setInvalidFields(new Set()), 450);
+        }
+        return;
       }
-      return;
+      onUpdated({ ...patient, ...data.patient });
+      invalidateClientCache("/api/patients", `/api/patients/${patient.id}/history`);
+      toast.success("Dados atualizados.");
+      onClose();
+    } catch {
+      setError("Não foi possível atualizar os dados. Verifique a conexão.");
+    } finally {
+      setSaving(false);
     }
-    setSavedPatient({ ...savedPatient, ...data.patient });
-    onUpdated({ ...savedPatient, ...data.patient });
-    setEditing(false);
-    invalidateClientCache("/api/patients", `/api/patients/${patient.id}/history`);
   }
 
-  if (editing) return <Card className="p-5"><div className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-[#5147dc]" /><h3 className="text-sm font-bold text-[#303144]">Editar dados</h3></div><form className="mt-5 grid gap-4 sm:grid-cols-2" noValidate onSubmit={savePatient}><FormField label="Nome"><input className={cn(fieldClassName, invalidFields.has("name") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="name" defaultValue={savedPatient.name} required /></FormField><FormField label="CPF"><MaskedInput className={cn(fieldClassName, invalidFields.has("cpf") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={formatCpf} name="cpf" inputMode="numeric" maxLength={14} placeholder="000.000.000-00" defaultValue={savedPatient.cpf ?? ""} /></FormField><FormField label="Telefone"><MaskedInput className={cn(fieldClassName, invalidFields.has("phone") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={formatPhone} name="phone" inputMode="tel" maxLength={15} placeholder="(00) 00000-0000" defaultValue={savedPatient.phone} required /></FormField><FormField label="Idade"><MaskedInput className={cn(fieldClassName, invalidFields.has("age") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={(value) => formatInteger(value, 3)} name="age" inputMode="numeric" maxLength={3} defaultValue={String(savedPatient.age)} required /></FormField>{error ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{error}</p> : null}<div className="flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" disabled={saving} onClick={() => setEditing(false)}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{saving ? "Salvando..." : "Salvar dados"}</Button></div></form></Card>;
-
   return (
-    <div className="grid gap-4 lg:grid-cols-[1.4fr_0.8fr]">
-      <Card className="p-5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-[#5147dc]" />
-          <h3 className="text-sm font-bold text-[#303144]">Dados</h3>
-          </div>
-          <Button type="button" variant="secondary" size="sm" onClick={() => setEditing(true)}><PencilLine className="h-3.5 w-3.5" />Editar</Button>
-        </div>
-        <p className="mt-2 text-xs leading-5 text-[#858696]">Informações de dados vinculadas ao prontuário de {savedPatient.name}.</p>
-        <div className="mt-5 grid gap-3 sm:grid-cols-2">
-          <InfoBlock icon={Phone} label="Telefone" value={savedPatient.phone} />
-          <InfoBlock icon={FileText} label="CPF" value={savedPatient.cpf || "Não informado"} />
-          <InfoBlock icon={CalendarDays} label="Último atendimento" value={savedPatient.lastVisit} />
-          <InfoBlock icon={Clock3} label="Próximo retorno" value={savedPatient.nextReturn} />
-        </div>
-      </Card>
-      <Card className="p-5">
-        <p className="text-[9px] font-bold uppercase text-[#a0a1af]">Resumo da cliente</p>
-        <div className="mt-4 space-y-4 text-xs text-[#555668]">
-          <p><strong className="text-[#333447]">Idade:</strong> {savedPatient.age} anos</p>
-          <p><strong className="text-[#333447]">Status:</strong> {savedPatient.status}</p>
-          <p><strong className="text-[#333447]">Último atendimento:</strong> {savedPatient.lastVisit || "Não informado"}</p>
-        </div>
-      </Card>
-    </div>
+    <Modal open={open} onClose={() => { if (!saving) { setError(""); onClose(); } }} title="Editar dados" description={`Atualize os dados cadastrais de ${patient.name}.`}>
+      <form className="grid gap-4 sm:grid-cols-2" noValidate onSubmit={savePatient} key={`${patient.id}-${open}`}>
+        <FormField label="Nome"><input className={cn(fieldClassName, invalidFields.has("name") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="name" defaultValue={patient.name} required /></FormField>
+        <FormField label="CPF"><MaskedInput className={cn(fieldClassName, invalidFields.has("cpf") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={formatCpf} name="cpf" inputMode="numeric" maxLength={14} placeholder="000.000.000-00" defaultValue={patient.cpf ?? ""} /></FormField>
+        <FormField label="Telefone"><MaskedInput className={cn(fieldClassName, invalidFields.has("phone") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={formatPhone} name="phone" inputMode="tel" maxLength={15} placeholder="(00) 00000-0000" defaultValue={patient.phone} required /></FormField>
+        <FormField label="Idade"><MaskedInput className={cn(fieldClassName, invalidFields.has("age") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={(value) => formatInteger(value, 3)} name="age" inputMode="numeric" maxLength={3} defaultValue={String(patient.age)} required /></FormField>
+        {error ? <p role="alert" className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{error}</p> : null}
+        <div className="flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" disabled={saving} onClick={() => { setError(""); onClose(); }}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{saving ? "Salvando..." : "Salvar dados"}</Button></div>
+      </form>
+    </Modal>
   );
 }
 
@@ -633,7 +754,7 @@ function HistoryTab({ patient, history, loading }: { patient: Patient; history?:
             </div>
             <p className="mt-1 text-xs text-[#858696]">Acompanhe os atendimentos e a evolução da cliente.</p>
           </div>
-          <span className="hidden rounded-full bg-[#f1f0ff] px-2.5 py-1 text-[9px] font-bold uppercase text-[#5147dc] sm:inline-flex">Linha do tempo</span>
+          <span className="hidden rounded-full bg-[#f1f0ff] px-2.5 py-1 text-xs font-bold uppercase text-[#5147dc] sm:inline-flex">Linha do tempo</span>
         </div>
 
         <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -646,11 +767,11 @@ function HistoryTab({ patient, history, loading }: { patient: Patient; history?:
         <div className="mt-5 grid gap-2 lg:grid-cols-[minmax(0,1fr)_190px_180px]">
           <label className="flex h-10 items-center gap-2 rounded-[8px] border border-input bg-white px-3 text-xs text-muted-foreground transition focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
             <Search className="h-4 w-4 shrink-0" />
-            <input className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar no histórico" aria-label="Buscar no histórico" />
+            <input className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar no histórico" aria-label="Buscar no histórico" />
           </label>
           <label className="relative flex h-10 items-center gap-2 rounded-[8px] border border-input bg-white px-3 text-xs text-foreground transition focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
             <Filter className="h-4 w-4 shrink-0 text-primary" />
-            <select className="min-w-0 flex-1 appearance-none bg-transparent pr-5 text-xs outline-none" value={eventFilter} onChange={(event) => setEventFilter(event.target.value as HistoryEventKind | "all")} aria-label="Filtrar eventos">
+            <select className="min-w-0 flex-1 appearance-none bg-transparent pr-5 text-sm outline-none" value={eventFilter} onChange={(event) => setEventFilter(event.target.value as HistoryEventKind | "all")} aria-label="Filtrar eventos">
               <option value="all">Todos os eventos</option>
               <option value="procedure">Procedimentos</option>
               <option value="appointment">Agendamentos</option>
@@ -661,7 +782,7 @@ function HistoryTab({ patient, history, loading }: { patient: Patient; history?:
           </label>
           <label className="relative flex h-10 items-center gap-2 rounded-[8px] border border-input bg-white px-3 text-xs text-foreground transition focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
             <CalendarDays className="h-4 w-4 shrink-0 text-primary" />
-            <select className="min-w-0 flex-1 appearance-none bg-transparent pr-5 text-xs outline-none" value={periodFilter} onChange={(event) => setPeriodFilter(event.target.value as "all" | "30" | "90")} aria-label="Filtrar período">
+            <select className="min-w-0 flex-1 appearance-none bg-transparent pr-5 text-sm outline-none" value={periodFilter} onChange={(event) => setPeriodFilter(event.target.value as "all" | "30" | "90")} aria-label="Filtrar período">
               <option value="all">Todo o período</option>
               <option value="30">Últimos 30 dias</option>
               <option value="90">Últimos 90 dias</option>
@@ -750,7 +871,7 @@ function HistoryMetric({ icon: Icon, label, value, tone }: { icon: typeof Sparkl
     amber: "bg-[#fff5e7] text-[#c57a11]",
     green: "bg-[#eaf8f0] text-[#269765]",
   };
-  return <div className="flex items-center gap-3 rounded-[7px] border border-[#e8e9f2] bg-[#fbfbfd] p-3"><span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-[9px]", tones[tone])}><Icon className="h-5 w-5" /></span><div><p className="text-[10px] text-[#77788a]">{label}</p><strong className="mt-0.5 block text-lg leading-5 text-[#303144]">{value}</strong></div></div>;
+  return <div className="flex items-center gap-3 rounded-[7px] border border-[#e8e9f2] bg-[#fbfbfd] p-3"><span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-[9px]", tones[tone])}><Icon className="h-5 w-5" /></span><div><p className="text-xs text-[#77788a]">{label}</p><strong className="mt-0.5 block text-lg leading-5 text-[#303144]">{value}</strong></div></div>;
 }
 
 function HistoryTimelineEventCard({ event, expanded, onToggle, onViewProcedure }: { event: HistoryTimelineEvent; expanded: boolean; onToggle: () => void; onViewProcedure: (procedure: PatientProcedureRecord) => void }) {
@@ -761,7 +882,7 @@ function HistoryTimelineEventCard({ event, expanded, onToggle, onViewProcedure }
 
   return (
     <div className={cn("relative grid gap-3 sm:grid-cols-[66px_minmax(0,1fr)]", isProcedure && expanded && "") }>
-      <div className="hidden pt-4 text-center sm:block"><strong className="block text-sm text-[#303144]">{dateParts.day}</strong><span className="text-[9px] font-bold uppercase text-[#858696]">{dateParts.month}</span></div>
+      <div className="hidden pt-4 text-center sm:block"><strong className="block text-sm text-[#303144]">{dateParts.day}</strong><span className="text-xs font-bold uppercase text-[#858696]">{dateParts.month}</span></div>
       <Card className={cn("overflow-hidden p-0", isProcedure && expanded && "border-[#b9b2ff] shadow-[0_8px_24px_rgba(81,71,220,0.08)]")}>
         <button className="flex w-full items-start justify-between gap-3 p-4 text-left" type="button" onClick={onToggle} aria-expanded={expanded}>
           <div className="flex min-w-0 items-start gap-3">
@@ -843,12 +964,12 @@ function HistoryProcedureViewer({ procedure, onClose }: { procedure: PatientProc
 
   return <Modal open title={procedure.name} description={`${procedure.date}${procedure.professional ? ` · ${procedure.professional}` : ""}`} onClose={onClose} closeOnOverlayClick={false} overlayContent={<div className="pointer-events-none fixed inset-y-0 z-[1001] flex items-center justify-between" style={{ left: "max(0.5rem, calc(50% - 330px))", right: "max(0.5rem, calc(50% - 330px))" }}><Button className="pointer-events-auto rounded-full bg-white shadow-[0_8px_24px_rgba(37,38,58,0.2)]" type="button" variant="secondary" size="icon" aria-label="Ângulo anterior" disabled={activeIndex === 0} onClick={() => changeAngle("previous")}><ChevronRight className="h-5 w-5 rotate-180" /></Button><Button className="pointer-events-auto rounded-full bg-white shadow-[0_8px_24px_rgba(37,38,58,0.2)]" type="button" variant="secondary" size="icon" aria-label="Próximo ângulo" disabled={activeIndex === sessions.length - 1} onClick={() => changeAngle("next")}><ChevronRight className="h-5 w-5" /></Button></div>}>
     <div key={animationKey} className={cn("space-y-4", animationDirection === "next" ? "hp-history-modal-next" : "hp-history-modal-previous")}>
-      <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[9px] font-bold uppercase text-[#858696]">Ângulo selecionado</p><p className="mt-1 text-sm font-bold text-[#303144]">{activeSession?.name ?? "Sessão principal"}</p></div><Button type="button" variant="secondary" size="sm" disabled title="Visualização de anexos em breve"><Paperclip className="h-3.5 w-3.5" />Ver anexos</Button></div>
-      <div className="flex justify-center"><div className="inline-flex rounded-[7px] border border-[#dddfea] bg-[#fafafd] p-1"><button className={cn("inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 text-[10px] font-bold", viewMode === "compare" ? "bg-[#5147dc] text-white" : "text-[#77788a] hover:bg-white hover:text-[#5147dc]")} type="button" onClick={() => setViewMode("compare")} aria-pressed={viewMode === "compare"}><ArrowLeftRight className="h-3.5 w-3.5" />Comparar</button><button className={cn("inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 text-[10px] font-bold", viewMode === "sideBySide" ? "bg-[#5147dc] text-white" : "text-[#77788a] hover:bg-white hover:text-[#5147dc]")} type="button" onClick={() => setViewMode("sideBySide")} aria-pressed={viewMode === "sideBySide"}><Columns2 className="h-3.5 w-3.5" />Lado a lado</button></div></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-bold uppercase text-[#858696]">Ângulo selecionado</p><p className="mt-1 text-sm font-bold text-[#303144]">{activeSession?.name ?? "Sessão principal"}</p></div><Button type="button" variant="secondary" size="sm" disabled title="Visualização de anexos em breve"><Paperclip className="h-3.5 w-3.5" />Ver anexos</Button></div>
+      <div className="flex justify-center"><div className="inline-flex rounded-[7px] border border-[#dddfea] bg-[#fafafd] p-1"><button className={cn("inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 text-xs font-bold", viewMode === "compare" ? "bg-[#5147dc] text-white" : "text-[#77788a] hover:bg-white hover:text-[#5147dc]")} type="button" onClick={() => setViewMode("compare")} aria-pressed={viewMode === "compare"}><ArrowLeftRight className="h-3.5 w-3.5" />Comparar</button><button className={cn("inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 text-xs font-bold", viewMode === "sideBySide" ? "bg-[#5147dc] text-white" : "text-[#77788a] hover:bg-white hover:text-[#5147dc]")} type="button" onClick={() => setViewMode("sideBySide")} aria-pressed={viewMode === "sideBySide"}><Columns2 className="h-3.5 w-3.5" />Lado a lado</button></div></div>
       <div className="relative mx-auto w-full max-w-[420px]">
         <div className="flex min-h-0 justify-center">{viewMode === "compare" ? <BeforeAfterComparison compact beforeSrc={activeSession?.beforePhoto} afterSrc={activeSession?.afterPhoto} beforeLabel={`Antes · ${procedure.date}`} afterLabel={`Depois · ${procedure.date}`} sliderPosition={sliderPosition} comparisonRef={comparisonRef} onPointerDown={handleSliderPointerDown} onPointerMove={handleSliderPointerMove} onPointerUp={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onBeforePreview={(src) => setExpandedPhoto({ label: "Antes", src })} onAfterPreview={(src) => setExpandedPhoto({ label: "Depois", src })} /> : <div className="grid w-full max-w-[380px] gap-2 sm:grid-cols-2"><BeforeAfterPhoto label="Antes" overlayLabel={`Antes · ${procedure.date}`} src={activeSession?.beforePhoto} onPreview={(src) => setExpandedPhoto({ label: "Antes", src })} /><BeforeAfterPhoto label="Depois" overlayLabel={`Depois · ${procedure.date}`} src={activeSession?.afterPhoto} onPreview={(src) => setExpandedPhoto({ label: "Depois", src })} /></div>}</div>
       </div>
-      <div className="text-center"><p className="text-xs font-bold text-[#303144]">{activeSession?.name ?? "Sessão principal"}</p><p className="mt-0.5 text-[10px] text-[#858696]">Ângulo {activeIndex + 1} de {sessions.length}</p></div>
+      <div className="text-center"><p className="text-xs font-bold text-[#303144]">{activeSession?.name ?? "Sessão principal"}</p><p className="mt-0.5 text-xs text-[#858696]">Ângulo {activeIndex + 1} de {sessions.length}</p></div>
     </div>
     <Modal open={Boolean(expandedPhoto)} title={`Foto ${expandedPhoto?.label.toLowerCase() ?? "ampliada"}`} description="Visualização ampliada da foto do procedimento." closeOnOverlayClick={false} onClose={() => setExpandedPhoto(null)}>
       {expandedPhoto ? <div className="relative mx-auto h-[min(68vh,560px)] w-full max-w-[360px] overflow-hidden rounded-[7px] bg-[#f7f8fc]"><Image className="object-contain" src={expandedPhoto.src} alt={`Foto ampliada de ${expandedPhoto.label.toLowerCase()}`} fill sizes="(max-width: 640px) 90vw, 360px" /></div> : null}
@@ -887,7 +1008,7 @@ function HistoryTabSkeleton() {
   );
 }
 
-function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, history, loading, onProcedurePhotoUpdated, onScheduleReturn }: { patientId: string; onOpenTab: (tab: string) => void; pinnedJourneyKey?: string; onPinJourney: (journey: PinnedJourney | null) => void; history?: PatientHistoryRecord; loading: boolean; onProcedurePhotoUpdated: (procedureId: string, photo: { beforePhoto: string | null; afterPhoto: string | null }) => void; onScheduleReturn: (procedure: ReturnAppointmentTarget, kind?: "return" | "procedure") => void }) {
+function ProceduresTab({ requestStart, patientId, onOpenTab, pinnedJourneyKey, onPinJourney, history, loading, onProcedurePhotoUpdated, onScheduleReturn }: { requestStart?: (proceed: () => void) => void; patientId: string; onOpenTab: (tab: string) => void; pinnedJourneyKey?: string; onPinJourney: (journey: PinnedJourney | null) => void; history?: PatientHistoryRecord; loading: boolean; onProcedurePhotoUpdated: (procedureId: string, photo: { beforePhoto: string | null; afterPhoto: string | null }) => void; onScheduleReturn: (procedure: ReturnAppointmentTarget, kind?: "return" | "procedure") => void }) {
   const canReadClinical = useCan("clinical:read");
   const [procedures, setProcedures] = useState<PatientProcedureRecord[]>(history?.procedures ?? []);
   const [photoOperations, setPhotoOperations] = useState<Record<string, "upload" | "remove">>({});
@@ -910,7 +1031,7 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
   }, [patientId]);
 
   const visibleProcedures = history ? (procedures.length ? procedures : history.procedures) : [];
-  const hasOpenAppointment = (name: string) => Boolean(history?.appointments.some((appointment) => appointment.procedure === name && ["Agendado", "Em atendimento"].includes(appointment.status)));
+  const hasOpenAppointment = (name: string) => Boolean(history?.appointments.some((appointment) => appointmentMatchesProcedure(appointment.procedure, name) && ["Agendado", "Em atendimento"].includes(appointment.status)));
   const proceduresToSchedule = visibleProcedures.filter((procedure) => procedure.status !== "Realizado" && !hasOpenAppointment(procedure.name));
   const returnsToSchedule = visibleProcedures.filter((procedure) => procedure.status === "Realizado" && !hasOpenAppointment(`Retorno - ${procedure.name}`));
 
@@ -944,11 +1065,15 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
   }
 
   function requestProcedureStart(appointment: PatientAppointmentRecord) {
-    if (appointmentWithinStartWindow(appointment, history?.appointmentToleranceMinutes ?? 15, currentTime)) {
-      void updateProcedureAppointment(appointment, "Em atendimento");
-      return;
-    }
-    setStartConfirmation(appointment);
+    const start = () => {
+      if (appointmentWithinStartWindow(appointment, history?.appointmentToleranceMinutes ?? 15, currentTime)) {
+        void updateProcedureAppointment(appointment, "Em atendimento");
+        return;
+      }
+      setStartConfirmation(appointment);
+    };
+    // Mesmo gate de anamnese dos demais pontos de "Iniciar atendimento".
+    if (requestStart) requestStart(start); else start();
   }
 
   async function confirmProcedureStart() {
@@ -1057,7 +1182,7 @@ function ProceduresTab({ patientId, onOpenTab, pinnedJourneyKey, onPinJourney, h
 
   return (
     <div className="space-y-4">
-      <div><h3 className="text-sm font-bold text-[#303144]">Procedimentos realizados</h3><p className="mt-1 text-[10px] text-[#858696]">Os procedimentos aparecem aqui automaticamente a partir do orçamento aprovado. Adicione as fotos de antes e depois no atendimento.</p></div>
+      <div><h3 className="text-sm font-bold text-[#303144]">Procedimentos realizados</h3><p className="mt-1 text-xs text-[#858696]">Os procedimentos aparecem aqui automaticamente a partir do orçamento aprovado. Adicione as fotos de antes e depois no atendimento.</p></div>
       {loading ? <ProcedureCardsSkeleton /> : !visibleProcedures.length ? <EmptyPatientState message="Este cliente ainda não possui procedimentos realizados." /> : <div className="grid gap-4">{(() => {
         const procedureAppointments = assignProcedureAppointmentsToCards(history?.appointments ?? [], visibleProcedures, history?.procedureNames ?? []);
         return visibleProcedures.map((procedure, procedureIndex) => {
@@ -1170,7 +1295,7 @@ function ptBrDateToIso(value: string) {
   return match ? `${match[3]}-${match[2]}-${match[1]}` : null;
 }
 
-type PatientHistoryResponse = { patient?: { appointmentToleranceMinutes?: number; appointmentProcedureNames?: Array<{ name: string }>; observations?: PatientObservation[]; materialsUsed?: MaterialUsed[]; appointments: Array<{ id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string; materialsCheck?: string | null }>; payments: Array<{ id: string; value: number; method: string; status: string; installments: string }>; quotes: Array<{ id: string; items: string; status: string; createdAt?: string }>; procedureRecords: Array<{ id: string; quoteId?: string | null; name: string; professional: string; performedAt: string; notes: string; beforePhoto: string | null; afterPhoto: string | null; sessions?: Array<{ id: string; procedureName: string; professional: string; performedAt: string; status: string; technique: string; treatedAreas: string; durationMinutes: number | null }>; photoSessions?: Array<{ id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }> }> } };
+type PatientHistoryResponse = { patient?: { appointmentToleranceMinutes?: number; appointmentProcedureNames?: Array<{ name: string }>; observations?: PatientObservation[]; materialsUsed?: MaterialUsed[]; appointments: Array<{ id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string; materialsCheck?: string | null; journeyId?: string | null }>; payments: Array<{ id: string; value: number; method: string; status: string; installments: string }>; quotes: Array<{ id: string; items: string; status: string; createdAt?: string }>; procedureRecords: Array<{ id: string; quoteId?: string | null; name: string; professional: string; performedAt: string; notes: string; beforePhoto: string | null; afterPhoto: string | null; sessions?: Array<{ id: string; procedureName: string; professional: string; performedAt: string; status: string; technique: string; treatedAreas: string; durationMinutes: number | null }>; photoSessions?: Array<{ id: string; name: string; beforePhoto: string | null; afterPhoto: string | null }> }> } };
 
 function mapPatientHistory(data: PatientHistoryResponse) {
   const appointments = data.patient?.appointments ?? [];
@@ -1185,7 +1310,7 @@ function mapPatientHistory(data: PatientHistoryResponse) {
     : paidQuotes.map((quote): PatientProcedureRecord => ({ name: quote.items, date: quote.createdAt ? new Date(quote.createdAt).toLocaleDateString("pt-BR") : new Date().toLocaleDateString("pt-BR"), professional: "", status: "Aguardando foto", beforePhoto: "", afterPhoto: "", photoSessions: [], notes: "", quoteDate: quote.createdAt }))
       .concat(appointments.filter((item) => ["Atendido", "Finalizado"].includes(item.status)).map((item) => ({ name: item.procedure, date: new Date(item.date).toLocaleDateString("pt-BR"), professional: item.professional, status: item.status, beforePhoto: "", afterPhoto: "", photoSessions: [], notes: item.notes })));
   const history: PatientHistoryRecord = {
-    appointments: appointments.map((item) => ({ id: item.id, date: new Date(item.date).toLocaleDateString("pt-BR"), time: item.time, procedure: item.procedure, professional: item.professional, status: item.status, notes: item.notes, materialsCheck: item.materialsCheck ?? null })),
+    appointments: appointments.map((item) => ({ id: item.id, date: new Date(item.date).toLocaleDateString("pt-BR"), time: item.time, procedure: item.procedure, professional: item.professional, status: item.status, notes: item.notes, materialsCheck: item.materialsCheck ?? null, dateKey: clinicDateKey(item.date), journeyId: item.journeyId ?? null })),
     appointmentToleranceMinutes: data.patient?.appointmentToleranceMinutes ?? 15,
     procedures,
     procedureNames: data.patient?.appointmentProcedureNames ?? procedures.map(({ name }) => ({ name })),
@@ -1347,7 +1472,7 @@ function ProcedureHistoryCard({ procedure, scheduleAction, materials, journey, e
     <Card className="overflow-hidden p-0">
       <div className="flex items-start justify-between gap-3 border-b border-[#ededf3] p-4">
         <button className={cn("min-w-0 flex-1 text-left", expandable && "cursor-pointer")} type="button" onClick={() => expandable && setExpanded((current) => !current)} aria-expanded={expandable ? expanded : undefined}>
-          <h3 className="text-sm font-bold text-[#303144]">{procedure.name}</h3>
+          <div className="flex min-w-0 items-center gap-2"><ProcedureImage name={procedure.name} decorative className="h-9 w-9 rounded" /><h3 className="truncate text-sm font-bold text-[#303144]">{procedure.name}</h3></div>
           <p className="mt-1 text-xs text-[#858696]">{procedure.date}{procedure.professional ? ` · ${procedure.professional}` : ""}</p>
         </button>
         <div className="flex flex-wrap items-center justify-end gap-2"><Badge variant={procedure.status === "Realizado" ? "green" : procedure.status === "Em procedimento" ? "amber" : "slate"}>{procedure.status}</Badge>{scheduleAction}{(appointment?.status === "Agendado" || appointment?.status === "Faltou") && appointment.id ? <Button className="h-8 px-2" type="button" disabled={procedureStartSaving} onClick={() => onProcedureStatusChange?.("Em atendimento")} title={canStartProcedure ? "Iniciar procedimento" : "Confirmar início fora do período agendado"}>{procedureStartSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock3 className="h-3.5 w-3.5" />}{procedureStartSaving ? "Iniciando..." : "Iniciar procedimento"}</Button> : null}{procedureInProgress && appointment?.id ? <Button className="h-8 px-2" type="button" disabled={procedureFinishSaving} onClick={() => onProcedureStatusChange?.("Atendido")}>{procedureFinishSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}{procedureFinishSaving ? "Finalizando..." : "Finalizar procedimento"}</Button> : null}{expandable ? <button className="grid h-8 w-8 place-items-center rounded-full text-[#77788a] transition hover:bg-[#f3f2ff] hover:text-[#5147dc]" type="button" onClick={() => setExpanded((current) => !current)} aria-label={expanded ? "Recolher procedimento" : "Expandir procedimento"} aria-expanded={expandable ? expanded : undefined}><ChevronDown className={cn("h-4 w-4 transition-transform", expanded && "rotate-180")} /></button> : null}</div>
@@ -1358,11 +1483,11 @@ function ProcedureHistoryCard({ procedure, scheduleAction, materials, journey, e
         <div className="min-w-0">
           <div className="mb-3 flex justify-end">
             <div className="inline-flex rounded-[7px] border border-[#dddfea] bg-[#fafafd] p-1">
-              <button className={cn("inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 text-[10px] font-bold transition", viewMode === "compare" ? "bg-[#5147dc] text-white shadow-[0_4px_12px_rgba(81,71,220,0.2)]" : "text-[#77788a] hover:bg-white hover:text-[#5147dc]")} type="button" onClick={() => setViewMode("compare")} aria-pressed={viewMode === "compare"}><ArrowLeftRight className="h-3.5 w-3.5" />Comparar</button>
-              <button className={cn("inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 text-[10px] font-bold transition", viewMode === "sideBySide" ? "bg-[#5147dc] text-white shadow-[0_4px_12px_rgba(81,71,220,0.2)]" : "text-[#77788a] hover:bg-white hover:text-[#5147dc]")} type="button" onClick={() => setViewMode("sideBySide")} aria-pressed={viewMode === "sideBySide"}><Columns2 className="h-3.5 w-3.5" />Lado a lado</button>
+              <button className={cn("inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 text-xs font-bold transition", viewMode === "compare" ? "bg-[#5147dc] text-white shadow-[0_4px_12px_rgba(81,71,220,0.2)]" : "text-[#77788a] hover:bg-white hover:text-[#5147dc]")} type="button" onClick={() => setViewMode("compare")} aria-pressed={viewMode === "compare"}><ArrowLeftRight className="h-3.5 w-3.5" />Comparar</button>
+              <button className={cn("inline-flex h-8 items-center gap-1.5 rounded-[5px] px-3 text-xs font-bold transition", viewMode === "sideBySide" ? "bg-[#5147dc] text-white shadow-[0_4px_12px_rgba(81,71,220,0.2)]" : "text-[#77788a] hover:bg-white hover:text-[#5147dc]")} type="button" onClick={() => setViewMode("sideBySide")} aria-pressed={viewMode === "sideBySide"}><Columns2 className="h-3.5 w-3.5" />Lado a lado</button>
             </div>
           </div>
-          {procedure.sessions?.length ? <div className="mb-3 space-y-2 rounded-[5px] bg-[#f7f7fb] p-3"><h4 className="text-[10px] font-bold">Sessões clínicas registradas</h4>{procedure.sessions.map((session) => <div className="flex flex-wrap justify-between gap-2 border-t border-[#e7e8ef] pt-2 text-[10px]" key={session.id}><span><strong>{session.procedureName}</strong> · {new Date(session.performedAt).toLocaleDateString("pt-BR")} · {session.professional || "Profissional não informado"}<small className="mt-0.5 block text-[#77788a]">{session.technique || "Técnica não informada"} · {session.treatedAreas || "Região não informada"}{session.durationMinutes ? ` · ${session.durationMinutes} min` : ""}</small></span><Badge variant={session.status === "Concluída" ? "green" : "amber"}>{session.status}</Badge></div>)}</div> : null}
+          {procedure.sessions?.length ? <div className="mb-3 space-y-2 rounded-[5px] bg-[#f7f7fb] p-3"><h4 className="text-xs font-bold">Sessões clínicas registradas</h4>{procedure.sessions.map((session) => <div className="flex flex-wrap justify-between gap-2 border-t border-[#e7e8ef] pt-2 text-xs" key={session.id}><span><strong>{session.procedureName}</strong> · {new Date(session.performedAt).toLocaleDateString("pt-BR")} · {session.professional || "Profissional não informado"}<small className="mt-0.5 block text-[#77788a]">{session.technique || "Técnica não informada"} · {session.treatedAreas || "Região não informada"}{session.durationMinutes ? ` · ${session.durationMinutes} min` : ""}</small></span><Badge variant={session.status === "Concluída" ? "green" : "amber"}>{session.status}</Badge></div>)}</div> : null}
           {viewMode === "compare" ? <BeforeAfterComparison beforeSrc={activePhotoSession?.beforePhoto} afterSrc={activePhotoSession?.afterPhoto} beforeLabel={beforeLabel} afterLabel={afterLabel} sliderPosition={sliderPosition} comparisonRef={comparisonRef} onPointerDown={handleSliderPointerDown} onPointerMove={handleSliderPointerMove} onPointerUp={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onBeforePreview={(src) => setExpandedPhoto({ label: "Antes", src })} onAfterPreview={(src) => setExpandedPhoto({ label: "Depois", src })} editable={photoEditable} showControls={!expandable} beforeSaving={beforePhotoSaving} afterSaving={afterPhotoSaving} beforeOperation={beforePhotoOperation} afterOperation={afterPhotoOperation} afterPhotoEnabled={afterPhotoEnabled} afterPhotoMessage={afterPhotoMessage} onBeforePhotoChange={(file) => onPhotoChange?.(procedure.id, "beforePhoto", file, activeSessionIdForRequest)} onAfterPhotoChange={(file) => onPhotoChange?.(procedure.id, "afterPhoto", file, activeSessionIdForRequest)} onBeforePhotoRemove={() => onPhotoRemove?.(procedure.id, "beforePhoto", activeSessionIdForRequest)} onAfterPhotoRemove={() => onPhotoRemove?.(procedure.id, "afterPhoto", activeSessionIdForRequest)} /> : <div className="grid justify-items-center gap-3 sm:grid-cols-2"><BeforeAfterPhoto label="Antes" overlayLabel={beforeLabel} src={activePhotoSession?.beforePhoto} editable={photoEditable && !expandable} saving={beforePhotoSaving} operation={beforePhotoOperation} onPhotoChange={(file) => onPhotoChange?.(procedure.id, "beforePhoto", file, activeSessionIdForRequest)} onPhotoRemove={() => onPhotoRemove?.(procedure.id, "beforePhoto", activeSessionIdForRequest)} onPreview={(src) => setExpandedPhoto({ label: "Antes", src })} /><BeforeAfterPhoto label="Depois" overlayLabel={afterLabel} src={activePhotoSession?.afterPhoto} editable={photoEditable && !expandable} photoInputEnabled={afterPhotoEnabled} blockedMessage={afterPhotoMessage} saving={afterPhotoSaving} operation={afterPhotoOperation} onPhotoChange={(file) => onPhotoChange?.(procedure.id, "afterPhoto", file, activeSessionIdForRequest)} onPhotoRemove={() => onPhotoRemove?.(procedure.id, "afterPhoto", activeSessionIdForRequest)} onPreview={(src) => setExpandedPhoto({ label: "Depois", src })} /></div>}
         </div>
         {expandable ? <ProcedureInfoPanel photoSessions={photoSessions} activePhotoSessionId={activePhotoSession?.id} onSelectPhotoSession={setActivePhotoSessionId} onCreatePhotoSession={openPhotoSessionCreator} onEditPhotoSession={openPhotoSessionEditor} onDeletePhotoSession={(sessionId) => setPhotoSessionToDelete(photoSessions.find((session) => session.id === sessionId) ?? null)} deletingPhotoSessionKey={deletingPhotoSessionKey} procedureId={procedure.id} creatingPhotoSession={creatingPhotoSession} editable={photoEditable} afterPhotoEnabled={afterPhotoEnabled} afterPhotoMessage={afterPhotoMessage} beforeSaving={beforePhotoSaving} afterSaving={afterPhotoSaving} beforeOperation={beforePhotoOperation} afterOperation={afterPhotoOperation} onBeforePhotoChange={(file) => onPhotoChange?.(procedure.id, "beforePhoto", file, activeSessionIdForRequest)} onAfterPhotoChange={(file) => onPhotoChange?.(procedure.id, "afterPhoto", file, activeSessionIdForRequest)} onBeforePhotoRemove={() => onPhotoRemove?.(procedure.id, "beforePhoto", activeSessionIdForRequest)} onAfterPhotoRemove={() => onPhotoRemove?.(procedure.id, "afterPhoto", activeSessionIdForRequest)} onBeforePreview={(src) => setExpandedPhoto({ label: "Antes", src })} onAfterPreview={(src) => setExpandedPhoto({ label: "Depois", src })} /> : null}
@@ -1387,14 +1512,14 @@ function ProcedureInfoPanel({ photoSessions, activePhotoSessionId, onSelectPhoto
   const afterImage = activePhotoSession?.afterPhoto && activePhotoSession.afterPhoto !== "__photo__" ? activePhotoSession.afterPhoto : undefined;
 
   return <aside className="h-fit rounded-[7px] border border-[#e7e9f2] bg-[#fafafd] p-3">
-    <div className="flex items-center justify-between gap-2"><h4 className="text-xs font-bold text-[#303144]">Sessões de fotos</h4>{editable ? <button className="inline-flex items-center gap-1 rounded-[5px] px-2 py-1 text-[9px] font-bold text-[#5147dc] transition hover:bg-[#f0efff] disabled:cursor-not-allowed disabled:opacity-60" type="button" onClick={onCreatePhotoSession} disabled={creatingPhotoSession} aria-busy={creatingPhotoSession}>{creatingPhotoSession ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}{creatingPhotoSession ? "Criando..." : "Nova sessão"}</button> : null}</div>
-    <div className="mt-2 grid gap-1.5">{photoSessions.map((session, index) => { const sessionKey = `${procedureId ?? "procedure"}-${session.id}`; const canManage = editable && !session.id.startsWith("legacy-"); return <div className={cn("flex items-center gap-1 rounded-[5px] border p-1 transition", session.id === activePhotoSessionId ? "border-[#5147dc] bg-[#f0efff]" : "border-[#e7e9f2] bg-white")} key={session.id}><button className={cn("min-w-0 flex-1 rounded-[4px] px-1.5 py-1.5 text-left text-[10px] font-semibold", session.id === activePhotoSessionId ? "text-[#5147dc]" : "text-[#656678] hover:text-[#5147dc]")} type="button" onClick={() => onSelectPhotoSession(session.id)} aria-pressed={session.id === activePhotoSessionId}><span className="block truncate">{session.name || `Sessão ${index + 1}`}</span><span className="block text-[9px] text-[#858696]">{session.beforePhoto || session.afterPhoto ? "Com fotos" : "Vazia"}</span></button>{canManage ? <><button className="grid h-7 w-7 shrink-0 place-items-center rounded-[4px] text-[#858696] transition hover:bg-[#f0efff] hover:text-[#5147dc]" type="button" aria-label={`Editar ${session.name || `Sessão ${index + 1}`}`} title="Editar nome" onClick={() => onEditPhotoSession(session.id)}><PencilLine className="h-3.5 w-3.5" /></button><button className="grid h-7 w-7 shrink-0 place-items-center rounded-[4px] text-[#858696] transition hover:bg-[#fff0ee] hover:text-[#b42318] disabled:cursor-not-allowed disabled:opacity-45" type="button" aria-label={`Excluir ${session.name || `Sessão ${index + 1}`}`} title="Excluir sessão" disabled={Boolean(deletingPhotoSessionKey === sessionKey)} onClick={() => onDeletePhotoSession(session.id)}><Trash2 className="h-3.5 w-3.5" /></button></> : null}</div>; })}</div>
-    <div className="mt-4 border-t border-[#e7e9f2] pt-3"><div className="flex items-center justify-between gap-2"><h4 className="text-xs font-bold text-[#303144]">{activePhotoSession?.name ?? "Fotos"}</h4><span className="text-[9px] font-semibold text-[#858696]">Antes / depois</span></div><div className="mt-2 grid grid-cols-2 gap-2"><ProcedurePhotoThumbnail label="Antes" src={beforeImage} editable={editable} saving={beforeSaving} onPreview={onBeforePreview} onRemove={onBeforePhotoRemove} /><ProcedurePhotoThumbnail label="Depois" src={afterImage} editable={editable} saving={afterSaving} disabled={!afterPhotoEnabled} onPreview={onAfterPreview} onRemove={onAfterPhotoRemove} /></div>{editable ? <div className="mt-3 grid gap-2"><PhotoInput icon={Upload} label={beforeImage ? "Trocar foto antes" : "Adicionar foto antes"} busyLabel={beforeOperation === "remove" ? "Removendo..." : "Carregando..."} disabled={beforeSaving} onChange={onBeforePhotoChange} /><PhotoInput icon={Upload} label={afterImage ? "Trocar foto depois" : "Adicionar foto depois"} busyLabel={afterOperation === "remove" ? "Removendo..." : "Carregando..."} disabled={afterSaving || !afterPhotoEnabled} blocked={!afterPhotoEnabled && !afterSaving} onChange={onAfterPhotoChange} />{afterPhotoMessage && !afterPhotoEnabled ? <p className="text-[9px] font-semibold text-[#858696]">{afterPhotoMessage}</p> : null}</div> : null}</div>
+    <div className="flex items-center justify-between gap-2"><h4 className="text-xs font-bold text-[#303144]">Sessões de fotos</h4>{editable ? <button className="inline-flex items-center gap-1 rounded-[5px] px-2 py-1 text-xs font-bold text-[#5147dc] transition hover:bg-[#f0efff] disabled:cursor-not-allowed disabled:opacity-60" type="button" onClick={onCreatePhotoSession} disabled={creatingPhotoSession} aria-busy={creatingPhotoSession}>{creatingPhotoSession ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}{creatingPhotoSession ? "Criando..." : "Nova sessão"}</button> : null}</div>
+    <div className="mt-2 grid gap-1.5">{photoSessions.map((session, index) => { const sessionKey = `${procedureId ?? "procedure"}-${session.id}`; const canManage = editable && !session.id.startsWith("legacy-"); return <div className={cn("flex items-center gap-1 rounded-[5px] border p-1 transition", session.id === activePhotoSessionId ? "border-[#5147dc] bg-[#f0efff]" : "border-[#e7e9f2] bg-white")} key={session.id}><button className={cn("min-w-0 flex-1 rounded-[4px] px-1.5 py-1.5 text-left text-xs font-semibold", session.id === activePhotoSessionId ? "text-[#5147dc]" : "text-[#656678] hover:text-[#5147dc]")} type="button" onClick={() => onSelectPhotoSession(session.id)} aria-pressed={session.id === activePhotoSessionId}><span className="block truncate">{session.name || `Sessão ${index + 1}`}</span><span className="block text-xs text-[#858696]">{session.beforePhoto || session.afterPhoto ? "Com fotos" : "Vazia"}</span></button>{canManage ? <><button className="grid h-7 w-7 shrink-0 place-items-center rounded-[4px] text-[#858696] transition hover:bg-[#f0efff] hover:text-[#5147dc]" type="button" aria-label={`Editar ${session.name || `Sessão ${index + 1}`}`} title="Editar nome" onClick={() => onEditPhotoSession(session.id)}><PencilLine className="h-3.5 w-3.5" /></button><button className="grid h-7 w-7 shrink-0 place-items-center rounded-[4px] text-[#858696] transition hover:bg-[#fff0ee] hover:text-[#b42318] disabled:cursor-not-allowed disabled:opacity-45" type="button" aria-label={`Excluir ${session.name || `Sessão ${index + 1}`}`} title="Excluir sessão" disabled={Boolean(deletingPhotoSessionKey === sessionKey)} onClick={() => onDeletePhotoSession(session.id)}><Trash2 className="h-3.5 w-3.5" /></button></> : null}</div>; })}</div>
+    <div className="mt-4 border-t border-[#e7e9f2] pt-3"><div className="flex items-center justify-between gap-2"><h4 className="text-xs font-bold text-[#303144]">{activePhotoSession?.name ?? "Fotos"}</h4><span className="text-xs font-semibold text-[#858696]">Antes / depois</span></div><div className="mt-2 grid grid-cols-2 gap-2"><ProcedurePhotoThumbnail label="Antes" src={beforeImage} editable={editable} saving={beforeSaving} onPreview={onBeforePreview} onRemove={onBeforePhotoRemove} /><ProcedurePhotoThumbnail label="Depois" src={afterImage} editable={editable} saving={afterSaving} disabled={!afterPhotoEnabled} onPreview={onAfterPreview} onRemove={onAfterPhotoRemove} /></div>{editable ? <div className="mt-3 grid gap-2"><PhotoInput icon={Upload} label={beforeImage ? "Trocar foto antes" : "Adicionar foto antes"} busyLabel={beforeOperation === "remove" ? "Removendo..." : "Carregando..."} disabled={beforeSaving} onChange={onBeforePhotoChange} /><PhotoInput icon={Upload} label={afterImage ? "Trocar foto depois" : "Adicionar foto depois"} busyLabel={afterOperation === "remove" ? "Removendo..." : "Carregando..."} disabled={afterSaving || !afterPhotoEnabled} blocked={!afterPhotoEnabled && !afterSaving} onChange={onAfterPhotoChange} />{afterPhotoMessage && !afterPhotoEnabled ? <p className="text-xs font-semibold text-[#858696]">{afterPhotoMessage}</p> : null}</div> : null}</div>
   </aside>;
 }
 
 function ProcedurePhotoThumbnail({ label, src, editable, saving, disabled, onPreview, onRemove }: { label: string; src?: string; editable?: boolean; saving?: boolean; disabled?: boolean; onPreview?: (src: string) => void; onRemove?: () => void }) {
-  return <div className="overflow-hidden rounded-[5px] border border-[#e7e9f2] bg-white"><div className="px-2 py-1.5 text-[9px] font-bold uppercase text-[#858696]">{label}</div><div className="relative aspect-[9/16] bg-[#f1f2f7]">{src ? <button className="absolute inset-0 cursor-zoom-in" type="button" onClick={() => onPreview?.(src)} aria-label={`Ampliar foto ${label.toLowerCase()}`}><Image className="object-cover" src={src} alt={`Miniatura da foto ${label.toLowerCase()}`} fill sizes="130px" /></button> : <span className="absolute inset-0 grid place-items-center px-2 text-center text-[9px] font-semibold text-[#858696]">Sem foto</span>}{editable && src ? <button className="absolute right-1.5 top-1.5 z-10 grid h-6 w-6 place-items-center rounded-full bg-[#25263a]/80 text-white transition hover:bg-[#b42318] disabled:cursor-not-allowed disabled:opacity-50" type="button" aria-label={`Remover foto ${label.toLowerCase()}`} disabled={saving || disabled} onClick={onRemove}><X className="h-3 w-3" /></button> : null}</div></div>;
+  return <div className="overflow-hidden rounded-[5px] border border-[#e7e9f2] bg-white"><div className="px-2 py-1.5 text-xs font-bold uppercase text-[#858696]">{label}</div><div className="relative aspect-[9/16] bg-[#f1f2f7]">{src ? <button className="absolute inset-0 cursor-zoom-in" type="button" onClick={() => onPreview?.(src)} aria-label={`Ampliar foto ${label.toLowerCase()}`}><Image className="object-cover" src={src} alt={`Miniatura da foto ${label.toLowerCase()}`} fill sizes="130px" /></button> : <span className="absolute inset-0 grid place-items-center px-2 text-center text-xs font-semibold text-[#858696]">Sem foto</span>}{editable && src ? <button className="absolute right-1.5 top-1.5 z-10 grid h-6 w-6 place-items-center rounded-full bg-[#25263a]/80 text-white transition hover:bg-[#b42318] disabled:cursor-not-allowed disabled:opacity-50" type="button" aria-label={`Remover foto ${label.toLowerCase()}`} disabled={saving || disabled} onClick={onRemove}><X className="h-3 w-3" /></button> : null}</div></div>;
 }
 
 function BeforeAfterComparison({ beforeSrc, afterSrc, beforeLabel, afterLabel, sliderPosition, comparisonRef, onPointerDown, onPointerMove, onPointerUp, onBeforePreview, onAfterPreview, editable, showControls = true, compact = false, beforeSaving, afterSaving, beforeOperation, afterOperation, afterPhotoEnabled, afterPhotoMessage, onBeforePhotoChange, onAfterPhotoChange, onBeforePhotoRemove, onAfterPhotoRemove }: { beforeSrc?: string; afterSrc?: string; beforeLabel: string; afterLabel: string; sliderPosition: number; comparisonRef: RefObject<HTMLDivElement | null>; onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void; onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void; onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void; onBeforePreview: (src: string) => void; onAfterPreview: (src: string) => void; editable?: boolean; showControls?: boolean; compact?: boolean; beforeSaving?: boolean; afterSaving?: boolean; beforeOperation?: "upload" | "remove"; afterOperation?: "upload" | "remove"; afterPhotoEnabled?: boolean; afterPhotoMessage?: string; onBeforePhotoChange?: (file: File) => void; onAfterPhotoChange?: (file: File) => void; onBeforePhotoRemove?: () => void; onAfterPhotoRemove?: () => void }) {
@@ -1421,7 +1546,7 @@ function BeforeAfterComparison({ beforeSrc, afterSrc, beforeLabel, afterLabel, s
 }
 
 function ComparisonPhotoLayer({ src, alt, label, emptySide, onPreview }: { src?: string; alt: string; label: string; emptySide: "before" | "after"; onPreview: (src: string) => void }) {
-  return src ? <button className="absolute inset-0 h-full w-full cursor-zoom-in" type="button" aria-label={`Ampliar ${label.toLowerCase()}`} onClick={(event) => { event.stopPropagation(); onPreview(src); }}><Image className="object-cover" src={src} alt={alt} fill draggable={false} onDragStart={(event) => event.preventDefault()} sizes="(max-width: 640px) 90vw, 420px" /><span className="absolute bottom-3 left-3 rounded-full bg-white/90 px-2.5 py-1 text-[9px] font-bold text-[#303144] shadow-[0_3px_10px_rgba(37,38,58,0.12)]">{label}</span></button> : <div className="absolute inset-0"><span className={cn("absolute top-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] font-semibold text-[#858696]", emptySide === "before" ? "left-[5%]" : "right-[5%]")}>Nenhuma foto cadastrada</span></div>;
+  return src ? <button className="absolute inset-0 h-full w-full cursor-zoom-in" type="button" aria-label={`Ampliar ${label.toLowerCase()}`} onClick={(event) => { event.stopPropagation(); onPreview(src); }}><Image className="object-cover" src={src} alt={alt} fill draggable={false} onDragStart={(event) => event.preventDefault()} sizes="(max-width: 640px) 90vw, 420px" /><span className="absolute bottom-3 left-3 rounded-full bg-white/90 px-2.5 py-1 text-xs font-bold text-[#303144] shadow-[0_3px_10px_rgba(37,38,58,0.12)]">{label}</span></button> : <div className="absolute inset-0"><span className={cn("absolute top-1/2 -translate-y-1/2 whitespace-nowrap text-xs font-semibold text-[#858696]", emptySide === "before" ? "left-[5%]" : "right-[5%]")}>Nenhuma foto cadastrada</span></div>;
 }
 
 function ComparisonPhotoControls({ label, saving, operation, photoInputEnabled = true, blockedMessage, onPhotoChange, onPhotoRemove }: { label: string; saving?: boolean; operation?: "upload" | "remove"; photoInputEnabled?: boolean; blockedMessage?: string; onPhotoChange?: (file: File) => void; onPhotoRemove?: () => void }) {
@@ -1433,7 +1558,7 @@ function BeforeAfterPhoto({ label, overlayLabel, src, editable, photoInputEnable
   const hasPhoto = Boolean(src);
   return (
     <div className="w-full max-w-[280px] overflow-hidden rounded-[7px] border border-[#e7e9f2] bg-[#f7f8fc]">
-      <div className="flex items-center gap-2 px-3 py-2 text-[9px] font-bold uppercase text-[#858696]">
+      <div className="flex items-center gap-2 px-3 py-2 text-xs font-bold uppercase text-[#858696]">
         <Camera className="h-3.5 w-3.5 text-[#5147dc]" />
         {label}
       </div>
@@ -1443,7 +1568,7 @@ function BeforeAfterPhoto({ label, overlayLabel, src, editable, photoInputEnable
           <span className="flex items-center gap-1 text-xs font-bold"><Loader2 className="h-3.5 w-3.5 animate-spin" />{operation === "remove" ? "Removendo foto..." : "Carregando foto..."}</span>
         </div> : imageSrc ? <>
           <button type="button" className="absolute inset-0 cursor-zoom-in" aria-label={`Ampliar foto de ${label.toLowerCase()}`} onClick={() => onPreview?.(imageSrc)}><Image className="object-cover transition-transform duration-200 hover:scale-[1.02]" src={imageSrc} alt={`Foto de ${label.toLowerCase()} do procedimento`} fill sizes="(max-width: 640px) 100vw, (max-width: 1280px) 50vw, 400px" /></button>
-          {overlayLabel ? <span className="pointer-events-none absolute bottom-3 left-3 z-10 rounded-full bg-white/90 px-2.5 py-1 text-[9px] font-bold text-[#303144] shadow-[0_3px_10px_rgba(37,38,58,0.12)]">{overlayLabel}</span> : null}
+          {overlayLabel ? <span className="pointer-events-none absolute bottom-3 left-3 z-10 rounded-full bg-white/90 px-2.5 py-1 text-xs font-bold text-[#303144] shadow-[0_3px_10px_rgba(37,38,58,0.12)]">{overlayLabel}</span> : null}
           {editable ? <button type="button" className="absolute right-2 top-2 z-10 grid h-7 w-7 place-items-center rounded-full bg-[#25263a]/80 text-white transition hover:bg-[#b42318] disabled:cursor-not-allowed disabled:opacity-50" aria-label={`Remover foto de ${label.toLowerCase()}`} disabled={saving || !photoInputEnabled} onClick={onPhotoRemove}><X className="h-3.5 w-3.5" /></button> : null}
         </> : hasPhoto ? <span className="px-4 text-center">Foto cadastrada</span> : blockedMessage ?? "Nenhuma foto cadastrada"}
       </div>
@@ -1458,17 +1583,18 @@ function BeforeAfterPhoto({ label, overlayLabel, src, editable, photoInputEnable
 function PhotoInput({ icon: Icon, label, busyLabel, capture, disabled, blocked, onChange }: { icon: typeof Camera; label: string; busyLabel: string; capture?: boolean; disabled?: boolean; blocked?: boolean; onChange?: (file: File) => void }) {
   const busy = Boolean(disabled && !blocked);
   return (
-    <label className={cn("inline-flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-full border border-[#dddfea] bg-white px-2 text-[9px] font-bold text-[#5147dc] transition hover:border-[#5147dc]", disabled && "pointer-events-none opacity-50")} aria-busy={busy}>
+    <label className={cn("inline-flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-full border border-[#dddfea] bg-white px-2 text-xs font-bold text-[#5147dc] transition hover:border-[#5147dc]", disabled && "pointer-events-none opacity-50")} aria-busy={busy}>
       {busy ? <><Loader2 className="h-3 w-3 animate-spin" />{busyLabel}</> : <><Icon className="h-3 w-3" />{label}</>}
       <input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" capture={capture ? "environment" : undefined} disabled={disabled} onChange={(event) => { const file = event.target.files?.[0]; if (file) onChange?.(file); event.currentTarget.value = ""; }} />
     </label>
   );
 }
 
-function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget, onReturnAppointmentClose, onAppointmentCreated, onScheduleReturn, hidden = false }: { patientId: string; history?: PatientHistoryRecord; loading: boolean; returnAppointmentTarget: ReturnAppointmentTarget | null; onReturnAppointmentClose: () => void; onAppointmentCreated: (appointment: PatientAppointmentRecord) => void; onScheduleReturn: (procedure: ReturnAppointmentTarget, kind?: "return" | "procedure") => void; hidden?: boolean }) {
+function AppointmentsTab({ requestStart, patientId, history, loading, error, onRetry, journeyNames, onNew, onOpenJourney, returnAppointmentTarget, onReturnAppointmentClose }: { requestStart?: (proceed: () => void) => void; patientId: string; history?: PatientHistoryRecord; loading: boolean; error: boolean; onRetry: () => void; journeyNames: Record<string, string>; onNew: () => void; onOpenJourney: (journeyId: string) => void; returnAppointmentTarget: ReturnAppointmentTarget | null; onReturnAppointmentClose: () => void }) {
   const canRun = useCan("appointment:run");
   const [returnDate, setReturnDate] = useState(() => clinicDateAfterDays(0));
   const [returnTime, setReturnTime] = useState("09:00");
+  const [clinicHours, setClinicHours] = useState<{ openingTime: string; closingTime: string } | null>(() => readClientCache<{ openingTime: string; closingTime: string }>("/api/appointments/options") ?? null);
   const [returnReason, setReturnReason] = useState(() => returnAppointmentTarget ? returnAppointmentTarget.kind === "procedure" ? returnAppointmentTarget.name : `Retorno - ${returnAppointmentTarget.name}` : "");
   const [returnNotes, setReturnNotes] = useState("");
   const [returnSaving, setReturnSaving] = useState(false);
@@ -1483,6 +1609,13 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
   useEffect(() => {
     if (!returnAppointmentTarget && !editingAppointment) return;
     let active = true;
+    getCachedJson<{ openingTime: string; closingTime: string }>("/api/appointments/options")
+      .then((data) => {
+        if (!active) return;
+        setClinicHours(data);
+        if (!editingAppointment) setReturnTime(data.openingTime);
+      })
+      .catch(() => { if (active) setReturnError("Não foi possível carregar o horário de funcionamento da clínica."); });
     getCachedJson<{ professionals: Array<{ id: string; name: string }> }>("/api/team/professionals")
       .then((data) => { if (active) setProfessionals(data.professionals); })
       .catch(() => undefined);
@@ -1496,8 +1629,6 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
   const [checkAppointmentId, setCheckAppointmentId] = useState<string | null>(null);
   const [checkedAppointmentIds, setCheckedAppointmentIds] = useState<string[]>([]);
   const [currentTime, setCurrentTime] = useState(() => clinicNowForForm());
-  const primaryProcedure = history?.procedures[0];
-  const returnScheduled = Boolean([...(history?.appointments ?? []), ...createdAppointments].some((appointment) => appointment.procedure.toLocaleLowerCase("pt-BR").includes("retorno")));
   const scheduleKind = returnAppointmentTarget?.kind ?? "return";
   const appointments = mergePatientAppointments(history?.appointments ?? [], createdAppointments)
     .map((appointment) => appointment.id && editedAppointments[appointment.id] ? editedAppointments[appointment.id] : appointment)
@@ -1548,8 +1679,18 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
   async function saveReturnAppointment(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if ((!returnAppointmentTarget && !editingAppointment) || !returnDate || !returnTime || !returnReason.trim()) return;
+    if (!clinicHours) {
+      setReturnError("Não foi possível carregar o horário de funcionamento da clínica.");
+      return;
+    }
     if (!editingAppointment?.id && !returnProfessional) {
       setReturnError("Escolha o profissional.");
+      return;
+    }
+    const slotError = appointmentSlotError(returnDate, returnTime, clinicHours.openingTime, clinicHours.closingTime, clinicNow());
+    if (slotError) {
+      setInvalidReturnFields(new Set([/data|passou/i.test(slotError) ? "date" : "time"]));
+      setReturnError(slotError);
       return;
     }
     const now = clinicNowForForm();
@@ -1577,15 +1718,14 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
           notes: returnNotes.trim(),
         }),
       });
-      const data = await response.json().catch(() => null) as { appointment?: { id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string; materialsCheck?: string | null }; message?: string } | null;
+      const data = await response.json().catch(() => null) as { appointment?: { id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string; materialsCheck?: string | null; journeyId?: string | null }; message?: string } | null;
       const updatedAppointment = data?.appointment;
       if (!response.ok || !updatedAppointment) throw new Error(data?.message ?? "Não foi possível salvar o retorno.");
-      const appointmentRecord: PatientAppointmentRecord = { id: updatedAppointment.id, date: formatAppointmentDisplayDate(updatedAppointment.date), time: updatedAppointment.time, procedure: updatedAppointment.procedure, professional: updatedAppointment.professional, status: updatedAppointment.status, notes: updatedAppointment.notes, materialsCheck: updatedAppointment.materialsCheck ?? null };
+      const appointmentRecord: PatientAppointmentRecord = { id: updatedAppointment.id, date: formatAppointmentDisplayDate(updatedAppointment.date), time: updatedAppointment.time, procedure: updatedAppointment.procedure, professional: updatedAppointment.professional, status: updatedAppointment.status, notes: updatedAppointment.notes, materialsCheck: updatedAppointment.materialsCheck ?? null, dateKey: clinicDateKey(updatedAppointment.date), journeyId: updatedAppointment.journeyId ?? null };
       if (editingAppointment?.id) {
-        setEditedAppointments((current) => ({ ...current, [editingAppointment.id as string]: { ...editingAppointment, date: formatAppointmentDisplayDate(updatedAppointment.date), time: updatedAppointment.time, procedure: updatedAppointment.procedure, professional: updatedAppointment.professional, status: updatedAppointment.status, notes: updatedAppointment.notes } }));
+        setEditedAppointments((current) => ({ ...current, [editingAppointment.id as string]: { ...editingAppointment, date: formatAppointmentDisplayDate(updatedAppointment.date), time: updatedAppointment.time, procedure: updatedAppointment.procedure, professional: updatedAppointment.professional, status: updatedAppointment.status, notes: updatedAppointment.notes, dateKey: clinicDateKey(updatedAppointment.date) } }));
       } else {
         setCreatedAppointments((current) => mergePatientAppointments(current, [appointmentRecord]));
-        onAppointmentCreated(appointmentRecord);
       }
       invalidateClientCache(`/api/patients/${patientId}/history`, "/api/patients", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
       setEditingAppointment(null); setProfessionalChoice(null);
@@ -1598,23 +1738,33 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
   }
 
   return (
-    <div className={cn("space-y-4", hidden && "hidden")}>
-      <div className="flex items-start justify-between gap-4"><div><h3 className="text-sm font-bold text-[#303144]">Agendamentos do cliente</h3><p className="mt-1 text-[10px] text-[#858696]">Acompanhe os atendimentos e agende o próximo retorno.</p></div><Button className={cn("shrink-0", returnScheduled && "border-[#b9e8d8] bg-[#eaf8ef] text-[#16805d] hover:border-[#b9e8d8] hover:bg-[#eaf8ef] hover:text-[#16805d]")} type="button" variant="secondary" disabled={!primaryProcedure || primaryProcedure.status !== "Realizado" || returnScheduled} onClick={() => { if (primaryProcedure) onScheduleReturn(primaryProcedure, "return"); }}><CalendarPlus className="h-3.5 w-3.5" />{returnScheduled ? "Retorno marcado" : "Marcar retorno"}</Button></div>
-      {loading ? <AppointmentListSkeleton /> : !appointments.length ? <EmptyPatientState message="Este cliente ainda não possui agendamentos registrados." /> : (
-        <div className="space-y-3">
-            {appointments.map((appointment, index) => (
-              <Card className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between" key={appointment.id ?? `${appointment.date}-${appointment.time}-${appointment.procedure}-${index}`}>
-                <div>
-                  <p className="text-sm font-bold text-[#303144]">{appointment.procedure}</p>
-                  <p className="mt-1 text-xs text-[#858696]">{appointment.date} às {appointment.time} · {appointment.professional}</p>
-                  {appointment.notes ? <p className="mt-2 text-xs text-[#656678]">{appointment.notes}</p> : null}
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-2">{canRun && appointment.id && appointment.status === "Atendido" && appointment.materialsCheck === "pending" && !checkedAppointmentIds.includes(appointment.id) ? <Button className="h-8 px-2" type="button" variant="secondary" onClick={() => setCheckAppointmentId(appointment.id ?? null)}>Conferir materiais</Button> : null}{appointment.status === "Agendado" ? <Button className="h-8 px-2" type="button" variant="secondary" disabled title="Confirmação por WhatsApp em breve"><MessageCircle className="h-3.5 w-3.5" />Confirmar por WhatsApp</Button> : null}<Badge variant={appointment.status === "Atendido" ? "green" : appointment.status === "Em atendimento" ? "amber" : "purple"}>{appointment.status}</Badge>{appointment.status === "Agendado" && appointment.id ? (() => { const withinWindow = appointmentWithinStartWindow(appointment, history?.appointmentToleranceMinutes ?? 15, currentTime); const procedureAppointment = matchesProcedureAppointment(appointment, history?.procedureNames ?? []); const isUpdating = updatingAppointmentId === appointment.id; return <>{canRun ? <Button className="h-8 px-2" type="button" variant="secondary" disabled={!canRequestAppointmentStart(appointment, history?.procedureNames ?? [], withinWindow, isUpdating)} onClick={() => { if (procedureAppointment && !withinWindow) setStartConfirmation(appointment); else void updateAppointmentStatus(appointment, "Em atendimento"); }} title={withinWindow ? "Iniciar atendimento" : procedureAppointment ? "Confirmar início fora do horário" : "Aguarde o horário do atendimento"}>{isUpdating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock3 className="h-3.5 w-3.5" />}{isUpdating ? "Atualizando..." : "Iniciar atendimento"}</Button> : null}<Button className="h-8 px-2" type="button" variant="secondary" aria-label="Editar retorno" title="Editar retorno" onClick={() => openEditAppointment(appointment)}><PencilLine className="h-3.5 w-3.5" /></Button></>; })() : null}{canRun && appointment.status === "Em atendimento" && appointment.id ? <Button className="h-8 px-2" type="button" onClick={() => void updateAppointmentStatus(appointment, "Atendido")}><CheckCircle2 className="h-3.5 w-3.5" />{updatingAppointmentId === appointment.id ? "Atualizando..." : "Finalizar atendimento"}</Button> : null}</div>
-              </Card>
-            ))}
-        </div>
-      )}
-      <Modal open={Boolean(returnAppointmentTarget || editingAppointment)} onClose={() => { if (!returnSaving) { setEditingAppointment(null); setProfessionalChoice(null); onReturnAppointmentClose(); } }} title={editingAppointment ? "Editar retorno" : scheduleKind === "procedure" ? "Marcar procedimento" : "Marcar retorno"} description={editingAppointment ? "Atualize os dados do retorno agendado." : scheduleKind === "procedure" ? "O procedimento será incluído na lista de agendamentos da clínica." : "O retorno será incluído na lista de agendamentos da clínica."}>
+    <div className="space-y-4">
+      <PatientAppointmentsList
+        appointments={appointments}
+        loading={loading}
+        error={error}
+        onRetry={onRetry}
+        journeyNames={journeyNames}
+        canRun={canRun}
+        updatingId={updatingAppointmentId}
+        materialsPendingIds={new Set(appointments.flatMap((appointment) => appointment.id && appointment.status === "Atendido" && appointment.materialsCheck === "pending" && !checkedAppointmentIds.includes(appointment.id) ? [appointment.id] : []))}
+        startState={(appointment) => {
+          const withinWindow = appointmentWithinStartWindow(appointment, history?.appointmentToleranceMinutes ?? 15, currentTime);
+          const updating = updatingAppointmentId === appointment.id;
+          return { allowed: canRequestAppointmentStart(appointment, history?.procedureNames ?? [], withinWindow, updating), updating, title: withinWindow ? "Iniciar atendimento" : matchesProcedureAppointment(appointment, history?.procedureNames ?? []) ? "Confirmar início fora do horário" : "Aguarde o horário do atendimento" };
+        }}
+        onNew={onNew}
+        onStart={(appointment) => {
+          const withinWindow = appointmentWithinStartWindow(appointment, history?.appointmentToleranceMinutes ?? 15, currentTime);
+          const start = () => { if (matchesProcedureAppointment(appointment, history?.procedureNames ?? []) && !withinWindow) setStartConfirmation(appointment); else void updateAppointmentStatus(appointment, "Em atendimento"); };
+          if (requestStart) requestStart(start); else start();
+        }}
+        onFinish={(appointment) => void updateAppointmentStatus(appointment, "Atendido")}
+        onReschedule={openEditAppointment}
+        onOpenJourney={onOpenJourney}
+        onCheckMaterials={(appointment) => setCheckAppointmentId(appointment.id ?? null)}
+      />
+      <Modal open={Boolean(returnAppointmentTarget || editingAppointment)} onClose={() => { if (!returnSaving) { setEditingAppointment(null); setProfessionalChoice(null); onReturnAppointmentClose(); } }} title={editingAppointment ? "Reagendar" : scheduleKind === "procedure" ? "Marcar procedimento" : "Marcar retorno"} description={editingAppointment ? "Atualize os dados do retorno agendado." : scheduleKind === "procedure" ? "O procedimento será incluído na lista de agendamentos da clínica." : "O retorno será incluído na lista de agendamentos da clínica."}>
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveReturnAppointment}>
           <div className="sm:col-span-2 rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3 text-xs text-[#555668]">Procedimento: <strong className="text-[#303144]">{editingAppointment?.procedure ?? returnAppointmentTarget?.name}</strong></div>
           <div className="sm:col-span-2"><FormField label="Profissional"><select className={fieldClassName} value={returnProfessional} onChange={(event) => { if (professionalSource) setProfessionalChoice({ source: professionalSource, name: event.target.value }); }} required>
@@ -1623,11 +1773,11 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
             {professionals.map((professional) => <option key={professional.id} value={professional.name}>{professional.name}</option>)}
           </select></FormField></div>
           <FormField label="Data"><input className={cn(fieldClassName, invalidReturnFields.has("date") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} type="date" value={returnDate} required onChange={(event) => { setReturnDate(event.target.value); setInvalidReturnFields((current) => { const next = new Set(current); next.delete("date"); return next; }); setReturnError(""); }} /></FormField>
-          <FormField label="Horário"><input className={cn(fieldClassName, invalidReturnFields.has("time") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} type="time" value={returnTime} required onChange={(event) => { setReturnTime(event.target.value); setInvalidReturnFields((current) => { const next = new Set(current); next.delete("time"); return next; }); setReturnError(""); }} /></FormField>
-          <div className="sm:col-span-2"><FormField label={scheduleKind === "procedure" ? "Procedimento" : "Motivo do retorno"}><input className={fieldClassName} value={returnReason} required placeholder={scheduleKind === "procedure" ? "Ex.: Botox" : "Ex.: avaliação do resultado"} onChange={(event) => setReturnReason(event.target.value)} /></FormField></div>
+          <FormField label="Horário">{clinicHours ? <ClinicTimePicker openingTime={clinicHours.openingTime} closingTime={clinicHours.closingTime} latestTime={latestAppointmentStart(clinicHours.closingTime)} value={returnTime} invalid={invalidReturnFields.has("time")} className={fieldClassName} onChange={(value) => { setReturnTime(value); setInvalidReturnFields((current) => { const next = new Set(current); next.delete("time"); return next; }); setReturnError(""); }} /> : <button type="button" disabled className={cn(fieldClassName, "text-left opacity-60")}>Carregando horários...</button>}</FormField>
+          <div className="sm:col-span-2"><FormField label={editingAppointment || scheduleKind === "procedure" ? "Procedimento" : "Motivo do retorno"}><input className={fieldClassName} value={returnReason} required placeholder={scheduleKind === "procedure" ? "Ex.: Botox" : "Ex.: avaliação do resultado"} onChange={(event) => setReturnReason(event.target.value)} /></FormField></div>
           <div className="sm:col-span-2"><FormField label="Observações"><textarea className={`${fieldClassName} h-24 resize-none py-2`} value={returnNotes} placeholder="Adicione informações importantes para o atendimento" onChange={(event) => setReturnNotes(event.target.value)} /></FormField></div>
           {returnError ? <p className="rounded-[7px] bg-[#fff1f0] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{returnError}</p> : null}
-          <div className="flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" disabled={returnSaving} onClick={() => { setEditingAppointment(null); setProfessionalChoice(null); onReturnAppointmentClose(); }}>Cancelar</Button><Button type="submit" disabled={returnSaving}>{returnSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : editingAppointment ? <PencilLine className="h-3.5 w-3.5" /> : <CalendarPlus className="h-3.5 w-3.5" />}{returnSaving ? "Salvando..." : editingAppointment ? "Salvar alterações" : scheduleKind === "procedure" ? "Confirmar procedimento" : "Confirmar retorno"}</Button></div>
+          <div className="flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" disabled={returnSaving} onClick={() => { setEditingAppointment(null); setProfessionalChoice(null); onReturnAppointmentClose(); }}>Cancelar</Button><Button type="submit" disabled={returnSaving || !clinicHours}>{returnSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : editingAppointment ? <PencilLine className="h-3.5 w-3.5" /> : <CalendarPlus className="h-3.5 w-3.5" />}{returnSaving ? "Salvando..." : editingAppointment ? "Salvar alterações" : scheduleKind === "procedure" ? "Confirmar procedimento" : "Confirmar retorno"}</Button></div>
         </form>
       </Modal>
       <Modal open={Boolean(startConfirmation)} onClose={() => { if (!updatingAppointmentId) setStartConfirmation(null); }} title="Iniciar fora do horário" description={startConfirmation ? `Agendado para ${startConfirmation.date} às ${startConfirmation.time}.` : undefined}>
@@ -1639,10 +1789,6 @@ function AppointmentsTab({ patientId, history, loading, returnAppointmentTarget,
       {checkAppointmentId ? <MaterialCheckModal appointmentId={checkAppointmentId} onClose={() => setCheckAppointmentId(null)} onDone={(message) => { setCheckedAppointmentIds((current) => [...current, checkAppointmentId]); setCheckAppointmentId(null); invalidateClientCache(`/api/patients/${patientId}/history`); toast.success(message); }} /> : null}
     </div>
   );
-}
-
-function AppointmentListSkeleton() {
-  return <Card className="space-y-3 p-5"><LoadingSkeleton className="h-4 w-44" />{[0, 1, 2].map((item) => <div className="flex items-center justify-between gap-4 rounded-[7px] border border-[#ececf3] p-4" key={item}><div className="flex-1 space-y-2"><LoadingSkeleton className="h-3 w-44" /><LoadingSkeleton className="h-2.5 w-64 max-w-full" /></div><LoadingSkeleton className="h-6 w-20 rounded-full" /></div>)}</Card>;
 }
 
 function ObservationsTab({ patientId }: { patientId: string }) {
@@ -1687,7 +1833,7 @@ function ObservationsTab({ patientId }: { patientId: string }) {
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4">
-        <div><h3 className="text-sm font-bold text-[#303144]">Observações do paciente</h3><p className="mt-1 text-[10px] text-[#858696]">Anotações da equipe sobre este cliente.</p></div>
+        <div><h3 className="text-sm font-bold text-[#303144]">Observações do paciente</h3><p className="mt-1 text-xs text-[#858696]">Anotações da equipe sobre este cliente.</p></div>
         {!adding ? <Button className="shrink-0" type="button" variant="secondary" onClick={() => setAdding(true)}><Plus className="h-3.5 w-3.5" />Adicionar observação</Button> : null}
       </div>
       {adding ? (
@@ -1708,7 +1854,7 @@ function ObservationsTab({ patientId }: { patientId: string }) {
         : <div className="space-y-3">{observations.map((observation) => (
           <Card className="p-4" key={observation.id}>
             <p className="whitespace-pre-wrap text-sm leading-6 text-[#555668]">{observation.text}</p>
-            <p className="mt-2 text-[10px] text-[#858696]">{new Date(observation.createdAt).toLocaleDateString("pt-BR")} · {observation.authorName}</p>
+            <p className="mt-2 text-xs text-[#858696]">{new Date(observation.createdAt).toLocaleDateString("pt-BR")} · {observation.authorName}</p>
             {observation.kind === "administrative" ? <div className="mt-2"><Badge variant="slate">Administrativa</Badge></div> : null}
           </Card>
         ))}</div>}
@@ -1716,43 +1862,6 @@ function ObservationsTab({ patientId }: { patientId: string }) {
   );
 }
 
-function PaymentsTab({ history }: { history?: PatientHistoryRecord }) {
-  if (!history?.payments.length) return <EmptyPatientState message="Este cliente ainda não possui pagamentos para acompanhar." />;
-
-  return (
-    <Card className="p-5">
-      <h3 className="text-sm font-bold text-[#303144]">Pagamentos do cliente</h3>
-      <div className="mt-4 space-y-3">
-        {history.payments.map((payment, index) => (
-          <div
-            className={cn(
-              "flex flex-col gap-3 rounded-[7px] border p-4 transition sm:flex-row sm:items-center sm:justify-between",
-              payment.disabled ? "border-[#ececf3] bg-[#f7f7fa] opacity-60" : "border-[#e1e4f2] bg-white",
-            )}
-            key={payment.id ?? `${payment.procedure}-${payment.status}-${index}`}
-          >
-            <div>
-              <p className="flex items-center gap-2 text-sm font-bold text-[#303144]"><CreditCard className="h-4 w-4 text-[#5147dc]" />{payment.procedure}</p>
-              <p className="mt-1 text-xs text-[#858696]">{payment.value} · {payment.method}</p>
-              {payment.disabledReason ? <p className="mt-1 text-[10px] font-semibold text-[#8a8b9c]">{payment.disabledReason}</p> : null}
-            </div>
-            <Badge variant={payment.status === "Pago" ? "green" : payment.status === "Bloqueado" ? "amber" : "purple"}>{payment.status}</Badge>
-          </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
-
 function EmptyInline({ text }: { text: string }) {
   return <div className="rounded-[7px] border border-dashed border-[#d9dce8] p-4 text-xs font-semibold text-[#858696]">{text}</div>;
-}
-
-function InfoBlock({ icon: Icon, label, value }: { icon: typeof Phone; label: string; value: string }) {
-  return (
-    <div className="rounded-[6px] border border-[#e9e9ef] bg-[#fbfbfd] p-3">
-      <p className="flex items-center gap-2 text-[9px] font-bold uppercase text-[#9697a7]"><Icon className="h-3.5 w-3.5 text-[#5147dc]" />{label}</p>
-      <p className="mt-2 text-xs font-semibold text-[#4f5062]">{value}</p>
-    </div>
-  );
 }

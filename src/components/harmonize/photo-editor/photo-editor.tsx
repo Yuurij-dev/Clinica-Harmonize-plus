@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Baby, Camera, Check, ChevronRight, CircleCheck, ClipboardPenLine, Dna, Droplet, FileJson, ImagePlus, Info, Loader2, Maximize2, ShieldAlert, Syringe, UserRound } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Baby, Camera, Check, ChevronRight, CircleCheck, ClipboardPenLine, Dna, Droplet, FileJson, ImagePlus, Info, Loader2, Maximize2, ShieldAlert, Syringe, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
@@ -15,7 +15,9 @@ import { EvaluationResult } from "./evaluation-result";
 import { PhotoGallery } from "./photo-gallery";
 import { EncounterBreadcrumb, type EncounterBreadcrumbActions } from "../encounter-breadcrumb";
 import { useDraftAutosave } from "../use-draft-autosave";
+import { ReadOnlyStageNotice } from "../readonly-stage-notice";
 import { revealValidationTarget } from "../reveal-validation-target";
+import { JourneyProgress } from "../journey-progress";
 import type { AnnotationSnapshot, EditorTool, EvaluationPhoto, PhotoAnnotation } from "./types";
 import type { Patient } from "@/types/clinic";
 
@@ -43,7 +45,7 @@ export type ClinicalAssessment = {
 
 const emptyAssessment: ClinicalAssessment = { chiefComplaint: "", patientGoal: "", medicalHistory: "", allergies: "", pregnancyStatus: "", anticoagulantUse: "", autoimmuneDiseases: "", contraindications: "", previousProcedures: "", clinicalNotes: "" };
 
-export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, onSaved, encounter, encounterLabel = "Novo atendimento" }: { patientId: string; evaluationId?: string; journeyId?: string; patientName: string; onSaved?: (evaluation: SavedEvaluation) => void; encounter?: { patient: Patient; onCancel: () => void; onContinue: (evaluationId: string) => void } & EncounterBreadcrumbActions; encounterLabel?: string }) {
+export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, onSaved, encounter, encounterLabel = "Novo atendimento", readOnly = false }: { patientId: string; evaluationId?: string; journeyId?: string; patientName: string; onSaved?: (evaluation: SavedEvaluation) => void; encounter?: { patient: Patient; onContinue: (evaluationId: string) => void } & EncounterBreadcrumbActions; encounterLabel?: string; readOnly?: boolean }) {
   const [currentEvaluationId, setCurrentEvaluationId] = useState(evaluationId);
   const currentEvaluationIdRef = useRef(evaluationId);
   const evaluationCacheKey = evaluationId ? `/api/patients/${patientId}/evaluation?evaluationId=${encodeURIComponent(evaluationId)}` : null;
@@ -90,7 +92,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   const displayScale = fitScale * zoom;
   const canUndo = Boolean(activePhotoId && past[activePhotoId]?.length);
   const canRedo = Boolean(activePhotoId && future[activePhotoId]?.length);
-  const autosave = useDraftAutosave({ scope: `${patientId}:${journeyId ?? ""}`, revision: editRevision, enabled: isEncounterMode && hydrated && !loadError, save: async () => Boolean(await saveEvaluation("Rascunho", true)) });
+  const autosave = useDraftAutosave({ scope: `${patientId}:${journeyId ?? ""}`, revision: editRevision, enabled: isEncounterMode && !readOnly && hydrated && !loadError, save: async () => Boolean(await saveEvaluation("Rascunho", true)) });
 
   function markDirty() {
     editRevisionRef.current += 1;
@@ -407,6 +409,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   }
 
   async function continueToQuote() {
+    if (readOnly) { if (currentEvaluationIdRef.current) encounter?.onContinue(currentEvaluationIdRef.current); return; }
     if (!assessment.chiefComplaint.trim()) {
       setAssessmentError("Informe a queixa principal para avançar.");
       setAssessmentValidationAttempt((current) => current + 1);
@@ -416,10 +419,6 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     if (!await autosave.flush()) { revealValidationTarget("evaluation-header-card"); return; }
     const savedEvaluationId = await saveEvaluation("Concluída");
     if (savedEvaluationId) encounter?.onContinue(savedEvaluationId);
-  }
-
-  async function returnToTreatments() {
-    await autosave.leave(() => encounter?.onCancel());
   }
 
   async function exportImage() {
@@ -436,22 +435,24 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     <div className={encounter ? "space-y-4" : undefined}>
       {encounter ? <>
         <EncounterBreadcrumb patientName={patientName} journeyName={encounterLabel} stage="Avaliação" onClients={() => void autosave.leave(encounter.onClients)} onPatient={() => void autosave.leave(encounter.onPatient)} onJourney={() => void autosave.leave(encounter.onJourney)} />
+        <button type="button" onClick={() => void autosave.leave(encounter.onJourney)} className="flex items-center gap-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-primary"><ArrowLeft className="h-4 w-4" />Voltar aos tratamentos</button>
         <Card id="evaluation-header-card" tabIndex={-1} className="flex scroll-mt-24 flex-wrap items-center justify-between gap-4 p-4">
           <div className="flex min-w-0 items-center gap-3">
             <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[#efedff] text-sm font-black text-[#5147dc]">{patientName.split(" ").map((part) => part[0]).slice(0, 2).join("")}</div>
-            <div className="min-w-0"><h2 className="truncate text-base font-bold">{patientName}</h2><p className="mt-1 flex flex-wrap gap-x-3 text-[10px] text-muted-foreground"><span>{encounter.patient.age ? `${encounter.patient.age} anos` : "Idade não informada"}</span><span>{encounter.patient.phone || "Telefone não informado"}</span></p><div className="mt-1.5 flex flex-wrap gap-2"><span className="rounded-full bg-emerald-50 px-2 py-1 text-[9px] font-semibold text-emerald-700">{encounter.patient.status}</span><span className="rounded-full bg-muted px-2 py-1 text-[9px] text-muted-foreground">Paciente desde {encounter.patient.createdAt ? new Date(encounter.patient.createdAt).toLocaleDateString("pt-BR") : "data indisponível"}</span></div></div>
+            <div className="min-w-0"><h2 className="truncate text-base font-bold">{patientName}</h2><p className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground"><span>{encounter.patient.age ? `${encounter.patient.age} anos` : "Idade não informada"}</span><span>{encounter.patient.phone || "Telefone não informado"}</span></p><div className="mt-1.5 flex flex-wrap gap-2"><span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">{encounter.patient.status}</span><span className="rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">Paciente desde {encounter.patient.createdAt ? new Date(encounter.patient.createdAt).toLocaleDateString("pt-BR") : "data indisponível"}</span></div></div>
           </div>
-          <div className="flex flex-wrap items-center gap-2"><span role="status" className={cn("text-[10px]", autosave.state === "error" ? "text-destructive" : "text-muted-foreground")}>{autosave.state === "saving" ? "Salvando..." : autosave.state === "pending" ? "Alterações pendentes" : autosave.state === "error" ? "Não foi possível salvar" : "Rascunho salvo"}</span>{autosave.state === "error" ? <Button size="sm" variant="outline" onClick={() => void autosave.flush()}>Tentar novamente</Button> : null}<Button variant="secondary" onClick={() => void returnToTreatments()}>Voltar aos tratamentos</Button><Button disabled={isSaving} onClick={() => void continueToQuote()}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Avançar para orçamento<ChevronRight className="h-4 w-4" /></Button></div>
+          <div className="flex flex-wrap items-center gap-2"><span role="status" className={cn("text-xs", autosave.state === "error" ? "text-destructive" : "text-muted-foreground")}>{readOnly ? "Somente leitura" : autosave.state === "saving" ? "Salvando..." : autosave.state === "pending" ? "Alterações pendentes" : autosave.state === "error" ? "Não foi possível salvar" : "Rascunho salvo"}</span>{autosave.state === "error" && !readOnly ? <Button size="sm" variant="outline" onClick={() => void autosave.flush()}>Tentar novamente</Button> : null}<Button disabled={isSaving} onClick={() => void continueToQuote()}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Avançar para orçamento<ChevronRight className="h-4 w-4" /></Button></div>
         </Card>
-        <div aria-label="Etapas do atendimento" className="grid grid-cols-4 gap-2 px-1">{["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento"].map((stage, index) => <div className="flex min-w-0 items-center gap-2" key={stage}><span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] font-bold", index === 0 ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground")}>{index + 1}</span><span className={cn("truncate text-[10px]", index === 0 ? "font-bold text-primary" : "text-muted-foreground")}>{stage}</span>{index < 3 ? <span className="h-px flex-1 bg-border" /> : null}</div>)}</div>
+        <JourneyProgress current={0} />
+        {readOnly ? <ReadOnlyStageNotice /> : null}
       </> : null}
       <Card className={cn("overflow-hidden border-[#e3e5f0] bg-white p-0 text-[#25263a] shadow-[0_12px_34px_rgba(38,39,58,0.06)]", encounter && "border-0 bg-transparent shadow-none")}>
         {!encounter ? <div className="flex flex-col gap-3 border-b border-[#ececf3] bg-white px-5 py-4 md:flex-row md:items-center md:justify-between">
-          <div><div className="flex items-center gap-2"><Camera className="h-4 w-4 text-[#5147dc]" /><h3 className="text-sm font-bold">{encounter ? "Avaliação clínica" : "Fotos da avaliação"}</h3></div><p className="mt-1 text-[11px] text-[#858696]">Registre as informações clínicas e as fotografias de {patientName}.</p></div>
-          <div className="flex items-center gap-2 text-[10px] text-[#858696]"><FileJson className="h-3.5 w-3.5 text-[#5147dc]" />Marcações editáveis salvas separadamente</div>
+          <div><div className="flex items-center gap-2"><Camera className="h-4 w-4 text-[#5147dc]" /><h3 className="text-sm font-bold">{encounter ? "Avaliação clínica" : "Fotos da avaliação"}</h3></div><p className="mt-1 text-xs text-[#858696]">Registre as informações clínicas e as fotografias de {patientName}.</p></div>
+          <div className="flex items-center gap-2 text-xs text-[#858696]"><FileJson className="h-3.5 w-3.5 text-[#5147dc]" />Marcações editáveis salvas separadamente</div>
         </div> : null}
 
-        <div className={cn("grid gap-4 p-4", encounter && "grid-cols-1 p-0 lg:grid-cols-[minmax(0,1fr)_290px]")}>
+        <div inert={readOnly} className={cn("grid gap-4 p-4", encounter && "grid-cols-1 p-0 lg:grid-cols-[minmax(0,1fr)_290px]")}>
           <div className="min-w-0">
             {encounter || evaluationId ? <AssessmentForm assessment={assessment} error={assessmentError} validationAttempt={assessmentValidationAttempt} onChange={changeAssessment} /> : null}
             <section id="evaluation-photo-card" tabIndex={-1} className={cn("mt-4 grid scroll-mt-24 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)]", encounter && "rounded-md border border-[#e3e5f0] bg-white p-3 sm:p-4", saveError && "border-destructive")} aria-label="Registro fotográfico e marcação">
@@ -461,7 +462,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
                   <EditorToolbar canRedo={canRedo} canUndo={canUndo} color={color} strokeWidth={strokeWidth} hasSelection={Boolean(selectedId)} onClear={clearAnnotations} onColorChange={setColor} onStrokeWidthChange={setStrokeWidth} onDeleteSelected={deleteSelected} onExport={exportImage} onRedo={redo} onSave={() => { if (encounter) void autosave.flush(); else void saveEvaluation(); }} onToolChange={(nextTool) => { setTool(nextTool); if (nextTool !== "select") setSelectedId(null); }} onUndo={undo} onZoomIn={() => setZoom((value) => Math.min(2.25, value + 0.15))} onZoomOut={() => setZoom((value) => Math.max(0.55, value - 0.15))} onZoomReset={() => setZoom(1)} isSaving={isSaving} tool={tool} />
                   <div className="min-w-0">
                   {encounter ? <div className="mb-3 flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={() => void openCamera()}><Camera className="h-4 w-4" />Capturar foto</Button><Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}><ImagePlus className="h-4 w-4" />Upload de fotos</Button><input ref={fileInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} />{activePhoto ? <Button size="sm" variant="outline" onClick={() => setPreviewPhoto(activePhoto)}><Maximize2 className="h-4 w-4" />Ampliar foto</Button> : null}</div> : null}
-                  {activePhoto ? <EditorCanvas color={color} strokeWidth={strokeWidth} onCommitAnnotations={commitAnnotations} onPreviewAnnotations={updatePhotoAnnotations} onSelect={setSelectedId} photo={activePhoto} scale={displayScale} selectedId={selectedId} tool={tool} /> : <label className="flex min-h-[360px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed border-[#cfd3e4] bg-[#fbfbfe] px-5 text-center transition hover:border-[#5147dc] hover:bg-[#f8f7ff]"><span className="grid h-12 w-12 place-items-center rounded-full bg-[#efedff] text-[#5147dc]"><ImagePlus className="h-5 w-5" /></span><strong className="mt-4 text-sm">Adicione a primeira foto da avaliação</strong><span className="mt-1 max-w-sm text-[11px] leading-5 text-[#858696]">JPG, PNG ou WEBP. A imagem original fica preservada e as marcações são armazenadas separadamente.</span><span className="mt-4 inline-flex items-center rounded-[7px] bg-[#5147dc] px-4 py-2 text-xs font-bold text-white">Escolher foto</span><input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} /></label>}
+                  {activePhoto ? <EditorCanvas color={color} strokeWidth={strokeWidth} onCommitAnnotations={commitAnnotations} onPreviewAnnotations={updatePhotoAnnotations} onSelect={setSelectedId} photo={activePhoto} scale={displayScale} selectedId={selectedId} tool={tool} /> : <label className="flex min-h-[360px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed border-[#cfd3e4] bg-[#fbfbfe] px-5 text-center transition hover:border-[#5147dc] hover:bg-[#f8f7ff]"><span className="grid h-12 w-12 place-items-center rounded-full bg-[#efedff] text-[#5147dc]"><ImagePlus className="h-5 w-5" /></span><strong className="mt-4 text-sm">Adicione a primeira foto da avaliação</strong><span className="mt-1 max-w-sm text-xs leading-5 text-[#858696]">JPG, PNG ou WEBP. A imagem original fica preservada e as marcações são armazenadas separadamente.</span><span className="mt-4 inline-flex items-center rounded-[7px] bg-[#5147dc] px-4 py-2 text-xs font-bold text-white">Escolher foto</span><input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} /></label>}
                   {photoUploadError ? <p id="evaluation-photo-upload-error" tabIndex={-1} role="alert" className="mt-2 scroll-mt-24 text-xs font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{photoUploadError}</p> : null}
                   {saveError ? <p id="evaluation-save-error" tabIndex={-1} role="alert" className="mt-2 scroll-mt-24 text-xs text-destructive animate-[hp-shake_0.42s_ease-in-out]">{saveError}</p> : null}
                 </div>
@@ -469,21 +470,21 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
                 <aside className="space-y-3">
                   <div className="rounded-[8px] border border-[#e3e5f0] bg-white p-3">
                     <div className="mb-3 flex items-center justify-between gap-2">
-                      <div><p className="text-[10px] font-bold">Fotos anexadas ({photos.length})</p><p className="mt-1 text-[9px] text-muted-foreground">Clique para selecionar; use as setas para organizar.</p></div>
-                      <button className="text-[9px] font-semibold text-primary hover:underline" type="button" onClick={() => fileInputRef.current?.click()}>Adicionar fotos</button>
+                      <div><p className="text-xs font-bold">Fotos anexadas ({photos.length})</p><p className="mt-1 text-xs text-muted-foreground">Clique para selecionar; use as setas para organizar.</p></div>
+                      <button className="text-xs font-semibold text-primary hover:underline" type="button" onClick={() => fileInputRef.current?.click()}>Adicionar fotos</button>
                     </div>
                     <PhotoGallery activePhotoId={activePhotoId} onCategoryChange={changePhotoCategory} onMove={movePhoto} onRemove={removePhoto} onReplace={replacePhoto} onSelect={(photoId) => { setActivePhotoId(photoId); setSelectedId(null); setZoom(1); }} onUpload={uploadPhotos} photos={photos} />
                   </div>
-                  <div className="rounded-[8px] border border-[#e3e5f0] bg-white p-3"><h4 className="text-[10px] font-bold">Marcação / observações sobre a foto</h4>{activePhoto ? <div className="mt-2 space-y-1.5 text-[10px] text-muted-foreground"><p>Categoria: <strong className="text-foreground">{activePhoto.category}</strong></p><p>{activePhoto.annotations.length ? `${activePhoto.annotations.length} marcação(ões) editável(is) nesta imagem.` : "Nenhuma marcação feita nesta foto."}</p><p className="truncate" title={activePhoto.name}>Arquivo: {activePhoto.name}</p></div> : <p className="mt-2 text-[10px] text-muted-foreground">Selecione ou adicione uma foto para ver suas marcações.</p>}</div>
+                  <div className="rounded-[8px] border border-[#e3e5f0] bg-white p-3"><h4 className="text-xs font-bold">Marcação / observações sobre a foto</h4>{activePhoto ? <div className="mt-2 space-y-1.5 text-xs text-muted-foreground"><p>Categoria: <strong className="text-foreground">{activePhoto.category}</strong></p><p>{activePhoto.annotations.length ? `${activePhoto.annotations.length} marcação(ões) editável(is) nesta imagem.` : "Nenhuma marcação feita nesta foto."}</p><p className="truncate" title={activePhoto.name}>Arquivo: {activePhoto.name}</p></div> : <p className="mt-2 text-xs text-muted-foreground">Selecione ou adicione uma foto para ver suas marcações.</p>}</div>
                 </aside>
               </>)}
             </section>
           </div>
-          {encounter ? <aside className="space-y-3"><Card className="space-y-2 p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><UserRound className="h-4 w-4 text-primary" />Resumo rápido do atendimento</h3>{[["Etapa atual", "Avaliação"], ["Profissional", professional || "Não informado"], ["Data", new Date().toLocaleDateString("pt-BR")], ["Status", currentEvaluationId ? evaluationStatus : "Novo rascunho"], ["Fotos anexadas", String(photos.length)]].map(([label, value]) => <div className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2.5 py-2 text-[10px]" key={label}><span className="text-muted-foreground">{label}</span><span className="truncate font-semibold">{value}</span></div>)}</Card><Card className="space-y-2 p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><CircleCheck className="h-4 w-4 text-primary" />Checklist da avaliação</h3>{[["Anamnese preenchida", Boolean(assessment.chiefComplaint.trim() && (assessment.allergies.trim() || assessment.pregnancyStatus || assessment.anticoagulantUse || assessment.autoimmuneDiseases || assessment.previousProcedures.trim()))], ["Fotos iniciais registradas", photos.length > 0], ["Marcação realizada", photos.some((photo) => photo.annotations.length > 0)], ["Observações clínicas salvas", Boolean(assessment.clinicalNotes.trim() && !isDirty)]].map(([label, done]) => <div className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-2 text-[10px]" key={String(label)}><span className={cn("grid h-4 w-4 place-items-center rounded border", done ? "border-primary bg-primary text-primary-foreground" : "border-input")}>{done ? <Check className="h-3 w-3" /> : null}</span>{label}</div>)}</Card></aside> : null}
+          {encounter ? <aside className="space-y-3"><Card className="space-y-2 p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><UserRound className="h-4 w-4 text-primary" />Resumo rápido do atendimento</h3>{[["Etapa atual", "Avaliação"], ["Profissional", professional || "Não informado"], ["Data", new Date().toLocaleDateString("pt-BR")], ["Status", currentEvaluationId ? evaluationStatus : "Novo rascunho"], ["Fotos anexadas", String(photos.length)]].map(([label, value]) => <div className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2.5 py-2 text-xs" key={label}><span className="text-muted-foreground">{label}</span><span className="truncate font-semibold">{value}</span></div>)}</Card><Card className="space-y-2 p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><CircleCheck className="h-4 w-4 text-primary" />Checklist da avaliação</h3>{[["Anamnese preenchida", Boolean(assessment.chiefComplaint.trim() && (assessment.allergies.trim() || assessment.pregnancyStatus || assessment.anticoagulantUse || assessment.autoimmuneDiseases || assessment.previousProcedures.trim()))], ["Fotos iniciais registradas", photos.length > 0], ["Marcação realizada", photos.some((photo) => photo.annotations.length > 0)], ["Observações clínicas salvas", Boolean(assessment.clinicalNotes.trim() && !isDirty)]].map(([label, done]) => <div className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-2 text-xs" key={String(label)}><span className={cn("grid h-4 w-4 place-items-center rounded border", done ? "border-primary bg-primary text-primary-foreground" : "border-input")}>{done ? <Check className="h-3 w-3" /> : null}</span>{label}</div>)}</Card></aside> : null}
         </div>
 
       {notice ? (
-        <div id="evaluation-notice" tabIndex={-1} className={cn("mx-4 mb-4 flex scroll-mt-24 items-center gap-2 rounded-[7px] border px-3 py-2 text-[11px]", notice.tone === "success" ? "border-[#b9e8d8] bg-[#effbf6] text-[#16805d]" : "border-[#d7d9ee] bg-[#f7f6ff] text-[#5147dc]")}>
+        <div id="evaluation-notice" tabIndex={-1} className={cn("mx-4 mb-4 flex scroll-mt-24 items-center gap-2 rounded-[7px] border px-3 py-2 text-xs", notice.tone === "success" ? "border-[#b9e8d8] bg-[#effbf6] text-[#16805d]" : "border-[#d7d9ee] bg-[#f7f6ff] text-[#5147dc]")}>
           <Info className="h-3.5 w-3.5 shrink-0" />
           {notice.text}
         </div>
@@ -516,8 +517,8 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
 }
 
 function AssessmentForm({ assessment, error, validationAttempt, onChange }: { assessment: ClinicalAssessment; error?: string; validationAttempt?: number; onChange: (field: keyof ClinicalAssessment, value: string) => void }) {
-  const textareaClass = "w-full resize-y rounded-[5px] border border-[#dfe1ea] bg-white px-2.5 py-2 text-[10px] font-normal text-[#25263a] outline-none placeholder:text-[#8c8d9c] focus:border-[#5147dc] focus:ring-1 focus:ring-[#5147dc]/20";
-  const controlClass = "h-8 w-full rounded-[5px] border border-[#dfe1ea] bg-white px-2 text-[10px] font-normal text-[#25263a] outline-none focus:border-[#5147dc] focus:ring-1 focus:ring-[#5147dc]/20";
+  const textareaClass = "w-full resize-y rounded-[5px] border border-[#dfe1ea] bg-white px-2.5 py-2 text-sm font-normal text-[#25263a] outline-none placeholder:text-[#8c8d9c] focus:border-[#5147dc] focus:ring-1 focus:ring-[#5147dc]/20";
+  const controlClass = "h-8 w-full rounded-[5px] border border-[#dfe1ea] bg-white px-2 text-sm font-normal text-[#25263a] outline-none focus:border-[#5147dc] focus:ring-1 focus:ring-[#5147dc]/20";
   const anamnesisFields = [
     { key: "allergies" as const, label: "Alergias", icon: ShieldAlert },
     { key: "pregnancyStatus" as const, label: "Gestante", icon: Baby },
@@ -528,7 +529,7 @@ function AssessmentForm({ assessment, error, validationAttempt, onChange }: { as
   const renderAnamnesisField = (field: typeof anamnesisFields[number]) => {
     const Icon = field.icon;
     return <label className="min-w-0 rounded-[5px] border border-[#e5e6ee] bg-white p-2" key={field.key}>
-      <span className="mb-1 flex items-center gap-1.5 text-[9px] font-medium text-[#6f7082]"><Icon className="h-3.5 w-3.5 shrink-0 text-[#5147dc]" aria-hidden="true" />{field.label}</span>
+      <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[#6f7082]"><Icon className="h-3.5 w-3.5 shrink-0 text-[#5147dc]" aria-hidden="true" />{field.label}</span>
       <select className={controlClass} value={assessment[field.key]} onChange={(event) => onChange(field.key, event.target.value)}><option value="">Não informado</option><option value="Não">Não</option><option value="Sim">Sim</option>{assessment[field.key] && !["Não", "Sim"].includes(assessment[field.key]) ? <option value={assessment[field.key]}>{assessment[field.key]}</option> : null}</select>
     </label>;
   };
@@ -536,14 +537,14 @@ function AssessmentForm({ assessment, error, validationAttempt, onChange }: { as
   return <Card id="evaluation-assessment-card" tabIndex={-1} className={cn("scroll-mt-24 p-3 sm:p-4", error && "border-destructive")}>
     <h3 className="flex items-center gap-2 text-sm font-bold"><ClipboardPenLine className="h-4 w-4 text-primary" />Avaliação clínica</h3>
     <div className="mt-3 grid gap-3 md:grid-cols-2">
-      <label className="grid min-w-0 gap-1 text-[10px] font-semibold"><span>Queixa principal <span className="text-destructive">*</span></span><textarea key={`chief-complaint-${validationAttempt ?? 0}`} aria-invalid={Boolean(error)} aria-describedby={error ? "chief-complaint-error" : undefined} className={cn(textareaClass, "min-h-[54px]", error && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} rows={2} maxLength={5000} placeholder="Descreva a queixa principal" value={assessment.chiefComplaint} onChange={(event) => onChange("chiefComplaint", event.target.value)} />{error ? <span id="chief-complaint-error" role="alert" className="text-[9px] font-medium text-[#b42318]">{error}</span> : null}</label>
-      <label className="grid min-w-0 gap-1 text-[10px] font-semibold"><span>Objetivo do paciente</span><textarea className={`${textareaClass} min-h-[54px]`} rows={2} maxLength={5000} placeholder="Não informado" value={assessment.patientGoal} onChange={(event) => onChange("patientGoal", event.target.value)} /></label>
+      <label className="grid min-w-0 gap-1 text-xs font-semibold"><span>Queixa principal <span className="text-destructive">*</span></span><textarea key={`chief-complaint-${validationAttempt ?? 0}`} aria-invalid={Boolean(error)} aria-describedby={error ? "chief-complaint-error" : undefined} className={cn(textareaClass, "min-h-[54px]", error && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} rows={2} maxLength={5000} placeholder="Descreva a queixa principal" value={assessment.chiefComplaint} onChange={(event) => onChange("chiefComplaint", event.target.value)} />{error ? <span id="chief-complaint-error" role="alert" className="text-xs font-medium text-[#b42318]">{error}</span> : null}</label>
+      <label className="grid min-w-0 gap-1 text-xs font-semibold"><span>Objetivo do paciente</span><textarea className={`text-sm ${textareaClass} min-h-[54px]`} rows={2} maxLength={5000} placeholder="Não informado" value={assessment.patientGoal} onChange={(event) => onChange("patientGoal", event.target.value)} /></label>
       <section aria-labelledby="anamnesis-title" className="min-w-0">
-        <h4 id="anamnesis-title" className="mb-2 text-[10px] font-bold">Anamnese rápida</h4>
+        <h4 id="anamnesis-title" className="mb-2 text-xs font-bold">Anamnese rápida</h4>
         <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">{anamnesisFields.slice(0, 3).map(renderAnamnesisField)}</div>
         <div className="mt-1.5 grid grid-cols-1 gap-1.5 sm:grid-cols-2">{anamnesisFields.slice(3).map(renderAnamnesisField)}</div>
       </section>
-      <label className="grid min-w-0 content-start gap-1 text-[10px] font-semibold">Observações clínicas<textarea className={`${textareaClass} min-h-[116px]`} rows={5} maxLength={5000} placeholder="Não informado" value={assessment.clinicalNotes} onChange={(event) => onChange("clinicalNotes", event.target.value)} /></label>
+      <label className="grid min-w-0 content-start gap-1 text-xs font-semibold">Observações clínicas<textarea className={`text-sm ${textareaClass} min-h-[116px]`} rows={5} maxLength={5000} placeholder="Não informado" value={assessment.clinicalNotes} onChange={(event) => onChange("clinicalNotes", event.target.value)} /></label>
     </div>
   </Card>;
 }

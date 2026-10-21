@@ -37,7 +37,7 @@ export function Sidebar({
             </div>
             <div className="min-w-0">
               <p className="text-[15px] font-black leading-none text-foreground">Harmonize+</p>
-              <p className="mt-1 text-[9px] font-medium text-muted-foreground">Gestão para clínicas</p>
+              <p className="mt-1 text-xs font-medium text-muted-foreground">Gestão para clínicas</p>
             </div>
           </div>
         </div>
@@ -50,7 +50,7 @@ export function Sidebar({
         </button>
       </div>
 
-      <Button className="mb-6 w-full justify-start whitespace-nowrap px-3 text-[11px]" variant="primary" onClick={onNewAppointment}>
+      <Button className="mb-6 w-full justify-start whitespace-nowrap px-3 text-xs" variant="primary" onClick={onNewAppointment}>
         <Plus className="h-4 w-4" />
         Novo agendamento
       </Button>
@@ -64,7 +64,7 @@ export function Sidebar({
             <button
               key={item.id}
             className={cn(
-                "hp-pressable flex h-10 w-full items-center justify-between rounded-md px-3 text-left text-[12px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "hp-pressable flex h-10 w-full items-center justify-between rounded-md px-3 text-left text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 isActive
                   ? "bg-accent text-accent-foreground"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -85,7 +85,7 @@ export function Sidebar({
       </nav>
 
       <div className="mt-auto border-t border-border px-2 pt-4">
-        <p className="text-[10px] font-semibold text-muted-foreground">{clinicName ?? "Clínica"}</p>
+        <p className="text-xs font-semibold text-muted-foreground">{clinicName ?? "Clínica"}</p>
         <p className="mt-1 text-xs font-bold text-foreground">Plano profissional</p>
       </div>
     </aside>
