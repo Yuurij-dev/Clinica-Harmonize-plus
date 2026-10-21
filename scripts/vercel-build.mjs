@@ -44,7 +44,7 @@ if (isProduction && !skip) {
     process.exit(1);
   }
   // Migrations precisam de conexão direta ou de sessão: o pooler de transações (porta 6543) trava o lock do Prisma.
-  // O prisma.config.ts usa DATABASE_URL, então ela é trocada pela DIRECT_URL só neste comando.
+  // O Prisma migra pela DIRECT_URL (directUrl do prisma.config.ts) e usa a DATABASE_URL como url, então ela é trocada pela DIRECT_URL só neste comando.
   // O pooler de transações (6543) trava o lock do Prisma. No Supabase o pooler em modo sessão fica no mesmo host, porta 5432,
   // com as mesmas credenciais: troca a porta automaticamente para o migrate (o app continua usando DATABASE_URL como está).
   const migrateUrl = migrationUrl(process.env.DIRECT_URL);
@@ -53,7 +53,7 @@ if (isProduction && !skip) {
     console.error("A URL de migração aponta para um pooler de transações (6543) que não é do Supabase. Use a conexão direta ou um pooler em modo sessão (porta 5432) em DIRECT_URL.");
     process.exit(1);
   }
-  run("npx", ["prisma", "migrate", "deploy"], { env: { ...process.env, DATABASE_URL: migrateUrl }, timeout: 240000 });
+  run("npx", ["prisma", "migrate", "deploy"], { env: { ...process.env, DATABASE_URL: migrateUrl, DIRECT_URL: migrateUrl }, timeout: 240000 });
 } else {
   console.log(`Migrations ignoradas (VERCEL_ENV=${process.env.VERCEL_ENV ?? "local"}${skip ? ", SKIP_PRISMA_MIGRATE=1" : ""}).`);
 }
