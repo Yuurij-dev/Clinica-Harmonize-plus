@@ -13,7 +13,8 @@ import { clinicToday } from "@/lib/clinic-time";
 import { expenseCategories, type FinancePeriod } from "@/lib/finance-rules";
 import { formatCurrency, parseCurrency } from "@/lib/input-masks";
 import { RecurringExpensesCard } from "./recurring-expenses";
-import { CountUpValue, EmptyState, ProgressBar, SectionIntro } from "./shared";
+import { CountUp } from "@/components/ui/count-up";
+import { EmptyState, ProgressBar, SectionIntro } from "./shared";
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 export const paymentMethods = ["Pix", "Boleto", "Cartão de crédito", "Cartão de débito", "Dinheiro", "Transferência"];
@@ -86,7 +87,7 @@ export function FinanceSection() {
           <Card className="p-5" key={label}>
             <p className="text-sm font-semibold text-[#65708b]">{label}</p>
             <p className={`mt-3 text-xl font-black ${label === "Resultado" && (value ?? 0) < 0 ? "text-destructive" : "text-[#121733]"}`}>
-              {value === undefined ? <span className="text-muted-foreground">—</span> : <CountUpValue value={value / 100} format={(current) => currency.format(current)} />}
+              {value === undefined ? <span className="text-muted-foreground">—</span> : <CountUp value={value / 100} format={(current) => currency.format(current)} />}
             </p>
           </Card>
         ))}
@@ -255,7 +256,7 @@ function ProcedureResultsCard() {
               <p className="font-black text-[#121733]">{name}</p>
               <p className="text-sm text-[#65708b]">Atendimentos realizados: <strong>{count}</strong></p>
             </div>
-            <ProgressBar value={Math.min(100, count * 20)} tone={index === 2 ? "purple" : "green"} />
+            <ProgressBar index={index} value={Math.min(100, count * 20)} tone={index === 2 ? "purple" : "green"} />
           </div>
         )) : <p className="text-sm text-[#65708b]">Ainda não há atendimentos para calcular resultados.</p>}
       </CardContent>

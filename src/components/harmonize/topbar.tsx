@@ -1,5 +1,7 @@
 import { Bell, ChevronDown, Clock3, Loader2, LogOut, Menu, Moon, Search, Settings2, Sparkles, Sun } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
+import { THEME_CHANGE_EVENT, isDarkTheme, resolveStoredDark, toggleThemeWithReveal } from "@/lib/theme-transition";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -33,12 +35,6 @@ function appointmentMinutesFromTime(time: string) {
   return (hours || 0) * 60 + (minutes || 0);
 }
 
-function initialDarkMode() {
-  if (typeof window === "undefined") return false;
-  const savedTheme = window.localStorage.getItem("harmonize-theme");
-  return savedTheme === "dark";
-}
-
 function formatTrialRemaining(milliseconds: number) {
   const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
   const days = Math.floor(totalSeconds / 86_400);
@@ -53,7 +49,6 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
   const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
-  const [themeReady, setThemeReady] = useState(false);
   const [trialRemaining, setTrialRemaining] = useState<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const previousAlertIdsRef = useRef<string[] | null>(null);
@@ -104,17 +99,21 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
   const trialUrgent = trialRemaining !== null && trialRemaining > 0 && trialRemaining <= 24 * 60 * 60 * 1000;
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      setDarkMode(initialDarkMode());
-      setThemeReady(true);
-    });
-    return () => window.cancelAnimationFrame(frame);
+    // Após o login (navegação SPA) o script do layout não rodou: aplica o tema salvo/preferido do sistema.
+    const stored = resolveStoredDark();
+    if (stored !== isDarkTheme()) {
+      document.documentElement.classList.toggle("dark", stored);
+      window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
+    }
+    const frame = window.requestAnimationFrame(() => setDarkMode(isDarkTheme()));
+    // flushSync: o ícone precisa estar no novo estado antes do snapshot da view transition.
+    const syncFromDocument = () => flushSync(() => setDarkMode(isDarkTheme()));
+    window.addEventListener(THEME_CHANGE_EVENT, syncFromDocument);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener(THEME_CHANGE_EVENT, syncFromDocument);
+    };
   }, []);
-
-  useEffect(() => {
-    if (!themeReady) return;
-    document.documentElement.classList.toggle("dark", darkMode);
-  }, [darkMode, themeReady]);
 
   useEffect(() => {
     if (!trialEndsAt) {
@@ -134,14 +133,6 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
       window.clearInterval(timer);
     };
   }, [trialEndsAt]);
-
-  function toggleTheme() {
-    const nextTheme = !darkMode;
-    setDarkMode(nextTheme);
-    window.localStorage.setItem("harmonize-theme", nextTheme ? "dark" : "light");
-    document.documentElement.classList.toggle("dark", nextTheme);
-    window.dispatchEvent(new Event("harmonize-theme-change"));
-  }
 
   useEffect(() => {
     const primeOnInteraction = () => primeNotificationAudio();
@@ -248,8 +239,10 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
         >
           <Settings2 className="h-5 w-5" />
         </Button> : null}
-        <Button variant="secondary" size="icon" aria-label={darkMode ? "Ativar tema claro" : "Ativar tema escuro"} title={darkMode ? "Tema claro" : "Tema escuro"} onClick={toggleTheme}>
-          {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+        <Button variant="secondary" size="icon" aria-label={darkMode ? "Ativar tema claro" : "Ativar tema escuro"} title={darkMode ? "Tema claro" : "Tema escuro"} onClick={toggleThemeWithReveal}>
+          <span key={darkMode ? "sun" : "moon"} className="hp-theme-icon inline-flex">
+            {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+          </span>
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

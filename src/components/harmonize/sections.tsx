@@ -24,6 +24,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CountUp } from "@/components/ui/count-up";
 import { MaskedInput } from "@/components/ui/masked-input";
 import {
   DetailCard,
@@ -597,7 +598,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
 
   return (
     <div className="w-full">
-      <div className="hp-page-enter mb-5 flex flex-col gap-4 border-b border-[#ececf2] pb-5 sm:flex-row sm:items-end sm:justify-between">
+      <div data-hp-title className="hp-page-enter mb-5 flex flex-col gap-4 border-b border-[#ececf2] pb-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h2 className="text-xl font-bold text-[#3026a8]">Agenda Clínica</h2>
           <p className="mt-1 text-xs text-[#858696]">Visualize e gerencie seus atendimentos de forma prática.</p>
@@ -1399,10 +1400,10 @@ export function ReportsSection() {
   const pending = data?.payments.filter((item) => item.status !== "Pago").reduce((sum, item) => sum + item.value, 0) ?? 0;
   const mostPerformed = Object.entries((data?.appointments ?? []).reduce<Record<string, number>>((result, item) => { result[item.procedure] = (result[item.procedure] ?? 0) + 1; return result; }, {})).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "Sem dados";
   const reportItems = [
-    { label: "Receita por período", value: currency.format(received) },
-    { label: "Resultado por período", value: currency.format(received) },
-    { label: "Procedimento mais realizado", value: mostPerformed },
-    { label: "Pagamentos pendentes", value: currency.format(pending) },
+    { label: "Receita por período", amount: received },
+    { label: "Resultado por período", amount: received },
+    { label: "Procedimento mais realizado", text: mostPerformed },
+    { label: "Pagamentos pendentes", amount: pending },
   ];
   return (
     <div>
@@ -1416,7 +1417,7 @@ export function ReportsSection() {
         {reportItems.map((item) => (
           <Card className="p-5" key={item.label}>
             <p className="text-sm font-semibold text-[#65708b]">{item.label}</p>
-            <p className="mt-3 text-xl font-black text-[#121733]">{item.value}</p>
+            <p className="mt-3 text-xl font-black text-[#121733]">{item.amount === undefined ? item.text : <CountUp value={item.amount} format={currency.format} />}</p>
           </Card>
         ))}
       </div>
