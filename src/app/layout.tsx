@@ -51,7 +51,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <head>
-        <script dangerouslySetInnerHTML={{ __html: `(() => { try { if (window.location.pathname !== "/login" && window.localStorage.getItem("harmonize-theme") === "dark") document.documentElement.classList.add("dark"); } catch {} })();` }} />
+        <script dangerouslySetInnerHTML={{ __html: `(() => { try { if (window.location.pathname === "/login") return; var saved = window.localStorage.getItem("harmonize-theme"); var dark = saved === "dark" || saved === "light" ? saved === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches; if (dark) document.documentElement.classList.add("dark"); } catch {} })();` }} />
       </head>
       <body className="min-h-full flex flex-col"><AppRouterShell>{children}</AppRouterShell></body>
     </html>
