@@ -22,8 +22,8 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
   const cachedDashboard = readClientCache<DashboardData>("/api/dashboard/bootstrap");
   const [data, setData] = useState<DashboardData | null>(cachedDashboard ?? null);
   const [now, setNow] = useState(() => clinicNow());
-  const [showAllPatients, setShowAllPatients] = useState(false);
-  const [showAllQuotes, setShowAllQuotes] = useState(false);
+  const [visiblePatients, setVisiblePatients] = useState(3);
+  const [visibleQuotes, setVisibleQuotes] = useState(3);
   useEffect(() => {
     getCachedJson<DashboardData>("/api/dashboard/bootstrap")
       .then((dashboardData) => setData({ appointmentCount: dashboardData.appointmentCount ?? 0, appointments: dashboardData.appointments ?? [], patients: dashboardData.patients ?? [], quotes: dashboardData.quotes ?? [], payments: dashboardData.payments ?? [] }))
@@ -167,9 +167,9 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
       </div>
 
       <div className="hp-list-stagger grid gap-6 lg:grid-cols-3">
-        <DetailCard title="Clientes recentes" onAction={() => setShowAllPatients((expanded) => !expanded)} expanded={showAllPatients}>
+        <DetailCard title="Clientes recentes" onAction={() => setVisiblePatients((visible) => visible > 3 ? 3 : 6)} expanded={visiblePatients > 3}>
           <div className="space-y-4">
-            {(showAllPatients ? (data?.patients ?? []) : (data?.patients ?? []).slice(0, 3)).map((patient, index) => (
+            {(data?.patients ?? []).slice(0, visiblePatients).map((patient, index) => (
               <div className="flex items-center justify-between gap-3" key={`${patient.id || "patient"}-${index}`}>
                 <div className="flex min-w-0 items-center gap-3">
                   <PatientAvatarLink patientId={patient.id} patientName={patient.name} />
@@ -184,11 +184,17 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
               </div>
             ))}
           </div>
+          {visiblePatients > 3 ? <DashboardListActions
+            canShowMore={visiblePatients === 6 && (data?.patients.length ?? 0) > 6}
+            onShowMore={() => setVisiblePatients((visible) => visible + 3)}
+            onNavigate={() => onNavigate("clientes")}
+            destinationLabel="Ir para clientes"
+          /> : null}
         </DetailCard>
 
-        <DetailCard title="Orçamentos recentes" onAction={() => setShowAllQuotes((expanded) => !expanded)} expanded={showAllQuotes}>
+        <DetailCard title="Orçamentos recentes" onAction={() => setVisibleQuotes((visible) => visible > 3 ? 3 : 6)} expanded={visibleQuotes > 3}>
           <div className="space-y-4">
-            {(showAllQuotes ? (data?.quotes ?? []) : (data?.quotes ?? []).slice(0, 3)).map((quote) => (
+            {(data?.quotes ?? []).slice(0, visibleQuotes).map((quote) => (
               <div key={quote.id}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
@@ -211,6 +217,12 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
               </div>
             ))}
           </div>
+          {visibleQuotes > 3 ? <DashboardListActions
+            canShowMore={visibleQuotes === 6 && (data?.quotes.length ?? 0) > 6}
+            onShowMore={() => setVisibleQuotes((visible) => visible + 3)}
+            onNavigate={() => onNavigate("orcamentos")}
+            destinationLabel="Ir para orçamentos"
+          /> : null}
         </DetailCard>
 
         <DetailCard title="Retornos próximos">
@@ -241,6 +253,15 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
         </DetailCard>
       </div>
     </PageContainer>
+  );
+}
+
+function DashboardListActions({ canShowMore, onShowMore, onNavigate, destinationLabel }: { canShowMore: boolean; onShowMore: () => void; onNavigate: () => void; destinationLabel: string }) {
+  return (
+    <div className="mt-4 flex flex-col items-center gap-2 border-t border-[#f0f0f4] pt-3">
+      {canShowMore ? <button type="button" className="text-sm font-semibold text-[#5147dc] hover:text-[#3f35c4] focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]" onClick={onShowMore}>Exibir mais 3</button> : null}
+      {!canShowMore ? <button type="button" className="text-sm font-semibold text-[#5147dc] hover:text-[#3f35c4] focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]" onClick={onNavigate}>{destinationLabel}</button> : null}
+    </div>
   );
 }
 

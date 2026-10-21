@@ -69,6 +69,7 @@ const currency = new Intl.NumberFormat("pt-BR", {
   style: "currency",
   currency: "BRL",
 });
+const quantityFormat = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 3 });
 
 const appointmentTypeOptions = ["Consulta / retorno", "Avaliação", "Procedimento", "Outros"];
 
@@ -1124,12 +1125,19 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
         {isLoading ? <LoadingTable columns={7} /> : <MiniTable
           columns={["Nome", "Categoria", "Valor sugerido", "Tempo", "Ficha técnica", "Margem", "Ação"]}
           rows={procedureRows.map((procedure, index) => [
-            <span className="flex min-w-0 items-center gap-2" key={procedure.id}><ProcedureImage name={procedure.name} decorative className="h-8 w-8 rounded" /><strong className="truncate text-[#121733]">{procedure.name}</strong></span>,
-            procedure.category,
-            currency.format(procedure.price),
-            procedure.duration,
-            <div className="max-w-xs space-y-1" key="sheet">
-              <span className="block text-xs">{procedure.materials || <span className="text-muted-foreground">Sem itens</span>}</span>
+            <span className="flex min-w-0 items-center gap-2" key={procedure.id}><ProcedureImage name={procedure.name} decorative className="h-8 w-8 rounded" /><strong className="truncate uppercase italic text-[#121733]">{procedure.name}</strong></span>,
+            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-medium text-[#34364b]">{procedure.category}</span>,
+            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-semibold tabular-nums text-[#34364b]">{currency.format(procedure.price)}</span>,
+            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-medium tabular-nums text-[#34364b]">{procedure.duration}</span>,
+            <div className="w-full min-w-[190px] max-w-[300px] space-y-1.5" key="sheet">
+              {procedure.technicalSheet.length ? procedure.technicalSheet.map((material, materialIndex) => (
+                <div className="flex min-w-0 items-center gap-1.5" key={`${material.productId}-${materialIndex}`}>
+                  <span className="min-w-0 flex-1 truncate rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 font-sans text-[13px] font-semibold tracking-tight text-[#34364b]" title={material.name}>{material.name}</span>
+                  <span className="shrink-0 rounded-md border border-[#e1defe] bg-[#f3f1ff] px-2 py-1.5 font-sans text-xs font-bold tabular-nums text-[#5147dc]">
+                    {quantityFormat.format(material.quantity)} {material.unit === "unidade" ? "Un" : material.unit}
+                  </span>
+                </div>
+              )) : <span className="text-xs text-muted-foreground">Sem materiais</span>}
               {procedure.materialsNeedReview ? <Badge variant="amber" title="Convertida automaticamente do texto antigo. Confira as quantidades e salve.">Revisar ficha</Badge> : null}
             </div>,
             <Badge key={procedure.margin} variant="green">{procedure.margin}</Badge>,
