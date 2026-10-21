@@ -3,6 +3,7 @@ import { Menu, Plus } from "lucide-react";
 import { navItems } from "@/data/navigation";
 import type { SectionId } from "@/types/clinic";
 import { Button } from "@/components/ui/button";
+import { SlidingIndicator } from "@/components/ui/sliding-indicator";
 import { Sheet } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { visibleSections } from "@/lib/permissions";
@@ -51,7 +52,8 @@ export function Sidebar({
         Novo agendamento
       </Button>
 
-      <nav className="space-y-0.5">
+      <nav className="relative space-y-0.5">
+        <SlidingIndicator variant="block" />
         {visibleNavItems.map((item) => {
           const Icon = item.icon;
           const isActive = active === item.id;
@@ -59,10 +61,11 @@ export function Sidebar({
           return (
             <button
               key={item.id}
-            className={cn(
-                "hp-pressable flex h-10 w-full items-center justify-between rounded-md px-3 text-left text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              aria-current={isActive ? "page" : undefined}
+              className={cn(
+                "hp-pressable relative flex h-10 w-full items-center justify-between rounded-md px-3 text-left text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 isActive
-                  ? "bg-accent text-accent-foreground"
+                  ? "text-accent-foreground"
                   : "text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
               onClick={() => {
