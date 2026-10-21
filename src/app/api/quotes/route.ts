@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { serializeQuote, toCents } from "@/lib/finance";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 import { calculateQuote, type QuoteLineInput } from "@/lib/quote-rules";
+import { matchPaymentQuotes } from "@/lib/patient-finance-rules";
 
 export async function GET(request: Request) {
   const user = await getCurrentUser();
@@ -14,9 +15,28 @@ export async function GET(request: Request) {
   const quotes = await prisma.quote.findMany({
     where: { clinicId: user.clinicId, ...(patientId ? { patientId } : {}), ...(journeyId ? { journeyId } : {}) },
     orderBy: { createdAt: "desc" },
-    include: { patient: { select: { name: true } } },
+    include: {
+      patient: { select: { name: true, ...(patientId ? { cpf: true } : {}) } },
+      ...(patientId ? { evaluation: { select: { professional: true } }, clinic: { select: { name: true } } } : {}),
+    },
   });
-  return NextResponse.json({ quotes: quotes.map(serializeQuote) });
+  const serialized = quotes.map(serializeQuote);
+  if (!patientId) return NextResponse.json({ quotes: serialized });
+
+  const payments = await prisma.payment.findMany({
+    where: { clinicId: user.clinicId, patientId, status: "Pago", ...(journeyId ? { journeyId } : {}) },
+    orderBy: { date: "asc" },
+    select: { id: true, journeyId: true, valueCents: true, status: true, date: true },
+  });
+  const matched = matchPaymentQuotes(
+    payments.map(({ valueCents, date, ...payment }) => ({ ...payment, date: date.toISOString(), value: valueCents / 100 })),
+    serialized.map((quote) => ({ ...quote, createdAt: quote.createdAt?.toISOString() })),
+  );
+  const paymentConfirmedQuoteIds = new Set([...matched.values()].map((quote) => quote.id));
+  return NextResponse.json({ quotes: quotes.map((quote, index) => ({
+    ...serialized[index],
+    paymentConfirmed: paymentConfirmedQuoteIds.has(quote.id),
+  })) });
 }
 
 export async function POST(request: Request) {

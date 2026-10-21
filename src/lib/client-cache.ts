@@ -111,10 +111,29 @@ export function invalidateClientCache(...keys: string[]) {
       const patientPrefix = `/api/patients/${patientResource[1]}`;
       affected.add(`${patientPrefix}/profile`);
       affected.add(`${patientPrefix}/journeys`);
+      affected.add(`${patientPrefix}/encounters`);
+      // A galeria de fotos e a lista de documentos (itens de sistema) derivam desses registros.
+      affected.add(`${patientPrefix}/photos`);
+      if (patientResource[2] === "evaluation") affected.add(`${patientPrefix}/documents`);
+      // A anamnese também lê a avaliação como fallback.
+      if (patientResource[2] === "evaluation") affected.add(`${patientPrefix}/anamnesis`);
     }
+    // A lista de atendimentos é derivada de jornadas, sessões e retornos.
+    const encounterSource = key.match(/^\/api\/patients\/([^/?]+)\/(journeys|procedure-sessions)(?:[/?]|$)/);
+    if (encounterSource) { affected.add(`/api/patients/${encounterSource[1]}/encounters`); affected.add(`/api/patients/${encounterSource[1]}/photos`); }
+    // O resumo de consentimento (gate de início do procedimento) vem dos termos em Documentos clínicos.
+    const documentSource = key.match(/^\/api\/patients\/([^/?]+)\/documents(?:[/?]|$)/);
+    if (documentSource) affected.add(`/api/patients/${documentSource[1]}/procedure-sessions`);
+    const anamnesisSource = key.match(/^\/api\/patients\/([^/?]+)\/anamnesis(?:[/?]|$)/);
+    if (anamnesisSource) affected.add(`/api/patients/${anamnesisSource[1]}/documents`);
+  }
+  // Agendamentos e conferência de materiais alteram o próximo retorno e as pendências de qualquer paciente em cache.
+  if (keys.some((key) => key.startsWith("/api/agenda/bootstrap") || key.startsWith("/api/appointments") || key.startsWith("/api/stock/pending"))) {
+    for (const cachedKey of cache.keys()) { const match = cachedKey.match(/^(\/api\/patients\/[^/?]+\/encounters)(?:\?|$)/); if (match) affected.add(match[1]); }
   }
   for (const cachedKey of cache.keys()) {
-    if ([...affected].some((key) => cachedKey === key || cachedKey.startsWith(`${key}?`))) remove(cachedKey);
+    // /photos também derruba /photos/<ref> (marcações por foto), que são derivadas dos mesmos registros.
+    if ([...affected].some((key) => cachedKey === key || cachedKey.startsWith(`${key}?`) || (key.endsWith("/photos") && cachedKey.startsWith(`${key}/`)))) remove(cachedKey);
   }
   if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent<string[]>(CLIENT_CACHE_INVALIDATED_EVENT, { detail: [...affected] }));
 }

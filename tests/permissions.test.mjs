@@ -112,3 +112,12 @@ test("agendamento: atendente exclui só o que ainda não rodou", () => {
   assert.equal(appointmentDeleteAllowed("STAFF", "Cancelado"), true);
   for (const current of runStates) assert.equal(appointmentDeleteAllowed("STAFF", current), false, current);
 });
+
+test("anamnese: conteúdo só para administrador e profissional; atendente não lê nem grava", () => {
+  for (const permission of ["anamnesis:read", "anamnesis:write"]) {
+    assert.equal(can("ADMIN", permission), true, `ADMIN ${permission}`);
+    assert.equal(can("PROFESSIONAL", permission), true, `PROFESSIONAL ${permission}`);
+    assert.equal(can("STAFF", permission), false, `STAFF ${permission}`);
+    assert.equal(can(undefined, permission), false);
+  }
+});

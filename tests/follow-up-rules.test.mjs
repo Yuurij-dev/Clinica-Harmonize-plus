@@ -6,7 +6,7 @@ const empty = { guidanceText: "", guidanceSent: false, observations: "", complic
 
 test("empty follow-up gets one inline content error", () => {
   assert.deepEqual(validateFollowUpDraft(empty), {
-    content: "Adicione uma orientação, observação, intercorrência, foto ou retorno para registrar a evolução.",
+    content: "Adicione uma queixa, orientação, observação, intercorrência, foto ou retorno para registrar a evolução.",
   });
 });
 
@@ -17,7 +17,7 @@ test("sent guidance requires its text without duplicating the empty-content erro
 });
 
 test("any valid clinical record satisfies the minimum content rule", () => {
-  for (const update of [{ guidanceText: "Cuidados" }, { observations: "Evolução" }, { complications: "Sem intercorrências" }, { photoCount: 1 }, { appointmentId: "return-1" }]) {
+  for (const update of [{ complaints: "Dor leve" }, { guidanceText: "Cuidados" }, { observations: "Evolução" }, { complications: "Sem intercorrências" }, { photoCount: 1 }, { appointmentId: "return-1" }]) {
     assert.deepEqual(validateFollowUpDraft({ ...empty, ...update }), {});
   }
 });

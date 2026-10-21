@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { hash } from "bcryptjs";
+import { clinicToday } from "../../src/lib/clinic-time.ts";
 
 const prisma = new PrismaClient();
 const suffix = Date.now().toString(36);
@@ -37,18 +38,29 @@ async function main() {
   const cookie = login.response.headers.get("set-cookie")?.split(";")[0];
   if (!cookie) throw new Error("Login did not set a session cookie.");
   const path = `/api/patients/${patient.id}/procedure-sessions/${session.id}/follow-ups?journeyId=${journey.id}`;
+  const today = clinicToday();
+  const tomorrow = new Date(`${today}T12:00:00Z`);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  const futureDate = tomorrow.toISOString().slice(0, 10);
+  const futureReturn = await prisma.appointment.create({ data: { clinicId, patientId: patient.id, journeyId: journey.id, procedure: `Retorno - ${procedure.name}`, professional: user.name, date: new Date(`${futureDate}T12:00:00-03:00`), time: "10:00", status: "Agendado" } });
+  const earlyStart = await fetch(`${baseUrl}${path}`, { method: "PATCH", headers: { cookie, "Content-Type": "application/json" }, body: JSON.stringify({ action: "start-return", appointmentId: futureReturn.id }) });
+  if (earlyStart.status !== 409) throw new Error("A future return was allowed to start early.");
+  const returnAppointment = await prisma.appointment.create({ data: { clinicId, patientId: patient.id, journeyId: journey.id, procedure: `Retorno - ${procedure.name}`, professional: user.name, date: new Date(`${today}T12:00:00-03:00`), time: "10:00", status: "Agendado" } });
+  const earlyRecord = await fetch(`${baseUrl}${path}`, { method: "POST", headers: { cookie, "Content-Type": "application/json" }, body: JSON.stringify({ complaints: "Before start", appointmentId: returnAppointment.id, photos: [] }) });
+  if (earlyRecord.status !== 400) throw new Error("Return complaints were recorded before the appointment started.");
+  await request(path, "PATCH", { action: "start-return", appointmentId: returnAppointment.id }, cookie);
 
-  await request(path, "PUT", { observations: "Draft observation", guidanceText: "Draft guidance", photos: [] }, cookie);
+  await request(path, "PUT", { complaints: "Draft complaint", observations: "Draft observation", guidanceText: "Draft guidance", appointmentId: returnAppointment.id, photos: [] }, cookie);
   const reopened = (await request(path, "GET", undefined, cookie)).data;
-  if (reopened.draft?.observations !== "Draft observation" || reopened.followUps.length !== 0) throw new Error("Draft was not restored separately from clinical history.");
+  if (reopened.draft?.complaints !== "Draft complaint" || reopened.draft?.observations !== "Draft observation" || reopened.followUps.length !== 0) throw new Error("Draft was not restored separately from clinical history.");
 
-  await request(path, "PUT", { observations: "Updated draft", photos: [] }, cookie);
+  await request(path, "PUT", { complaints: "Updated complaint", observations: "Updated draft", appointmentId: returnAppointment.id, photos: [] }, cookie);
   const updated = (await request(path, "GET", undefined, cookie)).data;
-  if (updated.draft?.observations !== "Updated draft" || updated.draft?.guidanceText !== "") throw new Error("Draft update was not persisted.");
+  if (updated.draft?.complaints !== "Updated complaint" || updated.draft?.observations !== "Updated draft" || updated.draft?.guidanceText !== "") throw new Error("Draft update was not persisted.");
 
-  await request(path, "POST", { observations: "Registered evolution", photos: [] }, cookie);
+  await request(path, "POST", { complaints: "Registered complaint", observations: "Registered evolution", appointmentId: returnAppointment.id, photos: [] }, cookie);
   const finalized = (await request(path, "GET", undefined, cookie)).data;
-  if (finalized.draft !== null || finalized.followUps.length !== 1 || finalized.followUps[0].observations !== "Registered evolution") throw new Error("Final record did not replace the draft.");
+  if (finalized.draft !== null || finalized.followUps.length !== 1 || finalized.followUps[0].complaints !== "Registered complaint" || finalized.followUps[0].observations !== "Registered evolution" || finalized.followUps[0].appointment?.status !== "Atendido") throw new Error("Final record did not complete the return and replace the draft.");
   console.log("Follow-up draft API: save, restore, update, and register passed.");
 }
 

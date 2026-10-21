@@ -1,0 +1,182 @@
+[
+  {
+    "name": "Botox",
+    "slug": "botox",
+    "file": "/images/procedimentos/botox.webp",
+    "alt": "Imagem ilustrativa de botox"
+  },
+  {
+    "name": "Preenchimento labial",
+    "slug": "preenchimento-labial",
+    "file": "/images/procedimentos/preenchimento-labial.webp",
+    "alt": "Imagem ilustrativa de preenchimento labial"
+  },
+  {
+    "name": "Harmonização facial",
+    "slug": "harmonizacao-facial",
+    "file": "/images/procedimentos/harmonizacao-facial.webp",
+    "alt": "Imagem ilustrativa de harmonização facial"
+  },
+  {
+    "name": "Bioestimulador de colágeno",
+    "slug": "bioestimulador-de-colageno",
+    "file": "/images/procedimentos/bioestimulador-de-colageno.webp",
+    "alt": "Imagem ilustrativa de bioestimulador de colágeno"
+  },
+  {
+    "name": "Skinbooster",
+    "slug": "skinbooster",
+    "file": "/images/procedimentos/skinbooster.webp",
+    "alt": "Imagem ilustrativa de skinbooster"
+  },
+  {
+    "name": "Fios de sustentação",
+    "slug": "fios-de-sustentacao",
+    "file": "/images/procedimentos/fios-de-sustentacao.webp",
+    "alt": "Imagem ilustrativa de fios de sustentação"
+  },
+  {
+    "name": "Lipo de papada",
+    "slug": "lipo-de-papada",
+    "file": "/images/procedimentos/lipo-de-papada.webp",
+    "alt": "Imagem ilustrativa de lipo de papada"
+  },
+  {
+    "name": "Enzimas faciais",
+    "slug": "enzimas-faciais",
+    "file": "/images/procedimentos/enzimas-faciais.webp",
+    "alt": "Imagem ilustrativa de enzimas faciais"
+  },
+  {
+    "name": "Peelings químicos",
+    "slug": "peelings-quimicos",
+    "file": "/images/procedimentos/peelings-quimicos.webp",
+    "alt": "Imagem ilustrativa de peelings químicos"
+  },
+  {
+    "name": "Limpeza de pele",
+    "slug": "limpeza-de-pele",
+    "file": "/images/procedimentos/limpeza-de-pele.webp",
+    "alt": "Imagem ilustrativa de limpeza de pele"
+  },
+  {
+    "name": "Tratamento para acne",
+    "slug": "tratamento-para-acne",
+    "file": "/images/procedimentos/tratamento-para-acne.webp",
+    "alt": "Imagem ilustrativa de tratamento para acne"
+  },
+  {
+    "name": "Tratamento para manchas",
+    "slug": "tratamento-para-manchas",
+    "file": "/images/procedimentos/tratamento-para-manchas.webp",
+    "alt": "Imagem ilustrativa de tratamento para manchas"
+  },
+  {
+    "name": "Rejuvenescimento facial",
+    "slug": "rejuvenescimento-facial",
+    "file": "/images/procedimentos/rejuvenescimento-facial.webp",
+    "alt": "Imagem ilustrativa de rejuvenescimento facial"
+  },
+  {
+    "name": "Preenchimento de olheiras",
+    "slug": "preenchimento-de-olheiras",
+    "file": "/images/procedimentos/preenchimento-de-olheiras.webp",
+    "alt": "Imagem ilustrativa de preenchimento de olheiras"
+  },
+  {
+    "name": "Rinomodelação",
+    "slug": "rinomodelacao",
+    "file": "/images/procedimentos/rinomodelacao.webp",
+    "alt": "Imagem ilustrativa de rinomodelação"
+  },
+  {
+    "name": "Tratamento para cicatrizes",
+    "slug": "tratamento-para-cicatrizes",
+    "file": "/images/procedimentos/tratamento-para-cicatrizes.webp",
+    "alt": "Imagem ilustrativa de tratamento para cicatrizes"
+  },
+  {
+    "name": "Design de sobrancelhas",
+    "slug": "design-de-sobrancelhas",
+    "file": "/images/procedimentos/design-de-sobrancelhas.webp",
+    "alt": "Imagem ilustrativa de design de sobrancelhas"
+  },
+  {
+    "name": "Tratamento para suor excessivo",
+    "slug": "tratamento-para-suor-excessivo",
+    "file": "/images/procedimentos/tratamento-para-suor-excessivo.webp",
+    "alt": "Imagem ilustrativa de tratamento para suor excessivo"
+  },
+  {
+    "name": "Emagrecimento",
+    "slug": "emagrecimento",
+    "file": "/images/procedimentos/emagrecimento.webp",
+    "alt": "Imagem ilustrativa de emagrecimento"
+  },
+  {
+    "name": "Tratamento para celulite",
+    "slug": "tratamento-para-celulite",
+    "file": "/images/procedimentos/tratamento-para-celulite.webp",
+    "alt": "Imagem ilustrativa de tratamento para celulite"
+  },
+  {
+    "name": "Tratamento para flacidez",
+    "slug": "tratamento-para-flacidez",
+    "file": "/images/procedimentos/tratamento-para-flacidez.webp",
+    "alt": "Imagem ilustrativa de tratamento para flacidez"
+  },
+  {
+    "name": "Intradermoterapia",
+    "slug": "intradermoterapia",
+    "file": "/images/procedimentos/intradermoterapia.webp",
+    "alt": "Imagem ilustrativa de intradermoterapia"
+  },
+  {
+    "name": "Tratamento capilar",
+    "slug": "tratamento-capilar",
+    "file": "/images/procedimentos/tratamento-capilar.webp",
+    "alt": "Imagem ilustrativa de tratamento capilar"
+  },
+  {
+    "name": "Soroterapia",
+    "slug": "soroterapia",
+    "file": "/images/procedimentos/soroterapia.webp",
+    "alt": "Imagem ilustrativa de soroterapia"
+  },
+  {
+    "name": "Crioestética",
+    "slug": "crioestetica",
+    "file": "/images/procedimentos/crioestetica.webp",
+    "alt": "Imagem ilustrativa de crioestética"
+  },
+  {
+    "name": "Radiofrequência",
+    "slug": "radiofrequencia",
+    "file": "/images/procedimentos/radiofrequencia.webp",
+    "alt": "Imagem ilustrativa de radiofrequência"
+  },
+  {
+    "name": "Ultrassom microfocado",
+    "slug": "ultrassom-microfocado",
+    "file": "/images/procedimentos/ultrassom-microfocado.webp",
+    "alt": "Imagem ilustrativa de ultrassom microfocado"
+  },
+  {
+    "name": "Microagulhamento",
+    "slug": "microagulhamento",
+    "file": "/images/procedimentos/microagulhamento.webp",
+    "alt": "Imagem ilustrativa de microagulhamento"
+  },
+  {
+    "name": "LEDterapia",
+    "slug": "ledterapia",
+    "file": "/images/procedimentos/ledterapia.webp",
+    "alt": "Imagem ilustrativa de ledterapia"
+  },
+  {
+    "name": "Aplicação de medicamentos",
+    "slug": "aplicacao-de-medicamentos",
+    "file": "/images/procedimentos/aplicacao-de-medicamentos.webp",
+    "alt": "Imagem ilustrativa de aplicação de medicamentos"
+  }
+]

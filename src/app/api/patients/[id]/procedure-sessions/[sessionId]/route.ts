@@ -1,14 +1,17 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { denyUnless } from "@/lib/api-guards";
-import { dateOnly } from "@/lib/clinic-time";
+import { appointmentInstant, clinicNow, dateOnly } from "@/lib/clinic-time";
 import { registerAttendanceOutputs, AttendanceMaterialsError } from "@/lib/attendance-materials";
-import { approvedProcedureNames } from "@/lib/procedure-session-rules";
+import { appointmentStartNow, approvedProcedureNames, combinedProcedureName, isMovableStartAppointment, PROCEDURE_APPOINTMENT_PREFIX, procedureAppointmentName, scheduledAppointmentOrder } from "@/lib/procedure-session-rules";
+import { consentGate, consentRequiredCode } from "@/lib/consent-rules";
+import { consentCounts } from "@/lib/clinical-files-server";
 import { prisma } from "@/lib/prisma";
 import { lockLots, lotBalances } from "@/lib/stock";
 import { validateQuantity } from "@/lib/stock-rules";
 import { validateSessionPayload } from "../route";
 
+class ConsentRequiredError extends Error {}
 type Material = { productId: string; quantity: number; allocations?: Array<{ lotId: string; quantity: number }> };
 type Photo = { id: string; phase: string; sourceEvaluationPhotoId?: string; imageUrl?: string; name?: string; category?: string; width?: number; height?: number };
 
@@ -21,7 +24,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   const invalid = validateSessionPayload(body);
   if (invalid) return NextResponse.json({ message: invalid }, { status: 400 });
-  const current = await prisma.patientProcedureSession.findFirst({ where: { id: sessionId, patientId, clinicId: user.clinicId }, select: { id: true, journeyId: true, quoteId: true, evaluationId: true, procedureId: true, procedureName: true, professional: true, performedAt: true, startedAt: true, status: true, updatedAt: true, auditLog: true, journey: { select: { status: true } } } });
+  const current = await prisma.patientProcedureSession.findFirst({ where: { id: sessionId, patientId, clinicId: user.clinicId }, select: { id: true, journeyId: true, quoteId: true, evaluationId: true, procedureId: true, procedureName: true, professional: true, performedAt: true, startedAt: true, status: true, updatedAt: true, auditLog: true, photos: true, journey: { select: { status: true } } } });
   if (!current) return NextResponse.json({ message: "Sessão não encontrada." }, { status: 404 });
   if (current.status === "Concluída") return NextResponse.json({ message: "Sessão concluída não pode ser alterada. Crie uma nova sessão para continuar o tratamento." }, { status: 409 });
 
@@ -29,7 +32,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (procedureName !== undefined) {
     const quote = await prisma.quote.findFirst({ where: { id: current.quoteId, patientId, clinicId: user.clinicId }, select: { details: true } });
     const approvedItems = approvedProcedureNames(quote?.details ?? "");
-    if (!procedureName || procedureName.length > 180 || !approvedItems.includes(procedureName)) return NextResponse.json({ message: "O procedimento precisa corresponder a um item do orçamento aprovado." }, { status: 400 });
+    // Aceita o nome combinado da sessão única, um item aprovado (sessões antigas por item) ou o nome já gravado.
+    const validName = procedureName === current.procedureName || approvedItems.includes(procedureName) || procedureName === combinedProcedureName(approvedItems);
+    if (!procedureName || procedureName.length > 180 || !validName) return NextResponse.json({ message: "O procedimento precisa corresponder a um item do orçamento aprovado." }, { status: 400 });
   }
 
   const photos = Array.isArray(body?.photos) ? body.photos as Photo[] : undefined;
@@ -42,12 +47,23 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const finalizing = nextStatus === "Concluída";
   if (nextStatus === "Rascunho" && current.status !== "Rascunho") return NextResponse.json({ message: "Não é possível retornar uma sessão iniciada para rascunho." }, { status: 409 });
   if (finalizing && current.status !== "Em execução") return NextResponse.json({ message: "Inicie o procedimento antes de finalizar a sessão." }, { status: 409 });
+  // Início do procedimento (só esta transição): exige termo de consentimento assinado na jornada. Sessões já iniciadas não são reavaliadas.
+  const startingSession = nextStatus === "Em execução" && current.status === "Rascunho";
+  if (startingSession) {
+    const gate = consentGate(await consentCounts(user.clinicId, patientId, current.journeyId));
+    if (!gate.ok) return NextResponse.json({ message: gate.reason, code: consentRequiredCode }, { status: 409 });
+  }
   const technique = typeof body?.technique === "string" ? body.technique.trim() : undefined;
   const treatedAreas = typeof body?.treatedAreas === "string" ? body.treatedAreas.trim() : undefined;
   const professional = typeof body?.professional === "string" ? body.professional.trim() : current.professional;
   const nextPhotos = photos ?? undefined;
   const materials = Array.isArray(body?.materials) ? body.materials as Material[] : undefined;
   if (nextStatus === "Em execução" && current.status === "Rascunho" && !nextPhotos?.some((photo) => photo.phase === "Antes")) return NextResponse.json({ message: "Registre uma foto de antes antes de iniciar o procedimento." }, { status: 400 });
+  const startingWithBody = nextStatus === "Em execução" && current.status === "Rascunho";
+  if (startingWithBody && (!technique || !treatedAreas || !professional)) return NextResponse.json({ message: "Informe a técnica, a região tratada e o profissional antes de iniciar o procedimento." }, { status: 400 });
+  // Fotos de depois só entram com o procedimento iniciado; as que já estavam gravadas no rascunho (dado anterior à regra) são preservadas.
+  const storedAfterIds = new Set(parseJson<Photo[]>(current.photos, []).filter((photo) => photo.phase === "Imediatamente após").map((photo) => photo.id));
+  if (nextStatus === "Rascunho" && nextPhotos?.some((photo) => photo.phase === "Imediatamente após" && !storedAfterIds.has(photo.id))) return NextResponse.json({ message: "As fotos de depois só podem ser adicionadas depois de iniciar o procedimento." }, { status: 400 });
   if (finalizing && (!technique || !treatedAreas || !professional)) return NextResponse.json({ message: "Informe a técnica, a região tratada e o profissional antes de finalizar." }, { status: 400 });
   if (finalizing && (!nextPhotos || !nextPhotos.some((photo) => photo.phase === "Antes") || !nextPhotos.some((photo) => photo.phase === "Imediatamente após"))) return NextResponse.json({ message: "Registre ao menos uma foto antes e uma imediatamente após a sessão." }, { status: 400 });
   if (materials && new Set(materials.map((item) => item.productId)).size !== materials.length) return NextResponse.json({ message: "Um produto aparece mais de uma vez. Ajuste a lista de materiais." }, { status: 400 });
@@ -101,11 +117,38 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         await tx.patientProcedure.update({ where: { id: current.procedureId }, data: { professional, performedAt, notes: String(body?.observations ?? "").trim() } });
         await tx.patientJourney.update({ where: { id: current.journeyId }, data: { status: current.journey.status } });
         const completed = await tx.patientProcedureSession.findUnique({ where: { id: sessionId } });
-        return { session: completed, pending };
+        return { session: completed, pending, appointment: null as { id: string; date: string; time: string } | null };
+      }
+      // Relê o consentimento dentro da transação, logo antes de gravar o início (reduz a janela contra arquivamento/rebaixamento concorrente).
+      if (startingSession) {
+        const lateGate = consentGate(await consentCounts(user.clinicId, patientId, current.journeyId, tx));
+        if (!lateGate.ok) throw new ConsentRequiredError(lateGate.reason);
       }
       const saved = await tx.patientProcedureSession.updateMany({ where: { id: sessionId, patientId, clinicId: user.clinicId, status: { in: ["Rascunho", "Em execução"] }, updatedAt: current.updatedAt }, data: updateData });
       if (!saved.count) throw new AttendanceMaterialsError("Esta sessão não está mais disponível para edição.");
-      return { session: await tx.patientProcedureSession.findUnique({ where: { id: sessionId } }), pending: [] };
+      let appointment: { id: string; date: string; time: string } | null = null;
+      if (startingSession) {
+        // Início efetivo com o procedimento agendado: o horário do agendamento passa para agora (dia e HH:mm da clínica).
+        // Decisão do profissional iniciando de fato, por isso não valida expediente nem horário livre. Só um agendamento
+        // "Procedimento - …" em Agendado desta jornada é movido; retornos e demais agendamentos não são tocados.
+        // O cliente envia o id do agendamento que o modal mostrou; sem id válido, só vale o agendamento cujo nome casa com o da sessão (nunca "o mais antigo").
+        const scope = { clinicId: user.clinicId, patientId, journeyId: current.journeyId, status: "Agendado", procedure: { startsWith: PROCEDURE_APPOINTMENT_PREFIX } };
+        const select = { id: true, procedure: true, status: true };
+        const chosenId = typeof body?.scheduledAppointmentId === "string" ? body.scheduledAppointmentId : "";
+        const byId = chosenId ? await tx.appointment.findFirst({ where: { ...scope, id: chosenId }, select }) : null;
+        const scheduled = byId ?? await tx.appointment.findFirst({ where: { ...scope, procedure: procedureAppointmentName(current.procedureName) }, orderBy: scheduledAppointmentOrder(), select });
+        if (scheduled && isMovableStartAppointment(scheduled)) {
+          const startNow = appointmentStartNow(clinicNow());
+          const moved = await tx.appointment.updateMany({ where: { id: scheduled.id, clinicId: user.clinicId, patientId, journeyId: current.journeyId, status: "Agendado" }, data: { date: appointmentInstant(startNow.day), time: startNow.time } });
+          if (moved.count) {
+            appointment = { id: scheduled.id, date: startNow.day, time: startNow.time };
+            const log = [...parseJson<Array<{ at: string; actor: string; action: string; fields: string[] }>>(auditLog, []), { at: new Date().toISOString(), actor: user.name, action: `Agendamento alterado para o início (${startNow.day.split("-").reverse().join("/")} às ${startNow.time})`, fields: [] }].slice(-100);
+            await tx.patientProcedureSession.updateMany({ where: { id: sessionId, patientId, clinicId: user.clinicId }, data: { auditLog: JSON.stringify(log) } });
+          }
+        }
+        return { session: await tx.patientProcedureSession.findUnique({ where: { id: sessionId } }), pending: [], appointment };
+      }
+      return { session: await tx.patientProcedureSession.findUnique({ where: { id: sessionId } }), pending: [], appointment };
     });
     const savedPhotos = updated.session ? parseJson<Photo[]>(updated.session.photos, []) : [];
     const sourcePhotoIds = savedPhotos.flatMap((photo) => photo.sourceEvaluationPhotoId ? [photo.sourceEvaluationPhotoId] : []);
@@ -116,6 +159,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     });
     return NextResponse.json({ ...updated, session: updated.session ? { ...updated.session, materials: parseJson<unknown[]>(updated.session.materials, []), photos: resolvedPhotos, auditLog: parseJson<unknown[]>(updated.session.auditLog, []) } : null });
   } catch (error) {
+    if (error instanceof ConsentRequiredError) return NextResponse.json({ message: error.message || consentGate({ signed: 0, pending: 0 }).reason, code: consentRequiredCode }, { status: 409 });
     if (error instanceof AttendanceMaterialsError) return NextResponse.json({ message: error.message }, { status: 409 });
     throw error;
   }

@@ -15,6 +15,20 @@ test("quote totals use catalog prices, quantity, discount, and clinic costs", ()
   });
 });
 
+test("cent-based calculation preserves fractional cents distribution without floating-point drift", () => {
+  const result = calculateQuote(
+    [{ procedureId: "filler", quantity: 3, discountCents: 1 }],
+    [{ id: "filler", name: "Preenchimento", priceCents: 3_333 }],
+    { laborCents: 1, facilityCents: 0, medicationCents: 0 },
+  );
+
+  assert.equal(result?.items[0].subtotalCents, 9_998);
+  assert.equal(result?.subtotalCents, 9_999);
+  assert.equal(result?.discountCents, 1);
+  assert.equal(result?.costTotalCents, 1);
+  assert.equal(result?.totalCents, 9_999);
+});
+
 test("quote calculation rejects unknown, duplicate, invalid quantity, and excessive discounts", () => {
   assert.equal(calculateQuote([{ procedureId: "missing", quantity: 1, discountCents: 0 }], catalog, costs), null);
   assert.equal(calculateQuote([{ procedureId: "filler", quantity: 1, discountCents: 1 }, { procedureId: "filler", quantity: 1, discountCents: 0 }], catalog, costs), null);

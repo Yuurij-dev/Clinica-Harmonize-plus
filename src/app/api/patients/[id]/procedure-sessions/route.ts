@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { denyUnless } from "@/lib/api-guards";
-import { clinicToday, dateOnly } from "@/lib/clinic-time";
+import { appointmentDay, clinicToday, dateOnly } from "@/lib/clinic-time";
+import { PROCEDURE_APPOINTMENT_PREFIX, scheduledAppointmentOrder } from "@/lib/procedure-session-rules";
+import { consentCounts } from "@/lib/clinical-files-server";
+import { consentSummary } from "@/lib/consent-rules";
 import { prisma } from "@/lib/prisma";
 import { lotBalances } from "@/lib/stock";
+import { combinedProcedureName, shouldRefreshDraftName } from "@/lib/procedure-session-rules";
 
 type SessionPhotoInput = { id?: string; name?: string; phase?: string; category?: string; imageUrl?: string; sourceEvaluationPhotoId?: string; width?: number; height?: number };
 type MaterialInput = { productId?: string; quantity?: number; allocations?: Array<{ lotId?: string; quantity?: number }> };
@@ -25,9 +29,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   ]);
   if (!journey || !quote || !quote.evaluationId) return NextResponse.json({ message: "Jornada ou orçamento aprovado não encontrado." }, { status: 404 });
   if (!["Aprovado", "Pago"].includes(quote.status)) return NextResponse.json({ message: "O orçamento precisa estar aprovado antes de iniciar a execução." }, { status: 409 });
-  const [evaluation, sessions] = await Promise.all([
+  const [evaluation, sessions, scheduled] = await Promise.all([
     prisma.evaluation.findFirst({ where: { id: quote.evaluationId, patientId, journeyId, clinicId: user.clinicId }, select: { id: true, chiefComplaint: true, patientGoal: true, allergies: true, contraindications: true, photos: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }], select: { id: true, name: true, imageUrl: true, width: true, height: true, category: true } } } }),
     prisma.patientProcedureSession.findMany({ where: { clinicId: user.clinicId, patientId, journeyId, quoteId }, orderBy: [{ performedAt: "desc" }, { createdAt: "desc" }] }),
+    // Procedimento já marcado na Agenda para esta jornada (retornos são "Retorno - ..." e ficam de fora).
+    prisma.appointment.findFirst({ where: { clinicId: user.clinicId, patientId, journeyId, procedure: { startsWith: PROCEDURE_APPOINTMENT_PREFIX }, status: { in: ["Agendado", "Em atendimento"] } }, orderBy: scheduledAppointmentOrder(), select: { id: true, date: true, time: true, procedure: true, professional: true, status: true } }),
   ]);
   if (!evaluation) return NextResponse.json({ message: "A avaliação associada ao orçamento não foi encontrada." }, { status: 404 });
   const stored = parseJson<{ items?: Array<{ procedureId: string; name: string; quantity: number }> }>(quote.details, {});
@@ -49,7 +55,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     procedures: procedures.map((procedure) => ({ ...procedure, suggestedMaterials: procedure.technicalSheet.map((item) => ({ productId: item.productId, quantity: item.quantity })) })),
     materials: products.map((product) => ({ id: product.id, name: product.name, unit: product.unit, lots: product.lots.map((lot) => ({ id: lot.id, code: lot.code, expiresOn: dateOnly(lot.expiresOn), balance: balances.get(lot.id) ?? 0 })).filter((lot) => lot.balance > 0) })),
     sessions: sessions.map((session) => ({ ...session, materials: parseJson<unknown[]>(session.materials, []), photos: resolvePhotos(session.photos, evaluation.photos), auditLog: parseJson<unknown[]>(session.auditLog, []) })),
-    consent: { status: "Sem registro de assinatura disponível", signed: false },
+    scheduledProcedure: scheduled ? { ...scheduled, date: appointmentDay(scheduled.date) } : null,
+    consent: consentSummary(await consentCounts(user.clinicId, patientId, journeyId)),
+    clinicName: user.clinic?.name ?? "",
   });
 }
 
@@ -60,7 +68,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (denied) return denied;
   const patientId = (await params).id;
   const body = await request.json().catch(() => null) as { journeyId?: string; quoteId?: string; procedureId?: string; performedAt?: string } | null;
-  if (!body?.journeyId || !body.quoteId || !body.procedureId) return NextResponse.json({ message: "Informe o tratamento, orçamento e procedimento." }, { status: 400 });
+  if (!body?.journeyId || !body.quoteId) return NextResponse.json({ message: "Informe o tratamento e o orçamento." }, { status: 400 });
   const [patient, journey, quote] = await Promise.all([
     prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true } }),
     prisma.patientJourney.findFirst({ where: { id: body.journeyId, patientId, clinicId: user.clinicId, archivedAt: null }, select: { id: true, professional: true } }),
@@ -70,28 +78,45 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (!["Aprovado", "Pago"].includes(quote.status)) return NextResponse.json({ message: "O orçamento precisa estar aprovado para criar uma sessão." }, { status: 409 });
   const evaluation = await prisma.evaluation.findFirst({ where: { id: quote.evaluationId!, patientId, journeyId: body.journeyId, clinicId: user.clinicId }, select: { id: true } });
   if (!evaluation) return NextResponse.json({ message: "A avaliação vinculada ao orçamento não está disponível nesta jornada." }, { status: 404 });
-  const selected = parseJson<{ items?: Array<{ procedureId: string; name: string }> }>(quote.details, {}).items ?? [];
-  const procedure = await prisma.procedure.findFirst({ where: { id: body.procedureId, clinicId: user.clinicId }, select: { id: true, name: true } });
-  const isLegacyItem = !selected.length && procedure && restoreLegacyQuoteItems(quote.items, [procedure]).some((item) => item.procedureId === procedure.id);
-  const line = selected.find((item) => item.procedureId === body.procedureId) ?? (isLegacyItem && procedure ? { procedureId: procedure.id, name: procedure.name } : undefined);
-  if (!procedure) return NextResponse.json({ message: "O procedimento não pertence ao orçamento aprovado." }, { status: 400 });
-  if (!line) return NextResponse.json({ message: "O procedimento não pertence ao orçamento aprovado." }, { status: 400 });
+  // Uma única sessão reúne todos os procedimentos do orçamento aprovado.
+  const stored = parseJson<{ items?: Array<{ procedureId: string; name: string; quantity?: number }> }>(quote.details, {}).items ?? [];
+  const catalog = await prisma.procedure.findMany({ where: { clinicId: user.clinicId, ...(stored.length ? { id: { in: stored.map((item) => item.procedureId).filter(Boolean) } } : {}) }, select: { id: true, name: true, durationMinutes: true } });
+  const lines: Array<{ procedureId: string; name: string; quantity?: number }> = stored.length ? stored : restoreLegacyQuoteItems(quote.items, catalog);
+  if (!lines.length) return NextResponse.json({ message: "O orçamento aprovado não possui procedimentos para executar." }, { status: 400 });
+  // Compatibilidade: se um procedureId for informado, ele ainda precisa pertencer ao orçamento.
+  if (body.procedureId && !lines.some((item) => item.procedureId === body.procedureId)) return NextResponse.json({ message: "O procedimento não pertence ao orçamento aprovado." }, { status: 400 });
   const date = body.performedAt ? new Date(body.performedAt) : new Date();
   if (!Number.isFinite(date.getTime())) return NextResponse.json({ message: "Data da sessão inválida." }, { status: 400 });
   const assignedProfessional = journey.professional.trim() || user.name;
-  const parent = await prisma.patientProcedure.upsert({
-    where: { quoteId: quote.id },
-    update: { name: quote.items, journeyId: journey.id },
-    create: { clinicId: user.clinicId, patientId, journeyId: journey.id, quoteId: quote.id, name: quote.items, professional: assignedProfessional, performedAt: date },
-    select: { id: true },
+  const sessionName = combinedProcedureName(lines.map((item) => item.name));
+  const estimated = lines.reduce((total, item) => total + (catalog.find((procedure) => procedure.id === item.procedureId)?.durationMinutes ?? 0) * Math.max(1, item.quantity ?? 1), 0);
+  const { session, reused } = await prisma.$transaction(async (tx) => {
+    // Serializa criações concorrentes do mesmo orçamento (clique duplo/corrida) e reaproveita o rascunho aberto.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${quote.id}))`;
+    const open = await tx.patientProcedureSession.findFirst({ where: { clinicId: user.clinicId, patientId, journeyId: journey.id, quoteId: quote.id, status: { in: ["Rascunho", "Em execução"] } }, orderBy: { createdAt: "desc" } });
+    if (open) {
+      if (!shouldRefreshDraftName(open, sessionName)) return { session: open, reused: true };
+      // Rascunho legado (por item): alinha ao combinado do orçamento. Em execução/concluída nunca é alterada.
+      const refreshed = await tx.patientProcedureSession.updateMany({ where: { id: open.id, clinicId: user.clinicId, status: "Rascunho" }, data: { procedureName: sessionName, ...(estimated > 0 ? { estimatedMinutes: Math.min(estimated, 1440) } : {}) } });
+      const current = refreshed.count ? await tx.patientProcedureSession.findFirst({ where: { id: open.id, clinicId: user.clinicId } }) : open;
+      return { session: current ?? open, reused: true };
+    }
+    const parent = await tx.patientProcedure.upsert({
+      where: { quoteId: quote.id },
+      update: { name: quote.items, journeyId: journey.id },
+      create: { clinicId: user.clinicId, patientId, journeyId: journey.id, quoteId: quote.id, name: quote.items, professional: assignedProfessional, performedAt: date },
+      select: { id: true },
+    });
+    const created = await tx.patientProcedureSession.create({ data: {
+      clinicId: user.clinicId, patientId, journeyId: journey.id, evaluationId: quote.evaluationId!,
+      procedureId: parent.id, quoteId: quote.id, procedureName: sessionName, professional: assignedProfessional,
+      performedAt: date, status: "Rascunho", createdBy: user.name, updatedBy: user.name, ...(estimated > 0 ? { estimatedMinutes: Math.min(estimated, 1440) } : {}),
+      auditLog: JSON.stringify([{ at: new Date().toISOString(), actor: user.name, action: "Sessão criada", fields: ["procedimento", "profissional", "data"] }]),
+    } });
+    return { session: created, reused: false };
   });
-  const session = await prisma.patientProcedureSession.create({ data: {
-    clinicId: user.clinicId, patientId, journeyId: journey.id, evaluationId: quote.evaluationId,
-    procedureId: parent.id, quoteId: quote.id, procedureName: procedure.name, professional: assignedProfessional,
-    performedAt: date, status: "Rascunho", createdBy: user.name, updatedBy: user.name,
-    auditLog: JSON.stringify([{ at: new Date().toISOString(), actor: user.name, action: "Sessão criada", fields: ["procedimento", "profissional", "data"] }]),
-  } });
-  return NextResponse.json({ session: { ...session, materials: [], photos: [], auditLog: parseJson<unknown[]>(session.auditLog, []) } }, { status: 201 });
+  // Em reuso o cliente recarrega a sessão completa (fotos resolvidas) pelo GET.
+  return NextResponse.json({ session: { ...session, materials: parseJson<unknown[]>(session.materials, []), photos: [], auditLog: parseJson<unknown[]>(session.auditLog, []) }, reused }, { status: reused ? 200 : 201 });
 }
 
 function parseJson<T>(value: string, fallback: T): T {

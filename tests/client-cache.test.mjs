@@ -140,3 +140,84 @@ test("does not reuse private data after an unauthorized response", async () => {
   await assert.rejects(getCachedJson("/api/patients"));
   assert.equal(readClientCache("/api/patients"), undefined);
 });
+
+test("mudanças em histórico, jornadas ou sessões também invalidam a lista de atendimentos do mesmo paciente", async () => {
+  globalThis.fetch = async (url) => new Response(JSON.stringify({ url }), { status: 200 });
+  setClientCacheScope("user-a:clinic-a");
+  const keys = ["/api/patients/p1/encounters", "/api/patients/p2/encounters", "/api/patients/p1/anamnesis"];
+  const warm = () => Promise.all(keys.map((key) => getCachedJson(key)));
+  for (const changed of ["/api/patients/p1/history", "/api/patients/p1/journeys", "/api/patients/p1/procedure-sessions/s1/follow-ups", "/api/patients/p1/evaluation"]) {
+    await warm();
+    invalidateClientCache(changed);
+    assert.equal(readClientCache("/api/patients/p1/encounters"), undefined, changed);
+    assert.notEqual(readClientCache("/api/patients/p2/encounters"), undefined, changed);
+    if (!changed.endsWith("/evaluation")) assert.notEqual(readClientCache("/api/patients/p1/anamnesis"), undefined, changed);
+  }
+});
+
+test("avaliação invalida a anamnese; agenda e estoque pendente invalidam os atendimentos de todos os pacientes em cache", async () => {
+  globalThis.fetch = async (url) => new Response(JSON.stringify({ url }), { status: 200 });
+  setClientCacheScope("user-a:clinic-a");
+  const keys = ["/api/patients/p1/encounters", "/api/patients/p2/encounters", "/api/patients/p1/anamnesis", "/api/patients/p2/anamnesis"];
+  const warm = () => Promise.all(keys.map((key) => getCachedJson(key)));
+  await warm();
+  invalidateClientCache("/api/patients/p1/evaluation");
+  assert.equal(readClientCache("/api/patients/p1/anamnesis"), undefined);
+  assert.notEqual(readClientCache("/api/patients/p2/anamnesis"), undefined);
+  for (const changed of ["/api/agenda/bootstrap", "/api/appointments/options", "/api/stock/pending"]) {
+    await warm();
+    invalidateClientCache(changed);
+    assert.equal(readClientCache("/api/patients/p1/encounters"), undefined, changed);
+    assert.equal(readClientCache("/api/patients/p2/encounters"), undefined, changed);
+    assert.notEqual(readClientCache("/api/patients/p1/anamnesis"), undefined, changed);
+  }
+});
+
+test("fotos e documentos: chaves com query são invalidadas por prefixo, só do mesmo paciente, e por registros de origem", async () => {
+  globalThis.fetch = async (url) => new Response(JSON.stringify({ url }), { status: 200 });
+  setClientCacheScope("user-a:clinic-a");
+  const keys = ["/api/patients/p1/documents?page=1&pageSize=9", "/api/patients/p1/documents?category=EXAMES", "/api/patients/p2/documents?page=1", "/api/patients/p1/photos", "/api/patients/p2/photos"];
+  const warm = () => Promise.all(keys.map((key) => getCachedJson(key)));
+  await warm();
+  invalidateClientCache("/api/patients/p1/documents");
+  assert.equal(readClientCache(keys[0]), undefined);
+  assert.equal(readClientCache(keys[1]), undefined);
+  assert.notEqual(readClientCache(keys[2]), undefined);
+  assert.notEqual(readClientCache(keys[3]), undefined);
+  await warm();
+  invalidateClientCache("/api/patients/p1/photos");
+  assert.equal(readClientCache(keys[3]), undefined);
+  assert.notEqual(readClientCache(keys[4]), undefined);
+  assert.notEqual(readClientCache(keys[0]), undefined);
+  for (const changed of ["/api/patients/p1/evaluation", "/api/patients/p1/history", "/api/patients/p1/procedure-sessions/s1/follow-ups"]) {
+    await warm();
+    invalidateClientCache(changed);
+    assert.equal(readClientCache(keys[3]), undefined, changed);
+    assert.notEqual(readClientCache(keys[4]), undefined, changed);
+    if (changed.endsWith("/evaluation")) assert.equal(readClientCache(keys[0]), undefined, changed);
+  }
+  await warm();
+  invalidateClientCache("/api/patients/p1/anamnesis");
+  assert.equal(readClientCache(keys[0]), undefined);
+});
+
+test("invalidar /photos também remove as marcações /photos/<ref> do mesmo paciente", async () => {
+  globalThis.fetch = async (url) => new Response(JSON.stringify({ url }), { status: 200 });
+  setClientCacheScope("user-a:clinic-a");
+  const keys = ["/api/patients/p1/photos", "/api/patients/p1/photos/evaluation%3Ax", "/api/patients/p2/photos/evaluation%3Ay"];
+  await Promise.all(keys.map((key) => getCachedJson(key)));
+  invalidateClientCache("/api/patients/p1/evaluation");
+  assert.equal(readClientCache(keys[0]), undefined);
+  assert.equal(readClientCache(keys[1]), undefined);
+  assert.notEqual(readClientCache(keys[2]), undefined);
+});
+
+test("mudar documentos do paciente também invalida as sessões de procedimento (resumo de consentimento), só do mesmo paciente", async () => {
+  globalThis.fetch = async (url) => new Response(JSON.stringify({ url }), { status: 200 });
+  setClientCacheScope("user-a:clinic-a");
+  const keys = ["/api/patients/p1/procedure-sessions?journeyId=j1&quoteId=q1", "/api/patients/p2/procedure-sessions?journeyId=j2&quoteId=q2"];
+  await Promise.all(keys.map((key) => getCachedJson(key)));
+  invalidateClientCache("/api/patients/p1/documents");
+  assert.equal(readClientCache(keys[0]), undefined);
+  assert.notEqual(readClientCache(keys[1]), undefined);
+});

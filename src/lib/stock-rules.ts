@@ -136,8 +136,11 @@ export function normalizeName(value: string) {
   return value.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLocaleLowerCase("pt-BR").replace(/\s+/g, " ");
 }
 
+const PROCEDURE_APPOINTMENT_PREFIX = "Procedimento - "; // mesmo prefixo de procedure-session-rules.ts
+
 export function procedureSelectionsFromAppointment(label: string, procedureNames: string[]) {
-  const selectedNames = label.split(",").map((value) => {
+  const bare = label.trim().startsWith(PROCEDURE_APPOINTMENT_PREFIX) ? label.trim().slice(PROCEDURE_APPOINTMENT_PREFIX.length) : label;
+  const selectedNames = bare.split(/,| \+ /).map((value) => {
     const match = value.match(/\s*\((\d+)\s*x\)\s*$/i);
     return { name: normalizeName(value.replace(/\s*\(\d+\s*x\)\s*$/i, "")), quantity: match ? Number(match[1]) : 1 };
   }).filter((selection) => selection.name && selection.quantity > 0);

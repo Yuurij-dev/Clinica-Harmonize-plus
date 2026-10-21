@@ -24,6 +24,23 @@ function containsProcedureName(cardName: string, procedureName: string) {
   return false;
 }
 
+const procedureAppointmentPrefix = "Procedimento - "; // mesmo prefixo de procedure-session-rules.ts
+
+function baseProcedureName(procedure: string) {
+  const trimmed = procedure.trim();
+  return trimmed.startsWith(procedureAppointmentPrefix) ? trimmed.slice(procedureAppointmentPrefix.length).trim() : trimmed;
+}
+
+// O agendamento (nome puro, "Procedimento - X" ou combinado "A + B") refere-se a este procedimento/tratamento?
+export function appointmentMatchesProcedure(appointmentProcedure: string, procedureName: string) {
+  if (appointmentProcedure === procedureName) return true;
+  if (/^retorno/i.test(procedureName.trim())) return false;
+  const base = baseProcedureName(appointmentProcedure);
+  if (base === procedureName.trim()) return true;
+  const parts = [...new Set(base.split(" + ").map((part) => part.trim()).filter(Boolean))];
+  return appointmentProcedure.startsWith(procedureAppointmentPrefix) && parts.length > 0 && parts.every((part) => containsProcedureName(procedureName, part));
+}
+
 export function assignProcedureAppointmentsToCards<T extends { procedure: string; status: string }>(appointments: T[], cards: Array<{ name: string }>, procedureNames: Array<{ name: string }>) {
   const assignments: Array<T | undefined> = Array(cards.length).fill(undefined);
   const assignedAppointmentIndexes = new Set<number>();
@@ -31,11 +48,15 @@ export function assignProcedureAppointmentsToCards<T extends { procedure: string
 
   appointments.forEach((appointment, appointmentIndex) => {
     cards.forEach((card, cardIndex) => {
-      if (appointment.procedure === card.name) {
+      if (appointment.procedure === card.name || baseProcedureName(appointment.procedure) === card.name.trim()) {
         matches.push({ appointmentIndex, cardIndex, specificity: 0, active: 0 });
         return;
       }
-      const catalogMatch = procedureNames.find(({ name }) => name === appointment.procedure && containsProcedureName(card.name, name));
+      if (appointment.procedure.startsWith(procedureAppointmentPrefix) && appointmentMatchesProcedure(appointment.procedure, card.name)) {
+        matches.push({ appointmentIndex, cardIndex, specificity: 50, active: ["Agendado", "Em atendimento", "Faltou"].includes(appointment.status) ? 0 : 1 });
+        return;
+      }
+      const catalogMatch = procedureNames.find(({ name }) => name === baseProcedureName(appointment.procedure) && containsProcedureName(card.name, name));
       if (catalogMatch) {
         const extraTitleLength = Math.max(0, card.name.trim().length - catalogMatch.name.trim().length);
         matches.push({ appointmentIndex, cardIndex, specificity: 100 + extraTitleLength, active: ["Agendado", "Em atendimento", "Faltou"].includes(appointment.status) ? 0 : 1 });

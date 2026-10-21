@@ -143,3 +143,9 @@ test("pending outputs and material checks become alerts", () => {
   assert.deepEqual(stockAlerts({ ...base, pendingOutputs: 1, pendingChecks: 0 }).map((alert) => alert.message), ["1 saída de estoque pendente por falta de saldo"]);
   assert.deepEqual(stockAlerts(base), []);
 });
+
+test("agendamento 'Procedimento - A + B' casa com o catálogo sem prefixo e separa por ' + '", async () => {
+  const { procedureSelectionsFromAppointment } = await import("../src/lib/stock-rules.ts");
+  assert.deepEqual(procedureSelectionsFromAppointment("Procedimento - Botox + Preenchimento", ["Botox", "Preenchimento", "Peeling"]), [{ name: "Botox", quantity: 1 }, { name: "Preenchimento", quantity: 1 }]);
+  assert.deepEqual(procedureSelectionsFromAppointment("Botox (2x), Peeling", ["Botox", "Peeling"]), [{ name: "Botox", quantity: 2 }, { name: "Peeling", quantity: 1 }]);
+});

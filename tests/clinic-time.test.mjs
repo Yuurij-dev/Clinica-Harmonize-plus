@@ -60,3 +60,15 @@ test("an appointment only counts as missed after its own day and time plus toler
   assert.equal(clinicNow(new Date("2026-10-15T02:30:00Z")).date, "2026-10-14");
   assert.equal(clinicNow(new Date("2026-10-15T02:30:00Z")).minutes, 23 * 60 + 30);
 });
+
+test("fuso da clínica (America/Sao_Paulo, UTC-3 sem horário de verão desde 2019) na virada de dia", async () => {
+  const { clinicNow, appointmentInstant, appointmentDay } = await import("../src/lib/clinic-time.ts");
+  const { appointmentStartNow } = await import("../src/lib/procedure-session-rules.ts");
+  const late = clinicNow(new Date("2026-10-21T02:30:00Z"));
+  assert.deepEqual(late, { date: "2026-10-20", minutes: 23 * 60 + 30 });
+  assert.deepEqual(appointmentStartNow(late), { day: "2026-10-20", time: "23:30" });
+  assert.equal(appointmentDay(appointmentInstant("2026-10-20")), "2026-10-20");
+  // Em novembro/janeiro não há DST: o offset segue -03:00 (03:00Z = 00:00 local).
+  assert.deepEqual(clinicNow(new Date("2026-01-15T03:00:00Z")), { date: "2026-01-15", minutes: 0 });
+  assert.deepEqual(clinicNow(new Date("2026-01-15T02:59:00Z")), { date: "2026-01-14", minutes: 23 * 60 + 59 });
+});
