@@ -107,7 +107,7 @@ function detailLine(label: string, value?: string | null) {
 export function buildQuoteProposalHtml(input: ProposalInput) {
   const primary = safeColor(input.clinic?.primaryColor);
   const clinicName = hasValue(input.clinic?.name) ? input.clinic!.name!.trim() : "";
-  const markUrl = input.harmonizeMarkUrl === null ? "" : (input.harmonizeMarkUrl ?? "/harmonize-mark.png");
+  const markUrl = input.harmonizeMarkUrl === null ? "" : (input.harmonizeMarkUrl ?? "/brand/mark.svg");
   const clinicLogoUrl = resolveImageUrl(input.clinic?.logoUrl);
   const compactClass = input.rows.length <= 2 && !hasValue(input.goal) && !input.rows.some((item) => hasValue(item.description)) ? "compact" : "";
   const clinicLogo = clinicLogoUrl ? imageTag(clinicLogoUrl, clinicName || "Logo da clínica", "clinic-logo") : "";
