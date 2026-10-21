@@ -22,6 +22,19 @@ function hostOf(url) {
   }
 }
 
+function migrationUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.port === "6543" && parsed.hostname.endsWith(".pooler.supabase.com")) {
+      parsed.port = "5432";
+      parsed.searchParams.delete("pgbouncer");
+      parsed.searchParams.delete("connection_limit");
+      return parsed.toString();
+    }
+  } catch { /* URL inválida: segue com o valor original e deixa o Prisma reportar */ }
+  return url;
+}
+
 const isProduction = process.env.VERCEL_ENV === "production";
 const skip = process.env.SKIP_PRISMA_MIGRATE === "1";
 
@@ -32,12 +45,15 @@ if (isProduction && !skip) {
   }
   // Migrations precisam de conexão direta ou de sessão: o pooler de transações (porta 6543) trava o lock do Prisma.
   // O prisma.config.ts usa DATABASE_URL, então ela é trocada pela DIRECT_URL só neste comando.
-  console.log(`Production: aplicando migrations pendentes (prisma migrate deploy) em ${hostOf(process.env.DIRECT_URL)}...`);
-  if (hostOf(process.env.DIRECT_URL).endsWith(":6543")) {
-    console.error("DIRECT_URL aponta para o pooler de transações (6543), que trava migrations. Use a conexão direta ou o pooler em modo sessão (porta 5432).");
+  // O pooler de transações (6543) trava o lock do Prisma. No Supabase o pooler em modo sessão fica no mesmo host, porta 5432,
+  // com as mesmas credenciais: troca a porta automaticamente para o migrate (o app continua usando DATABASE_URL como está).
+  const migrateUrl = migrationUrl(process.env.DIRECT_URL);
+  console.log(`Production: aplicando migrations pendentes (prisma migrate deploy) em ${hostOf(migrateUrl)}...`);
+  if (hostOf(migrateUrl).endsWith(":6543")) {
+    console.error("A URL de migração aponta para um pooler de transações (6543) que não é do Supabase. Use a conexão direta ou um pooler em modo sessão (porta 5432) em DIRECT_URL.");
     process.exit(1);
   }
-  run("npx", ["prisma", "migrate", "deploy"], { env: { ...process.env, DATABASE_URL: process.env.DIRECT_URL }, timeout: 240000 });
+  run("npx", ["prisma", "migrate", "deploy"], { env: { ...process.env, DATABASE_URL: migrateUrl }, timeout: 240000 });
 } else {
   console.log(`Migrations ignoradas (VERCEL_ENV=${process.env.VERCEL_ENV ?? "local"}${skip ? ", SKIP_PRISMA_MIGRATE=1" : ""}).`);
 }
