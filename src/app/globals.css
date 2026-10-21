@@ -772,3 +772,15 @@ html.dark [class*="border-[#35ae78]"],
 html.dark [class*="border-[#3d9be9]"] {
   border-color: currentColor !important;
 }
+
+.hp-logo-dark {
+  display: none;
+}
+
+html.dark .hp-logo-light {
+  display: none;
+}
+
+html.dark .hp-logo-dark {
+  display: block;
+}

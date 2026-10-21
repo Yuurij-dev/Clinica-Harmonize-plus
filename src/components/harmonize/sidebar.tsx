@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { Menu, Plus } from "lucide-react";
 import { navItems } from "@/data/navigation";
 import type { SectionId } from "@/types/clinic";
@@ -32,15 +33,9 @@ export function Sidebar({
     <aside className="flex h-full w-[220px] flex-col border-r border-border bg-card px-4 py-5 text-card-foreground">
       <div className="mb-7 flex items-center justify-between gap-3 px-1">
         <div className="min-w-0">
-          <div className="flex items-center gap-2.5">
-            <div className="grid h-8 w-8 shrink-0 place-items-center rounded-[6px] bg-[#5147dc] text-xs font-black text-white shadow-[0_7px_16px_rgba(81,71,220,0.24)]">
-              H+
-            </div>
-            <div className="min-w-0">
-              <p className="text-[15px] font-black leading-none text-foreground">Harmonize+</p>
-              <p className="mt-1 text-xs font-medium text-muted-foreground">Gestão para clínicas</p>
-            </div>
-          </div>
+          <Image alt="Harmonize+" className="h-auto w-[150px] hp-logo-light" height={300} priority src="/brand/logo-horizontal.svg" unoptimized width={1200} />
+          <Image alt="Harmonize+" className="hp-logo-dark h-auto w-[150px]" height={300} priority src="/brand/logo-horizontal-white.svg" unoptimized width={1200} />
+          <p className="mt-0.5 text-xs font-medium text-muted-foreground">Gestão para clínicas</p>
         </div>
         <button
           className="grid h-9 w-9 place-items-center rounded-md bg-muted text-primary lg:hidden"
