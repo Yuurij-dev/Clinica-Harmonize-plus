@@ -7,9 +7,12 @@ const prisma = new PrismaClient();
 function seedPassword(name, required = false) {
   const password = process.env[name];
   if (!password && !required) return null;
-  if (!password || password.length < 12) {
-    throw new Error(`${name} precisa ter pelo menos 12 caracteres para executar o seed.`);
+  // Com SEED_ALLOW_WEAK_PASSWORDS=1 qualquer senha não vazia vale (só para ambiente de teste/rascunho).
+  const weakAllowed = process.env.SEED_ALLOW_WEAK_PASSWORDS === "1";
+  if (!password || (!weakAllowed && password.length < 12)) {
+    throw new Error(`${name} precisa ter pelo menos 12 caracteres para executar o seed (ou use SEED_ALLOW_WEAK_PASSWORDS=1 em ambiente de teste).`);
   }
+  if (weakAllowed && password.length < 12) console.warn(`Aviso: ${name} tem menos de 12 caracteres (SEED_ALLOW_WEAK_PASSWORDS=1).`);
   return password;
 }
 
