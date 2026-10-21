@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { type FormEvent, type ReactNode, type PointerEvent as ReactPointerEvent, type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArrowLeft,
   ArrowLeftRight,
   CalendarPlus,
   CalendarDays,
@@ -562,11 +563,14 @@ export function PatientDetail({
           <span aria-current="page" className="font-semibold text-foreground">{selectedJourneyLabel}</span>
         </nav>
       ) : (
+        <>
         <nav aria-label="Navegação estrutural" className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <button className="rounded-sm transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" type="button" onClick={() => guarded(onBack)}>Clientes</button>
           <ChevronRight className="h-3 w-3" aria-hidden="true" />
           <span aria-current="page" className="font-semibold text-foreground">{currentPatient.name}</span>
         </nav>
+        <button type="button" onClick={() => guarded(onBack)} className="flex items-center gap-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm"><ArrowLeft className="h-4 w-4" />Voltar para clientes</button>
+        </>
       )}
 
       <Card className={cn("grid overflow-hidden p-0", pinnedJourney && "lg:grid-cols-[350px_minmax(0,1fr)]")}>
