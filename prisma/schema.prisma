@@ -59,6 +59,10 @@ model Clinic {
   procedureSessions           PatientProcedureSession[]
   procedureFollowUps           PatientProcedureFollowUp[]
   journeys                    PatientJourney[]
+  patientAnamneses            PatientAnamnesis[]
+  clinicalDocuments           ClinicalDocument[]
+  clinicalPhotos              ClinicalPhoto[]
+  clinicalFileAudits          ClinicalFileAudit[]
   stockLots                   StockLot[]
   stockMovements              StockMovement[]
   expenses                    Expense[]
@@ -102,6 +106,9 @@ model Patient {
   procedureFollowUps  PatientProcedureFollowUp[]
   observations        PatientObservation[]
   journeys            PatientJourney[]
+  anamneses           PatientAnamnesis[]
+  clinicalDocuments   ClinicalDocument[]
+  clinicalPhotos      ClinicalPhoto[]
   stockMovements      StockMovement[]
   pendingStockOutputs PendingStockOutput[]
   clinic              Clinic?              @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -424,11 +431,13 @@ model PatientProcedureFollowUp {
   appointmentId  String?                 @unique
   occurredAt     DateTime                @default(now()) @db.Timestamptz(6)
   professional   String
+  complaints     String                  @default("")
   guidanceText   String                  @default("")
   guidanceSentAt DateTime?               @db.Timestamptz(6)
   observations   String                  @default("")
   complications  String                  @default("")
   photos         String                  @default("[]")
+  removedPhotoIds String                 @default("[]")
   auditLog       String                  @default("[]")
   createdBy      String
   updatedBy      String
@@ -447,14 +456,148 @@ model PatientProcedureFollowUp {
 
 model PatientProcedureFollowUpDraft {
   sessionId         String                  @id
+  complaints        String                  @default("")
   guidanceText      String                  @default("")
   guidanceConfirmed Boolean                 @default(false)
   observations      String                  @default("")
   complications     String                  @default("")
   photos            String                  @default("[]")
+  removedPhotoIds   String                  @default("[]")
   appointmentId     String?
   updatedAt         DateTime                @updatedAt @db.Timestamptz(6)
   session           PatientProcedureSession @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+// Anamnese versionada do paciente. Uma versão concluída nunca tem o conteúdo alterado: editar gera nova versão (rascunho).
+// status: RASCUNHO | CONCLUIDA | PENDENTE_REVISAO (pendência explícita, nunca inferida só pelo tempo decorrido).
+model PatientAnamnesis {
+  id                String    @id @default(cuid())
+  clinicId          String
+  patientId         String
+  version           Int
+  status            String    @default("RASCUNHO")
+  schemaVersion     Int       @default(1)
+  content           String    @default("{}")
+  origin            String    @default("empty")
+  basedOnVersion    Int?
+  createdBy         String
+  updatedBy         String
+  completedBy       String?
+  completedAt       DateTime? @db.Timestamptz(6)
+  reviewRequestedBy String?
+  reviewRequestedAt DateTime? @db.Timestamptz(6)
+  reviewReason      String    @default("")
+  reviewConfirmedBy String?
+  reviewConfirmedAt DateTime? @db.Timestamptz(6)
+  auditLog          String    @default("[]")
+  createdAt         DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @db.Timestamptz(6)
+  clinic            Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  patient           Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([patientId, version])
+  @@index([clinicId, patientId, status])
+}
+
+// Documentos clínicos enviados (PDF/imagem). Metadados aqui; bytes em ClinicalDocumentBlob (driver db) ou no bucket (driver supabase).
+// category: TERMOS | EXAMES | RECEITAS | ORIENTACOES | DECLARACOES | OUTROS. signatureStatus: NAO_APLICAVEL | PENDENTE | ASSINADO.
+model ClinicalDocument {
+  id              String                @id @default(cuid())
+  clinicId        String
+  patientId       String
+  journeyId       String?
+  encounterType   String?
+  encounterId     String?
+  category        String                @default("OUTROS")
+  name            String
+  originalName    String
+  mimeType        String
+  sizeBytes       Int
+  sha256          String
+  storageDriver   String                @default("db")
+  storageKey      String?
+  signatureStatus String                @default("NAO_APLICAVEL")
+  uploadedBy      String
+  uploadedByName  String
+  uploadedAt      DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime              @updatedAt @db.Timestamptz(6)
+  archivedAt      DateTime?             @db.Timestamptz(6)
+  archivedBy      String?
+  archiveReason   String                @default("")
+  clinic          Clinic                @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  patient         Patient               @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  blob            ClinicalDocumentBlob?
+
+  @@index([clinicId, patientId, archivedAt, uploadedAt])
+  @@index([clinicId, patientId, category])
+  @@index([journeyId])
+}
+
+model ClinicalDocumentBlob {
+  documentId String           @id
+  data       Bytes
+  document   ClinicalDocument @relation(fields: [documentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+// Fotos novas enviadas pela galeria. As fotos antigas (avaliação/sessão/retorno) continuam onde estão e são lidas por referência.
+// phase: ANTES | DEPOIS | EVOLUCAO | OUTRA.
+model ClinicalPhoto {
+  id             String             @id @default(cuid())
+  clinicId       String
+  patientId      String
+  journeyId      String?
+  encounterType  String?
+  encounterId    String?
+  phase          String             @default("OUTRA")
+  category       String             @default("Outra")
+  name           String
+  mimeType       String
+  sizeBytes      Int
+  width          Int
+  height         Int
+  sha256         String
+  storageDriver  String             @default("db")
+  storageKey     String?
+  takenAt        DateTime           @default(now()) @db.Timestamptz(6)
+  uploadedBy     String
+  uploadedByName String
+  createdAt      DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime           @updatedAt @db.Timestamptz(6)
+  archivedAt     DateTime?          @db.Timestamptz(6)
+  archivedBy     String?
+  clinic         Clinic             @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  patient        Patient            @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  blob           ClinicalPhotoBlob?
+
+  @@index([clinicId, patientId, archivedAt, takenAt])
+  @@index([journeyId])
+}
+
+model ClinicalPhotoBlob {
+  photoId String        @id
+  data    Bytes
+  photo   ClinicalPhoto @relation(fields: [photoId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+// Trilha de rastreabilidade de documentos e fotos (sem conteúdo). Sem FK para o arquivo: sobrevive à exclusão definitiva.
+// fileKind: DOCUMENT | PHOTO. action: UPLOAD | VIEW | DOWNLOAD | RENAME | RECATEGORIZE | LINK | SIGNATURE | ARCHIVE | UNARCHIVE | DELETE.
+model ClinicalFileAudit {
+  id        String   @id @default(cuid())
+  clinicId  String
+  patientId String
+  fileKind  String
+  fileId    String
+  action    String
+  actorId   String
+  actorName String
+  fileName  String   @default("")
+  category  String   @default("")
+  note      String   @default("")
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  clinic    Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([clinicId, patientId, createdAt])
+  @@index([fileId])
 }
 
 model StockLot {
