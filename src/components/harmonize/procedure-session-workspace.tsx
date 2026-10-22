@@ -8,6 +8,8 @@ import { Modal } from "@/components/ui/modal";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { appointmentSlotError, clinicToday, latestAppointmentStart } from "@/lib/clinic-time";
 import { combinedProcedureName, procedureAppointmentName, shouldRefreshDraftName } from "@/lib/procedure-session-rules";
+import { adjustLotAllocations, uncoveredQuantity } from "@/lib/session-materials-rules";
+import { groupByKind, stockKindLabels, type StockKind } from "@/lib/stock-rules";
 import { cn } from "@/lib/utils";
 import type { Patient } from "@/types/clinic";
 import { LoadingSkeleton } from "./shared";
@@ -24,9 +26,9 @@ import { PhotoPreviewModal } from "./photo-preview-modal";
 type SessionPhoto = { id: string; name: string; phase: "Antes" | "Imediatamente após"; category: string; imageUrl: string; sourceEvaluationPhotoId?: string; width: number; height: number };
 type Allocation = { lotId: string; quantity: number; code?: string; expiresOn?: string };
 type UsedMaterial = { productId: string; name?: string; unit?: string; quantity: number; allocations: Allocation[] };
-type Session = { id: string; procedureName: string; professional: string; performedAt: string; startedAt: string | null; endedAt: string | null; estimatedMinutes: number | null; durationMinutes: number | null; technique: string; treatedAreas: string; anesthesia: string; complications: string; observations: string; materials: UsedMaterial[]; photos: SessionPhoto[]; auditLog: Array<{ at: string; actor: string; action: string; fields: string[] }>; status: string; updatedBy: string; updatedAt: string; completedBy?: string | null; completedAt?: string | null };
+type Session = { id: string; procedureName: string; professional: string; performedAt: string; startedAt: string | null; endedAt: string | null; estimatedMinutes: number | null; durationMinutes: number | null; technique: string; treatedAreas: string; anesthesia: string; complications: string; observations: string; materials: UsedMaterial[]; materialsSeededAt?: string | null; photos: SessionPhoto[]; auditLog: Array<{ at: string; actor: string; action: string; fields: string[] }>; status: string; updatedBy: string; updatedAt: string; completedBy?: string | null; completedAt?: string | null };
 type Procedure = { id: string; name: string; durationMinutes: number };
-type Product = { id: string; name: string; unit: string; lots: Array<{ id: string; code: string; expiresOn: string; balance: number }> };
+type Product = { id: string; name: string; kind?: string; unit: string; lots: Array<{ id: string; code: string; expiresOn: string; balance: number }> };
 type InitialPhoto = { id: string; name: string; imageUrl: string; width: number; height: number; category: string };
 type Payload = { journey: { id: string; name: string; status: string }; quote: { id: string; status: string; items: Array<{ procedureId: string; name: string; quantity: number }> }; evaluation: { id: string; chiefComplaint: string; patientGoal: string; allergies: string; contraindications: string; photos: InitialPhoto[] }; procedures: Procedure[]; materials: Product[]; sessions: Session[]; consent: { signed: boolean; signedCount: number; pendingCount: number; message: string }; clinicName?: string; scheduledProcedure?: ScheduledProcedure | null };
 type ScheduledProcedure = { id: string; date: string; time: string; procedure: string; professional: string; status: string };
@@ -75,6 +77,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
   const [preview, setPreview] = useState<SessionPhoto | InitialPhoto | null>(null);
   const [materialPickerOpen, setMaterialPickerOpen] = useState(false);
   const [materialSearch, setMaterialSearch] = useState("");
+  const [materialsEdited, setMaterialsEdited] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const beforeInputRef = useRef<HTMLInputElement>(null);
@@ -97,7 +100,9 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
       // A criação é idempotente no servidor (rascunho da jornada+orçamento é reaproveitado), então remontagens não duplicam.
       const combined = combinedProcedureName(result.quote.items.map((item) => item.name));
       const staleDraft = result.sessions.find((item) => shouldRefreshDraftName(item, combined));
-      if ((!result.sessions.length || staleDraft) && !readOnly) {
+      // Rascunho vazio que ainda não recebeu a ficha técnica (ex.: sessão anterior ao recurso): o servidor semeia uma única vez.
+      const unseededDraft = result.sessions.find((item) => item.status === "Rascunho" && !item.materialsSeededAt && Array.isArray(item.materials) && item.materials.length === 0);
+      if ((!result.sessions.length || staleDraft || unseededDraft) && !readOnly) {
         const created = await requestSession();
         if (!active) return;
         payload = { ...result, sessions: [created, ...result.sessions.filter((item) => item.id !== created.id)] };
@@ -230,6 +235,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
     setDraft((current) => current ? { ...current, ...changes } : current);
     editRevisionRef.current += 1;
     setEditRevision(editRevisionRef.current);
+    if (changes.materials) setMaterialsEdited(true);
     setInvalidFields((current) => {
       const next = new Set(current);
       if (typeof changes.technique === "string" && changes.technique.trim()) next.delete("technique");
@@ -391,14 +397,14 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
   function addMaterial(productId: string) {
     const product = data?.materials.find((item) => item.id === productId);
     if (!product || materials.some((item) => item.productId === product.id)) return;
-    patchDraft({ materials: [...materials, { productId, name: product.name, unit: product.unit, quantity: 1, allocations: allocateSessionLots(product, 1) }] });
+    patchDraft({ materials: [...materials, { productId, name: product.name, unit: product.unit, quantity: 1, allocations: adjustLotAllocations([], 1, product.lots).allocations }] });
   }
 
   function setMaterialQuantity(index: number, quantity: number) {
     patchDraft({ materials: materials.map((item, itemIndex) => itemIndex === index ? {
       ...item,
       quantity,
-      allocations: resizeSessionLots(item.allocations, quantity),
+      allocations: adjustLotAllocations(item.allocations, quantity, data?.materials.find((product) => product.id === item.productId)?.lots ?? []).allocations,
     } : item) });
   }
 
@@ -517,7 +523,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
             <div className="mt-3 grid gap-2 sm:grid-cols-2"><div className="rounded-[5px] border border-[#ececf2] p-3 text-xs"><strong>Queixa principal</strong><p className="mt-1 text-[#6f7082]">{data.evaluation.chiefComplaint || "Não informado na avaliação"}</p></div><div className="rounded-[5px] border border-[#ececf2] p-3 text-xs"><strong>Alergias e contraindicações</strong><p className="mt-1 text-[#6f7082]">{[data.evaluation.allergies, data.evaluation.contraindications].filter(Boolean).join(" · ") || "Não informado na avaliação"}</p></div></div>
           </Card>
 
-          <Card className="overflow-hidden p-4"><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="flex items-center gap-2 text-sm font-bold"><Syringe className="h-4 w-4 text-[#5147dc]" />Produtos e materiais utilizados</h3><Button type="button" size="sm" variant="outline" disabled={!canWrite || !data.materials.length} onClick={() => { setMaterialSearch(""); setMaterialPickerOpen(true); }}><Plus className="h-4 w-4" />Adicionar produto</Button></div>{notice && noticeIsMaterial ? <p id={notice.error ? "procedure-error-notice" : undefined} tabIndex={notice.error ? -1 : undefined} key={noticeAnimation} role={notice.error ? "alert" : "status"} className={cn("mt-3 scroll-mt-24 rounded-[5px] px-3 py-2 text-xs font-semibold", notice.error ? "bg-[#fff1f0] text-[#b42318]" : "bg-[#eef8f2] text-[#287a50]")}>{notice.text}</p> : null}<div className="mt-3 overflow-x-auto"><table className="w-full min-w-[680px] border-collapse text-left text-xs"><thead><tr className="bg-[#f7f7fb] text-[#737486]"><th className="px-3 py-2">Produto</th><th className="px-3 py-2">Quantidade</th><th className="px-3 py-2">Lote e validade</th><th className="px-3 py-2">Saldo</th><th className="w-10" /></tr></thead><tbody>{materials.map((item, index) => { const productData = data.materials.find((product) => product.id === item.productId); const allocation = item.allocations[0]; const lot = productData?.lots.find((candidate) => candidate.id === allocation?.lotId); return <tr key={item.productId} className="border-b border-[#ececf2]"><td className="px-3 py-2.5 font-semibold">{productData?.name ?? item.name ?? "Produto indisponível"}<span className="block text-xs font-normal text-[#898a9a]">{productData?.unit ?? item.unit ?? "unidade"}</span></td><td className="px-3 py-2.5"><input className="text-sm h-8 w-24 rounded-[5px] border border-[#dddde6] px-2" type="number" min="0.001" step="0.001" disabled={!canWrite} value={item.quantity} onChange={(event) => setMaterialQuantity(index, Number(event.target.value))} /></td><td className="px-3 py-2.5"><select className="text-sm h-8 min-w-40 rounded-[5px] border border-[#dddde6] bg-white px-2" disabled={!canWrite} value={allocation?.lotId ?? ""} onChange={(event) => { const selectedLot = productData?.lots.find((candidate) => candidate.id === event.target.value); setMaterial(index, { allocations: selectedLot ? [{ lotId: selectedLot.id, quantity: Math.min(item.quantity, selectedLot.balance), code: selectedLot.code, expiresOn: selectedLot.expiresOn }] : [] }); }}><option value="">Selecionar lote</option>{productData?.lots.map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.code} · vence {candidate.expiresOn.split("-").reverse().join("/")}</option>)}</select>{allocation && lot ? <span className="ml-2 text-xs text-[#6f7082]">Válido até {lot.expiresOn.split("-").reverse().join("/")}</span> : allocation ? <span className="ml-2 text-xs text-[#6f7082]">{allocation.code} · validade {allocation.expiresOn?.split("-").reverse().join("/")}</span> : null}</td><td className="px-3 py-2.5">{lot ? `${lot.balance} ${productData?.unit ?? "un"}` : allocation ? "Saldo indisponível" : "Sem lote selecionado"}</td><td className="px-3 py-2.5"><button type="button" className="rounded p-1 text-[#b42318]" disabled={!canWrite} aria-label={`Remover ${item.name ?? "produto"}`} onClick={() => patchDraft({ materials: materials.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 className="h-4 w-4" /></button></td></tr>; })}{materials.length === 0 ? <tr><td colSpan={5} className="py-6 text-center text-[#858696]">Nenhum material registrado para esta sessão.</td></tr> : null}</tbody></table></div><p className="mt-2 text-xs text-[#77788a]">O estoque é movimentado somente ao finalizar a sessão. O uso sem saldo disponível gera uma saída pendente conforme as regras do estoque.</p></Card>
+          <Card className="overflow-hidden p-4"><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="flex items-center gap-2 text-sm font-bold"><Syringe className="h-4 w-4 text-[#5147dc]" />Produtos e materiais utilizados</h3><Button type="button" size="sm" variant="outline" disabled={!canWrite || !data.materials.length} onClick={() => { setMaterialSearch(""); setMaterialPickerOpen(true); }}><Plus className="h-4 w-4" />Adicionar produto</Button></div>{draft.materialsSeededAt && !materialsEdited && materials.length > 0 && draft.status !== "Concluída" ? <p role="note" className="mt-3 rounded-[5px] bg-[#f1f0ff] px-3 py-2 text-xs text-[#4a40c9]">Preenchido a partir da ficha técnica dos procedimentos do orçamento. Ajuste as quantidades conforme o uso real.</p> : null}{notice && noticeIsMaterial ? <p id={notice.error ? "procedure-error-notice" : undefined} tabIndex={notice.error ? -1 : undefined} key={noticeAnimation} role={notice.error ? "alert" : "status"} className={cn("mt-3 scroll-mt-24 rounded-[5px] px-3 py-2 text-xs font-semibold", notice.error ? "bg-[#fff1f0] text-[#b42318]" : "bg-[#eef8f2] text-[#287a50]")}>{notice.text}</p> : null}<div className="mt-3 overflow-x-auto"><table className="w-full min-w-[680px] border-collapse text-left text-xs"><thead><tr className="bg-[#f7f7fb] text-[#737486]"><th className="px-3 py-2">Produto</th><th className="px-3 py-2">Quantidade</th><th className="px-3 py-2">Lote e validade</th><th className="px-3 py-2">Saldo</th><th className="w-10" /></tr></thead><tbody>{materials.map((item, index) => { const productData = data.materials.find((product) => product.id === item.productId); const allocation = item.allocations[0]; const lot = productData?.lots.find((candidate) => candidate.id === allocation?.lotId); return <tr key={item.productId} className="border-b border-[#ececf2]"><td className="px-3 py-2.5 font-semibold">{productData?.name ?? item.name ?? "Produto indisponível"}<span className="block text-xs font-normal text-[#898a9a]">{productData?.kind && productData.kind in stockKindLabels ? `${stockKindLabels[productData.kind as StockKind].singular} · ` : ""}{productData?.unit ?? item.unit ?? "unidade"}</span></td><td className="px-3 py-2.5"><input className="text-sm h-8 w-24 rounded-[5px] border border-[#dddde6] px-2" type="number" min="0.001" step="0.001" disabled={!canWrite} value={item.quantity} onChange={(event) => setMaterialQuantity(index, Number(event.target.value))} /></td><td className="px-3 py-2.5"><select className="text-sm h-8 min-w-40 rounded-[5px] border border-[#dddde6] bg-white px-2" disabled={!canWrite} value={allocation?.lotId ?? ""} onChange={(event) => { const selectedLot = productData?.lots.find((candidate) => candidate.id === event.target.value); setMaterial(index, { allocations: selectedLot ? [{ lotId: selectedLot.id, quantity: Math.min(item.quantity, selectedLot.balance), code: selectedLot.code, expiresOn: selectedLot.expiresOn }] : [] }); }}><option value="">Selecionar lote</option>{productData?.lots.map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.code} · vence {candidate.expiresOn.split("-").reverse().join("/")}</option>)}</select>{allocation && lot ? <span className="ml-2 text-xs text-[#6f7082]">Válido até {lot.expiresOn.split("-").reverse().join("/")}</span> : allocation ? <span className="ml-2 text-xs text-[#6f7082]">{allocation.code} · validade {allocation.expiresOn?.split("-").reverse().join("/")}</span> : null}{item.allocations.length > 1 ? <span className="mt-1 block text-xs text-[#6f7082]">Lotes: {item.allocations.map((part) => `${part.code ?? "lote"} (${formatStockBalance(part.quantity)})`).join(" · ")}</span> : null}{draft.status !== "Concluída" && uncoveredQuantity(item.quantity, item.allocations) > 0 ? <span role="status" className="mt-1 block text-xs font-medium text-[#a36a00]">Sem saldo suficiente em estoque: o restante ({formatStockBalance(uncoveredQuantity(item.quantity, item.allocations))} {productData?.unit ?? item.unit ?? "un"}) vira saída pendente ao finalizar.</span> : null}</td><td className="px-3 py-2.5">{lot ? `${lot.balance} ${productData?.unit ?? "un"}` : allocation ? "Saldo indisponível" : "Sem lote selecionado"}</td><td className="px-3 py-2.5"><button type="button" className="rounded p-1 text-[#b42318]" disabled={!canWrite} aria-label={`Remover ${item.name ?? "produto"}`} onClick={() => patchDraft({ materials: materials.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 className="h-4 w-4" /></button></td></tr>; })}{materials.length === 0 ? <tr><td colSpan={5} className="py-6 text-center text-[#858696]">Nenhum material registrado para esta sessão.</td></tr> : null}</tbody></table></div><p className="mt-2 text-xs text-[#77788a]">O estoque é movimentado somente ao finalizar a sessão. O uso sem saldo disponível gera uma saída pendente conforme as regras do estoque.</p></Card>
 
           <Card id="procedure-photos-card" tabIndex={-1} className={cn("scroll-mt-24 p-4", (invalidFields.has("beforePhoto") || invalidFields.has("afterPhoto")) && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")}>
             <div><h3 className="flex items-center gap-2 text-sm font-bold"><Camera className="h-4 w-4 text-[#5147dc]" />Fotografias da sessão</h3><p className="mt-1 text-xs text-[#77788a]">As imagens originais da avaliação permanecem preservadas.</p></div>
@@ -560,14 +566,14 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
           <label className="relative block"><Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#858696]" /><input autoFocus value={materialSearch} onChange={(event) => setMaterialSearch(event.target.value)} placeholder="Buscar material no estoque" className="h-9 w-full rounded-[5px] border border-[#dddde6] bg-white pl-9 pr-3 text-sm outline-none focus:border-[#5147dc]" /></label>
           <div className="max-h-[55dvh] overflow-y-auto rounded-[6px] border border-[#e9e9ef]">
             <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 bg-[#fafafd] px-3 py-2.5 text-xs font-bold text-[#77798d]"><span>Produto / material</span><span>Saldo no estoque</span><span className="sr-only">Ação</span></div>
-            {availableMaterials.map((product) => {
+            {groupByKind(availableMaterials.map((product) => ({ ...product, kind: product.kind ?? "material" }))).map((group) => <div key={group.kind}><p className="border-t border-[#eeeeF3] bg-[#fafafd] px-3 py-1.5 text-xs font-bold text-[#77798d]">{group.label}</p>{group.items.map((product) => {
               const stockBalance = product.lots.reduce((total, lot) => total + lot.balance, 0);
               return <div key={product.id} className="grid min-h-14 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 border-t border-[#eeeeF3] px-3 py-2 text-xs">
                 <div className="min-w-0"><strong className="block truncate text-[#3f4053]">{product.name}</strong><span className="text-xs text-[#999aaa]">{product.unit}</span></div>
                 <span className={cn("text-xs font-medium", stockBalance > 0 ? "text-[#555668]" : "text-[#a36a00]")}>{stockBalance > 0 ? `${formatStockBalance(stockBalance)} ${product.unit}` : "Sem saldo"}</span>
                 <Button type="button" size="sm" variant="secondary" disabled={!canWrite} onClick={() => addMaterial(product.id)}><Plus className="h-3.5 w-3.5" />Adicionar</Button>
               </div>;
-            })}
+            })}</div>)}
             {!availableMaterials.length ? <p className="px-3 py-8 text-center text-xs text-[#858696]">{data.materials.length && materials.length === data.materials.length ? "Todos os materiais disponíveis já foram adicionados." : materialSearch ? "Nenhum material corresponde à pesquisa." : "Nenhum material cadastrado no estoque."}</p> : null}
           </div>
         </div>
@@ -583,18 +589,6 @@ function Summary({ label, value }: { label: string; value: string }) { return <d
 function toDraft(session: Session): Session { return { ...session, materials: Array.isArray(session.materials) ? session.materials : [], photos: Array.isArray(session.photos) ? session.photos : [], auditLog: Array.isArray(session.auditLog) ? session.auditLog : [] }; }
 function formatDay(day: string) { const [, month, date] = day.split("-"); return month && date ? `${date}/${month}` : day; }
 function formatElapsedTime(totalSeconds: number) { const hours = Math.floor(totalSeconds / 3600); const minutes = Math.floor((totalSeconds % 3600) / 60); const seconds = totalSeconds % 60; return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":"); }
-function allocateSessionLots(product: Product, quantity: number): Allocation[] {
-  const lot = product.lots.find((candidate) => candidate.balance >= quantity) ?? product.lots.find((candidate) => candidate.balance > 0);
-  return lot ? [{ lotId: lot.id, quantity: Math.min(quantity, lot.balance), code: lot.code, expiresOn: lot.expiresOn }] : [];
-}
-function resizeSessionLots(allocations: Allocation[], quantity: number): Allocation[] {
-  let remaining = Math.max(0, quantity);
-  return allocations.flatMap((allocation) => {
-    const allocated = Math.min(remaining, allocation.quantity);
-    remaining -= allocated;
-    return allocated > 0 ? [{ ...allocation, quantity: allocated }] : [];
-  });
-}
 function formatStockBalance(quantity: number) { return Number(quantity.toFixed(3)).toLocaleString("pt-BR"); }
 function auditFieldLabel(field: string) { return ({ technique: "técnica", treatedAreas: "região", professional: "profissional", performedAt: "data", startedAt: "horário", estimatedMinutes: "tempo estimado", durationMinutes: "duração", anesthesia: "anestesia", complications: "intercorrências", observations: "observações", materials: "materiais", photos: "fotografias" } as Record<string, string>)[field] ?? field; }
 function fileToDataUrl(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Falha ao ler a foto.")); reader.onerror = () => reject(new Error("Falha ao ler a foto.")); reader.readAsDataURL(file); }); }

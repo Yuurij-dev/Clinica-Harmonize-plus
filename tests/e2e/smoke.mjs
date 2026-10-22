@@ -3213,6 +3213,504 @@ async function scheduleConflictGaps() {
   }
 }
 
+// Materiais da sessão preenchidos pela ficha técnica dos procedimentos do orçamento (semeadura única no servidor).
+async function sessionMaterials() {
+  const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+  const dataUrl = `data:image/png;base64,${pngB64}`;
+  const mkProduct = async (name, kind, unit) => (await api("POST", "/api/products", { name: `${name} ${run}`, kind, unit, costCents: 100, supplier: "Fornecedor", minStock: 0 })).data.product;
+  const toxin = await mkProduct("E2E Toxina", "produto", "ml");
+  const syringe = await mkProduct("E2E Seringa", "material", "unidade");
+  const gauze = await mkProduct("E2E Gaze", "material", "unidade");
+  const noStock = await mkProduct("E2E SemSaldo", "material", "unidade");
+  const archived = await mkProduct("E2E Arquivado", "material", "unidade");
+  check("materiais da sessão: produtos criados", toxin && syringe && gauze && noStock && archived);
+  if (!(toxin && syringe && gauze && noStock && archived)) return;
+  const lotRow = (productId, code, expires, quantity) => ({ productId, lotCode: `${code}${run}`, expiresOn: day(expires), quantity, unitPriceCents: 100 });
+  const purchase = await api("POST", "/api/purchases", { supplier: "Fornecedor", purchasedOn: day(0), paymentMethod: "Pix", installments: 1, items: [
+    lotRow(toxin.id, "TA", 30, 3), lotRow(toxin.id, "TB", 200, 10), lotRow(syringe.id, "SC", 20, 5), lotRow(syringe.id, "SD", 100, 20), lotRow(gauze.id, "GE", 60, 50),
+  ] });
+  check("materiais da sessão: compra com 2 lotes por produto registrada", purchase.status === 201, purchase.status);
+
+  const nameP1 = `E2E Mat Proc 1 ${run}`;
+  const nameP2 = `E2E Mat Proc 2 ${run}`;
+  const nameP3 = `E2E Mat Vazio ${run}`;
+  const mkProc = async (name, technicalSheet) => {
+    await api("POST", "/api/procedures", { name, category: "Facial", price: 500, durationMinutes: 30, margin: 30, technicalSheet });
+    return (await api("GET", "/api/quotes/options")).data.procedures?.find((item) => item.name === name);
+  };
+  const p1 = await mkProc(nameP1, [{ productId: toxin.id, quantity: 1.5 }, { productId: syringe.id, quantity: 2 }, { productId: archived.id, quantity: 1 }, { productId: noStock.id, quantity: 1 }]);
+  const p2 = await mkProc(nameP2, [{ productId: toxin.id, quantity: 1 }, { productId: syringe.id, quantity: 1 }]);
+  const p3 = await mkProc(nameP3, []);
+  check("materiais da sessão: procedimentos com ficha criados", p1 && p2 && p3);
+  if (!(p1 && p2 && p3)) return;
+  await prisma.product.update({ where: { id: archived.id }, data: { archivedAt: new Date() } });
+
+  const P = (await api("POST", "/api/patients", { name: `E2E Mat Sessao ${run}`, phone: "11999990060", age: 35, cpf: randomCpf() })).data.patient.id;
+  const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
+  const J = (await api("POST", `/api/patients/${P}/journeys`, { name: `E2E Mat J ${run}`, professionalId: professional?.id })).data.journey;
+  const ev = (await api("PUT", `/api/patients/${P}/evaluation`, { journeyId: J.id, photos: [], assessment: { chiefComplaint: "Queixa", patientGoal: "Obj" }, status: "Concluída" })).data.evaluation;
+  const mkQuote = async (details) => {
+    const q = await api("POST", "/api/quotes", { patientId: P, journeyId: J.id, evaluationId: ev.id, details, paymentMethod: "Pix", installments: 1, notes: "" });
+    for (const status of ["Enviado", "Aprovado"]) await api("PATCH", `/api/quotes/${q.data.quote.id}`, { status, evaluationId: ev.id });
+    return q.data.quote?.id;
+  };
+  const twoItems = [{ procedureId: p1.id, quantity: 2, discountCents: 0 }, { procedureId: p2.id, quantity: 1, discountCents: 0 }];
+  const url = `/api/patients/${P}/procedure-sessions`;
+  const byProduct = (materials) => Object.fromEntries((materials ?? []).map((item) => [item.productId, item]));
+  const lots = (item) => (item?.allocations ?? []).map((allocation) => `${allocation.code?.replace(run, "")}:${allocation.quantity}`).join(",");
+  const dbSession = (id) => prisma.patientProcedureSession.findUnique({ where: { id }, select: { materials: true, materialsSeededAt: true, status: true } });
+
+  // 1) Criação semeia: ficha x quantidade do item, soma de produto repetido, FEFO, arquivado fora, sem saldo => sem lote.
+  const Q = await mkQuote(twoItems);
+  let r = await api("POST", url, { journeyId: J.id, quoteId: Q });
+  const S = r.data.session;
+  let m = byProduct(S?.materials);
+  check("materiais da sessão: POST cria e semeia (201)", r.status === 201 && S?.materials?.length === 3 && Boolean(S.materialsSeededAt), `${r.status} ${S?.materials?.length}`);
+  check("materiais da sessão: ml decimal e soma entre procedimentos (1,5x2+1 = 4 ml)", m[toxin.id]?.quantity === 4 && m[toxin.id]?.unit === "ml", m[toxin.id]?.quantity);
+  check("materiais da sessão: unidade somada (2x2+1 = 5)", m[syringe.id]?.quantity === 5, m[syringe.id]?.quantity);
+  check("materiais da sessão: lotes por validade (FEFO) cruzando lotes", lots(m[toxin.id]) === "TA:3,TB:1" && lots(m[syringe.id]) === "SC:5", `${lots(m[toxin.id])} | ${lots(m[syringe.id])}`);
+  check("materiais da sessão: produto sem saldo entra com a quantidade e sem lote", m[noStock.id]?.quantity === 2 && m[noStock.id]?.allocations.length === 0, JSON.stringify(m[noStock.id]));
+  check("materiais da sessão: produto arquivado na ficha não entra", !m[archived.id]);
+  check("materiais da sessão: semeadura não baixa estoque", await prisma.stockMovement.count({ where: { productId: { in: [toxin.id, syringe.id] }, type: "attendance" } }) === 0);
+  const seededAt = (await dbSession(S.id))?.materialsSeededAt?.toISOString();
+
+  // 2) Reuso e GET não duplicam nem mudam.
+  const snapshot = JSON.stringify(S.materials);
+  r = await api("POST", url, { journeyId: J.id, quoteId: Q });
+  check("materiais da sessão: segundo POST (reuso) não muda os materiais", r.status === 200 && JSON.stringify(r.data.session.materials) === snapshot, r.status);
+  const got = (await api("GET", `${url}?journeyId=${J.id}&quoteId=${Q}`)).data;
+  check("materiais da sessão: GET devolve os mesmos materiais, o marcador e o tipo dos produtos", JSON.stringify(got.sessions?.[0]?.materials) === snapshot && Boolean(got.sessions?.[0]?.materialsSeededAt) && got.materials?.every((item) => item.kind), JSON.stringify(got.sessions?.map((s) => s.materials?.length)));
+  check("materiais da sessão: orçamento continua com uma única sessão", await prisma.patientProcedureSession.count({ where: { quoteId: Q } }) === 1);
+
+  // 3) Profissional ajusta: aumenta, remove e adiciona produto.
+  const gauzeLot = got.materials.find((item) => item.id === gauze.id)?.lots?.[0];
+  const sPath = `${url}/${S.id}`;
+  const lotSD = await prisma.stockLot.findFirst({ where: { productId: syringe.id, code: `SD${run}` } });
+  const edited = [
+    { productId: syringe.id, quantity: 6, allocations: [{ lotId: m[syringe.id].allocations[0].lotId, quantity: 5 }, { lotId: lotSD.id, quantity: 1 }] },
+    { productId: noStock.id, quantity: 2, allocations: [] },
+    { productId: gauze.id, quantity: 1, allocations: [{ lotId: gauzeLot?.id, quantity: 1 }] },
+  ];
+  r = await api("PATCH", sPath, { materials: edited });
+  const saved = byProduct(r.data.session?.materials);
+  check("materiais da sessão: PATCH aumenta, remove e adiciona produto", r.status === 200 && Object.keys(saved).length === 3 && !saved[toxin.id] && saved[syringe.id]?.quantity === 6 && lots(saved[syringe.id]) === "SC:5,SD:1" && saved[gauze.id]?.quantity === 1, `${r.status} ${JSON.stringify(Object.keys(saved))}`);
+  const afterEdit = (await api("GET", `${url}?journeyId=${J.id}&quoteId=${Q}`)).data.sessions[0];
+  check("materiais da sessão: edição persiste no GET e mantém o marcador", byProduct(afterEdit.materials)[syringe.id]?.quantity === 6 && (await dbSession(S.id)).materialsSeededAt?.toISOString() === seededAt);
+  check("materiais da sessão: PATCH não baixa estoque", await prisma.stockMovement.count({ where: { productId: syringe.id, type: "attendance" } }) === 0);
+
+  // 4) Remover tudo não reaplica a ficha.
+  r = await api("PATCH", sPath, { materials: [] });
+  check("materiais da sessão: remover tudo => 200 e vazio", r.status === 200 && r.data.session?.materials?.length === 0, r.status);
+  r = await api("POST", url, { journeyId: J.id, quoteId: Q });
+  const reload = (await api("GET", `${url}?journeyId=${J.id}&quoteId=${Q}`)).data.sessions[0];
+  check("materiais da sessão: depois de remover tudo e reabrir continua vazio (não reaplica)", r.status === 200 && r.data.session.materials.length === 0 && reload.materials.length === 0 && (await dbSession(S.id)).materials === "[]" && (await dbSession(S.id)).materialsSeededAt?.toISOString() === seededAt, `${r.status} ${r.data.session?.materials?.length}`);
+
+  // 5) Concorrência: 5 POST simultâneos => 1 sessão semeada uma vez.
+  const Q2 = await mkQuote(twoItems);
+  const burst = await Promise.all(Array.from({ length: 5 }, () => api("POST", url, { journeyId: J.id, quoteId: Q2 })));
+  const ids = new Set(burst.map((x) => x.data.session?.id));
+  const first = burst.find((x) => x.status === 201)?.data.session;
+  check("materiais da sessão: 5 POST simultâneos => 1x201 + 4x200, mesma sessão", burst.filter((x) => x.status === 201).length === 1 && burst.filter((x) => x.status === 200).length === 4 && ids.size === 1 && await prisma.patientProcedureSession.count({ where: { quoteId: Q2 } }) === 1, burst.map((x) => x.status).join());
+  check("materiais da sessão: todos devolvem os mesmos 3 materiais (semeados uma vez, sem duplicar)", first?.materials?.length === 3 && burst.every((x) => JSON.stringify(x.data.session.materials) === JSON.stringify(first.materials)) && JSON.parse((await dbSession(first.id)).materials).length === 3);
+  if (!first) return;
+
+  // 6) Orçamento legado (sem details.items): resolve por nome e "(Nx)".
+  const Q5 = await mkQuote(twoItems);
+  await prisma.quote.update({ where: { id: Q5 }, data: { details: "{}", items: `${nameP1} (2x), ${nameP2}` } });
+  r = await api("POST", url, { journeyId: J.id, quoteId: Q5 });
+  m = byProduct(r.data.session?.materials);
+  check("materiais da sessão: orçamento legado resolve por nome e quantidade", r.status === 201 && m[toxin.id]?.quantity === 4 && m[syringe.id]?.quantity === 5 && !m[archived.id], `${r.status} ${JSON.stringify(Object.values(m).map((x) => x.quantity))}`);
+
+  // 7) Ficha vazia: sem erro e sem materiais.
+  const Q6 = await mkQuote([{ procedureId: p3.id, quantity: 1, discountCents: 0 }]);
+  r = await api("POST", url, { journeyId: J.id, quoteId: Q6 });
+  check("materiais da sessão: ficha vazia => sessão criada com materiais vazios", r.status === 201 && r.data.session.materials.length === 0, `${r.status}`);
+
+  // 8) Rascunho legado vazio (marcador nulo) é semeado uma vez; em execução vazia nunca.
+  const Q3 = await mkQuote([{ procedureId: p2.id, quantity: 1, discountCents: 0 }]);
+  const legacy = (await api("POST", url, { journeyId: J.id, quoteId: Q3 })).data.session;
+  await prisma.patientProcedureSession.update({ where: { id: legacy.id }, data: { materials: "[]", materialsSeededAt: null } });
+  r = await api("POST", url, { journeyId: J.id, quoteId: Q3 });
+  m = byProduct(r.data.session?.materials);
+  check("materiais da sessão: rascunho legado vazio é semeado ao reabrir (200)", r.status === 200 && m[toxin.id]?.quantity === 1 && m[syringe.id]?.quantity === 1 && Boolean(r.data.session.materialsSeededAt), `${r.status} ${Object.keys(m).length}`);
+  const once = (await dbSession(legacy.id)).materialsSeededAt?.toISOString();
+  await api("POST", url, { journeyId: J.id, quoteId: Q3 });
+  check("materiais da sessão: reabrir de novo não reaplica", (await dbSession(legacy.id)).materialsSeededAt?.toISOString() === once);
+  const Q4 = await mkQuote([{ procedureId: p2.id, quantity: 1, discountCents: 0 }]);
+  const running = (await api("POST", url, { journeyId: J.id, quoteId: Q4 })).data.session;
+  await prisma.patientProcedureSession.update({ where: { id: running.id }, data: { status: "Em execução", materials: "[]", materialsSeededAt: null } });
+  r = await api("POST", url, { journeyId: J.id, quoteId: Q4 });
+  const runningDb = await dbSession(running.id);
+  check("materiais da sessão: sessão em execução vazia NÃO é semeada", r.status === 200 && r.data.session.materials.length === 0 && runningDb.materials === "[]" && runningDb.materialsSeededAt === null && runningDb.status === "Em execução", `${r.status} ${runningDb.materials}`);
+
+  // 9) Outra clínica não enxerga nem altera.
+  const otherEmail = `e2e-mat-outra-${run}@example.com`;
+  const otherPassword = `E2e-${run}-Outra9!`;
+  const otherClinic = `E2E Mat Externa ${run}`;
+  try {
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990020", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const other = reg.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    if (other?.status === 200) {
+      const before = JSON.stringify(await dbSession(first.id));
+      const probes = await withSession(other.cookie, async () => ({
+        post: await api("POST", url, { journeyId: J.id, quoteId: Q2 }),
+        get: await api("GET", `${url}?journeyId=${J.id}&quoteId=${Q2}`),
+        patch: await api("PATCH", `${url}/${first.id}`, { materials: [] }),
+      }));
+      check("materiais da sessão: outra clínica recebe 404 em POST/GET/PATCH sem vazar dados", Object.values(probes).every((x) => x.status === 404 && !JSON.stringify(x.data).includes(nameP1)), Object.values(probes).map((x) => x.status).join());
+      check("materiais da sessão: tentativas da outra clínica não alteraram a sessão", JSON.stringify(await dbSession(first.id)) === before);
+    } else {
+      check("materiais da sessão: clínica externa criada para o teste", false, `${reg.status} ${other?.status}`);
+    }
+  } finally {
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: otherEmail } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: otherEmail } });
+  }
+
+  // 10) Finalizar: baixa por lote nas quantidades do body; o que falta vira saída pendente.
+  const sessionPath = `${url}/${first.id}`;
+  const pdf = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n");
+  const form = new FormData();
+  form.set("file", new Blob([pdf], { type: "application/pdf" }), "Termo mat.pdf");
+  form.set("category", "TERMOS"); form.set("signatureStatus", "ASSINADO"); form.set("journeyId", J.id);
+  const up = await fetch(`${baseUrl}/api/patients/${P}/documents`, { method: "POST", headers: { cookie }, body: form });
+  check("materiais da sessão: termo assinado enviado", up.status === 201, up.status);
+  const seeded = byProduct(first.materials);
+  const body = {
+    technique: "E2E técnica", treatedAreas: "E2E região",
+    materials: [
+      { productId: toxin.id, quantity: 4, allocations: seeded[toxin.id].allocations.map(({ lotId, quantity }) => ({ lotId, quantity })) },
+      { productId: syringe.id, quantity: 7, allocations: seeded[syringe.id].allocations.map(({ lotId, quantity }) => ({ lotId, quantity })) },
+      { productId: noStock.id, quantity: 2, allocations: [] },
+    ],
+  };
+  const before = { id: `mph-${run}`, phase: "Antes", imageUrl: dataUrl, name: "antes", width: 1, height: 1 };
+  const afterPhoto = { id: `mpa-${run}`, phase: "Imediatamente após", imageUrl: dataUrl, name: "depois", width: 1, height: 1 };
+  r = await api("PATCH", sessionPath, { ...body, status: "Em execução", photos: [before] });
+  check("materiais da sessão: iniciar com os materiais semeados => 200", r.status === 200 && r.data.session?.status === "Em execução", `${r.status} ${JSON.stringify(r.data).slice(0, 120)}`);
+  r = await api("PATCH", sessionPath, { ...body, status: "Concluída", photos: [before, afterPhoto] });
+  check("materiais da sessão: finalizar => 200 com saída pendente", r.status === 200 && r.data.pending?.length === 2, `${r.status} ${JSON.stringify(r.data.pending ?? r.data).slice(0, 160)}`);
+  const movements = await prisma.stockMovement.findMany({ where: { procedureSessionId: first.id }, select: { quantity: true, lot: { select: { code: true } } } });
+  const moved = movements.map((x) => `${x.lot.code.replace(run, "")}:${x.quantity}`).sort().join(",");
+  check("materiais da sessão: baixa por lote nas quantidades do body (TA 3, TB 1, SC 5)", moved === "SC:-5,TA:-3,TB:-1", moved);
+  const pendings = await prisma.pendingStockOutput.findMany({ where: { procedureSessionId: first.id }, select: { productId: true, quantity: true } });
+  const pendingMap = Object.fromEntries(pendings.map((x) => [x.productId, x.quantity]));
+  check("materiais da sessão: faltas viram saída pendente (seringa 2, sem saldo 2)", pendings.length === 2 && pendingMap[syringe.id] === 2 && pendingMap[noStock.id] === 2, JSON.stringify(pendingMap));
+  const next = await api("POST", url, { journeyId: J.id, quoteId: Q2 });
+  check("materiais da sessão: sessão concluída não é alterada; Nova sessão semeia só a nova", next.status === 201 && next.data.session.id !== first.id && next.data.session.materials.length === 3 && JSON.parse((await dbSession(first.id)).materials).length === 3, `${next.status}`);
+}
+
+// Lacunas da semeadura de materiais: cálculo (decimais, limites, linhas repetidas), lotes/FEFO, corridas, finalização, papéis e isolamento.
+async function sessionMaterialsGaps() {
+  const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+  const dataUrl = `data:image/png;base64,${pngB64}`;
+  const tag = "MG";
+  const mkProduct = async (name, kind, unit) => (await api("POST", "/api/products", { name: `${name} ${tag}${run}`, kind, unit, costCents: 100, supplier: "Fornecedor", minStock: 0 })).data.product;
+  const buy = (rows) => api("POST", "/api/purchases", { supplier: "Fornecedor", purchasedOn: day(0), paymentMethod: "Pix", installments: 1, items: rows.map(([productId, code, expires, quantity]) => ({ productId, lotCode: `${code}${run}`, expiresOn: day(expires), quantity, unitPriceCents: 100 })) });
+  const mkProc = async (name, rows) => {
+    await api("POST", "/api/procedures", { name, category: "Facial", price: 500, durationMinutes: 30, margin: 30, technicalSheet: [] });
+    const procedure = (await api("GET", "/api/quotes/options")).data.procedures?.find((item) => item.name === name);
+    for (const [productId, quantity] of rows) await prisma.procedureMaterial.create({ data: { procedureId: procedure.id, productId, quantity } });
+    return procedure;
+  };
+  const P = (await api("POST", "/api/patients", { name: `E2E Mat Lacunas ${run}`, phone: "11999990061", age: 35, cpf: randomCpf() })).data.patient.id;
+  const P2 = (await api("POST", "/api/patients", { name: `E2E Mat Outro Pac ${run}`, phone: "11999990062", age: 35, cpf: randomCpf() })).data.patient.id;
+  const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
+  const mkJourney = async (patientId, label) => {
+    const j = (await api("POST", `/api/patients/${patientId}/journeys`, { name: `E2E Mat ${label} ${run}`, professionalId: professional?.id })).data.journey;
+    const e = (await api("PUT", `/api/patients/${patientId}/evaluation`, { journeyId: j.id, photos: [], assessment: { chiefComplaint: "Queixa", patientGoal: "Obj" }, status: "Concluída" })).data.evaluation;
+    return { j, e };
+  };
+  const { j: J, e: ev } = await mkJourney(P, "J");
+  const { j: J3, e: ev3 } = await mkJourney(P, "SemTermo");
+  const { j: J2 } = await mkJourney(P2, "Outro");
+  // items: [{procedure, quantity?, extra?}] gravados direto em details.items (inclui casos que a tela não gera).
+  const mkQuote = async (items, { journey = J, evaluation = ev, patient = P, legacy = null } = {}) => {
+    const q = await api("POST", "/api/quotes", { patientId: patient, journeyId: journey.id, evaluationId: evaluation.id, details: [{ procedureId: items[0].procedure.id, quantity: 1, discountCents: 0 }], paymentMethod: "Pix", installments: 1, notes: "" });
+    const id = q.data.quote?.id;
+    for (const status of ["Enviado", "Aprovado"]) await api("PATCH", `/api/quotes/${id}`, { status, evaluationId: evaluation.id });
+    const row = await prisma.quote.findUnique({ where: { id }, select: { details: true } });
+    const details = JSON.parse(row.details);
+    details.items = items.map((item) => ({ procedureId: item.procedure.id, name: item.procedure.name, ...("quantity" in item ? { quantity: item.quantity } : {}), ...(item.extra ?? {}) }));
+    await prisma.quote.update({ where: { id }, data: { details: JSON.stringify(details), ...(legacy ? { items: legacy } : {}) } });
+    return id;
+  };
+  const url = (patient = P) => `/api/patients/${patient}/procedure-sessions`;
+  const open = (quoteId, journey = J, patient = P) => api("POST", url(patient), { journeyId: journey.id, quoteId });
+  const byProduct = (materials) => Object.fromEntries((materials ?? []).map((item) => [item.productId, item]));
+  const lotsOf = (item) => (item?.allocations ?? []).map((allocation) => `${allocation.code?.replace(run, "")}:${allocation.quantity}`).join(",");
+  const dbSession = (id) => prisma.patientProcedureSession.findUnique({ where: { id }, select: { materials: true, materialsSeededAt: true, status: true, procedureName: true } });
+  const legacyDraft = (id, extra = {}) => prisma.patientProcedureSession.update({ where: { id }, data: { materials: "[]", materialsSeededAt: null, ...extra } });
+  const qtyOf = (res, productId) => byProduct(res.data.session?.materials)[productId]?.quantity;
+  const asBody = (materials) => materials.map(({ productId, quantity }) => ({ productId, quantity, allocations: [] }));
+
+  const mlA = await mkProduct("Toxina A", "produto", "ml");
+  const mlB = await mkProduct("Toxina B", "produto", "ml");
+  const mlC = await mkProduct("Toxina C", "produto", "ml");
+  const unitHalf = await mkProduct("Unidade Meia", "material", "unidade");
+  const unitBig = await mkProduct("Unidade Grande", "material", "unidade");
+  const lotted = await mkProduct("Lotes", "material", "unidade");
+  const exact = await mkProduct("Saldo Exato", "material", "unidade");
+  if (!(mlA && mlB && mlC && unitHalf && unitBig && lotted && exact)) { check("lacunas materiais: produtos criados", false); return; }
+
+  // (a) Cálculo
+  const pDec = await mkProc(`E2E MG Decimais ${run}`, [[mlA.id, 0.333], [mlB.id, 0.5], [mlC.id, 0.1], [unitHalf.id, 0.5], [unitBig.id, 6000]]);
+  let r = await open(await mkQuote([{ procedure: pDec, quantity: 3, extra: { discountCents: 5000 } }]));
+  let m = byProduct(r.data.session?.materials);
+  check("lacunas materiais: 0,333 ml x 3 = 0,999 (3 casas) e item com desconto não muda a conta", r.status === 201 && m[mlA.id]?.quantity === 0.999, m[mlA.id]?.quantity);
+  check("lacunas materiais: 0,5 ml x 3 = 1,5 e 0,1 ml x 3 = 0,3 (sem ruído de ponto flutuante)", m[mlB.id]?.quantity === 1.5 && m[mlC.id]?.quantity === 0.3, `${m[mlB.id]?.quantity} ${m[mlC.id]?.quantity}`);
+  check("lacunas materiais: unidade inteira 0,5 x 3 = 1,5 arredonda para cima (2)", m[unitHalf.id]?.quantity === 2, m[unitHalf.id]?.quantity);
+  check("lacunas materiais: quantidade enorme (6000 x 3) fica limitada a 10000 e a PATCH aceita", m[unitBig.id]?.quantity === 10000 && (await api("PATCH", `${url()}/${r.data.session.id}`, { materials: asBody(r.data.session.materials) })).status === 200);
+  const pSimple = await mkProc(`E2E MG Simples ${run}`, [[mlB.id, 0.5], [unitHalf.id, 1]]);
+  r = await open(await mkQuote([{ procedure: pSimple, quantity: 1 }, { procedure: pSimple, quantity: 2 }]));
+  check("lacunas materiais: mesmo procedimento em duas linhas soma as quantidades (1+2 = 3x)", qtyOf(r, mlB.id) === 1.5 && qtyOf(r, unitHalf.id) === 3, `${qtyOf(r, mlB.id)} ${qtyOf(r, unitHalf.id)}`);
+  const odd = [["zero", { quantity: 0 }, 0.5], ["ausente", {}, 0.5], ["fracionada 2,7", { quantity: 2.7 }, 1], ["negativa", { quantity: -3 }, 0.5], ["texto", { quantity: "2" }, 0.5]];
+  for (const [label, item, expected] of odd) {
+    const res = await open(await mkQuote([{ procedure: pSimple, ...item }]));
+    check(`lacunas materiais: quantidade ${label} no orçamento => ${expected} ml (mínimo 1x, fração para baixo)`, res.status === 201 && qtyOf(res, mlB.id) === expected, `${res.status} ${qtyOf(res, mlB.id)}`);
+  }
+  const ghost = { id: "procedimento-que-nao-existe", name: "Fantasma" };
+  r = await open(await mkQuote([{ procedure: pSimple, quantity: 1 }, { procedure: ghost, quantity: 1 }]));
+  check("lacunas materiais: procedimento removido do catálogo no orçamento não impede a sessão", r.status === 201 && qtyOf(r, mlB.id) === 0.5, `${r.status} ${JSON.stringify(r.data).slice(0, 120)}`);
+  const qLegacy = await mkQuote([{ procedure: pSimple, quantity: 1 }], { legacy: `${pSimple.name} (4x), Item Que Nao Existe (2x)` });
+  await prisma.quote.update({ where: { id: qLegacy }, data: { details: "{}" } });
+  r = await open(qLegacy);
+  check("lacunas materiais: orçamento legado '(4x)' + item desconhecido => 4x só do conhecido", r.status === 201 && qtyOf(r, mlB.id) === 2 && qtyOf(r, unitHalf.id) === 4, `${r.status} ${qtyOf(r, mlB.id)}`);
+  const pNoSheet = await mkProc(`E2E MG SemFicha ${run}`, []);
+  r = await open(await mkQuote([{ procedure: pNoSheet, quantity: 2 }, { procedure: pSimple, quantity: 1 }]));
+  check("lacunas materiais: procedimento sem ficha ao lado de outro com ficha só traz o da ficha", r.status === 201 && r.data.session.materials.length === 2, r.data.session?.materials?.length);
+
+  // Limite de 40 itens
+  const many = [];
+  for (let start = 0; start < 41; start += 10) many.push(...await Promise.all(Array.from({ length: Math.min(10, 41 - start) }, (_, i) => mkProduct(`Muitos ${String(start + i).padStart(2, "0")}`, "material", "unidade"))));
+  const pMany = await mkProc(`E2E MG Muitos ${run}`, many.map((product) => [product.id, 1]));
+  r = await open(await mkQuote([{ procedure: pMany, quantity: 1 }]));
+  const manyMaterials = r.data.session?.materials ?? [];
+  check("lacunas materiais: ficha com 41 produtos semeia no máximo 40 (ordem por nome)", r.status === 201 && manyMaterials.length === 40 && !manyMaterials.some((item) => item.productId === many[40].id), `${r.status} ${manyMaterials.length}`);
+  check("lacunas materiais: os 40 semeados passam na PATCH (limite de itens)", (await api("PATCH", `${url()}/${r.data.session.id}`, { materials: asBody(manyMaterials) })).status === 200);
+
+  // (b) Lotes / FEFO
+  await buy([[lotted.id, "LA", 10, 2], [lotted.id, "LB", 5, 1], [lotted.id, "LC", 40, 10], [lotted.id, "LX", 20, 100], [exact.id, "EA", 7, 3]]);
+  await prisma.stockLot.updateMany({ where: { productId: lotted.id, code: `LX${run}` }, data: { expiresOn: new Date(`${day(-3)}T00:00:00Z`) } });
+  const pL6 = await mkProc(`E2E MG L6 ${run}`, [[lotted.id, 6]]);
+  const pL13 = await mkProc(`E2E MG L13 ${run}`, [[lotted.id, 13]]);
+  const pL14 = await mkProc(`E2E MG L14 ${run}`, [[lotted.id, 14]]);
+  const pEx = await mkProc(`E2E MG Exato ${run}`, [[exact.id, 3]]);
+  r = await open(await mkQuote([{ procedure: pL6, quantity: 1 }]));
+  const s6 = r.data.session;
+  check("lacunas materiais: 3 lotes + 1 vencido => FEFO ignora o vencido (LB:1,LA:2,LC:3)", lotsOf(byProduct(s6.materials)[lotted.id]) === "LB:1,LA:2,LC:3", lotsOf(byProduct(s6.materials)[lotted.id]));
+  check("lacunas materiais: availableAtSave reflete o saldo de cada lote", byProduct(s6.materials)[lotted.id].allocations.map((a) => a.availableAtSave).join() === "1,2,10");
+  r = await open(await mkQuote([{ procedure: pL13, quantity: 1 }]));
+  const s13 = r.data.session;
+  check("lacunas materiais: pedido igual ao saldo total (13) usa os 3 lotes sem sobra", lotsOf(byProduct(s13.materials)[lotted.id]) === "LB:1,LA:2,LC:10", lotsOf(byProduct(s13.materials)[lotted.id]));
+  r = await open(await mkQuote([{ procedure: pL14, quantity: 1 }]));
+  const item14 = byProduct(r.data.session.materials)[lotted.id];
+  check("lacunas materiais: pedido acima do saldo (14) mantém 14 e aloca só 13", item14?.quantity === 14 && lotsOf(item14) === "LB:1,LA:2,LC:10", `${item14?.quantity} ${lotsOf(item14)}`);
+  r = await open(await mkQuote([{ procedure: pEx, quantity: 1 }]));
+  check("lacunas materiais: saldo exato em um único lote (3 de 3)", lotsOf(byProduct(r.data.session.materials)[exact.id]) === "EA:3", lotsOf(byProduct(r.data.session.materials)[exact.id]));
+
+  // Ficha mudada / produto arquivado / excluído depois da semeadura
+  const snap6 = JSON.stringify(s6.materials);
+  await prisma.procedureMaterial.updateMany({ where: { procedureId: pL6.id }, data: { quantity: 99 } });
+  await prisma.product.update({ where: { id: lotted.id }, data: { archivedAt: new Date() } });
+  r = await open(s6.quoteId);
+  const got6 = (await api("GET", `${url()}?journeyId=${J.id}&quoteId=${s6.quoteId}`)).data;
+  check("lacunas materiais: ficha alterada e produto arquivado depois não mudam a sessão já semeada (POST/GET)", r.status === 200 && JSON.stringify(r.data.session.materials) === snap6 && JSON.stringify(got6.sessions?.[0]?.materials) === snap6, r.status);
+  await prisma.product.update({ where: { id: lotted.id }, data: { archivedAt: null } });
+  await prisma.procedureMaterial.updateMany({ where: { procedureId: pL6.id }, data: { quantity: 6 } });
+  const gone = await mkProduct("Excluido", "material", "unidade");
+  const pGone = await mkProc(`E2E MG Excluido ${run}`, [[gone.id, 1], [mlB.id, 1]]);
+  r = await open(await mkQuote([{ procedure: pGone, quantity: 1 }]));
+  const sGone = r.data.session;
+  await prisma.product.delete({ where: { id: gone.id } });
+  const gotGone = await api("GET", `${url()}?journeyId=${J.id}&quoteId=${sGone.quoteId}`);
+  check("lacunas materiais: produto excluído depois: GET e POST seguem 200 com a sessão", gotGone.status === 200 && (await open(sGone.quoteId)).status === 200, gotGone.status);
+  const resend = await api("PATCH", `${url()}/${sGone.id}`, { materials: asBody(sGone.materials) });
+  const resendWithout = await api("PATCH", `${url()}/${sGone.id}`, { materials: asBody(sGone.materials.filter((x) => x.productId !== gone.id)) });
+  check("lacunas materiais: PATCH reenviando o produto excluído é recusada (400) e sem ele passa (200)", resend.status === 400 && resendWithout.status === 200, `${resend.status} ${resendWithout.status}`);
+
+  // (c) Idempotência / concorrência
+  for (const n of [2, 10]) {
+    const q = await mkQuote([{ procedure: pSimple, quantity: 2 }]);
+    const burst = await Promise.all(Array.from({ length: n }, () => open(q)));
+    const sessions = await prisma.patientProcedureSession.findMany({ where: { quoteId: q }, select: { materials: true } });
+    const same = new Set(burst.map((x) => JSON.stringify(x.data.session?.materials))).size === 1;
+    check(`lacunas materiais: ${n} POST simultâneos => 1 sessão, materiais uma vez`, burst.filter((x) => x.status === 201).length === 1 && burst.every((x) => [200, 201].includes(x.status)) && sessions.length === 1 && JSON.parse(sessions[0].materials).length === 2 && same, `${burst.map((x) => x.status).join()} sessões=${sessions.length}`);
+  }
+  const qLeg = await mkQuote([{ procedure: pSimple, quantity: 1 }]);
+  const legacy = (await open(qLeg)).data.session;
+  await legacyDraft(legacy.id);
+  const viaGet = (await api("GET", `${url()}?journeyId=${J.id}&quoteId=${qLeg}`)).data.sessions?.[0];
+  check("lacunas materiais: GET repetido não semeia rascunho legado", viaGet?.materials.length === 0 && (await dbSession(legacy.id)).materialsSeededAt === null);
+  const qRen = await mkQuote([{ procedure: pSimple, quantity: 1 }, { procedure: pDec, quantity: 1 }]);
+  const ren = (await open(qRen)).data.session;
+  await legacyDraft(ren.id, { procedureName: pSimple.name });
+  r = await open(qRen);
+  check("lacunas materiais: rascunho legado com nome por item é renomeado e semeado", r.status === 200 && r.data.session.procedureName === ren.procedureName && r.data.session.materials.length > 0 && Boolean(r.data.session.materialsSeededAt), `${r.status} ${r.data.session?.procedureName} ${r.data.session?.materials?.length}`);
+  // Rascunho legado (marcador nulo) com itens, que o profissional esvazia pela PATCH: reabrir não deve semear de novo.
+  const qRem = await mkQuote([{ procedure: pSimple, quantity: 1 }]);
+  const rem = (await open(qRem)).data.session;
+  await prisma.patientProcedureSession.update({ where: { id: rem.id }, data: { materialsSeededAt: null } });
+  await api("PATCH", `${url()}/${rem.id}`, { materials: [] });
+  r = await open(qRem);
+  check("lacunas materiais: rascunho legado esvaziado pelo profissional não volta a ser semeado ao reabrir", r.data.session?.materials.length === 0, `materiais após reabrir: ${r.data.session?.materials?.length}`);
+  // POST x PATCH simultâneos em rascunho legado: a edição do profissional nunca é sobrescrita
+  for (let i = 0; i < 6; i++) {
+    const q = await mkQuote([{ procedure: pSimple, quantity: 1 }]);
+    const s = (await open(q)).data.session;
+    await legacyDraft(s.id);
+    const edit = [{ productId: unitHalf.id, quantity: 7, allocations: [] }];
+    const [post, patch] = await Promise.all([open(q), api("PATCH", `${url()}/${s.id}`, { materials: edit })]);
+    const final = JSON.parse((await dbSession(s.id)).materials);
+    check(`lacunas materiais: corrida POST x PATCH #${i + 1} em rascunho legado: PATCH 200 => lista final é a do profissional`, [200, 409].includes(patch.status) && (patch.status !== 200 || (final.length === 1 && final[0].productId === unitHalf.id && final[0].quantity === 7)), `${post.status}/${patch.status} final=${final.length}`);
+  }
+  for (let i = 0; i < 3; i++) {
+    const q = await mkQuote([{ procedure: pSimple, quantity: 1 }]);
+    const s = (await open(q)).data.session;
+    const [post, patch] = await Promise.all([open(q), api("PATCH", `${url()}/${s.id}`, { materials: [{ productId: mlB.id, quantity: 5, allocations: [] }] })]);
+    const final = JSON.parse((await dbSession(s.id)).materials);
+    check(`lacunas materiais: corrida reuso x PATCH #${i + 1} em sessão semeada preserva a edição`, post.status === 200 && patch.status === 200 && final.length === 1 && final[0].quantity === 5, `${post.status}/${patch.status} ${final.length}`);
+  }
+
+  // (d) Finalização
+  const pdf = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n");
+  const form = new FormData();
+  form.set("file", new Blob([pdf], { type: "application/pdf" }), "Termo mat lacunas.pdf");
+  form.set("category", "TERMOS"); form.set("signatureStatus", "ASSINADO"); form.set("journeyId", J.id);
+  check("lacunas materiais: termo assinado enviado", (await fetch(`${baseUrl}/api/patients/${P}/documents`, { method: "POST", headers: { cookie }, body: form })).status === 201);
+  const before = { id: `mgb-${run}`, phase: "Antes", imageUrl: dataUrl, name: "antes", width: 1, height: 1 };
+  const after = { id: `mga-${run}`, phase: "Imediatamente após", imageUrl: dataUrl, name: "depois", width: 1, height: 1 };
+  const clinical = { technique: "E2E técnica", treatedAreas: "E2E região" };
+  const strip = (materials) => materials.map(({ productId, quantity, allocations }) => ({ productId, quantity, ...(allocations ? { allocations: allocations.map(({ lotId, quantity: q }) => ({ lotId, quantity: q })) } : {}) }));
+  const start = (sessionId, materials) => api("PATCH", `${url()}/${sessionId}`, { ...clinical, materials, status: "Em execução", photos: [before] });
+  const finish = (sessionId, materials) => api("PATCH", `${url()}/${sessionId}`, { ...clinical, materials, status: "Concluída", photos: [before, after] });
+  const moves = async (sessionId) => (await prisma.stockMovement.findMany({ where: { procedureSessionId: sessionId }, select: { quantity: true, lot: { select: { code: true } } } })).map((x) => `${x.lot.code.replace(run, "")}:${x.quantity}`).sort().join(",");
+  const lotBalance = async (productId, code) => { const lot = await prisma.stockLot.findFirst({ where: { productId, code: `${code}${run}` } }); const sum = await prisma.stockMovement.aggregate({ where: { lotId: lot.id }, _sum: { quantity: true } }); return sum._sum.quantity; };
+
+  // baixa conforme o body (lote escolhido pelo profissional), não conforme a semeadura
+  const lotLC = await prisma.stockLot.findFirst({ where: { productId: lotted.id, code: `LC${run}` } });
+  const chosen = [{ productId: lotted.id, quantity: 13, allocations: [{ lotId: lotLC.id, quantity: 10 }, { lotId: byProduct(s13.materials)[lotted.id].allocations[1].lotId, quantity: 2 }] }];
+  r = await start(s13.id, chosen);
+  check("lacunas materiais: iniciar com lotes escolhidos pelo profissional => 200", r.status === 200, `${r.status} ${JSON.stringify(r.data).slice(0, 100)}`);
+  r = await finish(s13.id, chosen);
+  check("lacunas materiais: baixa segue o body (LC 10 + LA 2, faltou 1 => pendente), não a semeadura", r.status === 200 && (await moves(s13.id)) === "LA:-2,LC:-10" && r.data.pending?.[0]?.quantity === 1, `${r.status} ${await moves(s13.id)} ${JSON.stringify(r.data.pending)}`);
+  check("lacunas materiais: saldo do lote LC caiu 10 e LB ficou intacto", (await lotBalance(lotted.id, "LC")) === 0 && (await lotBalance(lotted.id, "LB")) === 1);
+
+  // dois rascunhos semeados com o mesmo lote: o segundo a finalizar encontra o lote gasto (LA/LC já consumidos)
+  r = await open(await mkQuote([{ procedure: pL6, quantity: 1 }]));
+  const secondDraft = r.data.session;
+  const seededLots = lotsOf(byProduct(secondDraft.materials)[lotted.id]);
+  const thirdDraft = (await open(await mkQuote([{ procedure: pL6, quantity: 1 }]))).data.session;
+  await start(thirdDraft.id, strip(thirdDraft.materials));
+  r = await finish(thirdDraft.id, strip(thirdDraft.materials));
+  check("lacunas materiais: terceira sessão semeada com o mesmo lote finaliza primeiro (200) e consome o lote", r.status === 200 && (await lotBalance(lotted.id, "LB")) === 0, `${r.status} ${await moves(thirdDraft.id)}`);
+  await start(secondDraft.id, strip(secondDraft.materials));
+  const stale = await finish(secondDraft.id, strip(secondDraft.materials));
+  const staleDb = await dbSession(secondDraft.id);
+  check("lacunas materiais: sessão semeada com lote que outra sessão gastou depois => finalização 409 sem baixa parcial e sessão continua Em execução", stale.status === 409 && (await moves(secondDraft.id)) === "" && staleDb.status === "Em execução", `semeada com ${seededLots}; finalizar devolveu ${stale.status} ${JSON.stringify(stale.data).slice(0, 120)}`);
+  const fresh = (await api("GET", `${url()}?journeyId=${J.id}&quoteId=${secondDraft.quoteId}`)).data.materials.find((x) => x.id === lotted.id);
+  const resolved = await finish(secondDraft.id, [{ productId: lotted.id, quantity: 6, allocations: fresh.lots.slice(0, 1).map((lot) => ({ lotId: lot.id, quantity: Math.min(lot.balance, 6) })) }]);
+  check("lacunas materiais: profissional reajusta os lotes pelo saldo atual e finaliza (200)", resolved.status === 200, `${resolved.status} ${JSON.stringify(resolved.data).slice(0, 120)}`);
+
+  // allocations: [] explícito => tudo pendente, sem baixa (mesmo havendo saldo)
+  const pEmpty = await mkProc(`E2E MG Vazio2 ${run}`, [[exact.id, 3]]);
+  r = await open(await mkQuote([{ procedure: pEmpty, quantity: 1 }]));
+  const sEmpty = r.data.session;
+  const emptyBody = [{ productId: exact.id, quantity: 3, allocations: [] }];
+  await start(sEmpty.id, emptyBody);
+  r = await finish(sEmpty.id, emptyBody);
+  check("lacunas materiais: allocations [] com saldo disponível => 200, tudo pendente e nenhuma baixa", r.status === 200 && r.data.pending?.[0]?.quantity === 3 && (await moves(sEmpty.id)) === "", `${r.status} ${JSON.stringify(r.data.pending)}`);
+  // item sem a chave allocations => FEFO automático na finalização
+  r = await open(await mkQuote([{ procedure: pEx, quantity: 1 }]));
+  const sAuto = r.data.session;
+  const autoBody = [{ productId: exact.id, quantity: 3 }];
+  await start(sAuto.id, autoBody);
+  r = await finish(sAuto.id, autoBody);
+  check("lacunas materiais: item sem allocations => FEFO automático (EA 3) sem pendência", r.status === 200 && (await moves(sAuto.id)) === "EA:-3" && !r.data.pending?.length, `${r.status} ${await moves(sAuto.id)}`);
+  // produto semeado sem saldo e que ganha estoque depois: a lista da sessão segue com allocations vazias
+  const late = await mkProduct("Chegou Depois", "material", "unidade");
+  const pLate = await mkProc(`E2E MG Depois ${run}`, [[late.id, 2]]);
+  r = await open(await mkQuote([{ procedure: pLate, quantity: 1 }]));
+  const sLate = r.data.session;
+  await buy([[late.id, "LT", 30, 10]]);
+  const lateBody = strip(sLate.materials);
+  await start(sLate.id, lateBody);
+  r = await finish(sLate.id, lateBody);
+  const lateMoves = await moves(sLate.id);
+  check("lacunas materiais: item semeado sem lote que depois recebe estoque e é finalizado como veio (allocations []): comportamento atual = tudo pendente, sem baixa do lote novo", r.status === 200 && lateMoves === "" && r.data.pending?.[0]?.quantity === 2, `${r.status} pendente=${JSON.stringify(r.data.pending)} baixas=${lateMoves || "nenhuma"}`);
+
+  // consentimento e campos obrigatórios intactos
+  const pCons = await mkProc(`E2E MG Termo ${run}`, [[mlB.id, 1]]);
+  const sCons = (await open(await mkQuote([{ procedure: pCons, quantity: 1 }], { journey: J3, evaluation: ev3 }), J3)).data.session;
+  r = await start(sCons.id, strip(sCons.materials));
+  check("lacunas materiais: iniciar sem termo assinado segue bloqueado (409 com código)", r.status === 409 && Boolean(r.data.code), `${r.status} ${r.data.code}`);
+  const sNoTech = (await open(await mkQuote([{ procedure: pCons, quantity: 1 }]))).data.session;
+  await start(sNoTech.id, strip(sNoTech.materials));
+  r = await api("PATCH", `${url()}/${sNoTech.id}`, { materials: strip(sNoTech.materials), status: "Concluída", photos: [before, after] });
+  check("lacunas materiais: finalizar sem técnica/região segue recusado (400) e sem baixa", r.status === 400 && (await moves(sNoTech.id)) === "", r.status);
+  r = await api("PATCH", `${url()}/${sNoTech.id}`, { ...clinical, materials: strip(sNoTech.materials), status: "Concluída", photos: [before] });
+  check("lacunas materiais: finalizar sem foto de depois segue recusado (400)", r.status === 400, r.status);
+
+  // (e) Papéis, ids estranhos e outra clínica
+  const members = [];
+  const probeOnQuote = await mkQuote([{ procedure: pSimple, quantity: 1 }]);
+  const probeSession = (await open(probeOnQuote)).data.session;
+  try {
+    for (const [role, login] of [["STAFF", `e2e-mg-staff-${run}@example.com`], ["PROFESSIONAL", `e2e-mg-prof-${run}@example.com`]]) {
+      const secret = `E2e-${run}-${role}9!`;
+      const created = await api("POST", "/api/team", { name: `E2E ${role} MG`, email: login, password: secret, role });
+      if (created.status === 201) members.push(created.data.member);
+      const session = created.status === 201 ? await loginAs(login, secret) : null;
+      if (session?.status !== 200) { check(`lacunas materiais: usuário ${role} criado`, false, `${created.status} ${session?.status}`); continue; }
+      await withSession(session.cookie, async () => {
+        const probe = { post: await open(probeOnQuote), get: await api("GET", `${url()}?journeyId=${J.id}&quoteId=${probeOnQuote}`), patch: await api("PATCH", `${url()}/${probeSession.id}`, { materials: [{ productId: mlB.id, quantity: 9, allocations: [] }] }) };
+        if (role === "STAFF") {
+          check("lacunas materiais: STAFF recebe 403 em POST/GET/PATCH", Object.values(probe).every((x) => x.status === 403), Object.values(probe).map((x) => x.status).join());
+        } else {
+          check("lacunas materiais: PROFESSIONAL abre (200), lê e edita os materiais", probe.post.status === 200 && probe.get.status === 200 && probe.patch.status === 200 && byProduct(probe.patch.data.session?.materials)[mlB.id]?.quantity === 9, Object.values(probe).map((x) => x.status).join());
+          const created2 = await open(await mkQuote([{ procedure: pSimple, quantity: 1 }]));
+          check("lacunas materiais: PROFESSIONAL cria sessão nova já semeada (201)", created2.status === 201 && created2.data.session.materials.length === 2, `${created2.status}`);
+        }
+      });
+    }
+  } finally {
+    for (const member of members) await api("DELETE", "/api/team", { membershipId: member.id });
+  }
+  const unauth = await withSession("", async () => ({ post: await open(probeOnQuote), get: await api("GET", `${url()}?journeyId=${J.id}&quoteId=${probeOnQuote}`), patch: await api("PATCH", `${url()}/${probeSession.id}`, { materials: [] }) }));
+  check("lacunas materiais: sem sessão => 401 em POST/GET/PATCH", Object.values(unauth).every((x) => x.status === 401), Object.values(unauth).map((x) => x.status).join());
+  const stranger = { post: await open(probeOnQuote, J, P2), get: await api("GET", `${url(P2)}?journeyId=${J.id}&quoteId=${probeOnQuote}`), patch: await api("PATCH", `${url(P2)}/${probeSession.id}`, { materials: [] }), postJ2: await open(probeOnQuote, J2, P), bogus: await open("id-inexistente"), bogusPatch: await api("PATCH", `${url()}/id-inexistente`, { materials: [] }) };
+  check("lacunas materiais: ids de outro paciente/jornada/inexistentes => 404", Object.values(stranger).every((x) => x.status === 404), Object.entries(stranger).map(([k, x]) => `${k}=${x.status}`).join());
+  const probeAfterStranger = await dbSession(probeSession.id);
+  check("lacunas materiais: tentativas com ids estranhos não alteraram a sessão", JSON.parse(probeAfterStranger.materials).length > 0 && probeAfterStranger.status === "Rascunho");
+
+  const otherEmail = `e2e-mg-outra-${run}@example.com`;
+  const otherPassword = `E2e-${run}-Outra9!`;
+  const otherClinic = `E2E MG Externa ${run}`;
+  try {
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990021", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const other = reg.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    if (other?.status === 200) {
+      const foreign = await withSession(other.cookie, async () => {
+        const product = (await api("POST", "/api/products", { name: `Externo ${run}`, kind: "material", unit: "unidade", costCents: 100, supplier: "F", minStock: 0 })).data.product;
+        await api("POST", "/api/purchases", { supplier: "F", purchasedOn: day(0), paymentMethod: "Pix", installments: 1, items: [{ productId: product.id, lotCode: `EXT${run}`, expiresOn: day(30), quantity: 5, unitPriceCents: 100 }] });
+        return { product, lot: await prisma.stockLot.findFirst({ where: { productId: product.id } }) };
+      });
+      const sessionBefore = JSON.stringify(await dbSession(probeSession.id));
+      const withForeignProduct = await api("PATCH", `${url()}/${probeSession.id}`, { materials: [{ productId: foreign.product.id, quantity: 1, allocations: [] }] });
+      const withForeignLot = await api("PATCH", `${url()}/${probeSession.id}`, { materials: [{ productId: mlB.id, quantity: 1, allocations: [{ lotId: foreign.lot.id, quantity: 1 }] }] });
+      check("lacunas materiais: produto ou lote de outra clínica na PATCH => 400 e nada gravado", withForeignProduct.status === 400 && withForeignLot.status === 400 && JSON.stringify(await dbSession(probeSession.id)) === sessionBefore, `${withForeignProduct.status} ${withForeignLot.status}`);
+      const foreignView = await withSession(other.cookie, () => api("GET", `${url()}?journeyId=${J.id}&quoteId=${probeOnQuote}`));
+      check("lacunas materiais: clínica externa não vê esta sessão no GET (404, sem nomes de produtos)", foreignView.status === 404 && !JSON.stringify(foreignView.data).includes("Toxina"), foreignView.status);
+    } else {
+      check("lacunas materiais: clínica externa criada para o teste", false, `${reg.status} ${other?.status}`);
+    }
+  } finally {
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: otherEmail } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: otherEmail } });
+  }
+}
 
 const suites = {
   pacientes: { needs: [], run: async (state) => Object.assign(state, await patientsAndPayments()) },
@@ -3226,6 +3724,7 @@ const suites = {
   catalogo: { needs: [], run: async () => { await procedureCatalog(); await procedureCatalogGaps(); } },
   consentimento: { needs: [], run: () => consentGate() },
   sessao_unica: { needs: [], run: () => sessionPerQuote() },
+  materiais_sessao: { needs: [], run: async () => { await sessionMaterials(); await sessionMaterialsGaps(); } },
   agendar_procedimento: { needs: [], run: () => scheduledProcedure() },
   inicio_move_agenda: { needs: [], run: () => startMovesAppointment() },
   paginacao: { needs: [], run: async () => { await paginationSuite(); await paginationGaps(); } },
