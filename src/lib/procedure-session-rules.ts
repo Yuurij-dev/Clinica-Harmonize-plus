@@ -47,6 +47,31 @@ export function procedureAppointmentVariants(procedure: string): string[] | null
   return [base, `${PROCEDURE_APPOINTMENT_PREFIX}${base}`];
 }
 
+// Nomes a buscar no cadastro para achar a duração de um agendamento: o próprio nome, o nome sem prefixo
+// ("Procedimento - " ou "Retorno - ") e, se for nome combinado ("A + B"), cada parte.
+export const RETURN_APPOINTMENT_PREFIX = "Retorno - ";
+function appointmentBaseProcedureName(procedure: string): string {
+  const stripped = stripProcedureAppointmentPrefix(procedure);
+  return stripped.startsWith(RETURN_APPOINTMENT_PREFIX) ? stripped.slice(RETURN_APPOINTMENT_PREFIX.length).trim() : stripped;
+}
+export function appointmentDurationLookupNames(procedure: string): string[] {
+  const base = appointmentBaseProcedureName(procedure);
+  return [...new Set([procedure, base, ...splitCombinedProcedureName(base)].filter(Boolean))];
+}
+
+// Duração em minutos do agendamento: nome exato, depois nome sem prefixo, depois soma das partes de um nome combinado
+// (só se todas existirem). undefined quando nada casa (quem chama aplica o padrão de 60 min).
+export function appointmentProcedureDuration(procedures: Array<{ name: string; durationMinutes: number }>, procedure: string): number | undefined {
+  const find = (name: string) => procedures.find((item) => item.name === name)?.durationMinutes;
+  const base = appointmentBaseProcedureName(procedure);
+  const direct = find(procedure) ?? (base ? find(base) : undefined);
+  if (direct !== undefined) return direct;
+  const parts = splitCombinedProcedureName(base);
+  if (parts.length < 2) return undefined;
+  const durations = parts.map(find);
+  return durations.every((value): value is number => value !== undefined) ? durations.reduce((sum, value) => sum + value, 0) : undefined;
+}
+
 export const DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE = "Este procedimento já está agendado nesta jornada. Remarque ou cancele o agendamento existente na Agenda.";
 
 // "A + B" (nome combinado) vira ["A", "B"], sem repetir nomes.

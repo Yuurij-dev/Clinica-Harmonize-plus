@@ -55,3 +55,16 @@ test("isMovableStartAppointment move só Procedimento agendado", async () => {
   assert.equal(isMovableStartAppointment({ procedure: "Procedimento - Botox", status: "Em atendimento" }), false);
   assert.equal(isMovableStartAppointment({ procedure: "Retorno - Botox", status: "Agendado" }), false);
 });
+
+test("appointment duration resolves prefixed and combined names from the procedure catalog", async () => {
+  const { appointmentProcedureDuration, appointmentDurationLookupNames } = await import("../src/lib/procedure-session-rules.ts");
+  const catalog = [{ name: "Botox", durationMinutes: 30 }, { name: "Preenchimento", durationMinutes: 120 }];
+  assert.equal(appointmentProcedureDuration(catalog, "Botox"), 30);
+  assert.equal(appointmentProcedureDuration(catalog, "Procedimento - Preenchimento"), 120);
+  assert.equal(appointmentProcedureDuration(catalog, "Retorno - Botox"), 30);
+  assert.equal(appointmentProcedureDuration(catalog, "Procedimento - Botox + Preenchimento"), 150);
+  assert.equal(appointmentProcedureDuration(catalog, "Procedimento - Botox + Outro"), undefined);
+  assert.equal(appointmentProcedureDuration(catalog, "Avaliação"), undefined);
+  assert.equal(appointmentProcedureDuration([{ name: "Procedimento - X", durationMinutes: 45 }], "Procedimento - X"), 45);
+  assert.deepEqual(appointmentDurationLookupNames("Procedimento - A + B"), ["Procedimento - A + B", "A + B", "A", "B"]);
+});

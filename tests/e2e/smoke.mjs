@@ -1156,7 +1156,7 @@ async function scheduledProcedure() {
   const getSessions = (j = J1) => api("GET", `${sessUrl}?journeyId=${j.id}&quoteId=${j.quoteId}`);
   const procName = `Procedimento - ${name}`;
   const returnName = `Retorno - ${name}`;
-  const body = (extra = {}) => ({ patientId: P, journeyId: J1.id, procedure: procName, professional: "Teste", time: "10:00", date: day(2), ...extra });
+  const body = (extra = {}) => ({ patientId: P, journeyId: J1.id, procedure: procName, professional: `Prof ${P}`, time: "10:00", date: day(2), ...extra });
   const activeCount = (journeyId, procedure) => prisma.appointment.count({ where: { patientId: P, journeyId, procedure, status: { in: ["Agendado", "Em atendimento"] } } });
 
   let r = await getSessions();
@@ -1193,16 +1193,16 @@ async function scheduledProcedure() {
   const ret1 = r.data.appointment;
   r = await api("POST", "/api/appointments", body({ procedure: returnName, time: "12:00" }));
   check("agenda do procedimento: segundo 'Retorno - nome' continua permitido (201)", r.status === 201, r.status);
-  r = await api("POST", "/api/appointments", body({ journeyId: J2.id, time: "10:00" }));
+  r = await api("POST", "/api/appointments", body({ journeyId: J2.id, time: "13:00" }));
   check("agenda do procedimento: mesmo nome em outra jornada do mesmo paciente => 201", r.status === 201, `${r.status} ${r.data.message}`);
   const otherJourneyAppt = r.data.appointment;
-  r = await api("POST", "/api/appointments", { patientId: P2, journeyId: JO.id, procedure: procName, professional: "Teste", time: "10:00", date: day(2) });
+  r = await api("POST", "/api/appointments", { patientId: P2, journeyId: JO.id, procedure: procName, professional: `Prof ${P2}`, time: "10:00", date: day(2) });
   check("agenda do procedimento: mesmo nome em outro paciente => 201", r.status === 201, `${r.status} ${r.data.message}`);
   const otherPatientAppt = r.data.appointment;
 
   r = await getSessions();
   const sp = r.data.scheduledProcedure;
-  check("agenda do procedimento: GET devolve scheduledProcedure com os campos esperados", r.status === 200 && sp?.id === first.id && sp.date === day(2) && sp.time === "10:00" && sp.procedure === procName && sp.professional === "Teste" && sp.status === "Agendado" && !("notes" in sp), JSON.stringify(sp));
+  check("agenda do procedimento: GET devolve scheduledProcedure com os campos esperados", r.status === 200 && sp?.id === first.id && sp.date === day(2) && sp.time === "10:00" && sp.procedure === procName && sp.professional === `Prof ${P}` && sp.status === "Agendado" && !("notes" in sp), JSON.stringify(sp));
   check("agenda do procedimento: só 6 campos (sem notes, sem paciente)", sp && Object.keys(sp).sort().join() === "date,id,procedure,professional,status,time", Object.keys(sp ?? {}).join());
   check("agenda do procedimento: não devolve retorno nem agendamento de outra jornada/paciente", ![ret1.id, otherJourneyAppt.id, otherPatientAppt.id].includes(sp?.id) && !JSON.stringify(r.data).includes(otherPatientAppt.id) && !JSON.stringify(r.data).includes(otherJourneyAppt.id));
   const s1 = r.data.sessions?.find((x) => x.id === sess?.id);
@@ -1229,7 +1229,7 @@ async function scheduledProcedure() {
   check("agenda do procedimento: nome puro com 'Procedimento - X' ativo => 409", r.status === 409, r.status);
   r = await api("POST", "/api/appointments", body({ procedure: `Avaliação ${name}`, time: "16:00" }));
   check("agenda do procedimento: 'Avaliação…' não é tratada como duplicata (201)", r.status === 201, `${r.status} ${r.data.message}`);
-  r = await api("POST", "/api/appointments", { patientId: P2, journeyId: JO.id, procedure: name, professional: "Teste", time: "11:00", date: day(2) });
+  r = await api("POST", "/api/appointments", { patientId: P2, journeyId: JO.id, procedure: name, professional: `Prof ${P2}`, time: "11:00", date: day(2) });
   check("agenda do procedimento: nome puro vs prefixada já ativa em outra jornada/paciente => 409", r.status === 409, r.status);
   const J3 = await mkJourney(P, "Agenda J3");
   r = await api("POST", "/api/appointments", body({ journeyId: J3.id, procedure: name }));
@@ -1237,7 +1237,7 @@ async function scheduledProcedure() {
   r = await api("POST", "/api/appointments", body({ journeyId: J3.id }));
   check("agenda do procedimento: 'Procedimento - X' com nome puro ativo => 409", r.status === 409, r.status);
   const J4 = await mkJourney(P, "Agenda J4");
-  const [c1, c2] = await Promise.all([api("POST", "/api/appointments", body({ journeyId: J4.id, procedure: name })), api("POST", "/api/appointments", body({ journeyId: J4.id }))]);
+  const [c1, c2] = await Promise.all([api("POST", "/api/appointments", body({ journeyId: J4.id, procedure: name, time: "08:00" })), api("POST", "/api/appointments", body({ journeyId: J4.id, time: "08:00" }))]);
   check("agenda do procedimento: nome puro e prefixado simultâneos => 1x 201 e 1x 409", [c1.status, c2.status].sort().join() === "201,409", `${c1.status}/${c2.status}`);
 
   // PATCH de procedure
@@ -1273,12 +1273,12 @@ async function scheduledProcedure() {
 
   // Jornada padrão (sem journeyId no corpo)
   const P5 = (await api("POST", "/api/patients", { name: `E2E Agenda Padrao ${run}`, phone: "11999990062", age: 35, cpf: randomCpf() })).data.patient.id;
-  const noJ = (extra = {}) => ({ patientId: P5, procedure: procName, professional: "Teste", time: "10:00", date: day(2), ...extra });
+  const noJ = (extra = {}) => ({ patientId: P5, procedure: procName, professional: `Prof ${P5}`, time: "10:00", date: day(2), ...extra });
   r = await api("POST", "/api/appointments", noJ());
   check("agenda do procedimento: POST sem journeyId cria na jornada padrão (201)", r.status === 201, `${r.status} ${r.data.message}`);
   r = await api("POST", "/api/appointments", noJ({ time: "11:00" }));
   check("agenda do procedimento: POST sem journeyId duplicando na jornada padrão => 409", r.status === 409, r.status);
-  const [d1, d2] = await Promise.all([api("POST", "/api/appointments", noJ({ procedure: returnName })), api("POST", "/api/appointments", noJ({ procedure: returnName }))]);
+  const [d1, d2] = await Promise.all([api("POST", "/api/appointments", noJ({ procedure: returnName, time: "13:00" })), api("POST", "/api/appointments", noJ({ procedure: returnName, time: "14:00" }))]);
   check("agenda do procedimento: Retorno sem journeyId não sofre trava de duplicata", d1.status === 201 && d2.status === 201, `${d1.status}/${d2.status}`);
 
   // Reabrir / renomear encerrado
@@ -1291,7 +1291,7 @@ async function scheduledProcedure() {
   // PATCH simultâneo
   const J6 = await mkJourney(P, "Agenda J6");
   const rA = (await api("POST", "/api/appointments", body({ journeyId: J6.id, procedure: returnName, time: "09:00" }))).data.appointment;
-  const rB = (await api("POST", "/api/appointments", body({ journeyId: J6.id, procedure: returnName, time: "09:30" }))).data.appointment;
+  const rB = (await api("POST", "/api/appointments", body({ journeyId: J6.id, procedure: returnName, time: "14:00" }))).data.appointment;
   const target = `Procedimento - ${name} simultaneo`;
   const [e1, e2] = await Promise.all([api("PATCH", `/api/appointments/${rA.id}`, { procedure: target }), api("PATCH", `/api/appointments/${rB.id}`, { procedure: target })]);
   check("agenda do procedimento: dois PATCH simultâneos para o mesmo nome => 200 + 409", [e1.status, e2.status].sort().join() === "200,409" && await activeCount(J6.id, target) === 1, `${e1.status}/${e2.status} n=${await activeCount(J6.id, target)}`);
@@ -1336,7 +1336,8 @@ async function startMovesAppointment() {
   };
   const procName = `Procedimento - ${name}`;
   const otherName = `Procedimento - ${name} Outro`;
-  const mkAppt = async (J, extra = {}) => (await api("POST", "/api/appointments", { patientId: J.patientId, journeyId: J.journeyId, procedure: procName, professional: "Teste", date: day(7), time: "10:00", notes: "", ...extra })).data.appointment;
+  let apptDayOffset = 7; // cada agendamento vai para um dia próprio: a regra de conflito (mesmo paciente/profissional) não deve mascarar o cenário testado
+  const mkAppt = async (J, extra = {}) => (await api("POST", "/api/appointments", { patientId: J.patientId, journeyId: J.journeyId, procedure: procName, professional: `Prof ${J.patientId}`, date: day(apptDayOffset++), time: "10:00", notes: "", ...extra })).data.appointment;
   const start = (J, extra = {}) => api("PATCH", `/api/patients/${J.patientId}/procedure-sessions/${J.sessionId}`, { status: "Em execução", technique: "E2E técnica", treatedAreas: "E2E região", professional: "E2E Prof", photos: [{ id: `ph-${run}-${Math.random()}`, phase: "Antes", imageUrl: dataUrl, name: "antes", width: 1, height: 1 }], ...extra });
   const row = (id) => prisma.appointment.findUnique({ where: { id }, select: { date: true, time: true, status: true } });
   const snap = async (id) => JSON.stringify(await row(id));
@@ -2121,7 +2122,7 @@ async function procedureCatalogGaps() {
       for (const status of ["Enviado", "Aprovado"]) await api("PATCH", `/api/quotes/${quote.data.quote.id}`, { status, evaluationId: evaluation.id });
       const session = (await api("POST", `/api/patients/${patientId}/procedure-sessions`, { journeyId: journey.id, quoteId: quote.data.quote.id, procedureId: proc.id })).data.session;
       check(`integração (${label}): sessão criada com o nome do procedimento`, session?.procedureName === proc.name, session?.procedureName);
-      const appointment = await api("POST", "/api/appointments", { patientId, journeyId: journey.id, procedure: `Procedimento - ${proc.name}`, professional: "Teste", date: day(5), time: "10:00" });
+      const appointment = await api("POST", "/api/appointments", { patientId, journeyId: journey.id, procedure: `Procedimento - ${proc.name}`, professional: `Prof ${patientId}`, date: day(5), time: "10:00" });
       check(`integração (${label}): agendamento criado`, appointment.status === 201, `${appointment.status} ${JSON.stringify(appointment.data).slice(0, 120)}`);
       const upload = new FormData();
       upload.set("file", new Blob([pdf], { type: "application/pdf" }), "Termo.pdf"); upload.set("category", "TERMOS"); upload.set("signatureStatus", "ASSINADO"); upload.set("journeyId", journey.id);
@@ -2143,6 +2144,597 @@ async function procedureCatalogGaps() {
 }
 
 // Partes do roteiro, na ordem em que rodam. `needs` lista as partes que criam os dados que esta usa.
+// Conflitos de agenda: o mesmo profissional ou paciente não tem dois atendimentos sobrepostos (criar, remarcar, reativar, concorrência).
+async function scheduleConflicts() {
+  const D = day(10);
+  const mk = async (label, n) => (await api("POST", "/api/patients", { name: `E2E Conflito ${label} ${run}`, phone: `1199999${String(7000 + n)}`, age: 30, cpf: randomCpf() })).data.patient;
+  const [Pa, Pb, Pc] = [await mk("A", 1), await mk("B", 2), await mk("C", 3)];
+  const X = `Prof X ${run}`, Y = `Prof Y ${run}`;
+  const post = (patient, professional, time, extra = {}) => api("POST", "/api/appointments", { patientId: patient.id, procedure: "Retorno", professional, time, date: D, ...extra });
+  const stateOf = async (id) => prisma.appointment.findUnique({ where: { id }, select: { time: true, status: true } });
+
+  let r = await post(Pa, X, "10:00");
+  const A = r.data.appointment;
+  check("conflitos: primeiro agendamento (X, 10:00–11:00) é criado", r.status === 201, `${r.status} ${r.data.message}`);
+  if (!A) return;
+  r = await post(Pb, X, "10:30");
+  check("conflitos: sobreposição parcial do mesmo profissional => 409 sem expor o outro paciente", r.status === 409 && /já possui um atendimento neste horário/.test(r.data.message) && !r.data.message.includes("E2E Conflito"), `${r.status} ${r.data.message}`);
+  r = await post(Pb, X, "10:00");
+  check("conflitos: mesma faixa e mesmo profissional (caixa/espaços diferentes) => 409", (await post(Pb, `  ${X.toUpperCase()} `, "10:15")).status === 409 && r.status === 409, r.status);
+  r = await post(Pa, Y, "10:30");
+  check("conflitos: mesmo paciente com outro profissional => 409 com mensagem do paciente", r.status === 409 && /O paciente já tem outro agendamento neste horário/.test(r.data.message), `${r.status} ${r.data.message}`);
+  const B = (await post(Pb, X, "11:00"));
+  const C = (await post(Pb, X, "09:00"));
+  check("conflitos: horários adjacentes (termina 10:00 / começa 11:00) => 201", B.status === 201 && C.status === 201, `${B.status}/${C.status} ${B.data.message ?? ""} ${C.data.message ?? ""}`);
+  r = await post(Pb, Y, "10:00");
+  check("conflitos: outro profissional e outro paciente no mesmo horário => 201", r.status === 201, `${r.status} ${r.data.message}`);
+
+  // Remarcação.
+  const bId = B.data.appointment?.id;
+  r = await api("PATCH", `/api/appointments/${bId}`, { time: "10:30" });
+  check("conflitos: remarcar para faixa ocupada => 409 e o horário antigo continua", r.status === 409 && (await stateOf(bId)).time === "11:00", `${r.status} ${r.data.message}`);
+  r = await api("PATCH", `/api/appointments/${bId}`, { time: "14:00" });
+  check("conflitos: remarcar para faixa livre => 200", r.status === 200 && r.data.appointment?.time === "14:00", `${r.status} ${r.data.message}`);
+  r = await api("PATCH", `/api/appointments/${bId}`, { professional: Y, time: "10:30" });
+  check("conflitos: remarcar trocando de profissional para faixa ocupada => 409", r.status === 409, `${r.status} ${r.data.message}`);
+  r = await api("PATCH", `/api/appointments/${A.id}`, { time: "10:15" });
+  check("conflitos: remarcar sem colidir com o próprio agendamento => 200", r.status === 200, `${r.status} ${r.data.message}`);
+  await api("PATCH", `/api/appointments/${A.id}`, { time: "10:00" });
+  r = await api("PATCH", `/api/appointments/${A.id}`, { notes: "só observação" });
+  check("conflitos: alterar só a observação não revalida a faixa", r.status === 200, r.status);
+
+  // Cancelar libera; reativar volta a ocupar.
+  r = await api("PATCH", `/api/appointments/${A.id}`, { status: "Cancelado" });
+  check("conflitos: cancelar o agendamento", r.status === 200, r.status);
+  const E = await post(Pc, X, "10:00");
+  check("conflitos: faixa de agendamento cancelado fica livre", E.status === 201, `${E.status} ${E.data.message}`);
+  r = await api("PATCH", `/api/appointments/${A.id}`, { status: "Agendado" });
+  check("conflitos: reativar agendamento cancelado em faixa ocupada => 409 e continua cancelado", r.status === 409 && (await stateOf(A.id)).status === "Cancelado", `${r.status} ${r.data.message}`);
+  await api("PATCH", `/api/appointments/${E.data.appointment?.id}`, { status: "Faltou" });
+  r = await api("PATCH", `/api/appointments/${A.id}`, { status: "Agendado" });
+  check("conflitos: faltou também libera a faixa (reativar passa)", r.status === 200, `${r.status} ${r.data.message}`);
+
+  // Em atendimento e Atendido continuam ocupando a faixa; profissional só com espaços é recusado.
+  const Z = `Prof Z ${run}`;
+  const F = (await post(Pc, Z, "12:00")).data.appointment;
+  await api("PATCH", `/api/appointments/${F.id}`, { status: "Em atendimento" });
+  r = await post(Pb, Z, "12:30");
+  check("conflitos: agendamento Em atendimento ocupa a faixa => 409", r.status === 409, `${r.status} ${r.data.message}`);
+  await api("PATCH", `/api/appointments/${F.id}`, { status: "Atendido" });
+  r = await post(Pb, Z, "12:30");
+  check("conflitos: agendamento Atendido ocupa a faixa => 409", r.status === 409, `${r.status} ${r.data.message}`);
+  r = await post(Pb, "   ", "13:00");
+  check("conflitos: profissional só com espaços => 400", r.status === 400, `${r.status} ${r.data.message}`);
+  r = await api("PATCH", `/api/appointments/${F.id}`, { professional: "   " });
+  check("conflitos: PATCH com profissional só com espaços => 400", r.status === 400, r.status);
+
+  // "Procedimento - X" usa a duração real de X (120 min), não 60.
+  const longName = `E2E Longo ${run}`;
+  await api("POST", "/api/procedures", { name: longName, category: "Facial", price: 300, durationMinutes: 120, margin: 30 });
+  const W = `Prof W ${run}`;
+  r = await post(Pb, W, "14:00", { procedure: `Procedimento - ${longName}`, date: day(11) });
+  check("conflitos: 'Procedimento - X' de 120 min é criado", r.status === 201, `${r.status} ${r.data.message}`);
+  r = await post(Pc, W, "15:30", { date: day(11) });
+  check("conflitos: faixa real de 120 min bloqueia 15:30 => 409", r.status === 409 && /14:00–16:00/.test(r.data.message), `${r.status} ${r.data.message}`);
+  r = await post(Pc, W, "16:00", { date: day(11) });
+  check("conflitos: logo após a faixa de 120 min => 201", r.status === 201, `${r.status} ${r.data.message}`);
+
+  // Concorrência: duas requisições na mesma faixa.
+  let bad = 0, detail = "";
+  const same = [];
+  for (let i = 0; i < 20; i += 1) {
+    const d = day(20 + i);
+    const [p, q] = await Promise.all([post(Pb, `Conc ${run}`, "10:00", { date: d }), post(Pc, `Conc ${run}`, "10:00", { date: d })]);
+    const got = [p.status, q.status].sort().join();
+    if (got !== "201,409") { bad += 1; detail = `${got} ${p.data.message ?? ""}`; }
+    same.push(await prisma.appointment.count({ where: { professional: `Conc ${run}`, date: { gte: new Date(`${d}T00:00:00-03:00`), lt: new Date(`${d}T23:59:59-03:00`) } } }));
+  }
+  check("conflitos: 20x 2 POST simultâneos (mesmo profissional) => sempre 1x 201 e 1x 409, 1 registro", bad === 0 && same.every((n) => n === 1), `${bad} falhas ${detail} contagens ${same.join()}`);
+  bad = 0; detail = "";
+  const samePatient = [];
+  for (let i = 0; i < 20; i += 1) {
+    const d = day(45 + i);
+    const [p, q] = await Promise.all([post(Pa, `Conc1 ${run}`, "15:00", { date: d }), post(Pa, `Conc2 ${run}`, "15:00", { date: d })]);
+    const got = [p.status, q.status].sort().join();
+    if (got !== "201,409") { bad += 1; detail = got; }
+    samePatient.push(await prisma.appointment.count({ where: { patientId: Pa.id, date: { gte: new Date(`${d}T00:00:00-03:00`), lt: new Date(`${d}T23:59:59-03:00`) } } }));
+  }
+  check("conflitos: 20x 2 POST simultâneos (mesmo paciente) => sempre 1x 201 e 1x 409, 1 registro", bad === 0 && samePatient.every((n) => n === 1), `${bad} falhas ${detail} contagens ${samePatient.join()}`);
+  // Três requisições cruzadas (profissional + paciente) não podem travar nem gerar sobreposição.
+  bad = 0; detail = "";
+  const crossed = [];
+  for (let i = 0; i < 10; i += 1) {
+    const d = day(70 + i);
+    const res = await Promise.all([post(Pa, `Cruz ${run}`, "16:00", { date: d }), post(Pb, `Cruz ${run}`, "16:00", { date: d }), post(Pa, `Cruz2 ${run}`, "16:00", { date: d })]);
+    if (res.some((item) => ![201, 409].includes(item.status))) { bad += 1; detail = res.map((item) => item.status).join(); }
+    const wins = res.map((item) => item.status === 201);
+    crossed.push(wins[0] ? wins.filter(Boolean).length === 1 : wins[1] && wins[2]);
+  }
+  check("conflitos: 10x 3 POST cruzados (profissional/paciente) => sem 500/deadlock e resultado consistente", bad === 0 && crossed.every(Boolean), `${bad} falhas ${detail} ${crossed.join()}`);
+
+  // Clínicas diferentes não interferem.
+  const otherEmail = `e2e-conf-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E Conflito Externa ${run}`;
+  try {
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo3", phone: "11999990023", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    if (other?.status === 200) {
+      const result = await withSession(other.cookie, async () => {
+        const patient = (await api("POST", "/api/patients", { name: `E2E Conflito Ext ${run}`, phone: "11999997100", age: 30, cpf: randomCpf() })).data.patient;
+        return api("POST", "/api/appointments", { patientId: patient.id, procedure: "Retorno", professional: X, time: "10:00", date: D });
+      });
+      check("conflitos: outra clínica agenda o mesmo profissional/horário sem conflito", result.status === 201, `${result.status} ${result.data.message}`);
+    } else {
+      check("conflitos: segunda clínica criada para o teste de isolamento", false, `registro ${r.status} login ${other?.status}`);
+    }
+  } finally {
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: otherEmail } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: otherEmail } });
+  }
+}
+
+// Lacunas da regra de conflito: variações de profissional, geometria das faixas, duração por procedimento, status, remarcações,
+// concorrência (POST x POST x PATCH), isolamento entre clínicas, papéis e fluxos que criam/movem agendamento.
+async function scheduleConflictGaps() {
+  let off = 100;
+  const nd = () => day(off++);
+  let seq = 0;
+  const mkP = async (label) => (await api("POST", "/api/patients", { name: `E2E ConfG ${label} ${run}`, phone: `119${Math.floor(10000000 + Math.random() * 89999999)}`, age: 30, cpf: randomCpf() })).data.patient;
+  const fresh = () => mkP(`P${seq++}`);
+  const pool = []; for (let i = 0; i < 5; i += 1) pool.push(await fresh());
+  const clinicId = (await prisma.patient.findUnique({ where: { id: pool[0].id }, select: { clinicId: true } })).clinicId;
+  const instant = (d) => new Date(`${d}T12:00:00-03:00`);
+  const seed = (patient, d, time, procedure, professional, status = "Agendado") => prisma.appointment.create({ data: { clinicId, patientId: patient.id, date: instant(d), time, procedure, professional, status, notes: "" } });
+  const post = (patient, professional, time, d, procedure = "Retorno", extra = {}) => api("POST", "/api/appointments", { patientId: patient.id, procedure, professional, time, date: d, ...extra });
+  const patch = (id, body) => api("PATCH", `/api/appointments/${id}`, body);
+  const rowOf = (id) => prisma.appointment.findUnique({ where: { id }, select: { date: true, time: true, status: true, professional: true, procedure: true } });
+  const msg = (r) => `${r.status} ${r.data?.message ?? ""}`;
+  const P90 = `E2E Conf90 ${run}`, P30 = `E2E Conf30 ${run}`;
+  const p90 = await api("POST", "/api/procedures", { custom: true, name: P90, category: "Facial", price: 100, durationMinutes: 90, margin: 30 });
+  const p30 = await api("POST", "/api/procedures", { custom: true, name: P30, category: "Facial", price: 100, durationMinutes: 30, margin: 30 });
+  check("lacunas: procedimentos de 90 e 30 min criados", p90.status === 201 && p30.status === 201, `${p90.status}/${p30.status} ${p90.data?.message ?? ""} ${p30.data?.message ?? ""}`);
+  if (p90.status !== 201 || p30.status !== 201) return;
+
+  // (a) Variações do nome do profissional.
+  {
+    const d = nd(), pro = `Dra. Ana Lúcia ${run}`;
+    const a = await fresh();
+    check("lacunas(a): base com acento criada", (await post(a, pro, "10:00", d)).status === 201);
+    const got = [];
+    for (const variant of [`dra. ana lúcia ${run}`, `  Dra.   Ana   Lúcia  ${run}  `, `DRA. ANA LÚCIA ${run}`]) got.push((await post(await fresh(), variant, "10:30", d)).status);
+    check("lacunas(a): caixa, espaços extras (internos e nas pontas) e maiúsculas acentuadas => 409", got.every((s) => s === 409), got.join());
+    const noAccent = await post(await fresh(), `Dra. Ana Lucia ${run}`, "10:30", d);
+    const nfd = await post(await fresh(), `Dra. Ana Lúcia ${run}`, "10:15", d);
+    check("lacunas(a): OBSERVAÇÃO sem acento / NFD (sem 500)", noAccent.status < 500 && nfd.status < 500, `sem acento ${noAccent.status}; NFD ${nfd.status} (201 = tratado como outro profissional)`);
+    const e1 = await post(await fresh(), "", "10:30", d);
+    const e2 = await post(await fresh(), null, "10:30", d);
+    check("lacunas(a): profissional vazio ou null => 400", e1.status === 400 && e2.status === 400, `${e1.status}/${e2.status}`);
+    const w1 = await post(await fresh(), "   ", "10:30", d);
+    const w2 = await post(await fresh(), "   ", "10:30", d);
+    check("lacunas(a): profissional só com espaços => 400", w1.status === 400 && w2.status === 400, `${w1.status}/${w2.status}`);
+    // Grafias diferentes entre o que está gravado e o candidato (inclui legado sem trim): a comparação precisa ser normalizada nos dois sentidos.
+    const spelled = [
+      ["interno duplo gravado via API", `Maria  Silva ${run}`, `Maria Silva ${run}`, false],
+      ["interno duplo no candidato", `Maria Silva2 ${run}`, `Maria  Silva2 ${run}`, false],
+      ["legado com espaços nas pontas e internos", `  Maria  Silva3 ${run} `, `Maria Silva3 ${run}`, true],
+      ["legado MAIÚSCULO acentuado", `MARIA ÁLVARES ${run}`, `maria álvares ${run}`, true],
+      ["legado minúsculo acentuado", `maria álvares2 ${run}`, `MARIA ÁLVARES2 ${run}`, true],
+      ["legado com tab/espaço duplo", `Maria\t Silva4 ${run}`, `Maria Silva4 ${run}`, true],
+      ["acento no meio, duplo gravado via API", `Ana  Lúcia ${run}`, `ana lúcia ${run}`, false],
+      ["acento no meio, duplo no candidato", `Ana Lúcia2 ${run}`, `ANA  LÚCIA2 ${run}`, false],
+      ["acento no meio, legado com pontas", ` Ana  Lúcia3 ${run} `, `Ana Lúcia3 ${run}`, true],
+      ["inicia com Á, legado", `Álvaro  Souza ${run}`, `álvaro souza ${run}`, true],
+      ["inicia com Á, via API", `ÁLVARO Souza2 ${run}`, `Álvaro  Souza2 ${run}`, false],
+      ["inicia com É, legado", `Élida  Reis ${run}`, `ÉLIDA REIS ${run}`, true],
+      ["inicia com É, via API", `élida Reis2 ${run}`, `Élida  Reis2 ${run}`, false],
+      ["só não-ASCII, via API", "Ção  Üé", "ção üé", false],
+      ["só não-ASCII, legado", " Ção  Öí ", "Ção Öí", true],
+      ["só não-ASCII, mesma grafia", "Ão", "Ão", false],
+    ];
+    for (const [label, stored, candidate, legacy] of spelled) {
+      const dd = nd(), holder = await fresh();
+      if (legacy) await seed(holder, dd, "10:00", "Retorno", stored); else await post(holder, stored, "10:00", dd);
+      const rr = await post(await fresh(), candidate, "10:30", dd);
+      check(`lacunas(a): gravado "${stored.replace(run, "")}" x candidato "${candidate.replace(run, "")}" (${label}) => 409`, rr.status === 409, msg(rr));
+    }
+    const wp = await post(a, "   ", "10:30", d);
+    check("lacunas(a): paciente com agendamento ocupado + profissional só com espaços => 400 (profissional é obrigatório)", wp.status === 400, msg(wp));
+  }
+
+  // (b) Geometria das faixas (cada caso em um dia próprio: base + candidato).
+  const geo = async (baseProc, baseTime, time, proc, expected, why) => {
+    const d = nd(), pro = `Geo ${seq++} ${run}`;
+    const base = await post(await fresh(), pro, baseTime, d, baseProc);
+    const cand = await post(await fresh(), pro, time, d, proc);
+    check(`lacunas(b): ${why} => ${expected}`, base.status === 201 && cand.status === expected, `base ${baseTime} ${baseProc}: ${base.status}; candidato ${time} ${proc}: ${msg(cand)}`);
+  };
+  await geo("Retorno", "10:00", "10:30", "Retorno", 409, "início dentro (10:30 em 10:00–11:00)");
+  await geo("Retorno", "10:00", "09:30", "Retorno", 409, "fim dentro (09:30–10:30)");
+  await geo("Retorno", "10:00", "10:00", "Retorno", 409, "faixa idêntica");
+  await geo("Retorno", "10:00", "10:15", P30, 409, "contida (30 min dentro de 60)");
+  await geo("Retorno", "10:00", "09:45", P90, 409, "contendo (90 min cobre 60 min)");
+  await geo("Retorno", "10:00", "11:00", "Retorno", 201, "adjacente depois (fim == início)");
+  await geo("Retorno", "10:00", "09:00", "Retorno", 201, "adjacente antes");
+  await geo("Retorno", "10:00", "11:01", "Retorno", 201, "1 minuto de folga depois");
+  await geo("Retorno", "10:00", "09:29", P30, 201, "1 minuto de folga antes (09:29–09:59)");
+  await geo("Retorno", "10:00", "10:59", "Retorno", 409, "sobrepõe por 1 minuto no fim");
+  await geo("Retorno", "10:00", "09:01", "Retorno", 409, "sobrepõe por 1 minuto no início");
+  await geo(P90, "10:00", "11:00", "Retorno", 409, "base de 90 min: 11:00 ainda ocupado (fallback 60 deixaria livre)");
+  await geo(P90, "10:00", "11:29", "Retorno", 409, "base de 90 min: 11:29 ocupado");
+  await geo(P90, "10:00", "11:30", "Retorno", 201, "base de 90 min: 11:30 livre");
+  await geo("Retorno", "12:00", "10:31", P90, 409, "candidato de 90 min terminando 12:01");
+  await geo("Retorno", "12:00", "10:30", P90, 201, "candidato de 90 min terminando 12:00 (adjacente)");
+  await geo(`Sem cadastro ${run}`, "15:00", "15:59", "Retorno", 409, "nome desconhecido usa 60 min: 15:59 ocupado");
+  await geo(`Sem cadastro ${run}`, "15:00", "16:00", "Retorno", 201, "nome desconhecido usa 60 min: 16:00 livre");
+  {
+    const d1 = nd(), d2 = nd(), pro = `Geo dia ${run}`;
+    const base = await post(await fresh(), pro, "10:00", d1);
+    const other = await post(await fresh(), pro, "10:00", d2);
+    check("lacunas(b): mesmo horário e profissional em dias diferentes => 201", base.status === 201 && other.status === 201, msg(other));
+  }
+  {
+    // "Procedimento - X" e "Retorno - X" usam a duração cadastrada de X (90 min), não o fallback de 60.
+    const d = nd(), pro = `Geo prefixo ${run}`;
+    const base = await post(await fresh(), pro, "10:00", d, `Procedimento - ${P90}`);
+    const inside = await post(await fresh(), pro, "11:15", d, "Retorno");
+    const after = await post(await fresh(), pro, "11:30", d, "Retorno");
+    check("lacunas(b): 'Procedimento - X' de 90 min ocupa 90 min (11:15 => 409, 11:30 => 201)", base.status === 201 && inside.status === 409 && after.status === 201, `${base.status}/${inside.status}/${after.status}`);
+    const d2 = nd(), pro2 = `Geo prefixo2 ${run}`;
+    const b2 = await post(await fresh(), pro2, "10:00", d2, `Retorno - ${P90}`);
+    const i2 = await post(await fresh(), pro2, "11:15", d2, "Retorno");
+    check("lacunas(b): 'Retorno - X' de 90 min também ocupa 90 min (11:15 => 409)", b2.status === 201 && i2.status === 409, `${b2.status}/${i2.status}`);
+  }
+
+  // Faixas que atravessam a meia-noite e 23:30+60 (só existem como dado legado: a API de criação respeita o expediente).
+  {
+    const M = day(off), M1 = day(off + 1); off += 2;
+    const pro = `Meia ${run}`, pro2 = `Meia2 ${run}`;
+    const s = await fresh(), q = await fresh(), t = await fresh(), rr = await fresh();
+    await seed(s, M, "23:30", "Retorno", pro);
+    const Q = (await post(q, pro, "09:00", M1)).data.appointment;
+    let r = await patch(Q?.id, { time: "00:15" });
+    check("lacunas(b): 23:30+60 atravessa a meia-noite: remarcar para 00:15 do dia seguinte => 409", r.status === 409 && (await rowOf(Q.id)).time === "09:00", msg(r));
+    r = await patch(Q.id, { time: "00:30" });
+    check("lacunas(b): remarcar para 00:30 (adjacente ao fim 00:30) => 200", r.status === 200, msg(r));
+    r = await patch(Q.id, { time: "00:29" });
+    check("lacunas(b): remarcar para 00:29 (1 minuto dentro) => 409", r.status === 409, msg(r));
+    await seed(t, M1, "00:00", "Retorno", pro2);
+    const R = (await post(rr, pro2, "09:00", M)).data.appointment;
+    r = await patch(R.id, { time: "23:30" });
+    check("lacunas(b): 23:30 de hoje (até 00:30) contra 00:00 de amanhã => 409", r.status === 409, msg(r));
+    r = await patch(R.id, { time: "23:00" });
+    check("lacunas(b): 23:00 (até 00:00) contra 00:00 de amanhã => 200 (adjacente)", r.status === 200, msg(r));
+    const pro3 = `Meia3 ${run}`, u = await fresh(), v = await fresh();
+    await seed(u, M, "23:30", "Retorno", pro3);
+    const V = (await post(v, pro3, "09:00", M)).data.appointment;
+    const codes = [(await patch(V.id, { time: "23:45" })).status, (await patch(V.id, { time: "23:00" })).status, (await patch(V.id, { time: "22:30" })).status];
+    check("lacunas(b): contra 23:30–00:30: 23:45 => 409, 23:00 => 409, 22:30 => 200", codes.join() === "409,409,200", codes.join());
+  }
+
+  // (c) Status que ocupam ou liberam a faixa.
+  for (const status of ["Cancelado", "Faltou", "Atendido", "Finalizado", "Em atendimento", "Agendado"]) {
+    const d = nd(), pro = `Stat ${status} ${run}`, occupant = await fresh();
+    await seed(occupant, d, "10:00", "Retorno", pro, status);
+    const byPro = await post(await fresh(), pro, "10:30", d);
+    const byPatient = await post(occupant, `Outro ${status} ${run}`, "10:30", d);
+    const frees = status === "Cancelado" || status === "Faltou";
+    check(`lacunas(c): ${status} ${frees ? "libera" : "ocupa"} a faixa (por profissional e por paciente)`, frees ? byPro.status === 201 && byPatient.status === 201 : byPro.status === 409 && byPatient.status === 409, `prof ${byPro.status}, paciente ${byPatient.status}`);
+  }
+  {
+    const d = nd(), pro = `Trans ${run}`;
+    const a = (await post(await fresh(), pro, "10:00", d)).data.appointment;
+    await patch(a.id, { status: "Cancelado" });
+    const b = (await post(await fresh(), pro, "10:00", d)).data.appointment;
+    const st = async (id) => (await rowOf(id)).status;
+    const codes = [(await patch(a.id, { status: "Agendado" })).status, (await patch(a.id, { status: "Em atendimento" })).status, (await patch(a.id, { status: "Atendido" })).status];
+    check("lacunas(c): Cancelado -> Agendado/Em atendimento/Atendido em faixa ocupada => 409 e continua Cancelado", codes.join() === "409,409,409" && await st(a.id) === "Cancelado", `${codes.join()} ${await st(a.id)}`);
+    let r = await patch(a.id, { status: "Faltou" });
+    check("lacunas(c): Cancelado -> Faltou (nenhum ocupa) => 200", r.status === 200 && await st(a.id) === "Faltou", msg(r));
+    r = await patch(a.id, { status: "Agendado" });
+    check("lacunas(c): Faltou -> Agendado em faixa ocupada => 409", r.status === 409 && await st(a.id) === "Faltou", msg(r));
+    r = await patch(a.id, { status: "Agendado", time: "15:00" });
+    check("lacunas(c): Faltou -> Agendado já remarcando para faixa livre => 200 e horário gravado", r.status === 200 && (await rowOf(a.id)).time === "15:00", msg(r));
+    await patch(a.id, { status: "Cancelado" });
+    r = await patch(a.id, { status: "Agendado", time: "10:30" });
+    check("lacunas(c): Cancelado -> Agendado remarcando para faixa ocupada => 409 e horário antigo", r.status === 409 && (await rowOf(a.id)).time === "15:00", msg(r));
+    await patch(b.id, { status: "Cancelado" });
+    r = await patch(a.id, { status: "Agendado" });
+    check("lacunas(c): Cancelado -> Agendado em faixa livre => 200", r.status === 200 && await st(a.id) === "Agendado", msg(r));
+  }
+
+  // (d) Remarcação.
+  {
+    const d = nd(), d2 = nd(), pro = `Remarca ${run}`;
+    await post(await fresh(), pro, "10:00", d);
+    const B = (await post(await fresh(), pro, "14:00", d)).data.appointment;
+    let r = await patch(B.id, { time: "10:30" });
+    let row = await rowOf(B.id);
+    check("lacunas(d): remarcar para faixa ocupada => 409, horário e dia antigos, sem citar paciente", r.status === 409 && row.time === "14:00" && row.date.toISOString() === instant(d).toISOString() && !JSON.stringify(r.data).includes("E2E ConfG"), msg(r));
+    r = await patch(B.id, { date: d2 });
+    check("lacunas(d): remarcar só o dia para um dia livre => 200", r.status === 200 && (await rowOf(B.id)).date.toISOString() === instant(d2).toISOString(), msg(r));
+    r = await patch(B.id, { date: d, time: "10:00" });
+    check("lacunas(d): remarcar dia+hora para a faixa ocupada de outro dia => 409 e fica no dia antigo", r.status === 409 && (await rowOf(B.id)).date.toISOString() === instant(d2).toISOString(), msg(r));
+    r = await patch(B.id, { date: d, time: "11:00" });
+    check("lacunas(d): remarcar dia+hora para faixa adjacente => 200", r.status === 200, msg(r));
+    r = await patch(B.id, { time: "10:59" });
+    check("lacunas(d): remarcar para 10:59 (1 min dentro) => 409", r.status === 409, msg(r));
+
+    const pro2 = `Remarca2 ${run}`, pro3 = `Remarca3 ${run}`;
+    const C = (await post(await fresh(), pro2, "10:00", d)).data.appointment;
+    r = await patch(C.id, { professional: pro });
+    check("lacunas(d): trocar só o profissional para um ocupado => 409 e profissional antigo", r.status === 409 && (await rowOf(C.id)).professional === pro2, msg(r));
+    r = await patch(C.id, { professional: pro.toUpperCase() });
+    check("lacunas(d): trocar para o ocupado com outra caixa => 409", r.status === 409, msg(r));
+    r = await patch(C.id, { professional: pro3 });
+    check("lacunas(d): trocar o profissional para um livre => 200", r.status === 200 && (await rowOf(C.id)).professional === pro3, msg(r));
+    r = await patch(C.id, { professional: "   " });
+    check("lacunas(d): profissional só com espaços no PATCH => 400 e profissional mantido", r.status === 400 && (await rowOf(C.id)).professional === pro3, msg(r));
+    r = await patch(C.id, { professional: pro3.toUpperCase() });
+    check("lacunas(d): mudar só a caixa do próprio profissional => 200", r.status === 200, msg(r));
+
+    const pro4 = `Remarca4 ${run}`;
+    const D = (await post(await fresh(), pro4, "10:00", d)).data.appointment;
+    const E = (await post(await fresh(), pro4, "11:15", d)).data.appointment;
+    r = await patch(D.id, { procedure: P90 });
+    check("lacunas(d): trocar o procedimento para um de 90 min que invade o seguinte => 409 e procedimento antigo", r.status === 409 && (await rowOf(D.id)).procedure === "Retorno", msg(r));
+    r = await patch(D.id, { procedure: P30 });
+    check("lacunas(d): trocar para um procedimento mais curto => 200", r.status === 200 && (await rowOf(D.id)).procedure === P30, msg(r));
+    r = await patch(E.id, { procedure: P90 });
+    check("lacunas(d): estender o seguinte para 90 min sem invadir ninguém => 200", r.status === 200, msg(r));
+
+    // Paciente com dois agendamentos.
+    const pat = await fresh();
+    await post(pat, `PacA ${run}`, "10:00", d2);
+    const X2 = (await post(pat, `PacB ${run}`, "15:00", d2)).data.appointment;
+    r = await patch(X2.id, { time: "10:30" });
+    check("lacunas(d): remarcar para cima do outro agendamento do mesmo paciente => 409 (mensagem do paciente)", r.status === 409 && /O paciente já tem outro agendamento/.test(r.data.message) && (await rowOf(X2.id)).time === "15:00", msg(r));
+
+    // Legado sobreposto não bloqueia o que não muda a faixa.
+    const pro5 = `Legado ${run}`, l1 = await fresh(), l2 = await fresh();
+    const L1 = await seed(l1, d, "10:00", "Retorno", pro5), L2 = await seed(l2, d, "10:30", "Retorno", pro5);
+    const res = [];
+    res.push((await patch(L2.id, { notes: "obs" })).status);
+    res.push((await patch(L2.id, { time: "10:30", date: d })).status);
+    res.push((await patch(L2.id, { status: "Em atendimento" })).status);
+    res.push((await patch(L1.id, { status: "Atendido" })).status);
+    res.push((await patch(L1.id, { professional: pro5.toUpperCase() })).status);
+    res.push((await patch(L2.id, { status: "Cancelado" })).status);
+    check("lacunas(d): com legado sobreposto, observação/mesmo horário/status/caixa/cancelar => todos 200", res.every((s) => s === 200), res.join());
+
+    // Entradas inválidas continuam sendo recusadas (sem 500).
+    const inv = [
+      (await patch(B.id, { time: "25:00" })).status, (await patch(B.id, { date: "2030-02-30" })).status, (await patch(B.id, { date: day(-3) })).status,
+      (await patch(B.id, {})).status, (await patch(B.id, { time: 1030 })).status, (await patch("nao-existe", { time: "10:00" })).status,
+    ];
+    check("lacunas(d): PATCH inválido => 400,400,400,400,400,404", inv.join() === "400,400,400,400,400,404", inv.join());
+  }
+
+  // (e) Concorrência.
+  const reps = (n, fn) => Array.from({ length: n }, (_, i) => fn(i));
+  const countAt = (where, d, time) => prisma.appointment.count({ where: { ...where, clinicId, date: instant(d), time, status: { in: ["Agendado", "Em atendimento", "Atendido", "Finalizado"] } } });
+  {
+    let bad = 0, detail = "";
+    const counts = [];
+    for (let i = 0; i < 20; i += 1) {
+      const d = nd(), pro = `C5 ${i} ${run}`;
+      const variants = [pro, pro.toUpperCase(), ` ${pro} `, pro.toLowerCase(), pro];
+      const res = await Promise.all(pool.map((p, k) => post(p, variants[k], "10:00", d)));
+      const c201 = res.filter((x) => x.status === 201).length, c409 = res.filter((x) => x.status === 409).length;
+      if (c201 !== 1 || c409 !== 4) { bad += 1; detail = res.map((x) => x.status).join(); }
+      counts.push(await prisma.appointment.count({ where: { clinicId, patientId: { in: pool.map((p) => p.id) }, date: instant(d) } }));
+    }
+    check("lacunas(e): 20x 5 POST simultâneos (mesmo profissional, só caixa/espaços nas pontas) => 1x 201 e 4x 409", bad === 0 && counts.every((n) => n === 1), `${bad} falhas ${detail} contagens ${counts.join()}`);
+  }
+  {
+    let bad = 0, detail = "";
+    const counts = [];
+    for (let i = 0; i < 20; i += 1) {
+      const d = nd(), pro = `C5i ${i} ${run}`;
+      const variants = [pro, pro.replace(" ", "  "), pro.replace(" ", "	"), ` ${pro}`, pro.toUpperCase()];
+      const res = await Promise.all(pool.map((p, k) => post(p, variants[k], "10:00", d)));
+      const c201 = res.filter((x) => x.status === 201).length, c409 = res.filter((x) => x.status === 409).length;
+      if (c201 !== 1 || c409 !== 4) { bad += 1; detail = res.map((x) => x.status).join(); }
+      counts.push(await prisma.appointment.count({ where: { clinicId, patientId: { in: pool.map((p) => p.id) }, date: instant(d) } }));
+    }
+    check("lacunas(e): 20x 5 POST simultâneos (mesmo profissional, espaços internos diferentes) => 1x 201 e 4x 409", bad === 0 && counts.every((n) => n === 1), `${bad} falhas ${detail} contagens ${counts.join()}`);
+  }
+  {
+    let bad = 0, detail = "";
+    for (let i = 0; i < 20; i += 1) {
+      const d = nd();
+      const res = await Promise.all(reps(5, (k) => post(pool[0], `C5p ${i} ${k} ${run}`, "10:00", d)));
+      const c201 = res.filter((x) => x.status === 201).length, c409 = res.filter((x) => x.status === 409).length;
+      if (c201 !== 1 || c409 !== 4) { bad += 1; detail = res.map((x) => `${x.status} ${x.data?.message ?? ""}`).join(" | "); }
+    }
+    check("lacunas(e): 20x 5 POST simultâneos (mesmo paciente, 5 profissionais) => 1x 201 e 4x 409", bad === 0, `${bad} falhas ${detail}`);
+  }
+  {
+    let bad = 0, detail = "";
+    for (let i = 0; i < 3; i += 1) {
+      const d = nd(), pro = `Burst ${i} ${run}`;
+      const patients = await Promise.all(reps(10, () => fresh()));
+      const res = await Promise.all(patients.map((p) => post(p, pro, "10:00", d)));
+      if (res.filter((x) => x.status === 201).length !== 1 || res.some((x) => ![201, 409].includes(x.status))) { bad += 1; detail = res.map((x) => x.status).join(); }
+    }
+    check("lacunas(e): 3x 10 POST simultâneos na mesma faixa => 1x 201, resto 409, 0x 500", bad === 0, `${bad} falhas ${detail}`);
+  }
+  {
+    let bad = 0, detail = "";
+    for (let i = 0; i < 15; i += 1) {
+      const d = nd(), pro = `PxP ${i} ${run}`;
+      const Q = (await post(pool[0], pro, "15:00", d)).data.appointment;
+      const [a, b] = await Promise.all([post(pool[1], pro, "10:00", d), patch(Q.id, { time: "10:00" })]);
+      const ok = (a.status === 201 && b.status === 409) || (a.status === 409 && b.status === 200);
+      const n = await countAt({ professional: pro }, d, "10:00");
+      if (!ok || n !== 1) { bad += 1; detail = `${a.status}/${b.status} n=${n}`; }
+    }
+    check("lacunas(e): 15x POST x PATCH simultâneos na mesma faixa => só um vence, 0x 500", bad === 0, `${bad} falhas ${detail}`);
+  }
+  {
+    let bad = 0, detail = "";
+    for (let i = 0; i < 15; i += 1) {
+      const d = nd(), pro = `PxPa ${i} ${run}`;
+      const Q1 = (await post(pool[0], pro, "14:00", d)).data.appointment;
+      const Q2 = (await post(pool[1], pro, "16:00", d)).data.appointment;
+      const [a, b] = await Promise.all([patch(Q1.id, { time: "10:00" }), patch(Q2.id, { time: "10:00" })]);
+      const n = await countAt({ professional: pro }, d, "10:00");
+      if ([a.status, b.status].sort().join() !== "200,409" || n !== 1) { bad += 1; detail = `${a.status}/${b.status} n=${n}`; }
+    }
+    check("lacunas(e): 15x dois PATCH simultâneos para a mesma faixa => 1x 200 e 1x 409", bad === 0, `${bad} falhas ${detail}`);
+  }
+  {
+    let bad = 0, detail = "";
+    const [PA, PB] = pool;
+    for (let i = 0; i < 20; i += 1) {
+      const d = nd(), XA = `CruzA ${i} ${run}`, XB = `CruzB ${i} ${run}`;
+      const reqs = [[PB, XA], [PA, XB], [PA, XA], [PB, XB]];
+      const res = await Promise.all(reqs.map(([p, x]) => post(p, x, "10:00", d)));
+      const okSet = reqs.filter((_, k) => res[k].status === 201);
+      const conflicts = (a, b) => a[0].id === b[0].id || a[1] === b[1];
+      const independent = okSet.every((a, ia) => okSet.every((b, ib) => ia === ib || !conflicts(a, b)));
+      const maximal = reqs.every((q, k) => res[k].status === 201 || okSet.some((o) => conflicts(q, o)));
+      if (res.some((x) => ![201, 409].includes(x.status)) || !independent || !maximal || okSet.length === 0) { bad += 1; detail = res.map((x) => x.status).join(); }
+    }
+    check("lacunas(e): 20x travas cruzadas (prof A+pac B x prof B+pac A + 2 mistas) => sem 500/deadlock, sem sobreposição e sem 409 indevido", bad === 0, `${bad} falhas ${detail}`);
+  }
+  {
+    let bad = 0, detail = "";
+    for (let i = 0; i < 10; i += 1) {
+      const d = nd(), pro = `Reat ${i} ${run}`;
+      const A = (await post(pool[0], pro, "10:00", d)).data.appointment;
+      await patch(A.id, { status: "Cancelado" });
+      const B = (await post(pool[1], pro, "10:00", d)).data.appointment;
+      await patch(B.id, { status: "Cancelado" });
+      const [a, b] = await Promise.all([patch(A.id, { status: "Agendado" }), patch(B.id, { status: "Agendado" })]);
+      const n = await countAt({ professional: pro }, d, "10:00");
+      if ([a.status, b.status].sort().join() !== "200,409" || n !== 1) { bad += 1; detail = `${a.status}/${b.status} n=${n}`; }
+    }
+    check("lacunas(e): 10x reativação simultânea de dois cancelados para a mesma faixa => 1x 200 e 1x 409", bad === 0, `${bad} falhas ${detail}`);
+  }
+  {
+    let bad = 0, detail = "";
+    for (let i = 0; i < 10; i += 1) {
+      const d = nd(), pro = `CxP ${i} ${run}`;
+      const A = (await post(pool[0], pro, "10:00", d)).data.appointment;
+      const [c, p] = await Promise.all([patch(A.id, { status: "Cancelado" }), post(pool[1], pro, "10:00", d)]);
+      const n = await countAt({ professional: pro }, d, "10:00");
+      if (c.status !== 200 || ![201, 409].includes(p.status) || n !== (p.status === 201 ? 1 : 0)) { bad += 1; detail = `${c.status}/${p.status} n=${n}`; }
+    }
+    check("lacunas(e): 10x cancelar x POST na mesma faixa => sem 500 e sem dois ocupando", bad === 0, `${bad} falhas ${detail}`);
+  }
+
+  // (f) Outras clínicas e vazamento de dados no 409.
+  {
+    const d = nd(), pro = `Seg ${run}`;
+    const occupant = await fresh();
+    const first = await post(occupant, pro, "10:00", d, `Segredo ${run}`);
+    const byPro = await post(await fresh(), pro, "10:30", d);
+    const Z = (await post(await fresh(), pro, "15:00", d)).data.appointment;
+    const viaPatch = await patch(Z.id, { time: "10:30" });
+    const text = JSON.stringify([byPro.data, viaPatch.data]);
+    check("lacunas(f): 409 por profissional (POST e PATCH) não cita paciente, procedimento nem id do outro paciente", first.status === 201 && byPro.status === 409 && viaPatch.status === 409 && !text.includes("E2E ConfG") && !text.includes("Segredo") && !text.includes(occupant.id), text);
+    const otherEmail = `e2e-confg-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E ConfG Externa ${run}`;
+    try {
+      const r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo G", phone: "11999990044", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+      const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+      if (other?.status === 200) {
+        const theirs = await withSession(other.cookie, async () => {
+          const patient = (await api("POST", "/api/patients", { name: `E2E ConfG Ext ${run}`, phone: "11999997201", age: 30, cpf: randomCpf() })).data.patient;
+          const a = await post(patient, pro, "10:00", d);
+          const b = await post(patient, pro, "10:30", d);
+          const foreign = await patch(Z.id, { time: "13:00" });
+          return { a, b, foreign };
+        });
+        check("lacunas(f): outra clínica reserva o mesmo profissional/horário (201) e o próprio paciente dela ainda conflita (409)", theirs.a.status === 201 && theirs.b.status === 409, `${theirs.a.status}/${theirs.b.status}`);
+        check("lacunas(f): outra clínica não remarca agendamento desta (404) e ele fica intacto", theirs.foreign.status === 404 && (await rowOf(Z.id)).time === "15:00", theirs.foreign.status);
+        const mine = await post(await fresh(), `Seg2 ${run}`, "10:00", d);
+        check("lacunas(f): o agendamento da outra clínica não bloqueia esta (profissional livre)", mine.status === 201, msg(mine));
+      } else {
+        check("lacunas(f): segunda clínica criada", false, `registro ${r.status} login ${other?.status}`);
+      }
+    } finally {
+      await prisma.clinicMembership.deleteMany({ where: { user: { email: otherEmail } } });
+      await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+      await prisma.user.deleteMany({ where: { email: otherEmail } });
+    }
+  }
+
+  // (g) Retorno, "Procedimento - X" e início de sessão movendo o agendamento.
+  {
+    const d = nd(), pro = `Fluxos ${run}`;
+    const first = await post(await fresh(), pro, "10:00", d, `Procedimento - ${P90}`);
+    const ret = await post(await fresh(), pro, "10:30", d, `Retorno - ${P90}`);
+    const proc = await post(await fresh(), pro, "10:15", d, `Procedimento - ${P30}`);
+    const free = await post(await fresh(), pro, "11:30", d, `Retorno - ${P90}`);
+    check("lacunas(g): 'Procedimento - X' e 'Retorno - X' também conflitam por profissional (409) e livre passa (201)", first.status === 201 && ret.status === 409 && proc.status === 409 && free.status === 201, `${first.status}/${ret.status}/${proc.status}/${free.status}`);
+  }
+  {
+    const dataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    const pdf = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n");
+    const procName = `E2E ConfG Sessao ${run}`;
+    await api("POST", "/api/procedures", { name: procName, category: "Facial", price: 300, durationMinutes: 30, margin: 30 });
+    const proc = (await api("GET", "/api/quotes/options")).data.procedures?.find((item) => item.name === procName);
+    const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
+    const pat = await fresh(), occ = await fresh();
+    const j = (await api("POST", `/api/patients/${pat.id}/journeys`, { name: `E2E ConfG J ${run}`, professionalId: professional?.id })).data.journey;
+    const ev = (await api("PUT", `/api/patients/${pat.id}/evaluation`, { journeyId: j?.id, photos: [], assessment: { chiefComplaint: "Queixa", patientGoal: "Obj" }, status: "Concluída" })).data.evaluation;
+    const q = await api("POST", "/api/quotes", { patientId: pat.id, journeyId: j?.id, evaluationId: ev?.id, details: [{ procedureId: proc?.id, quantity: 1, discountCents: 0 }], paymentMethod: "Pix", installments: 1, notes: "" });
+    for (const status of ["Enviado", "Aprovado"]) await api("PATCH", `/api/quotes/${q.data.quote?.id}`, { status, evaluationId: ev?.id });
+    const s = (await api("POST", `/api/patients/${pat.id}/procedure-sessions`, { journeyId: j?.id, quoteId: q.data.quote?.id, procedureId: proc?.id })).data.session;
+    const form = new FormData();
+    form.set("file", new Blob([pdf], { type: "application/pdf" }), "Termo.pdf");
+    form.set("category", "TERMOS"); form.set("signatureStatus", "ASSINADO"); form.set("journeyId", j?.id ?? "");
+    await fetch(`${baseUrl}/api/patients/${pat.id}/documents`, { method: "POST", headers: { cookie }, body: form });
+    const pro = `Sessao ${run}`;
+    const appt = (await post(pat, pro, "10:00", nd(), `Procedimento - ${procName}`, { journeyId: j?.id })).data.appointment;
+    const nowClock = new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" }).format(new Date());
+    await seed(occ, nowClock.slice(0, 10), nowClock.slice(11, 16), "Retorno", pro);
+    const started = await api("PATCH", `/api/patients/${pat.id}/procedure-sessions/${s?.id}`, { status: "Em execução", technique: "E2E técnica", treatedAreas: "E2E região", professional: "E2E Prof", photos: [{ id: `ph-${run}`, phase: "Antes", imageUrl: dataUrl, name: "antes", width: 1, height: 1 }] });
+    const moved = appt ? await rowOf(appt.id) : null;
+    check("lacunas(g): iniciar a sessão move o agendamento para agora mesmo com outro do mesmo profissional no horário (não bloqueia)", started.status === 200 && started.data.appointment?.id === appt?.id && moved?.date.toISOString().slice(0, 10) === nowClock.slice(0, 10) && moved.time === nowClock.slice(11, 16), `${started.status} ${started.data?.message ?? ""} ${JSON.stringify(moved)}`);
+    const after = appt ? [(await patch(appt.id, { notes: "depois do início" })).status, (await patch(appt.id, { status: "Em atendimento" })).status] : [];
+    check("lacunas(g): depois do início sobreposto, observação e status continuam funcionando (200)", after.join() === "200,200", after.join());
+  }
+
+  // (h) STAFF e PROFESSIONAL.
+  {
+    const members = [];
+    const staffEmail = `e2e-confg-staff-${run}@example.com`, staffPassword = `E2e-${run}-Staff9!`;
+    const proEmail = `e2e-confg-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
+    try {
+      for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
+        const created = await api("POST", "/api/team", { name: `E2E ${role} ConfG`, email: memberEmail, password: memberPassword, role });
+        if (created.status === 201) members.push(created.data.member);
+        const session = created.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
+        if (session?.status !== 200) { check(`lacunas(h): usuário ${role} criado`, false, `team ${created.status} login ${session?.status}`); continue; }
+        const d = nd(), pro = `Papel ${role} ${run}`;
+        const base = await post(await fresh(), pro, "10:00", d);
+        const mineP = await fresh();
+        const out = await withSession(session.cookie, async () => {
+          const o = {};
+          o.dup = await post(mineP, pro, "10:30", d);
+          o.free = await post(mineP, pro, "12:00", d);
+          const id = o.free.data.appointment?.id;
+          o.mv = await patch(id, { time: "10:30" });
+          o.mvFree = await patch(id, { time: "13:00" });
+          o.cancel = await patch(id, { status: "Cancelado" });
+          await post(await mkP(`H${seq++}`), pro, "13:00", d);
+          o.react = await patch(id, { status: "Agendado" });
+          return o;
+        });
+        check(`lacunas(h): ${role} criando em faixa ocupada => 409 (igual ao ADMIN), em faixa livre => 201`, base.status === 201 && out.dup.status === 409 && /já possui um atendimento/.test(out.dup.data?.message ?? "") && out.free.status === 201, `${out.dup.status} ${out.free.status}`);
+        check(`lacunas(h): ${role} remarcando para ocupada => 409, para livre => 200`, out.mv.status === 409 && out.mvFree.status === 200, `${out.mv.status}/${out.mvFree.status}`);
+        check(`lacunas(h): ${role} cancela (200) e reativar em faixa ocupada => 409`, out.cancel.status === 200 && out.react.status === 409, `${out.cancel.status}/${out.react.status}`);
+      }
+    } finally {
+      for (const member of members) await api("DELETE", "/api/team", { membershipId: member.id });
+      await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [staffEmail, proEmail] } } } });
+      await prisma.user.deleteMany({ where: { email: { in: [staffEmail, proEmail] } } });
+    }
+  }
+}
+
+
 const suites = {
   pacientes: { needs: [], run: async (state) => Object.assign(state, await patientsAndPayments()) },
   orcamentos: { needs: ["pacientes"], run: async (state) => { state.quote = await quotesAndProcedures(state.patient); } },
@@ -2157,6 +2749,7 @@ const suites = {
   sessao_unica: { needs: [], run: () => sessionPerQuote() },
   agendar_procedimento: { needs: [], run: () => scheduledProcedure() },
   inicio_move_agenda: { needs: [], run: () => startMovesAppointment() },
+  conflitos_agenda: { needs: [], run: async () => { await scheduleConflicts(); await scheduleConflictGaps(); } },
   telas: { needs: ["orcamentos"], run: (state) => browser(state.homonym) },
   login: { needs: [], run: () => loginLockout() },
 };

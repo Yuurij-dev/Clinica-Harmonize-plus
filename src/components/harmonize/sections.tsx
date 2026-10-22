@@ -61,6 +61,8 @@ import { ProcedureFormModal, procedureCatalogCacheKey, type EditableProcedure } 
 import { MaterialCheckModal } from "./material-check-modal";
 import { ClinicTimePicker } from "./clinic-time-picker";
 import { latestAppointmentStart } from "@/lib/clinic-time";
+import { appointmentProcedureDuration } from "@/lib/procedure-session-rules";
+import { toast } from "sonner";
 import { clientsHomeEvent } from "@/lib/section-events";
 import { ProcedureImage } from "./procedure-image";
 import type { Appointment, JourneyStageId, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
@@ -109,6 +111,12 @@ type ApiAppointment = {
   patient: { name: string };
 };
 
+// Mensagem de erro devolvida pelo servidor (ex.: conflito de horário) ou o texto padrão.
+async function responseMessage(response: Response, fallback: string) {
+  const data = await response.json().catch(() => null) as { message?: string } | null;
+  return data?.message ?? fallback;
+}
+
 function mapApiAppointment(appointment: ApiAppointment, procedures: ApiProcedureOption[] = []): AppointmentRow {
   const procedure = procedures.find((item) => item.name === appointment.procedure);
   return {
@@ -120,7 +128,8 @@ function mapApiAppointment(appointment: ApiAppointment, procedures: ApiProcedure
     procedure: appointment.procedure,
     professional: appointment.professional,
     status: appointment.status,
-    durationMinutes: procedure?.durationMinutes ?? 60,
+    // Mesma resolução do servidor: "Procedimento - X" / "Retorno - X" usam a duração de X.
+    durationMinutes: appointmentProcedureDuration(procedures, appointment.procedure) ?? 60,
     category: procedure?.category ?? appointment.procedure,
   };
 }
@@ -510,9 +519,16 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
           date: `${String(form.get("date"))}T00:00:00`,
         }),
       });
-      if (!response.ok) return;
-      const data = await response.json() as { appointment: ApiAppointment };
-      setAppointmentRows((current) => [...current, mapApiAppointment(data.appointment, procedureCatalog)].sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`)));
+      const data = await response.json().catch(() => null) as { appointment?: ApiAppointment; message?: string } | null;
+      if (!response.ok || !data?.appointment) {
+        // Mostra o motivo devolvido pelo servidor (conflito de horário, expediente, duplicidade).
+        const reason = data?.message ?? "Não foi possível criar o agendamento.";
+        setAppointmentFormError(reason);
+        // Conflito/expediente: marca o campo Horário como inválido para leitores de tela e destaque visual.
+        if (/horário|atendimento neste horário/i.test(reason)) setInvalidAppointmentFields(new Set(["time"]));
+        return;
+      }
+      setAppointmentRows((current) => [...current, mapApiAppointment(data.appointment!, procedureCatalog)].sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`)));
       invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${selectedPatientId}/history`);
       onCreateClose();
       setPatientQuery("");
@@ -538,7 +554,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     const nextStatus = target.status === "Em atendimento" ? "Atendido" : "Em atendimento";
     setUpdatingId(target.id);
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: nextStatus }) });
-    if (!response.ok) { setUpdatingId(null); return; }
+    if (!response.ok) { setUpdatingId(null); toast.error(await responseMessage(response, "Não foi possível atualizar o atendimento.")); return; }
     const nextRows = appointmentRows.map((item) => item.id === target.id ? { ...item, status: nextStatus } : item);
     setAppointmentRows(nextRows);
     invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`, ...(nextStatus === "Atendido" ? ["/api/patients"] : []));
@@ -553,7 +569,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     const nextRows = appointmentRows.map((item) => item.id === target.id ? { ...item, status: "Faltou" } : item);
     setUpdatingId(target.id);
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Faltou" }) });
-    if (!response.ok) { setUpdatingId(null); return; }
+    if (!response.ok) { setUpdatingId(null); toast.error(await responseMessage(response, "Não foi possível marcar a falta.")); return; }
     setAppointmentRows(nextRows);
     invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
     setUpdatingId(null);
@@ -567,7 +583,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   async function cancelAppointment(target: AppointmentRow) {
     setUpdatingId(target.id);
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Cancelado" }) });
-    if (!response.ok) { setUpdatingId(null); return; }
+    if (!response.ok) { setUpdatingId(null); toast.error(await responseMessage(response, "Não foi possível cancelar o agendamento.")); return; }
     setAppointmentRows((current) => current.map((item) => item.id === target.id ? { ...item, status: "Cancelado" } : item));
     invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
     setUpdatingId(null);
@@ -579,7 +595,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     const target = deleteTarget;
     setDeleteSaving(true);
     const response = await fetch(`/api/appointments/${target.id}`, { method: "DELETE" });
-    if (!response.ok) { setDeleteSaving(false); return; }
+    if (!response.ok) { setDeleteSaving(false); toast.error(await responseMessage(response, "Não foi possível excluir o agendamento.")); return; }
     setAppointmentRows((current) => current.filter((item) => item.id !== target.id));
     setDeleteTarget(null);
     setDeleteSaving(false);
@@ -590,7 +606,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ patientId: target.patientId, time: target.time, procedure: target.procedure, professional: target.professional, date: target.date }),
       }).then(async (restoreResponse) => {
-        if (!restoreResponse.ok) return;
+        if (!restoreResponse.ok) { toast.error(`Não foi possível desfazer a exclusão: ${await responseMessage(restoreResponse, "tente agendar novamente.")}`); return; }
         const data = await restoreResponse.json() as { appointment: ApiAppointment };
         setAppointmentRows((current) => [...current, mapApiAppointment(data.appointment, procedureCatalog)].sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`)));
         invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
@@ -791,7 +807,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
           <div className="relative"><FormField label="Horário"><ClinicTimePicker openingTime={openingTime} closingTime={closingTime} latestTime={latestAppointmentStart(closingTime)} value={appointmentTime} invalid={invalidAppointmentFields.has("time")} onChange={(value) => { setAppointmentTime(value); clearAppointmentField("time"); }} /></FormField><input name="time" type="hidden" value={appointmentTime} required /></div>
           <FormField label="Profissional"><div className="relative"><select className={cn(fieldClassName, invalidAppointmentFields.has("professional") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="professional" required disabled={professionalLoading || !professionalChoices.length} onChange={() => clearAppointmentField("professional")}><option value="">{professionalLoading ? "..." : professionalChoices.length ? "Selecione o profissional" : "Nenhum profissional cadastrado"}</option>{professionalChoices.map((professional) => <option key={professional} value={professional}>{professional}</option>)}</select>{professionalLoading ? <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#5147dc]" /> : null}</div></FormField>
           <div className="sm:col-span-2"><FormField label="Tipo de consulta"><div className="relative"><select className={cn(fieldClassName, invalidAppointmentFields.has("procedure") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="procedure" required onChange={() => clearAppointmentField("procedure")}><option value="">Selecione o tipo de consulta</option>{appointmentTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></div></FormField></div>
-          {appointmentFormError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{appointmentFormError}</p> : null}
+          {appointmentFormError ? <p role="alert" className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{appointmentFormError}</p> : null}
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || professionalLoading || !professionalChoices.length || !selectedPatientId} type="submit">{isSaving || professionalLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : professionalLoading ? "Carregando dados..." : "Criar agendamento"}</Button></div>
         </form>
       </Modal>
