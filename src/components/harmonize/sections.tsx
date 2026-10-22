@@ -1234,6 +1234,14 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   const [isLoading, setIsLoading] = useState(!cachedProcedures);
   const editingProcedure = editingProcedureId === null ? null : procedureRows.find((procedure) => procedure.id === editingProcedureId) ?? null;
   const procedureModalOpen = openCreate || Boolean(editingProcedure);
+  const [procedureModalMounted, setProcedureModalMounted] = useState(procedureModalOpen);
+  const [procedureModalKey, setProcedureModalKey] = useState("new-procedure");
+  useEffect(() => {
+    if (procedureModalOpen || !procedureModalMounted) return;
+    const timeout = window.setTimeout(() => setProcedureModalMounted(false), 320);
+    return () => window.clearTimeout(timeout);
+  }, [procedureModalOpen, procedureModalMounted]);
+
   const materialOptions = productRows.filter((product): product is Product & { id: string } => Boolean(product.id));
 
   async function loadProcedures() {
@@ -1267,6 +1275,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   }, []);
 
   function closeProcedureModal() {
+    setProcedureModalMounted(true);
     setEditingProcedureId(null);
     onCreateClose();
     const opener = openerRef.current;
@@ -1284,6 +1293,8 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   }
 
   function editProcedure(procedureId: string) {
+    setProcedureModalKey(`edit-${procedureId}`);
+    setProcedureModalMounted(true);
     onCreateClose();
     setEditingProcedureId(procedureId);
   }
@@ -1295,7 +1306,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
           title="Procedimentos"
           description="Cadastro de serviços com valor sugerido, tempo estimado e a ficha técnica de materiais e produtos usada no estoque e no orçamento."
           action="Novo procedimento"
-          onAction={() => { openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; onCreateOpen?.(); }}
+          onAction={() => { setProcedureModalKey("new-procedure"); setProcedureModalMounted(true); openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; onCreateOpen?.(); }}
         />
         {isLoading ? <LoadingTable columns={6} /> : <MiniTable
           columns={["Nome", "Valor sugerido", "Tempo", "Ficha técnica", "Margem", "Ação"]}
@@ -1315,7 +1326,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
               {procedure.materialsNeedReview ? <Badge variant="amber" title="Convertida automaticamente do texto antigo. Confira as quantidades e salve.">Revisar ficha</Badge> : null}
             </div>,
             <Badge key={`margin-${procedure.id}`} variant="green">{procedure.margin}</Badge>,
-            <Button key={`edit-${procedure.id}`} size="sm" variant="secondary" onClick={(event) => { openerRef.current = event.currentTarget; setEditingProcedureId(procedure.id); }}>
+            <Button key={`edit-${procedure.id}`} size="sm" variant="secondary" onClick={(event) => { setProcedureModalKey(`edit-${procedure.id}`); setProcedureModalMounted(true); openerRef.current = event.currentTarget; setEditingProcedureId(procedure.id); }}>
               <PencilLine className="h-3.5 w-3.5" />
               Editar
             </Button>,
@@ -1324,9 +1335,10 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
       </div>
 
       <CostCalculator materials={productRows.filter((product) => !product.archivedAt)} charged={procedureRows[0]?.price ?? 0} procedureName={procedureRows[0]?.name} />
-      {procedureModalOpen ? (
+      {procedureModalMounted ? (
         <ProcedureFormModal
-          key={editingProcedure ? `edit-${editingProcedure.id}` : "new-procedure"}
+          key={procedureModalKey}
+          open={procedureModalOpen}
           editing={editingProcedure}
           procedures={procedureRows}
           materials={materialOptions}

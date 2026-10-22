@@ -45,6 +45,7 @@ export type EditableProcedure = {
 };
 
 type Props = {
+  open: boolean;
   editing: EditableProcedure | null;
   procedures: ReadonlyArray<{ id?: string; name: string }>;
   materials: Array<Product & { id: string }>;
@@ -91,14 +92,14 @@ function CatalogError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-export function ProcedureFormModal({ editing, procedures, materials, onClose, onEdit, onSaved }: Props) {
+export function ProcedureFormModal({ open, editing, procedures, materials, onClose, onEdit, onSaved }: Props) {
   const [selection, setSelection] = useState<Selection | null>(() => editing ? { kind: "custom", name: editing.name } : null);
   const [busy, setBusy] = useState(false);
   const step = selection ? "configure" : "choose";
 
   return (
     <Modal
-      open
+      open={open}
       onClose={() => { if (!busy) onClose(); }}
       closeOnOverlayClick={!busy}
       panelClassName="max-w-2xl"

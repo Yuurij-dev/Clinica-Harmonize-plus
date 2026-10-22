@@ -19,6 +19,7 @@ import { JourneyProgress } from "./journey-progress";
 import { useBodyScrollLock } from "./use-body-scroll-lock";
 import { ProcedureTermsPanel } from "./procedure-terms-panel";
 import { ClinicTimePicker } from "./clinic-time-picker";
+import { PhotoPreviewModal } from "./photo-preview-modal";
 
 type SessionPhoto = { id: string; name: string; phase: "Antes" | "Imediatamente após"; category: string; imageUrl: string; sourceEvaluationPhotoId?: string; width: number; height: number };
 type Allocation = { lotId: string; quantity: number; code?: string; expiresOn?: string };
@@ -536,18 +537,15 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
         {scheduledProcedure && !activeSchedule ? <p role="status" className="mb-3 rounded-[5px] bg-[#eef3ff] px-3 py-2 text-xs text-[#2f5fb3]"><strong>Já agendado:</strong> {formatDay(scheduledProcedure.date)} às {scheduledProcedure.time} · {scheduledProcedure.professional}. Para remarcar ou cancelar, use a Agenda.</p> : null}
         <div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setStartChoiceOpen(false)}>Cancelar</Button>{activeSchedule ? null : <Button type="button" variant="outline" disabled={Boolean(scheduledProcedure)} title={scheduledProcedure ? "Este procedimento já está agendado." : undefined} onClick={chooseSchedule}><CalendarDays className="h-4 w-4" />Agendar</Button>}<Button type="button" onClick={requestStart}><Clock3 className="h-4 w-4" />{activeSchedule ? "Iniciar agora e alterar agendamento" : "Iniciar agora"}</Button></div>
       </Modal>
-      {scheduleOpen ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-labelledby="procedure-schedule-title">
-          <form noValidate onSubmit={(event) => void scheduleProcedure(event)} className="max-h-[calc(100vh-2rem)] w-full max-w-md space-y-4 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden rounded-md border border-border bg-background p-5 shadow-xl">
-            <div className="flex items-start justify-between"><div><h2 id="procedure-schedule-title" className="text-base font-bold">Agendar procedimento</h2><p className="mt-1 text-xs text-muted-foreground">O agendamento será criado na agenda da clínica e vinculado a esta jornada. A sessão continua em rascunho.</p></div><Button type="button" variant="ghost" size="icon" aria-label="Fechar" onClick={() => setScheduleOpen(false)}><X className="h-4 w-4" /></Button></div>
+      <Modal open={scheduleOpen} onClose={() => setScheduleOpen(false)} closeOnOverlayClick={false} title="Agendar procedimento" description="O agendamento será criado na agenda da clínica e vinculado a esta jornada. A sessão continua em rascunho." panelClassName="max-w-md" bodyClassName="p-5">
+          <form noValidate onSubmit={(event) => void scheduleProcedure(event)} className="space-y-4">
             <label id="procedure-schedule-date-field" tabIndex={-1} className="block scroll-mt-24 text-xs font-medium">Data<input key={`schedule-date-${scheduleErrorAnimation}`} required aria-invalid={Boolean(scheduleDateError)} aria-describedby={scheduleDateError ? "procedure-schedule-date-error" : undefined} type="date" value={scheduleDate} onChange={(event) => { setScheduleDate(event.target.value); setScheduleDateError(""); setScheduleFormError(""); }} min={clinicToday()} className={cn("mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm", scheduleDateError && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} />{scheduleDateError ? <span id="procedure-schedule-date-error" role="alert" className="mt-1 block text-xs font-medium text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{scheduleDateError}</span> : null}</label>
             <label id="procedure-schedule-time-field" tabIndex={-1} className="block scroll-mt-24 text-xs font-medium">Horário{scheduleHours ? <ClinicTimePicker openingTime={scheduleHours.openingTime} closingTime={scheduleHours.closingTime} latestTime={scheduleLatestStart} value={scheduleTime} invalid={Boolean(scheduleTimeError)} disabled={scheduleHoursLoading || !scheduleHasSlots} onChange={(value) => { setScheduleTime(value); setScheduleTimeError(""); setScheduleFormError(""); }} /> : <button type="button" disabled className="mt-1 flex h-10 w-full items-center rounded-md border border-border bg-background px-3 text-left text-xs text-muted-foreground opacity-60">Carregando horários...</button>}{scheduleTimeError ? <span id="procedure-schedule-time-error" role="alert" className="mt-1 block text-xs text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{scheduleTimeError}</span> : null}{scheduleHours ? <span className="mt-1 block text-xs text-muted-foreground">{scheduleHasSlots ? `Horários disponíveis: ${scheduleHours.openingTime} às ${scheduleLatestStart}.` : "Não há horários disponíveis para a duração deste procedimento."}</span> : null}</label>
             <label className="block text-xs font-medium">Observação<textarea value={scheduleNotes} onChange={(event) => { setScheduleNotes(event.target.value); setScheduleFormError(""); }} maxLength={500} rows={3} className="text-sm mt-1 w-full rounded-md border border-border bg-background p-3" /></label>
             {scheduleFormError ? <div id="procedure-schedule-form-error" tabIndex={-1} key={scheduleErrorAnimation} role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{scheduleFormError}<Button className="ml-2 h-auto p-0 text-xs" variant="link" type="button" onClick={() => { setScheduleHours(null); setScheduleFormError(""); setScheduleHoursRetry((value) => value + 1); }}>Tentar novamente</Button></div> : null}
             <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setScheduleOpen(false)}>Cancelar</Button><Button type="submit" disabled={scheduling || scheduleHoursLoading || !scheduleHours || !scheduleHasSlots}>{scheduling ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}Confirmar agendamento</Button></div>
           </form>
-        </div>
-      ) : null}
+      </Modal>
       <Modal open={confirmStart}onClose={() => { if (!busy) setConfirmStart(false); }} title="Iniciar procedimento?" description="Tem certeza que deseja iniciar o procedimento? A contagem do tempo começará assim que o início for registrado.">
         <div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={Boolean(busy)} onClick={() => setConfirmStart(false)}>Cancelar</Button><Button type="button" disabled={Boolean(busy) || !consentOk} onClick={() => { setConfirmStart(false); void start(); }}><Clock3 className="h-4 w-4" />Confirmar início</Button></div>
       </Modal>
@@ -574,7 +572,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
           </div>
         </div>
       </Modal>
-      {preview ? <div className="fixed inset-0 z-50 grid place-items-center bg-black/75 p-4" role="dialog" aria-modal="true" aria-label="Visualização da fotografia" onClick={() => setPreview(null)}><div className="relative max-h-[90vh] max-w-[90vw]" onClick={(event) => event.stopPropagation()}><img src={preview.imageUrl} alt={preview.name} className="max-h-[85vh] max-w-[88vw] object-contain" /><button type="button" aria-label="Fechar visualização" onClick={() => setPreview(null)} className="absolute -right-3 -top-3 rounded-full bg-white p-2 text-[#27283b]"><X className="h-4 w-4" /></button></div></div> : null}
+      <PhotoPreviewModal photo={preview} onClose={() => setPreview(null)} />
     </div>
   );
 }

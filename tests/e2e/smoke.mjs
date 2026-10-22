@@ -212,6 +212,24 @@ async function withPage(fn) {
 
 async function browser(homonym) {
   await withPage(async (page, pageErrors) => {
+    await page.goto(`${baseUrl}/procedimentos`);
+    await page.getByRole("button", { name: "Novo procedimento" }).first().click();
+    const procedureDialog = page.getByRole("dialog", { name: "Novo procedimento" });
+    await procedureDialog.waitFor({ state: "visible" });
+    const entryAnimations = await page.locator(".modal-content").evaluate((element) => ({
+      content: getComputedStyle(element).animationName,
+      panel: getComputedStyle(element.querySelector(".modal-panel")).animationName,
+    }));
+    await procedureDialog.getByRole("button", { name: "Fechar" }).click();
+    await page.waitForFunction(() => document.querySelector(".modal-content")?.getAttribute("data-state") === "closed");
+    const exitAnimations = await page.locator(".modal-content").evaluate((element) => ({
+      content: getComputedStyle(element).animationName,
+      panel: getComputedStyle(element.querySelector(".modal-panel")).animationName,
+    }));
+    check("modal de procedimento anima entrada e saída", entryAnimations.content === "hp-modal-stage-in" && entryAnimations.panel === "hp-modal-panel-in" && exitAnimations.content === "hp-modal-stage-out" && exitAnimations.panel === "hp-modal-panel-out", JSON.stringify({ entryAnimations, exitAnimations }));
+    await page.locator(".modal-content").waitFor({ state: "detached" });
+    check("modal de procedimento permanece até o fim da animação de saída", true);
+
     await page.goto(`${baseUrl}/pagamentos`);
     await page.getByRole("cell", { name: "R$ 150,50" }).first().waitFor();
     check("tela de Pagamentos mostra R$ 150,50", true);
