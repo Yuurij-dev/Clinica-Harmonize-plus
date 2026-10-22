@@ -1469,6 +1469,7 @@ async function resetTestClinic() {
     prisma.recurringExpense.deleteMany({ where: { clinicId } }),
     prisma.product.deleteMany({ where: { clinicId } }),
     prisma.procedure.deleteMany({ where: { clinicId } }),
+    prisma.procedureImageAsset.deleteMany({ where: { clinicId } }),
     prisma.quote.deleteMany({ where: { clinicId } }),
     prisma.payment.deleteMany({ where: { clinicId } }),
     prisma.patientAnamnesis.deleteMany({ where: { clinicId } }),
@@ -1477,6 +1478,668 @@ async function resetTestClinic() {
     prisma.clinicalFileAudit.deleteMany({ where: { clinicId } }),
     prisma.patient.deleteMany({ where: { clinicId } }),
   ]);
+}
+
+// Catálogo de procedimentos: habilitar do catálogo, personalizados (com/sem imagem), upload, imagens por id, conflitos e permissões.
+async function procedureCatalog() {
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=", "base64");
+  const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(32)]);
+  const webp = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBP"), Buffer.alloc(16)]);
+  const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+  const fake = Buffer.from("isto é texto disfarçado de imagem");
+  const form = (buffer, name, type) => {
+    const body = new FormData();
+    body.set("file", new Blob([buffer], { type }), name);
+    return body;
+  };
+  const call = async (method, path, body, { raw = false } = {}) => {
+    const json = body && !(body instanceof FormData);
+    const response = await fetch(`${baseUrl}${path}`, { method, headers: { ...(json ? { "Content-Type": "application/json" } : {}), ...(cookie ? { cookie } : {}) }, body: json ? JSON.stringify(body) : body, redirect: "manual" });
+    if (raw) return { status: response.status, headers: response.headers, buffer: Buffer.from(await response.arrayBuffer()) };
+    const text = await response.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = text.slice(0, 200); }
+    return { status: response.status, data };
+  };
+  const base = { price: 800, durationMinutes: 40, margin: 35 };
+
+  // Sem sessão.
+  const anon = await withSession("", async () => [await call("GET", "/api/procedure-catalog"), await call("POST", "/api/procedures/images", form(png, "a.png", "image/png")), await call("GET", "/api/procedures/images/x", null, { raw: true })]);
+  check("catálogo e imagens sem sessão devolvem 401", anon.every((item) => item.status === 401), anon.map((item) => item.status).join(","));
+
+  // Catálogo.
+  let r = await call("GET", "/api/procedure-catalog");
+  const items = r.data.items ?? [];
+  check("lista o catálogo com 30 itens, imagem estática e nada habilitado", r.status === 200 && r.data.total === 30 && items.length === 30 && items.every((item) => item.id && item.slug && item.name && /^\/images\/procedimentos\/.+\.webp$/.test(item.imageUrl) && item.enabled === false && item.procedureId === null), `${r.status} ${JSON.stringify(items[0])}`);
+  r = await call("GET", "/api/procedure-catalog?q=HARMONIZAÇÃO");
+  check("busca ignora acento e caixa", r.status === 200 && r.data.items.some((item) => item.slug === "harmonizacao-facial") && r.data.total < 30, `${r.status} ${r.data.total}`);
+  r = await call("GET", "/api/procedure-catalog?limit=5&offset=5");
+  check("paginação do catálogo", r.status === 200 && r.data.items.length === 5 && r.data.total === 30, `${r.status} ${r.data.items?.length}`);
+  const botox = items.find((item) => item.slug === "botox");
+  const lip = items.find((item) => item.slug === "preenchimento-labial");
+
+  // Habilitar do catálogo.
+  r = await call("POST", "/api/procedures", { catalogItemId: botox.id, ...base });
+  const fromCatalog = r.data.procedure;
+  check("habilita item do catálogo sem enviar category", r.status === 201 && fromCatalog.name === botox.name && fromCatalog.catalogItemId === botox.id && fromCatalog.image?.kind === "catalog" && fromCatalog.image.url === botox.imageUrl && fromCatalog.price === 800 && fromCatalog.category === "", `${r.status} ${JSON.stringify(r.data)}`.slice(0, 300));
+  r = await call("POST", "/api/procedures", { catalogItemId: botox.id, ...base });
+  check("habilitar o mesmo item do catálogo de novo devolve 409", r.status === 409, `${r.status} ${JSON.stringify(r.data)}`);
+  r = await call("GET", "/api/procedure-catalog?q=botox");
+  check("catálogo marca o item como habilitado com o id do procedimento", r.data.items?.find((item) => item.id === botox.id)?.enabled === true && r.data.items.find((item) => item.id === botox.id).procedureId === fromCatalog.id, JSON.stringify(r.data.items?.[0]));
+  r = await call("POST", "/api/procedures", { catalogItemId: "inexistente", ...base });
+  check("item de catálogo inexistente devolve 404", r.status === 404, r.status);
+  r = await call("POST", "/api/procedures", { ...base });
+  check("sem catalogItemId nem custom devolve 400", r.status === 400, r.status);
+  r = await call("POST", "/api/procedures", { catalogItemId: lip.id, price: "", durationMinutes: 30, margin: 20 });
+  check("preço vazio devolve 400", r.status === 400, r.status);
+
+  // Renomear não quebra a imagem (por id) e o nome da clínica é independente do catálogo.
+  r = await call("PATCH", `/api/procedures/${fromCatalog.id}`, { name: `Toxina da casa ${run}` });
+  check("renomear procedimento de catálogo mantém a imagem do catálogo", r.status === 200 && r.data.procedure.name === `Toxina da casa ${run}` && r.data.procedure.image.url === botox.imageUrl && r.data.procedure.catalogItemId === botox.id, `${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+
+  // Personalizado sem imagem e sem category.
+  const customName = `E2E Personalizado ${run}`;
+  r = await call("POST", "/api/procedures", { custom: true, name: customName, ...base });
+  const custom = r.data.procedure;
+  check("personalizado sem imagem e sem category: image none", r.status === 201 && custom.catalogItemId === null && custom.image?.kind === "none" && custom.image.url === null && custom.category === "", `${r.status} ${JSON.stringify(r.data)}`.slice(0, 300));
+  r = await call("POST", "/api/procedures", { custom: true, name: customName, ...base });
+  check("nome duplicado na criação devolve 409", r.status === 409, r.status);
+  r = await call("POST", "/api/procedures", { custom: true, name: "  ", ...base });
+  check("personalizado sem nome devolve 400", r.status === 400, r.status);
+  r = await call("POST", "/api/procedures", { custom: true, name: `E2E Com categoria ${run}`, category: "Facial", ...base });
+  check("category legada continua aceita", r.status === 201 && r.data.procedure.category === "Facial", `${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+
+  // Personalizado com imagem da biblioteca.
+  r = await call("POST", "/api/procedures", { custom: true, name: `E2E Biblioteca ${run}`, catalogImageId: lip.id, ...base });
+  check("personalizado com imagem da biblioteca", r.status === 201 && r.data.procedure.image.kind === "catalog" && r.data.procedure.image.url === lip.imageUrl && r.data.procedure.catalogItemId === null, `${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+  r = await call("GET", "/api/procedure-catalog?q=labial");
+  check("usar só a imagem da biblioteca não habilita o item", r.data.items?.find((item) => item.id === lip.id)?.enabled === false);
+
+  // Upload válido (PNG/JPEG/WebP) e inválido.
+  const uploads = {};
+  for (const [label, buffer, type] of [["PNG", png, "image/png"], ["JPEG", jpg, "image/jpeg"], ["WebP", webp, "image/webp"]]) {
+    r = await call("POST", "/api/procedures/images", form(buffer, `a.${label}`, type));
+    uploads[label] = r.data;
+    check(`upload de ${label} válido devolve id e url`, r.status === 201 && r.data.id && r.data.url === `/api/procedures/images/${r.data.id}`, `${r.status} ${JSON.stringify(r.data)}`);
+  }
+  r = await call("GET", uploads.PNG.url, null, { raw: true });
+  check("imagem enviada é servida com tipo, nosniff e cache privado", r.status === 200 && r.headers.get("content-type") === "image/png" && r.headers.get("x-content-type-options") === "nosniff" && /private/.test(r.headers.get("cache-control") ?? "") && r.buffer.equals(png), `${r.status} ${r.headers.get("content-type")} ${r.headers.get("cache-control")}`);
+  const asset = await prisma.procedureImageAsset.findUnique({ where: { id: uploads.PNG.id }, select: { clinicId: true, mimeType: true, sizeBytes: true, sha256: true, blob: { select: { assetId: true } } } });
+  check("imagem fica na clínica com hash e bytes em tabela própria", asset?.mimeType === "image/png" && asset.sizeBytes === png.length && asset.sha256.length === 64 && asset.blob?.assetId === uploads.PNG.id && Boolean(asset.clinicId));
+  for (const [label, buffer, type, expected] of [["SVG", svg, "image/svg+xml", [400, 415]], ["texto disfarçado de PNG", fake, "image/png", [400, 415]], ["texto sem tipo", fake, "", [400, 415]], ["PNG declarado como JPEG", png, "image/jpeg", [400, 415]], ["maior que 4 MB", Buffer.concat([png, Buffer.alloc(5 * 1024 * 1024)]), "image/png", [413]]]) {
+    r = await call("POST", "/api/procedures/images", form(buffer, "x.bin", type));
+    check(`upload inválido recusado: ${label}`, expected.includes(r.status), r.status);
+  }
+  r = await call("POST", "/api/procedures/images", { file: "x" });
+  check("upload sem multipart é recusado", r.status >= 400 && r.status < 500, r.status);
+
+  // Personalizado com upload; troca e remoção de imagem.
+  r = await call("POST", "/api/procedures", { custom: true, name: `E2E Upload ${run}`, imageAssetId: uploads.PNG.id, ...base });
+  const withUpload = r.data.procedure;
+  check("personalizado com imagem enviada", r.status === 201 && withUpload.image.kind === "custom" && withUpload.image.url === uploads.PNG.url, `${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+  r = await call("POST", "/api/procedures", { custom: true, name: `E2E Imagem inexistente ${run}`, imageAssetId: "naoexiste", ...base });
+  check("imageAssetId inexistente (ou de outra clínica) devolve 400", r.status === 400, r.status);
+  r = await call("POST", "/api/procedures", { custom: true, name: `E2E Duas imagens ${run}`, imageAssetId: uploads.PNG.id, catalogImageId: lip.id, ...base });
+  check("imagem enviada e da biblioteca juntas devolve 400", r.status === 400, r.status);
+  r = await call("PATCH", `/api/procedures/${withUpload.id}`, { imageAssetId: uploads.JPEG.id });
+  check("PATCH troca a imagem enviada", r.status === 200 && r.data.procedure.image.url === uploads.JPEG.url, `${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+  check("imagem anterior sem uso é descartada", await prisma.procedureImageAsset.count({ where: { id: uploads.PNG.id } }) === 0);
+  r = await call("PATCH", `/api/procedures/${withUpload.id}`, { imageAssetId: null, catalogImageId: null });
+  check("PATCH remove a imagem (placeholder)", r.status === 200 && r.data.procedure.image.kind === "none", `${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+  r = await call("PATCH", `/api/procedures/${withUpload.id}`, { imageAssetId: "naoexiste" });
+  check("PATCH com imagem inexistente devolve 400", r.status === 400, r.status);
+  r = await call("PATCH", `/api/procedures/${fromCatalog.id}`, { imageAssetId: uploads.WebP.id });
+  check("catálogo habilitado pode ganhar imagem própria", r.status === 200 && r.data.procedure.image.kind === "custom", `${r.status}`);
+  r = await call("PATCH", `/api/procedures/${fromCatalog.id}`, { imageAssetId: null, catalogImageId: null });
+  check("remover imagem própria volta à imagem do catálogo", r.status === 200 && r.data.procedure.image.url === botox.imageUrl, `${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+  // Reenvia uma imagem para os testes de permissão e de outra clínica abaixo (a JPEG ainda é usada? não: foi trocada por remoção).
+  r = await call("POST", "/api/procedures/images", form(jpg, "b.jpg", "image/jpeg"));
+  const shared = r.data;
+
+  // Remoção de imagem enviada: em uso → 409; órfã → 200 e some; órfãs antigas são descartadas no próximo upload.
+  r = await call("POST", "/api/procedures/images", form(png, "u.png", "image/png"));
+  const inUse = r.data;
+  r = await call("POST", "/api/procedures", { custom: true, name: `E2E Imagem em uso ${run}`, imageAssetId: inUse.id, ...base });
+  const holder = r.data.procedure;
+  r = await call("DELETE", `/api/procedures/images/${inUse.id}`);
+  check("DELETE de imagem em uso devolve 409 e mantém a imagem", r.status === 409 && await prisma.procedureImageAsset.count({ where: { id: inUse.id } }) === 1, r.status);
+  r = await call("POST", "/api/procedures/images", form(png, "o.png", "image/png"));
+  const orphan = r.data;
+  r = await call("DELETE", `/api/procedures/images/${orphan.id}`);
+  check("DELETE de imagem órfã devolve 200 e apaga metadados e bytes", r.status === 200 && await prisma.procedureImageAsset.count({ where: { id: orphan.id } }) === 0 && await prisma.procedureImageBlob.count({ where: { assetId: orphan.id } }) === 0, r.status);
+  r = await call("GET", orphan.url, null, { raw: true });
+  check("imagem apagada devolve 404", r.status === 404, r.status);
+  r = await call("DELETE", "/api/procedures/images/naoexiste");
+  check("DELETE de imagem inexistente devolve 404", r.status === 404, r.status);
+  const clinicOfAsset = (await prisma.procedureImageAsset.findUnique({ where: { id: inUse.id }, select: { clinicId: true } })).clinicId;
+  const stale = await prisma.procedureImageAsset.create({ data: { clinicId: clinicOfAsset, mimeType: "image/png", sizeBytes: png.length, sha256: "0".repeat(64), uploadedBy: "e2e", createdAt: new Date(Date.now() - 48 * 3600_000), blob: { create: { data: png } } }, select: { id: true } });
+  const fresh = await prisma.procedureImageAsset.create({ data: { clinicId: clinicOfAsset, mimeType: "image/png", sizeBytes: png.length, sha256: "1".repeat(64), uploadedBy: "e2e", blob: { create: { data: png } } }, select: { id: true } });
+  r = await call("POST", "/api/procedures/images", form(png, "p.png", "image/png"));
+  const purgeProbe = r.data;
+  check("upload descarta órfã com mais de 24 h, mantém a recente e a em uso", await prisma.procedureImageAsset.count({ where: { id: stale.id } }) === 0 && await prisma.procedureImageAsset.count({ where: { id: { in: [fresh.id, inUse.id] } } }) === 2, r.status);
+  await call("DELETE", `/api/procedures/images/${purgeProbe.id}`);
+  await call("DELETE", `/api/procedures/images/${fresh.id}`);
+  r = await call("PATCH", `/api/procedures/${holder.id}`, { imageAssetId: null, catalogImageId: null });
+  check("trocar a imagem de um procedimento descarta a enviada sem uso", r.status === 200 && await prisma.procedureImageAsset.count({ where: { id: inUse.id } }) === 0, r.status);
+
+  // PATCH: conflitos e validação; category não é exigida.
+  r = await call("PATCH", `/api/procedures/${custom.id}`, { name: `Toxina da casa ${run}` });
+  check("PATCH com nome duplicado devolve 409", r.status === 409, `${r.status} ${JSON.stringify(r.data)}`);
+  r = await call("PATCH", `/api/procedures/${custom.id}`, { name: "   " });
+  check("PATCH com nome vazio devolve 400", r.status === 400, r.status);
+  r = await call("PATCH", `/api/procedures/${custom.id}`, { price: 1234 });
+  check("PATCH sem name nem category altera só o preço", r.status === 200 && r.data.procedure.price === 1234 && r.data.procedure.name === customName, `${r.status}`);
+  r = await call("PATCH", "/api/procedures/naoexiste", { price: 1 });
+  check("PATCH de procedimento inexistente devolve 404", r.status === 404, r.status);
+
+  // Lista, agenda e orçamentos devolvem image sem base64.
+  r = await call("GET", "/api/procedures");
+  check("lista de procedimentos traz image por procedimento, sem base64", r.status === 200 && r.data.procedures.length >= 4 && r.data.procedures.every((item) => ["custom", "catalog", "none"].includes(item.image?.kind) && !JSON.stringify(item).includes("base64")), `${r.status}`);
+  r = await call("GET", "/api/agenda/bootstrap");
+  check("agenda/bootstrap devolve image nos procedimentos", r.status === 200 && r.data.procedures.length >= 4 && r.data.procedures.every((item) => item.image && !("imageAssetId" in item)), `${r.status} ${JSON.stringify(r.data.procedures?.[0])}`);
+  r = await call("GET", "/api/quotes/options");
+  check("quotes/options devolve image nos procedimentos", r.status === 200 && r.data.procedures.length >= 4 && r.data.procedures.every((item) => item.image && !("catalogItem" in item)), `${r.status}`);
+
+  // Outra clínica, STAFF e PROFESSIONAL (removidos no finally).
+  const otherEmail = `e2e-cat-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E Catalogo Externa ${run}`;
+  const staffEmail = `e2e-cat-staff-${run}@example.com`, staffPassword = `E2e-${run}-Staff9!`;
+  const proEmail = `e2e-cat-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
+  const members = [];
+  try {
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990021", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    if (other?.status === 200) {
+      const o = await withSession(other.cookie, async () => ({
+        image: await call("GET", shared.url, null, { raw: true }),
+        patch: await call("PATCH", `/api/procedures/${custom.id}`, { price: 1 }),
+        useImage: await call("POST", "/api/procedures", { custom: true, name: `Invasor ${run}`, imageAssetId: shared.id, ...base }),
+        catalog: await call("GET", "/api/procedure-catalog?q=botox"),
+        list: await call("GET", "/api/procedures"),
+        del: await call("DELETE", shared.url),
+      }));
+      check("outra clínica não apaga imagem alheia (404) e a imagem continua", o.del.status === 404 && await prisma.procedureImageAsset.count({ where: { id: shared.id } }) === 1, o.del.status);
+      check("imagem enviada por uma clínica dá 404 para outra", o.image.status === 404, o.image.status);
+      check("outra clínica não altera procedimento nem usa imagem alheia", o.patch.status === 404 && o.useImage.status === 400, `${o.patch.status} ${o.useImage.status}`);
+      check("outra clínica vê o catálogo sem habilitações e a lista própria vazia", o.catalog.data.items?.every((item) => item.enabled === false) && o.list.data.procedures?.length === 0, `${o.catalog.status} ${o.list.status}`);
+    } else {
+      check("segunda clínica criada para testar isolamento do catálogo", false, `registro ${r.status} login ${other?.status}`);
+    }
+
+    for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
+      r = await api("POST", "/api/team", { name: `E2E ${role} Catalogo`, email: memberEmail, password: memberPassword, role });
+      if (r.status === 201) members.push(r.data.member);
+      const session = r.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
+      if (session?.status !== 200) { check(`usuário ${role} criado para testar permissões do catálogo`, false, `team ${r.status} login ${session?.status}`); continue; }
+      await withSession(session.cookie, async () => {
+        r = await call("POST", "/api/procedures", { catalogItemId: lip.id, ...base });
+        check(`${role} não habilita procedimento (403)`, r.status === 403, r.status);
+        r = await call("POST", "/api/procedures", { custom: true, name: `Nao ${role} ${run}`, ...base });
+        check(`${role} não cria personalizado (403)`, r.status === 403, r.status);
+        r = await call("POST", "/api/procedures/images", form(png, "a.png", "image/png"));
+        check(`${role} não envia imagem (403)`, r.status === 403, r.status);
+        r = await call("PATCH", `/api/procedures/${custom.id}`, { price: 1 });
+        check(`${role} não edita procedimento (403)`, r.status === 403, r.status);
+        r = await call("DELETE", shared.url);
+        check(`${role} não apaga imagem (403)`, r.status === 403 && await prisma.procedureImageAsset.count({ where: { id: shared.id } }) === 1, r.status);
+        r = await call("GET", shared.url, null, { raw: true });
+        check(`${role} da mesma clínica vê a imagem enviada`, r.status === 200 && r.headers.get("content-type") === "image/jpeg", r.status);
+        r = await call("GET", "/api/procedure-catalog");
+        check(`${role} lê o catálogo`, r.status === 200 && r.data.items.length === 30, r.status);
+        r = await call("GET", "/api/agenda/bootstrap");
+        check(`${role} recebe image na agenda`, r.status === 200 && r.data.procedures.every((item) => item.image), r.status);
+      });
+    }
+  } finally {
+    for (const member of members) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [otherEmail, staffEmail, proEmail] } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: [otherEmail, staffEmail, proEmail] } } });
+  }
+}
+
+// Catálogo de procedimentos, lacunas: compatibilidade, valores limite, corridas, imagens, permissões, outra clínica, ficha técnica e integração.
+async function procedureCatalogGaps() {
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=", "base64");
+  const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(32)]);
+  const webp = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBP"), Buffer.alloc(16)]);
+  const dataUrl = `data:image/png;base64,${png.toString("base64")}`;
+  const pdf = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n");
+  const mega = 4 * 1024 * 1024;
+  const padTo = (head, size) => Buffer.concat([head, Buffer.alloc(size - head.length)]);
+  const form = (buffer, name, type) => { const body = new FormData(); body.set("file", new Blob([buffer], { type }), name); return body; };
+  const call = async (method, path, body, { raw = false } = {}) => {
+    const isText = typeof body === "string";
+    const json = body !== undefined && body !== null && !(body instanceof FormData) && !isText;
+    const response = await fetch(`${baseUrl}${path}`, { method, headers: { ...(json || isText ? { "Content-Type": "application/json" } : {}), ...(cookie ? { cookie } : {}) }, body: body === undefined || body === null ? undefined : json ? JSON.stringify(body) : body, redirect: "manual" });
+    if (raw) return { status: response.status, headers: response.headers, buffer: Buffer.from(await response.arrayBuffer()) };
+    const text = await response.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = text.slice(0, 200); }
+    return { status: response.status, data };
+  };
+  const base = { price: 800, durationMinutes: 40, margin: 35 };
+  let counter = 0;
+  const uniq = (label = "Proc") => `E2E ${label} ${run} ${++counter}`;
+  const mkCustom = (extra = {}) => call("POST", "/api/procedures", { custom: true, name: uniq(), ...base, ...extra });
+  const listed = async (id) => (await call("GET", "/api/procedures")).data.procedures?.find((item) => item.id === id);
+  const count = (where) => prisma.procedure.count({ where });
+  const clinicId = (await prisma.clinicMembership.findFirst({ where: { user: { email } }, select: { clinicId: true } })).clinicId;
+  const catalog = (await call("GET", "/api/procedure-catalog")).data.items ?? [];
+  const free = catalog.filter((item) => !item.enabled);
+  const sheetOf = (procedure) => (procedure?.technicalSheet ?? []).map((item) => `${item.productId}:${item.quantity}`).sort().join();
+  let r;
+  let results;
+
+  // Compatibilidade: cliente antigo (sem catalogItemId nem custom) e dados legados.
+  const legacyName = uniq("Legado");
+  r = await call("POST", "/api/procedures", { name: legacyName, category: "Facial", price: 300, durationMinutes: 30, margin: 30 });
+  check("compat: procedimento legado {name, category} ainda cria (personalizado, sem imagem)", r.status === 201 && r.data.procedure.name === legacyName && r.data.procedure.category === "Facial" && r.data.procedure.catalogItemId === null && r.data.procedure.image.kind === "none", `${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+  r = await call("PATCH", `/api/procedures/${r.data.procedure.id}`, { name: legacyName, category: "Corporal", price: 310 });
+  check("compat: PATCH legado {name, category, price} com o mesmo nome não dá 409", r.status === 200 && r.data.procedure.category === "Corporal" && r.data.procedure.price === 310, `${r.status} ${JSON.stringify(r.data).slice(0, 160)}`);
+  r = await call("POST", "/api/procedures", { custom: true, name: uniq("SemCategoria"), ...base });
+  check("compat: category ausente grava vazio", r.status === 201 && r.data.procedure.category === "", `${r.status}`);
+  r = await call("POST", "/api/procedures", { custom: true, name: uniq("Cat100"), ...base, category: "C".repeat(100) });
+  check("compat: category longa é cortada em 60", r.status === 201 && r.data.procedure.category.length === 60, `${r.status} ${r.data.procedure?.category?.length}`);
+
+  // Renomear procedimento do catálogo: imagem por id continua em lista, orçamentos e agenda.
+  const renItem = free[0];
+  r = await call("POST", "/api/procedures", { catalogItemId: renItem.id, ...base });
+  const renamed = r.data.procedure;
+  const newName = uniq("Renomeado");
+  r = await call("PATCH", `/api/procedures/${renamed.id}`, { name: newName });
+  const inList = await listed(renamed.id);
+  const inQuotes = (await call("GET", "/api/quotes/options")).data.procedures?.find((item) => item.id === renamed.id);
+  const inAgenda = (await call("GET", "/api/agenda/bootstrap")).data.procedures?.find((item) => item.name === newName);
+  check("renomeado do catálogo mantém image.kind=catalog em lista, quotes/options e agenda", r.status === 200 && [inList, inQuotes, inAgenda].every((item) => item?.image?.kind === "catalog" && item.image.url === renItem.imageUrl), JSON.stringify([inList?.image, inQuotes?.image, inAgenda?.image]));
+  check("renomeado continua marcado como habilitado no catálogo (mesmo id)", (await call("GET", `/api/procedure-catalog?q=${encodeURIComponent(renItem.name)}`)).data.items?.find((item) => item.id === renItem.id)?.procedureId === renamed.id);
+  r = await call("PATCH", `/api/procedures/${renamed.id}`, { name: renItem.name });
+  check("voltar ao nome original do catálogo é permitido e mantém a imagem", r.status === 200 && r.data.procedure.image.kind === "catalog", `${r.status}`);
+  r = await call("POST", "/api/procedures", { custom: true, name: renItem.name, ...base });
+  check("personalizado com nome igual ao de um item do catálogo habilitado devolve 409", r.status === 409, r.status);
+  r = await call("POST", "/api/procedures", { catalogItemId: free[1].id, ...base });
+  const second = r.data.procedure;
+  r = await call("PATCH", `/api/procedures/${second.id}`, { name: renItem.name });
+  check("renomear outro procedimento para o nome de um existente devolve 409", r.status === 409, r.status);
+
+  // Valores: preço com centavos, limites, texto e tipos estranhos (POST).
+  for (const [sent, stored] of [[150.5, 151], [150.4, 150], ["99.9", 100], [0, 0], [-5, 0], [100000000, 100000000]]) {
+    r = await mkCustom({ price: sent });
+    check(`preço ${JSON.stringify(sent)} é arredondado para inteiro (${stored}), nunca negativo`, r.status === 201 && r.data.procedure.price === stored, `${r.status} ${r.data.procedure?.price}`);
+  }
+  for (const sent of ["abc", {}, "NaN", "Infinity", "", null, undefined, " ", [], true, "0x10", "1e3", [5]]) {
+    r = await mkCustom({ price: sent });
+    check(`preço inválido ${JSON.stringify(sent) ?? "ausente"} devolve 400`, r.status === 400, r.status);
+  }
+  for (const sent of [1e30, 3e9, 2147483648, 100000001]) {
+    r = await mkCustom({ price: sent });
+    check(`preço acima do teto de R$ 100.000.000 (${sent}) devolve 400`, r.status === 400, r.status);
+  }
+  r = await mkCustom({ durationMinutes: 0 });
+  check("duração 0 vira 1 minuto", r.status === 201 && r.data.procedure.durationMinutes === 1, `${r.status} ${r.data.procedure?.durationMinutes}`);
+  r = await mkCustom({ durationMinutes: -10 });
+  check("duração negativa vira 1 minuto", r.status === 201 && r.data.procedure.durationMinutes === 1, `${r.status} ${r.data.procedure?.durationMinutes}`);
+  r = await mkCustom({ durationMinutes: 30.5 });
+  check("duração decimal devolve 400", r.status === 400, r.status);
+  r = await mkCustom({ durationMinutes: "45" });
+  check("duração em texto numérico é aceita", r.status === 201 && r.data.procedure.durationMinutes === 45, `${r.status}`);
+  r = await mkCustom({ durationMinutes: 1440 });
+  check("duração de 1440 minutos é aceita", r.status === 201, r.status);
+  for (const sent of [1e10, 2147483648, 1441, " ", true, [], "0x10"]) {
+    r = await mkCustom({ durationMinutes: sent });
+    check(`duração inválida/acima de 1440 (${JSON.stringify(sent)}) devolve 400`, r.status === 400, r.status);
+  }
+  for (const [sent, stored] of [[-5, 0], [150, 100], [33.3, 33.3], [0, 0], [100, 100]]) {
+    r = await mkCustom({ margin: sent });
+    check(`margem ${sent} grava ${stored}`, r.status === 201 && r.data.procedure.margin === stored, `${r.status} ${r.data.procedure?.margin}`);
+  }
+  r = await mkCustom({ margin: "x" });
+  check("margem em texto não numérico devolve 400", r.status === 400, r.status);
+
+  // Nomes.
+  r = await call("POST", "/api/procedures", { custom: true, name: "A".repeat(121), ...base });
+  check("nome com 121 caracteres devolve 400", r.status === 400, r.status);
+  const longName = `${"L".repeat(110)}${run}`.padEnd(120, "x").slice(0, 120);
+  r = await call("POST", "/api/procedures", { custom: true, name: longName, ...base });
+  check("nome com exatamente 120 caracteres é aceito", longName.length === 120 && r.status === 201 && r.data.procedure.name === longName, r.status);
+  for (const sent of ["   ", "\t\n ", 12345, ["a"], { a: 1 }, null]) {
+    r = await call("POST", "/api/procedures", { custom: true, name: sent, ...base });
+    check(`nome inválido ${JSON.stringify(sent)} devolve 400`, r.status === 400, r.status);
+  }
+  const htmlName = `<img src=x onerror=alert(1)> ${run}`;
+  r = await call("POST", "/api/procedures", { custom: true, name: htmlName, ...base });
+  check("nome com HTML é guardado como texto literal (a tela escapa)", r.status === 201 && r.data.procedure.name === htmlName, `${r.status} ${r.data.procedure?.name}`);
+  r = await call("POST", "/api/procedures", { custom: true, name: `Muitos    espaços\t\ne tabs ${run}`, ...base });
+  check("espaços e quebras internas do nome colapsam em um espaço", r.status === 201 && r.data.procedure.name === `Muitos espaços e tabs ${run}`, `${r.status} ${r.data.procedure?.name}`);
+  for (const [label, sent] of [["NUL", "a\u0000b"], ["substituto solitário", "a\ud800b"]]) {
+    r = await call("POST", "/api/procedures", { custom: true, name: `${sent} ${run}`, ...base });
+    check(`nome com ${label} devolve 4xx, não 500`, r.status >= 400 && r.status < 500, r.status);
+  }
+  r = await call("POST", "/api/procedures", { custom: true, name: `Bell\u0007 ${run}`, ...base });
+  check("nome com caractere de controle (BEL) devolve 400", r.status === 400, r.status);
+
+  // Corpos e ids estranhos.
+  for (const [label, raw] of [["array", "[]"], ["JSON inválido", "{oops"], ["null", "null"], ["texto", '"x"']]) {
+    r = await call("POST", "/api/procedures", raw);
+    check(`POST com corpo ${label} devolve 400`, r.status === 400, r.status);
+  }
+  for (const [label, sent] of [["número", 123], ["SQL", "'; DROP TABLE \"Procedure\";--"], ["caminho", "../../etc/passwd"], ["objeto", { $ne: null }], ["inexistente", `cat_inexistente_${run}`]]) {
+    r = await call("POST", "/api/procedures", { catalogItemId: sent, ...base });
+    check(`catalogItemId ${label} sem nome devolve 400 ou 404`, [400, 404].includes(r.status), r.status);
+  }
+  r = await call("POST", "/api/procedures", { catalogItemId: "a".repeat(101), ...base });
+  check("catalogItemId com 101 caracteres sem nome devolve 400", r.status === 400, r.status);
+  for (const path of ["/api/procedures/%27%20OR%201=1", `/api/procedures/${"a".repeat(3000)}`, "/api/procedures/%00"]) {
+    r = await call("PATCH", path, { price: 1 });
+    check(`PATCH com id estranho (${path.slice(0, 30)}) devolve 404`, r.status === 404, r.status);
+  }
+  r = await call("GET", "/api/procedures/images/..%2F..%2Fetc");
+  check("GET de imagem com id de caminho devolve 404", r.status === 404, r.status);
+  r = await call("DELETE", "/api/procedures/images/%00");
+  check("DELETE de imagem com id NUL devolve 4xx, não 500", r.status >= 400 && r.status < 500, r.status);
+  r = await call("DELETE", `/api/procedures/images/${"a".repeat(3000)}`);
+  check("DELETE de imagem com id enorme devolve 404", r.status === 404, r.status);
+
+  // Catálogo: item inativo, desativado depois de habilitado, paginação e busca estranha.
+  const tempActive = `e2e_ativo_${run}`, tempInactive = `e2e_inativo_${run}`;
+  const tempIds = [tempActive, tempInactive];
+  const tempData = (id, active) => ({ id, slug: id.replace(/_/g, "-"), name: `E2E Item ${id}`, imageFile: `/images/procedimentos/${id.replace(/_/g, "-")}.webp`, imageAlt: "e2e", sortOrder: 9999, active });
+  try {
+    await prisma.procedureCatalogItem.createMany({ data: [tempData(tempActive, true), tempData(tempInactive, false)] });
+    r = await call("POST", "/api/procedures", { catalogItemId: tempInactive, ...base });
+    check("item inativo do catálogo não pode ser habilitado (404)", r.status === 404, r.status);
+    r = await mkCustom({ catalogImageId: tempInactive });
+    check("imagem de biblioteca inativa é recusada na criação (400)", r.status === 400, r.status);
+    const anyProc = (await mkCustom()).data.procedure;
+    r = await call("PATCH", `/api/procedures/${anyProc.id}`, { catalogImageId: tempInactive });
+    check("imagem de biblioteca inativa é recusada no PATCH (400)", r.status === 400, r.status);
+    r = await call("GET", `/api/procedure-catalog?q=${tempInactive}`);
+    check("item inativo não aparece na lista do catálogo", r.status === 200 && r.data.items.length === 0, `${r.status} ${r.data.items?.length}`);
+    r = await call("POST", "/api/procedures", { catalogItemId: tempActive, ...base });
+    const tempProc = r.data.procedure;
+    check("item ativo temporário habilita com a imagem dele", r.status === 201 && tempProc.image.url === tempData(tempActive, true).imageFile, `${r.status}`);
+    await prisma.procedureCatalogItem.update({ where: { id: tempActive }, data: { active: false } });
+    const afterOff = await listed(tempProc.id);
+    check("procedimento cujo item do catálogo foi desativado continua listado e com imagem", afterOff?.image?.kind === "catalog", JSON.stringify(afterOff?.image));
+    r = await call("PATCH", `/api/procedures/${tempProc.id}`, { price: 777 });
+    check("procedimento de item desativado continua editável", r.status === 200 && r.data.procedure.price === 777, r.status);
+  } finally {
+    await prisma.procedure.deleteMany({ where: { clinicId, OR: [{ catalogItemId: { in: tempIds } }, { imageCatalogItemId: { in: tempIds } }] } });
+    await prisma.procedureCatalogItem.deleteMany({ where: { id: { in: tempIds } } });
+  }
+  for (const [query, label] of [["limit=-1&offset=-3", "limit/offset negativos"], ["limit=abc&offset=xyz", "limit/offset em texto"], ["limit=0", "limit zero"], ["limit=100000", "limit enorme"], [`q=${"a".repeat(1000)}`, "busca com 1000 caracteres"], ["q=%00", "busca com NUL"], ["q=%25%5C", "busca com % e barra"]]) {
+    r = await call("GET", `/api/procedure-catalog?${query}`);
+    check(`catálogo com ${label} responde 200 sem 500`, r.status === 200 && Array.isArray(r.data.items) && r.data.items.length <= 100, `${r.status}`);
+  }
+
+  // PATCH: valores.
+  const target = (await mkCustom()).data.procedure;
+  r = await call("PATCH", `/api/procedures/${target.id}`, { price: 150.5 });
+  check("PATCH preço 150.5 grava 151", r.status === 200 && r.data.procedure.price === 151, `${r.status} ${r.data.procedure?.price}`);
+  r = await call("PATCH", `/api/procedures/${target.id}`, { price: -1 });
+  check("PATCH preço negativo grava 0", r.status === 200 && r.data.procedure.price === 0, `${r.status} ${r.data.procedure?.price}`);
+  await call("PATCH", `/api/procedures/${target.id}`, { price: 500, durationMinutes: 45, margin: 40 });
+  for (const [label, body] of [["preço em texto", { price: "abc" }], ["duração decimal", { durationMinutes: 30.5 }], ["margem em texto", { margin: "x" }], ["preço null", { price: null }], ["preço vazio", { price: "" }], ["preço booleano", { price: true }], ["duração lista", { durationMinutes: [] }], ["margem objeto", { margin: {} }], ["categoria numérica", { category: 5 }]]) {
+    r = await call("PATCH", `/api/procedures/${target.id}`, body);
+    const after = await listed(target.id);
+    check(`PATCH ${label} devolve 400 e nada muda (500/45/40)`, r.status === 400 && after.price === 500 && after.durationMinutes === 45 && after.margin === 40, `${r.status} ${JSON.stringify([after.price, after.durationMinutes, after.margin])}`);
+  }
+  r = await call("PATCH", `/api/procedures/${target.id}`, {});
+  check("PATCH com corpo vazio devolve 200 e não muda nada", r.status === 200 && r.data.procedure.price === 500 && r.data.procedure.durationMinutes === 45 && r.data.procedure.margin === 40, r.status);
+  r = await call("PATCH", `/api/procedures/${target.id}`, { durationMinutes: 0 });
+  check("PATCH duração 0 vira 1", r.status === 200 && r.data.procedure.durationMinutes === 1, `${r.status}`);
+  r = await call("PATCH", `/api/procedures/${target.id}`, { margin: 150 });
+  check("PATCH margem 150 vira 100", r.status === 200 && r.data.procedure.margin === 100, `${r.status}`);
+  for (const sent of [1e30, 3e9]) {
+    r = await call("PATCH", `/api/procedures/${target.id}`, { price: sent });
+    check(`PATCH preço acima do limite do banco (${sent}) devolve 4xx, não 500`, r.status >= 400 && r.status < 500, r.status);
+  }
+  r = await call("PATCH", `/api/procedures/${target.id}`, { durationMinutes: 1e10 });
+  check("PATCH duração acima do limite do banco devolve 4xx, não 500", r.status >= 400 && r.status < 500, r.status);
+  for (const [label, body] of [["nome null", { name: null }], ["nome numérico", { name: 123 }], ["nome 121 caracteres", { name: "Z".repeat(121) }], ["nome NUL", { name: "a\u0000b" }]]) {
+    r = await call("PATCH", `/api/procedures/${target.id}`, body);
+    check(`PATCH ${label} devolve 400`, r.status === 400, r.status);
+  }
+  for (const [label, body] of [["imageAssetId numérico", { imageAssetId: 5 }], ["imageAssetId vazio", { imageAssetId: "" }], ["imageAssetId com 101 caracteres", { imageAssetId: "a".repeat(101) }]]) {
+    r = await call("PATCH", `/api/procedures/${target.id}`, body);
+    check(`PATCH ${label} devolve 400`, r.status === 400, r.status);
+  }
+  check("recusas de PATCH não alteraram o nome", (await listed(target.id))?.name === target.name);
+
+  // Corridas.
+  const raceItem = free[2];
+  results = await Promise.all([1, 2, 3, 4].map(() => call("POST", "/api/procedures", { catalogItemId: raceItem.id, ...base })));
+  check("4 POST simultâneos do mesmo catalogItemId: 1x 201 e 3x 409, um só no banco", results.map((x) => x.status).sort().join() === "201,409,409,409" && await count({ clinicId, catalogItemId: raceItem.id }) === 1, results.map((x) => x.status).join());
+  const raceName = uniq("Corrida");
+  results = await Promise.all([1, 2, 3, 4].map(() => call("POST", "/api/procedures", { custom: true, name: raceName, ...base })));
+  check("4 POST simultâneos do mesmo nome: 1x 201 e 3x 409, um só no banco", results.map((x) => x.status).sort().join() === "201,409,409,409" && await count({ clinicId, name: raceName }) === 1, results.map((x) => x.status).join());
+  const pa = (await mkCustom()).data.procedure, pb = (await mkCustom()).data.procedure;
+  const clash = uniq("Alvo");
+  results = await Promise.all([call("PATCH", `/api/procedures/${pa.id}`, { name: clash }), call("PATCH", `/api/procedures/${pb.id}`, { name: clash })]);
+  check("2 PATCH simultâneos para o mesmo nome: 200 e 409, um só com o nome", results.map((x) => x.status).sort().join() === "200,409" && await count({ clinicId, name: clash }) === 1, results.map((x) => x.status).join());
+  results = await Promise.all([call("PATCH", `/api/procedures/${pa.id}`, { price: 111 }), call("PATCH", `/api/procedures/${pa.id}`, { price: 222 })]);
+  check("2 PATCH simultâneos de preço: ambos 200 e o valor final é um dos dois", results.every((x) => x.status === 200) && [111, 222].includes((await listed(pa.id)).price), results.map((x) => x.status).join());
+  results = await Promise.all([1, 2].map(() => call("POST", "/api/procedures/images", form(png, "d.png", "image/png"))));
+  check("2 uploads simultâneos: ambos 201 com ids diferentes", results.every((x) => x.status === 201) && results[0].data.id !== results[1].data.id, results.map((x) => x.status).join());
+  const dup = results[0].data.id;
+  results = await Promise.all([1, 2, 3].map(() => call("DELETE", `/api/procedures/images/${dup}`)));
+  check("3 DELETE simultâneos da mesma imagem órfã: 1x 200 e 2x 404", results.map((x) => x.status).sort().join() === "200,404,404", results.map((x) => x.status).join());
+  await call("DELETE", `/api/procedures/images/${(await call("POST", "/api/procedures/images", form(png, "d.png", "image/png"))).data.id}`);
+  // Apagar a imagem enquanto um procedimento passa a usá-la: sem 500 e sem procedimento apontando para imagem que sumiu.
+  const raceOutcomes = [];
+  for (let i = 0; i < 20; i++) {
+    const asset = (await call("POST", "/api/procedures/images", form(png, "r.png", "image/png"))).data;
+    const [del, create] = await Promise.all([call("DELETE", `/api/procedures/images/${asset.id}`), mkCustom({ imageAssetId: asset.id })]);
+    const stillThere = await prisma.procedureImageAsset.count({ where: { id: asset.id } });
+    const image = create.status === 201 ? await call("GET", asset.url, null, { raw: true }) : null;
+    const consistent = del.status < 500 && create.status < 500 && (create.status !== 201 ? create.status === 400 && del.status === 200 : image.status === 200 && stillThere === 1 && del.status === 409);
+    raceOutcomes.push(`${del.status}/${create.status}${image ? `/img${image.status}` : ""}${consistent ? "" : " X"}`);
+  }
+  check("DELETE da imagem em paralelo com a criação que a usa: sem 500 e sem imagem quebrada", raceOutcomes.every((item) => !item.endsWith(" X")), raceOutcomes.join(" "));
+
+  // Imagens: tamanhos, tipos e conteúdo.
+  const sized = [];
+  for (const [label, head, type] of [["PNG", png, "image/png"], ["JPEG", jpg, "image/jpeg"], ["WebP", webp, "image/webp"]]) {
+    r = await call("POST", "/api/procedures/images", form(padTo(head, mega), `g.${label}`, type));
+    if (r.data?.id) sized.push(r.data.id);
+    check(`${label} com exatamente 4 MB é aceito`, r.status === 201, r.status);
+  }
+  r = await call("POST", "/api/procedures/images", form(padTo(png, mega + 1), "g.png", "image/png"));
+  check("PNG com 4 MB + 1 byte devolve 413", r.status === 413, r.status);
+  r = await call("POST", "/api/procedures/images", form(padTo(webp, mega + 1), "g.webp", "image/webp"));
+  check("WebP com 4 MB + 1 byte devolve 413", r.status === 413, r.status);
+  r = await call("POST", "/api/procedures/images", form(Buffer.alloc(0), "vazio.png", "image/png"));
+  check("arquivo vazio devolve 400", r.status === 400, r.status);
+  const gif = Buffer.concat([Buffer.from("GIF89a"), Buffer.alloc(20)]);
+  const wave = Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WAVE"), Buffer.alloc(16)]);
+  for (const [label, buffer, name, type] of [
+    ["GIF", gif, "a.gif", "image/gif"], ["GIF disfarçado de PNG", gif, "a.png", "image/png"], ["HTML disfarçado de PNG", Buffer.from("<html><script>alert(1)</script></html>"), "a.png", "image/png"],
+    ["SVG disfarçado de PNG", Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'), "a.png", "image/png"], ["RIFF que não é WebP", wave, "a.webp", "image/webp"], ["PNG declarado JPEG", png, "a.jpg", "image/jpeg"],
+    ["PDF", Buffer.from("%PDF-1.4\n%%EOF\n"), "a.pdf", "application/pdf"],
+  ]) {
+    r = await call("POST", "/api/procedures/images", form(buffer, name, type));
+    check(`upload recusado: ${label}`, r.status === 415 || r.status === 400, r.status);
+  }
+  r = await call("POST", "/api/procedures/images", form(png, "imagem.exe", "image/png"));
+  const oddExt = r.data;
+  check("extensão enganosa (.exe com bytes de PNG) é aceita pelo conteúdo", r.status === 201, r.status);
+  r = await call("GET", oddExt.url, null, { raw: true });
+  check("imagem com extensão enganosa é servida como image/png", r.status === 200 && r.headers.get("content-type") === "image/png", `${r.status} ${r.headers.get("content-type")}`);
+  r = await call("POST", "/api/procedures/images", form(Buffer.concat([png, Buffer.from("<script>alert(1)</script>")]), "poli.png", "image/png"));
+  const poly = r.data;
+  const polyGet = await call("GET", poly.url, null, { raw: true });
+  check("PNG com HTML anexado é servido como PNG, nosniff, CSP restrita e inline", r.status === 201 && polyGet.headers.get("content-type") === "image/png" && polyGet.headers.get("x-content-type-options") === "nosniff" && polyGet.headers.get("content-security-policy") === "default-src 'none'" && polyGet.headers.get("content-disposition") === "inline", `${r.status} ${polyGet.headers.get("content-type")} ${polyGet.headers.get("content-security-policy")}`);
+  const withOther = new FormData(); withOther.set("outro", new Blob([png], { type: "image/png" }), "a.png");
+  r = await call("POST", "/api/procedures/images", withOther);
+  check("multipart sem o campo file devolve 400", r.status === 400, r.status);
+  const asText = new FormData(); asText.set("file", "texto");
+  r = await call("POST", "/api/procedures/images", asText);
+  check("campo file como texto (não arquivo) devolve 400", r.status === 400, r.status);
+  r = await call("POST", "/api/procedures/images", { file: "x" });
+  check("upload com JSON devolve 400", r.status === 400, r.status);
+  const dims = form(png, "dim.png", "image/png"); dims.set("width", "99999"); dims.set("height", "abc");
+  r = await call("POST", "/api/procedures/images", dims);
+  const dimRow = r.status === 201 ? await prisma.procedureImageAsset.findUnique({ where: { id: r.data.id }, select: { width: true, height: true } }) : null;
+  check("largura/altura inválidas são ignoradas (null) sem recusar o upload", r.status === 201 && dimRow?.width === null && dimRow?.height === null, `${r.status} ${JSON.stringify(dimRow)}`);
+  const strayPng = (await call("POST", "/api/procedures/images", form(png, "x.png", "image/png"))).data;
+  const strayJpg = (await call("POST", "/api/procedures/images", form(jpg, "x.jpg", "image/jpeg"))).data;
+  const strayWebp = (await call("POST", "/api/procedures/images", form(webp, "x.webp", "image/webp"))).data;
+  const served = await Promise.all([strayPng, strayJpg, strayWebp].map((item) => call("GET", item.url, null, { raw: true })));
+  check("PNG, JPEG e WebP enviados voltam byte a byte com o tipo certo", served[0].buffer.equals(png) && served[0].headers.get("content-type") === "image/png" && served[1].buffer.equals(jpg) && served[1].headers.get("content-type") === "image/jpeg" && served[2].buffer.equals(webp) && served[2].headers.get("content-type") === "image/webp", served.map((x) => `${x.status}:${x.headers.get("content-type")}`).join(" "));
+
+  // Imagem compartilhada por dois procedimentos da mesma clínica.
+  const shared = (await call("POST", "/api/procedures/images", form(png, "s.png", "image/png"))).data;
+  const holders = [(await mkCustom({ imageAssetId: shared.id })).data.procedure, (await mkCustom({ imageAssetId: shared.id })).data.procedure];
+  check("dois procedimentos da mesma clínica usam a mesma imagem", holders.every((item) => item?.image?.url === shared.url));
+  r = await call("DELETE", `/api/procedures/images/${shared.id}`);
+  check("DELETE de imagem usada por 2 procedimentos devolve 409", r.status === 409 && await prisma.procedureImageAsset.count({ where: { id: shared.id } }) === 1, r.status);
+  r = await call("PATCH", `/api/procedures/${holders[0].id}`, { imageAssetId: null, catalogImageId: null });
+  check("tirar a imagem de um dos dois não apaga a imagem do outro", r.status === 200 && (await call("GET", shared.url, null, { raw: true })).status === 200 && (await listed(holders[1].id)).image.url === shared.url, r.status);
+  r = await call("DELETE", `/api/procedures/images/${shared.id}`);
+  check("DELETE continua 409 enquanto resta 1 procedimento usando", r.status === 409, r.status);
+  r = await call("PATCH", `/api/procedures/${holders[1].id}`, { imageAssetId: null, catalogImageId: null });
+  check("tirar a imagem do último procedimento descarta a imagem", r.status === 200 && (await call("GET", shared.url, null, { raw: true })).status === 404, r.status);
+
+  // Isolamento entre clínicas, ficha técnica, permissões e integração.
+  const otherEmail = `e2e-cat2-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E Catalogo Externa2 ${run}`;
+  const staffEmail = `e2e-cat2-staff-${run}@example.com`, staffPassword = `E2e-${run}-Staff9!`;
+  const proEmail = `e2e-cat2-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
+  const members = [];
+  const material = (await api("POST", "/api/products", { name: `Material Cat ${run}`, kind: "material", unit: "frasco", costCents: 1000, supplier: "Fornecedor", minStock: 0 })).data.product;
+  const material2 = (await api("POST", "/api/products", { name: `Material Cat2 ${run}`, kind: "material", unit: "frasco", costCents: 1000, supplier: "Fornecedor", minStock: 0 })).data.product;
+  try {
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo2", phone: "11999990022", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    if (other?.status === 200) {
+      const foreign = await withSession(other.cookie, async () => ({
+        image: (await call("POST", "/api/procedures/images", form(png, "f.png", "image/png"))).data,
+        product: (await api("POST", "/api/products", { name: `Material Externo ${run}`, kind: "material", unit: "frasco", costCents: 1000, supplier: "F", minStock: 0 })).data.product,
+        enableSame: await call("POST", "/api/procedures", { catalogItemId: raceItem.id, ...base }),
+        sameName: await call("POST", "/api/procedures", { custom: true, name: raceName, ...base }),
+      }));
+      check("outra clínica habilita o mesmo item do catálogo e usa o mesmo nome (únicos só por clínica)", foreign.enableSame.status === 201 && foreign.sameName.status === 201, `${foreign.enableSame.status}/${foreign.sameName.status}`);
+      const mine = (await mkCustom()).data.procedure;
+      r = await call("POST", "/api/procedures", { custom: true, name: uniq("Roubo"), imageAssetId: foreign.image.id, ...base });
+      check("usar imagem de outra clínica na criação devolve 400", r.status === 400, r.status);
+      r = await call("PATCH", `/api/procedures/${mine.id}`, { imageAssetId: foreign.image.id });
+      check("usar imagem de outra clínica no PATCH devolve 400 e nada muda", r.status === 400 && (await listed(mine.id)).image.kind === "none", r.status);
+      r = await call("GET", foreign.image.url, null, { raw: true });
+      check("GET da imagem de outra clínica devolve 404", r.status === 404, r.status);
+      r = await call("DELETE", foreign.image.url);
+      check("DELETE da imagem de outra clínica devolve 404", r.status === 404, r.status);
+      r = await call("POST", "/api/procedures", { custom: true, name: uniq("FichaAlheia"), technicalSheet: [{ productId: foreign.product.id, quantity: 1 }], ...base });
+      check("ficha técnica com material de outra clínica devolve 400", r.status === 400, `${r.status} ${JSON.stringify(r.data)}`);
+      r = await call("PATCH", `/api/procedures/${mine.id}`, { technicalSheet: [{ productId: foreign.product.id, quantity: 1 }] });
+      check("PATCH de ficha técnica com material de outra clínica devolve 400", r.status === 400, r.status);
+      const foreignIds = await withSession(other.cookie, async () => (await call("GET", "/api/procedures")).data.procedures.map((item) => item.id));
+      check("a clínica externa não enxerga os procedimentos da clínica de teste", !foreignIds.includes(mine.id) && foreignIds.length === 2, foreignIds.length);
+    } else {
+      check("segunda clínica criada para testar isolamento (lacunas do catálogo)", false, `registro ${r.status} login ${other?.status}`);
+    }
+
+    // Ficha técnica: personalizado e catálogo.
+    r = await mkCustom({ technicalSheet: [{ productId: material.id, quantity: 2 }] });
+    const sheetCustom = r.data.procedure;
+    check("ficha técnica salva na criação do personalizado", r.status === 201 && sheetOf(sheetCustom) === `${material.id}:2` && sheetCustom.technicalSheet[0].name === material.name, `${r.status} ${sheetOf(sheetCustom)}`);
+    r = await call("POST", "/api/procedures", { catalogItemId: free[3].id, technicalSheet: [{ productId: material.id, quantity: 1 }], ...base });
+    const sheetCatalog = r.data.procedure;
+    check("ficha técnica salva na criação do item do catálogo", r.status === 201 && sheetOf(sheetCatalog) === `${material.id}:1`, `${r.status} ${sheetOf(sheetCatalog)}`);
+    for (const [label, procedure] of [["personalizado", sheetCustom], ["catálogo", sheetCatalog]]) {
+      r = await call("PATCH", `/api/procedures/${procedure.id}`, { technicalSheet: [{ productId: material2.id, quantity: 3 }] });
+      check(`ficha técnica atualizada no ${label} substitui a anterior`, r.status === 200 && sheetOf(r.data.procedure) === `${material2.id}:3` && r.data.procedure.materialsNeedReview === false, `${r.status} ${sheetOf(r.data.procedure)}`);
+      r = await call("PATCH", `/api/procedures/${procedure.id}`, { price: 901, name: uniq("SemTocarFicha") });
+      check(`PATCH sem technicalSheet no ${label} mantém a ficha`, r.status === 200 && sheetOf(r.data.procedure) === `${material2.id}:3`, `${r.status} ${sheetOf(r.data.procedure)}`);
+      r = await call("PATCH", `/api/procedures/${procedure.id}`, { technicalSheet: [{ productId: material.id, quantity: 1 }, { productId: material.id, quantity: 2 }] });
+      check(`ficha com material repetido no ${label} devolve 400 e mantém a anterior`, r.status === 400 && sheetOf(await listed(procedure.id)) === `${material2.id}:3`, r.status);
+      for (const quantity of [0, -1, "abc", null]) {
+        r = await call("PATCH", `/api/procedures/${procedure.id}`, { technicalSheet: [{ productId: material.id, quantity }] });
+        check(`ficha com quantidade ${JSON.stringify(quantity)} no ${label} devolve 400`, r.status === 400, r.status);
+      }
+      r = await call("PATCH", `/api/procedures/${procedure.id}`, { technicalSheet: [{ productId: "naoexiste", quantity: 1 }] });
+      check(`ficha com material inexistente no ${label} devolve 400`, r.status === 400, r.status);
+      results = await Promise.all([call("PATCH", `/api/procedures/${procedure.id}`, { technicalSheet: [{ productId: material.id, quantity: 1 }] }), call("PATCH", `/api/procedures/${procedure.id}`, { technicalSheet: [{ productId: material2.id, quantity: 1 }, { productId: material.id, quantity: 2 }] })]);
+      const finalSheet = sheetOf(await listed(procedure.id));
+      check(`2 PATCH simultâneos de ficha no ${label}: sem 500 e ficha final igual a uma das duas`, results.every((x) => x.status < 500) && [`${material.id}:1`, [`${material2.id}:1`, `${material.id}:2`].sort().join()].includes(finalSheet), `${results.map((x) => x.status).join()} ${finalSheet}`);
+      r = await call("PATCH", `/api/procedures/${procedure.id}`, { technicalSheet: [] });
+      check(`ficha vazia limpa a ficha do ${label}`, r.status === 200 && r.data.procedure.technicalSheet.length === 0, `${r.status}`);
+    }
+    await call("PATCH", `/api/procedures/${sheetCustom.id}`, { price: 901 });
+
+    // Permissões: sem sessão, STAFF e PROFESSIONAL.
+    const anon = await withSession("", async () => [
+      await call("POST", "/api/procedures", { custom: true, name: uniq("Anon"), ...base }), await call("PATCH", `/api/procedures/${sheetCustom.id}`, { price: 1 }),
+      await call("GET", "/api/procedures"), await call("DELETE", "/api/procedures/images/qualquer"), await call("GET", "/api/quotes/options"), await call("GET", "/api/agenda/bootstrap"),
+    ]);
+    check("sem sessão: POST/PATCH/GET de procedimentos, DELETE de imagem, quotes/options e agenda devolvem 401", anon.every((item) => item.status === 401), anon.map((item) => item.status).join());
+    const kept = (await call("POST", "/api/procedures/images", form(png, "k.png", "image/png"))).data;
+    for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
+      r = await api("POST", "/api/team", { name: `E2E ${role} Catalogo2`, email: memberEmail, password: memberPassword, role });
+      if (r.status === 201) members.push(r.data.member);
+      const session = r.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
+      if (session?.status !== 200) { check(`usuário ${role} criado para as lacunas de permissão`, false, `team ${r.status} login ${session?.status}`); continue; }
+      await withSession(session.cookie, async () => {
+        const attempts = [
+          ["habilitar do catálogo", () => call("POST", "/api/procedures", { catalogItemId: free[4].id, ...base })],
+          ["criar personalizado", () => call("POST", "/api/procedures", { custom: true, name: uniq(`Nao ${role}`), ...base })],
+          ["criar com corpo inválido", () => call("POST", "/api/procedures", "{oops")],
+          ["editar preço", () => call("PATCH", `/api/procedures/${sheetCustom.id}`, { price: 1 })],
+          ["editar com corpo inválido", () => call("PATCH", `/api/procedures/${sheetCustom.id}`, "null")],
+          ["editar ficha técnica", () => call("PATCH", `/api/procedures/${sheetCustom.id}`, { technicalSheet: [] })],
+          ["editar procedimento inexistente", () => call("PATCH", "/api/procedures/naoexiste", { price: 1 })],
+          ["enviar imagem", () => call("POST", "/api/procedures/images", form(png, "n.png", "image/png"))],
+          ["apagar imagem órfã", () => call("DELETE", kept.url)],
+          ["apagar imagem inexistente", () => call("DELETE", "/api/procedures/images/naoexiste")],
+          ["listar procedimentos do cadastro", () => call("GET", "/api/procedures")],
+        ];
+        for (const [label, fn] of attempts) { const response = await fn(); check(`${role}: ${label} devolve 403`, response.status === 403, `${label} ${response.status}`); }
+        check(`${role}: nada foi alterado pelas tentativas`, await prisma.procedureImageAsset.count({ where: { id: kept.id } }) === 1 && !(await prisma.procedure.findFirst({ where: { clinicId, name: { startsWith: `E2E Nao ${role}` } } })) && (await prisma.procedure.findUnique({ where: { id: sheetCustom.id }, select: { price: true } })).price === 901, role);
+        r = await call("GET", kept.url, null, { raw: true });
+        check(`${role}: lê a imagem enviada (200)`, r.status === 200 && r.buffer.equals(png), r.status);
+        r = await call("GET", "/api/procedure-catalog?limit=3");
+        check(`${role}: lê o catálogo paginado (200)`, r.status === 200 && r.data.items.length === 3 && r.data.total >= 30, r.status);
+        r = await call("GET", "/api/quotes/options");
+        check(`${role}: quotes/options traz image em todos os procedimentos`, r.status === 200 && r.data.procedures.length > 0 && r.data.procedures.every((item) => item.image && ["custom", "catalog", "none"].includes(item.image.kind)), r.status);
+      });
+    }
+    await call("DELETE", kept.url);
+    for (const id of [...sized, strayPng.id, strayJpg.id, strayWebp.id, oddExt.id, poly.id]) await call("DELETE", `/api/procedures/images/${id}`);
+
+    // Integração: orçamento, sessão, agendamento e início usando catálogo, personalizado e renomeado.
+    const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
+    const renamedBeforeQuote = (await call("POST", "/api/procedures", { catalogItemId: free[6].id, ...base })).data.procedure;
+    const renamedProc = (await call("PATCH", `/api/procedures/${renamedBeforeQuote.id}`, { name: uniq("RenomeadoInt"), price: 1200 })).data.procedure;
+    const integrationProcs = [
+      ["catálogo", (await call("POST", "/api/procedures", { catalogItemId: free[5].id, ...base })).data.procedure],
+      ["personalizado", (await mkCustom({ price: 450 })).data.procedure],
+      ["renomeado", renamedProc],
+    ];
+    for (const [label, proc] of integrationProcs) {
+      const patientId = (await api("POST", "/api/patients", { name: `E2E Cat Int ${label} ${run}`, phone: "11999990081", age: 35, cpf: randomCpf() })).data.patient?.id;
+      const journey = (await api("POST", `/api/patients/${patientId}/journeys`, { name: `E2E Cat ${label} ${run}`, professionalId: professional?.id })).data.journey;
+      const evaluation = (await api("PUT", `/api/patients/${patientId}/evaluation`, { journeyId: journey.id, photos: [], assessment: { chiefComplaint: "Queixa", patientGoal: "Obj" }, status: "Concluída" })).data.evaluation;
+      const quote = await api("POST", "/api/quotes", { patientId, journeyId: journey.id, evaluationId: evaluation.id, details: [{ procedureId: proc.id, quantity: 1, discountCents: 0 }], paymentMethod: "Pix", installments: 1, notes: "" });
+      check(`integração (${label}): orçamento criado com o nome e o valor do procedimento`, quote.status === 201 && String(quote.data.quote.items).includes(proc.name) && quote.data.quote.total === proc.price, `${quote.status} ${quote.data.quote?.items} ${quote.data.quote?.total} vs ${proc.price}`);
+      for (const status of ["Enviado", "Aprovado"]) await api("PATCH", `/api/quotes/${quote.data.quote.id}`, { status, evaluationId: evaluation.id });
+      const session = (await api("POST", `/api/patients/${patientId}/procedure-sessions`, { journeyId: journey.id, quoteId: quote.data.quote.id, procedureId: proc.id })).data.session;
+      check(`integração (${label}): sessão criada com o nome do procedimento`, session?.procedureName === proc.name, session?.procedureName);
+      const appointment = await api("POST", "/api/appointments", { patientId, journeyId: journey.id, procedure: `Procedimento - ${proc.name}`, professional: "Teste", date: day(5), time: "10:00" });
+      check(`integração (${label}): agendamento criado`, appointment.status === 201, `${appointment.status} ${JSON.stringify(appointment.data).slice(0, 120)}`);
+      const upload = new FormData();
+      upload.set("file", new Blob([pdf], { type: "application/pdf" }), "Termo.pdf"); upload.set("category", "TERMOS"); upload.set("signatureStatus", "ASSINADO"); upload.set("journeyId", journey.id);
+      await fetch(`${baseUrl}/api/patients/${patientId}/documents`, { method: "POST", headers: { cookie }, body: upload });
+      const started = await api("PATCH", `/api/patients/${patientId}/procedure-sessions/${session.id}`, { status: "Em execução", technique: "E2E técnica", treatedAreas: "E2E região", professional: "E2E Prof", photos: [{ id: `ph-${run}-${label}`, phase: "Antes", imageUrl: dataUrl, name: "antes", width: 1, height: 1 }] });
+      check(`integração (${label}): início da sessão move o agendamento para hoje`, started.status === 200 && started.data.appointment?.id === appointment.data.appointment?.id && started.data.appointment.date === day(0), `${started.status} ${JSON.stringify(started.data.appointment ?? started.data).slice(0, 160)}`);
+      const quoteOption = (await api("GET", "/api/quotes/options")).data.procedures.find((item) => item.id === proc.id);
+      check(`integração (${label}): quotes/options traz o procedimento com a imagem esperada`, quoteOption?.image?.kind === (label === "personalizado" ? "none" : "catalog"), JSON.stringify(quoteOption?.image));
+      const afterRename = await api("PATCH", `/api/procedures/${proc.id}`, { name: uniq("DepoisDoInicio") });
+      const sessionNow = (await api("GET", `/api/patients/${patientId}/procedure-sessions?journeyId=${journey.id}&quoteId=${quote.data.quote.id}`)).data.sessions?.find((item) => item.id === session.id);
+      check(`integração (${label}): renomear depois do início não altera a sessão em andamento`, afterRename.status === 200 && sessionNow?.procedureName === proc.name && sessionNow.status === "Em execução", `${afterRename.status} ${sessionNow?.procedureName} ${sessionNow?.status}`);
+    }
+  } finally {
+    for (const member of members) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [otherEmail, staffEmail, proEmail] } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: [otherEmail, staffEmail, proEmail] } } });
+  }
 }
 
 // Partes do roteiro, na ordem em que rodam. `needs` lista as partes que criam os dados que esta usa.
@@ -1489,6 +2152,7 @@ const suites = {
   estoque: { needs: ["pacientes"], run: (state) => stock(state.patient) },
   anamnese: { needs: [], run: () => anamnesis() },
   documentos: { needs: [], run: () => clinicalFiles() },
+  catalogo: { needs: [], run: async () => { await procedureCatalog(); await procedureCatalogGaps(); } },
   consentimento: { needs: [], run: () => consentGate() },
   sessao_unica: { needs: [], run: () => sessionPerQuote() },
   agendar_procedimento: { needs: [], run: () => scheduledProcedure() },

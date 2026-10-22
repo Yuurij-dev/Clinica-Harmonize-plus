@@ -47,7 +47,6 @@ import {
   formatCpf,
   formatDate,
   formatInteger,
-  formatPercent,
   formatPhone,
   parseCurrency,
   parseInteger,
@@ -56,10 +55,9 @@ import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { runningAppointmentStatuses } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
-import { procedureCategories } from "@/data/categories";
-import { sendJson } from "@/lib/send-json";
 import { describeTechnicalSheet } from "@/lib/stock-rules";
-import { readTechnicalSheet, TechnicalSheetEditor, type TechnicalSheetItem } from "./technical-sheet-editor";
+import type { TechnicalSheetItem } from "./technical-sheet-editor";
+import { ProcedureFormModal, procedureCatalogCacheKey, type EditableProcedure } from "./procedure-form-modal";
 import { MaterialCheckModal } from "./material-check-modal";
 import { ClinicTimePicker } from "./clinic-time-picker";
 import { latestAppointmentStart } from "@/lib/clinic-time";
@@ -1023,20 +1021,23 @@ function appointmentTone(appointment: AppointmentRow) {
   return { card: "border-[#e0647d] bg-[#fff0f2] text-[#9b3a4f]", pill: "bg-[#ffe0e5] text-[#a8465b]" };
 }
 
-type ApiProcedure = { id: string; name: string; category: string; price: number; durationMinutes: number; margin: number; materialsNeedReview: boolean; technicalSheet: TechnicalSheetItem[] };
-type ProcedureRow = Procedure & { technicalSheet: TechnicalSheetItem[]; materialsNeedReview: boolean };
+type ApiProcedure = { id: string; name: string; category?: string; price: number; durationMinutes: number; margin: number; materialsNeedReview: boolean; catalogItemId?: string | null; image?: { kind: string; url: string | null } | null; technicalSheet: TechnicalSheetItem[] };
+type ProcedureRow = Procedure & EditableProcedure;
 
 function mapApiProcedures(procedures: ApiProcedure[] = []): ProcedureRow[] {
   return procedures.map((item) => ({
     id: item.id,
     name: item.name,
-    category: item.category,
     price: item.price,
     duration: `${item.durationMinutes} min`,
+    durationMinutes: item.durationMinutes,
     materials: describeTechnicalSheet(item.technicalSheet),
     margin: `${item.margin}%`,
+    marginPercent: item.margin,
     technicalSheet: item.technicalSheet,
     materialsNeedReview: item.materialsNeedReview,
+    catalogItemId: item.catalogItemId ?? null,
+    imageUrl: item.image?.url ?? null,
   }));
 }
 
@@ -1045,17 +1046,16 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   const cachedProducts = readClientCache<{ products?: Product[] }>("/api/products");
   const [procedureRows, setProcedureRows] = useState<ProcedureRow[]>(() => mapApiProcedures(cachedProcedures?.procedures));
   const [productRows, setProductRows] = useState<Product[]>(cachedProducts?.products ?? []);
-  const [editingProcedureIndex, setEditingProcedureIndex] = useState<number | null>(null);
+  const [editingProcedureId, setEditingProcedureId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(!cachedProcedures);
-  const [isSaving, setIsSaving] = useState(false);
-  const [formError, setFormError] = useState("");
-  const editingProcedure = editingProcedureIndex === null ? null : procedureRows[editingProcedureIndex];
-  const procedureModalOpen = openCreate || editingProcedureIndex !== null;
+  const editingProcedure = editingProcedureId === null ? null : procedureRows.find((procedure) => procedure.id === editingProcedureId) ?? null;
+  const procedureModalOpen = openCreate || Boolean(editingProcedure);
   const materialOptions = productRows.filter((product): product is Product & { id: string } => Boolean(product.id));
 
   async function loadProcedures() {
     setIsLoading(true);
-    invalidateClientCache("/api/procedures", "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+    // Só chamado depois de salvar com sucesso. O catálogo muda a marca "Já cadastrado".
+    invalidateClientCache("/api/procedures", procedureCatalogCacheKey, "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     const data = await getCachedJson<{ procedures?: ApiProcedure[] }>("/api/procedures");
     setProcedureRows(mapApiProcedures(data.procedures));
     setIsLoading(false);
@@ -1083,39 +1083,19 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   }, []);
 
   function closeProcedureModal() {
-    setEditingProcedureIndex(null);
-    setFormError("");
+    setEditingProcedureId(null);
     onCreateClose();
   }
 
-  async function saveProcedure(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const sheet = readTechnicalSheet(form, materialOptions);
-    if (sheet.error !== undefined) {
-      setFormError(sheet.error);
-      return;
-    }
-    const name = String(form.get("name"));
-    const nextProcedure = {
-      name,
-      category: String(form.get("category")),
-      price: parseCurrency(form.get("price")),
-      durationMinutes: parseInteger(form.get("duration")),
-      technicalSheet: sheet.items,
-      margin: parseInteger(form.get("margin")),
-    };
-    setIsSaving(true);
-    setFormError("");
-    const { ok, data } = await sendJson(editingProcedure?.id ? `/api/procedures/${editingProcedure.id}` : "/api/procedures", editingProcedure?.id ? "PATCH" : "POST", nextProcedure);
-    setIsSaving(false);
-    if (!ok) {
-      setFormError(data?.message ?? "Não foi possível salvar o procedimento.");
-      return;
-    }
+  async function handleProcedureSaved(name: string, created: boolean) {
     await loadProcedures();
-    onSaved?.(`${name} ${editingProcedure ? "foi atualizado" : "foi adicionado aos procedimentos"}.`);
+    onSaved?.(`${name} ${created ? "foi adicionado aos procedimentos" : "foi atualizado"}.`);
     closeProcedureModal();
+  }
+
+  function editProcedure(procedureId: string) {
+    onCreateClose();
+    setEditingProcedureId(procedureId);
   }
 
   return (
@@ -1127,14 +1107,13 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
           action="Novo procedimento"
           onAction={onCreateOpen}
         />
-        {isLoading ? <LoadingTable columns={7} /> : <MiniTable
-          columns={["Nome", "Categoria", "Valor sugerido", "Tempo", "Ficha técnica", "Margem", "Ação"]}
-          rows={procedureRows.map((procedure, index) => [
-            <span className="flex min-w-0 items-center gap-2" key={procedure.id}><ProcedureImage name={procedure.name} decorative className="h-8 w-8 rounded" /><strong className="truncate uppercase italic text-[#121733]">{procedure.name}</strong></span>,
-            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-medium text-[#34364b]">{procedure.category}</span>,
-            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-semibold tabular-nums text-[#34364b]">{currency.format(procedure.price)}</span>,
-            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-medium tabular-nums text-[#34364b]">{procedure.duration}</span>,
-            <div className="w-full min-w-[190px] max-w-[300px] space-y-1.5" key="sheet">
+        {isLoading ? <LoadingTable columns={6} /> : <MiniTable
+          columns={["Nome", "Valor sugerido", "Tempo", "Ficha técnica", "Margem", "Ação"]}
+          rows={procedureRows.map((procedure) => [
+            <span className="flex min-w-0 items-center gap-2" key={`name-${procedure.id}`}><ProcedureImage name={procedure.name} imageUrl={procedure.imageUrl} decorative className="h-8 w-8 rounded" /><strong className="truncate uppercase italic text-[#121733]">{procedure.name}</strong></span>,
+            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-semibold tabular-nums text-[#34364b]" key={`price-${procedure.id}`}>{currency.format(procedure.price)}</span>,
+            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-medium tabular-nums text-[#34364b]" key={`duration-${procedure.id}`}>{procedure.duration}</span>,
+            <div className="w-full min-w-[190px] max-w-[300px] space-y-1.5" key={`sheet-${procedure.id}`}>
               {procedure.technicalSheet.length ? procedure.technicalSheet.map((material, materialIndex) => (
                 <div className="flex min-w-0 items-center gap-1.5" key={`${material.productId}-${materialIndex}`}>
                   <span className="min-w-0 flex-1 truncate rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 font-sans text-[13px] font-semibold tracking-tight text-[#34364b]" title={material.name}>{material.name}</span>
@@ -1145,8 +1124,8 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
               )) : <span className="text-xs text-muted-foreground">Sem materiais</span>}
               {procedure.materialsNeedReview ? <Badge variant="amber" title="Convertida automaticamente do texto antigo. Confira as quantidades e salve.">Revisar ficha</Badge> : null}
             </div>,
-            <Badge key={procedure.margin} variant="green">{procedure.margin}</Badge>,
-            <Button key="edit" size="sm" variant="secondary" onClick={() => setEditingProcedureIndex(index)}>
+            <Badge key={`margin-${procedure.id}`} variant="green">{procedure.margin}</Badge>,
+            <Button key={`edit-${procedure.id}`} size="sm" variant="secondary" onClick={() => setEditingProcedureId(procedure.id)}>
               <PencilLine className="h-3.5 w-3.5" />
               Editar
             </Button>,
@@ -1155,27 +1134,17 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
       </div>
 
       <CostCalculator materials={productRows.filter((product) => !product.archivedAt)} charged={procedureRows[0]?.price ?? 0} procedureName={procedureRows[0]?.name} />
-      <Modal
-        key={editingProcedure ? `edit-${editingProcedure.name}` : `new-procedure-${openCreate ? "open" : "closed"}`}
-        open={procedureModalOpen}
-        onClose={closeProcedureModal}
-        title={editingProcedure ? "Editar procedimento" : "Novo procedimento"}
-        description="Defina preço, duração, margem e os materiais e produtos usados em cada atendimento."
-      >
-        <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveProcedure}>
-          <div className="sm:col-span-2"><FormField label="Nome"><div className="flex items-center gap-2"><ProcedureImage name={editingProcedure?.name ?? "Procedimento"} decorative className="h-10 w-10 rounded" /><input className={fieldClassName} name="name" defaultValue={editingProcedure?.name ?? ""} required /></div></FormField></div>
-          <FormField label="Categoria"><select className={fieldClassName} name="category" defaultValue={editingProcedure?.category ?? ""} required><option value="">Selecione uma categoria</option>{procedureCategories.map((category) => <option key={category}>{category}</option>)}</select></FormField>
-          <FormField label="Valor sugerido"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="price" inputMode="decimal" defaultValue={editingProcedure ? currency.format(editingProcedure.price) : ""} placeholder="R$ 0,00" required /></FormField>
-          <FormField label="Duração em minutos"><MaskedInput className={fieldClassName} formatter={(value) => formatInteger(value, 3)} name="duration" inputMode="numeric" defaultValue={editingProcedure?.duration ?? ""} placeholder="60" required /></FormField>
-          <FormField label="Margem estimada (%)"><MaskedInput className={fieldClassName} formatter={formatPercent} name="margin" inputMode="numeric" defaultValue={editingProcedure?.margin ?? ""} placeholder="40%" required /></FormField>
-          <div className="sm:col-span-2"><FormField label="Ficha técnica" description="Materiais e produtos, com as quantidades usadas, em cada atendimento deste procedimento.">
-            {editingProcedure?.materialsNeedReview ? <p className="mb-2 rounded-[7px] bg-warning/10 px-3 py-2 text-[11px] font-semibold text-warning">Ficha convertida automaticamente do texto antigo com quantidade 1. Confira e salve para concluir a revisão.</p> : null}
-            <TechnicalSheetEditor materials={materialOptions} defaultValue={editingProcedure?.technicalSheet ?? []} />
-          </FormField></div>
-          {formError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{formError}</p> : null}
-          <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={closeProcedureModal}>Cancelar</Button><Button disabled={isSaving} type="submit">{isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : editingProcedure ? "Salvar alterações" : "Salvar procedimento"}</Button></div>
-        </form>
-      </Modal>
+      {procedureModalOpen ? (
+        <ProcedureFormModal
+          key={editingProcedure ? `edit-${editingProcedure.id}` : "new-procedure"}
+          editing={editingProcedure}
+          procedures={procedureRows}
+          materials={materialOptions}
+          onClose={closeProcedureModal}
+          onEdit={editProcedure}
+          onSaved={handleProcedureSaved}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1183,7 +1152,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
 export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
   type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; createdAt?: string; patient?: { name: string } | null };
   type QuoteRow = Quote & { createdAt?: string };
-  type QuoteOptions = { patients?: Array<{ id: string; name: string; cpf: string | null }>; procedures?: Array<{ id: string; name: string; price: number }>; costs?: { laborCost: number; facilityCost: number; medicationCost: number } };
+  type QuoteOptions = { patients?: Array<{ id: string; name: string; cpf: string | null }>; procedures?: Array<{ id: string; name: string; price: number; image?: { url: string | null } | null }>; costs?: { laborCost: number; facilityCost: number; medicationCost: number } };
   const cachedQuotes = readClientCache<{ quotes?: ApiQuote[] }>("/api/quotes");
   const cachedQuoteOptions = readClientCache<QuoteOptions>("/api/quotes/options");
   const [quoteRows, setQuoteRows] = useState<QuoteRow[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
@@ -1296,7 +1265,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
             {selectedPatientId ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {quotePatients.find((patient) => patient.id === selectedPatientId)?.name}</p> : null}
           </div>
           <FormField label="Validade"><MaskedInput className={fieldClassName} formatter={formatDate} name="expires" inputMode="numeric" maxLength={10} placeholder="30/09/2026" required /></FormField>
-          <div className="sm:col-span-2"><FormField label="Procedimentos"><div className="flex min-h-10 flex-wrap gap-1.5 rounded-[7px] border border-[#dddfea] bg-white p-2">{selectedProcedureNames.map((name) => <span className="flex items-center gap-1 rounded-full bg-[#f0efff] py-1 pl-1 pr-2 text-[10px] font-bold text-[#5147dc]" key={name}><ProcedureImage name={name} decorative className="h-6 w-6 rounded-full" />{name}<button className="ml-0.5 text-[#5147dc] hover:text-[#b42318]" type="button" onClick={() => setSelectedProcedureNames((current) => current.filter((item) => item !== name))}>×</button></span>)}<select className="min-w-[150px] flex-1 bg-transparent text-sm font-semibold text-[#858696] outline-none" value="" disabled={optionsLoading || !quoteProcedures.length} onChange={(event) => { if (event.target.value) setSelectedProcedureNames((current) => current.includes(event.target.value) ? current : [...current, event.target.value]); }}><option value="">{optionsLoading ? "Carregando procedimentos..." : quoteProcedures.length ? "Adicionar procedimento" : "Nenhum procedimento cadastrado"}</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name} · {currency.format(procedure.price)}</option>)}</select></div><input className="sr-only" name="items" value={selectedProcedureNames.join(", ")} readOnly required /></FormField></div>
+          <div className="sm:col-span-2"><FormField label="Procedimentos"><div className="flex min-h-10 flex-wrap gap-1.5 rounded-[7px] border border-[#dddfea] bg-white p-2">{selectedProcedureNames.map((name) => <span className="flex items-center gap-1 rounded-full bg-[#f0efff] py-1 pl-1 pr-2 text-[10px] font-bold text-[#5147dc]" key={name}><ProcedureImage name={name} imageUrl={quoteProcedures.find((procedure) => procedure.name === name)?.image?.url ?? null} decorative className="h-6 w-6 rounded-full" />{name}<button className="ml-0.5 text-[#5147dc] hover:text-[#b42318]" type="button" onClick={() => setSelectedProcedureNames((current) => current.filter((item) => item !== name))}>×</button></span>)}<select className="min-w-[150px] flex-1 bg-transparent text-sm font-semibold text-[#858696] outline-none" value="" disabled={optionsLoading || !quoteProcedures.length} onChange={(event) => { if (event.target.value) setSelectedProcedureNames((current) => current.includes(event.target.value) ? current : [...current, event.target.value]); }}><option value="">{optionsLoading ? "Carregando procedimentos..." : quoteProcedures.length ? "Adicionar procedimento" : "Nenhum procedimento cadastrado"}</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name} · {currency.format(procedure.price)}</option>)}</select></div><input className="sr-only" name="items" value={selectedProcedureNames.join(", ")} readOnly required /></FormField></div>
           <div className="sm:col-span-2"><FormField label="Valor total"><MaskedInput key={selectedProcedureNames.join("|")} className={fieldClassName} formatter={formatCurrency} name="total" inputMode="decimal" defaultValue={suggestedTotal ? currency.format(suggestedTotal) : ""} placeholder="R$ 0,00" required /></FormField><p className="mt-1 text-[10px] text-[#858696]">Inclui {currency.format(procedureSubtotal)} em procedimentos e {currency.format(clinicCostsTotal)} em custos padrão da Calculadora.</p></div>
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || optionsLoading || !selectedPatientId || !selectedProcedureNames.length} type="submit">{isSaving ? "Salvando..." : "Salvar orçamento"}</Button></div>
         </form>

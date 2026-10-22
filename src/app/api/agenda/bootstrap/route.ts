@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { procedureImageSelect, withImage } from "@/lib/procedure-server";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -21,7 +22,7 @@ export async function GET() {
     prisma.procedure.findMany({
       where: { clinicId: user.clinicId },
       orderBy: { name: "asc" },
-      select: { name: true, category: true, durationMinutes: true },
+      select: { name: true, category: true, durationMinutes: true, ...procedureImageSelect },
     }),
     prisma.clinicMembership.findMany({
       where: { clinicId: user.clinicId, role: { in: ["ADMIN", "PROFESSIONAL"] } },
@@ -34,5 +35,5 @@ export async function GET() {
     }),
   ]);
 
-  return NextResponse.json({ appointments, patients, procedures, members, settings: clinic ?? { appointmentToleranceMinutes: 15, openingTime: "08:00", closingTime: "19:00" } });
+  return NextResponse.json({ appointments, patients, procedures: procedures.map(withImage), members, settings: clinic ?? { appointmentToleranceMinutes: 15, openingTime: "08:00", closingTime: "19:00" } });
 }

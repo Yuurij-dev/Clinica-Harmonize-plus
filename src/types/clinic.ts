@@ -104,7 +104,7 @@ export type Product = {
 export type Procedure = {
   id?: string;
   name: string;
-  category: string;
+  category?: string;
   price: number;
   duration: string;
   materials: string;

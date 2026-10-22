@@ -24,8 +24,9 @@ import { ProcedureImage } from "./procedure-image";
 type ProcedureOption = {
   id: string;
   name: string;
-  category: string;
+  category?: string;
   materials?: string;
+  image?: { url: string | null } | null;
   unit?: string | null;
   price: number;
 };
@@ -481,7 +482,7 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
                   const discountCents = line?.discountCents ?? 0;
                   const subtotal = Math.max(0, unitCents * quantity - discountCents);
                   return <tr className="min-h-14 border-t border-[#eeeeF3]" key={procedure.id}>
-                    <td className="px-3 py-3"><label className="flex min-w-0 cursor-pointer items-center gap-2"><input type="checkbox" checked={Boolean(line)} disabled={!editable} onChange={(event) => toggleProcedure(procedure.id, event.target.checked)} aria-label={`Selecionar ${procedure.name}`} className="h-4 w-4 shrink-0 accent-[#5147dc] disabled:cursor-not-allowed" /><ProcedureImage name={procedure.name} decorative className="h-9 w-9 rounded" /><span className="min-w-0"><strong className={cn("block truncate", line ? "text-[#3f4053]" : "text-[#77798d] font-medium")}>{procedure.name}</strong><span className="mt-0.5 block truncate text-xs text-[#999aaa]">{procedure.materials || procedure.category}</span></span></label></td>
+                    <td className="px-3 py-3"><label className="flex min-w-0 cursor-pointer items-center gap-2"><input type="checkbox" checked={Boolean(line)} disabled={!editable} onChange={(event) => toggleProcedure(procedure.id, event.target.checked)} aria-label={`Selecionar ${procedure.name}`} className="h-4 w-4 shrink-0 accent-[#5147dc] disabled:cursor-not-allowed" /><ProcedureImage name={procedure.name} imageUrl={procedure.image?.url ?? null} decorative className="h-9 w-9 rounded" /><span className="min-w-0"><strong className={cn("block truncate", line ? "text-[#3f4053]" : "text-[#77798d] font-medium")}>{procedure.name}</strong><span className="mt-0.5 block truncate text-xs text-[#999aaa]">{procedure.materials || procedure.category}</span></span></label></td>
                     <td className="px-3 py-3"><select aria-label={`Quantidade de ${procedure.name}`} disabled={!editable || !line} className="h-8 rounded-[5px] border border-[#dddde6] bg-white px-2 text-sm disabled:bg-[#f4f4f8]" value={quantity} onChange={(event) => updateLine(procedure.id, { quantity: Number(event.target.value) })}>{[1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{formatQuantity(value, procedureUnit(procedure))}</option>)}</select></td>
                     <td className="px-3 py-3 font-semibold text-[#555668]">{currency.format(procedure.price)}</td>
                     <td className="px-3 py-3"><input id={`discount-${procedure.id}`} aria-label={`Desconto de ${procedure.name}`} aria-invalid={Boolean(discountErrors[procedure.id])} aria-describedby={discountErrors[procedure.id] ? `discount-error-${procedure.id}` : undefined} disabled={!editable || !line} className={cn("h-8 w-24 rounded-[5px] border border-[#dddde6] px-2 text-sm disabled:bg-[#f4f4f8]", discountErrors[procedure.id] && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} type="text" inputMode="decimal" placeholder="0,00" value={discountDrafts[procedure.id] ?? formatMoneyInput(discountCents)} onChange={(event) => changeDiscount(procedure.id, event.target.value, unitCents * quantity)} onBlur={() => blurDiscount(procedure.id)} /><span className="mt-1 block text-xs text-[#858696]">Em R$ · máximo {currency.format(unitCents * quantity / 100)}</span>{discountErrors[procedure.id] ? <span id={`discount-error-${procedure.id}`} role="alert" className="mt-1 block max-w-32 text-xs font-medium text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{discountErrors[procedure.id]}</span> : null}</td>

@@ -1,14 +1,17 @@
 "use client";
 
 import Image from "next/image";
-import { Image as ImageIcon } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { resolveProcedureImage } from "@/lib/procedure-images";
+import { localPreviewSrc, safeProcedureImageSrc } from "@/lib/procedure-image-rules";
+import { useProcedureImageByName } from "./procedure-image-lookup";
 
 type ProcedureImageProps = {
   name: string;
+  /** URL por referência (image.url do procedimento). null = sem imagem. Omitido = busca pelo nome entre os procedimentos da clínica. */
   imageUrl?: string | null;
+  /** Pré-visualização local (blob: criado pelo formulário a partir de um arquivo já validado). Ignorada se não for blob:. */
+  localPreview?: string | null;
   size?: "compact" | "card";
   className?: string;
   alt?: string;
@@ -16,43 +19,40 @@ type ProcedureImageProps = {
 };
 
 const dimensions = {
-  compact: { width: 48, height: 48, sizes: "48px", className: "h-12 w-12 rounded-md" },
-  card: { width: 160, height: 120, sizes: "(max-width: 640px) 42vw, 160px", className: "h-[120px] w-40 rounded-lg" },
+  compact: { sizes: "48px", className: "h-12 w-12 rounded-md text-base" },
+  card: { sizes: "(max-width: 640px) 42vw, 160px", className: "h-[120px] w-40 rounded-lg text-2xl" },
 } as const;
 
-export function ProcedureImage({ name, imageUrl, size = "compact", className, alt, decorative = false }: ProcedureImageProps) {
-  const image = resolveProcedureImage(name, imageUrl);
-  const [failedSources, setFailedSources] = useState<ReadonlySet<string>>(() => new Set());
-  const fallbackImage = image.custom ? resolveProcedureImage(name) : null;
-  const sourceFailed = Boolean(image.src && failedSources.has(image.src));
-  const displayedImage = sourceFailed
-    ? fallbackImage?.src && !failedSources.has(fallbackImage.src)
-      ? fallbackImage
-      : { ...image, src: null }
-    : image;
+export function ProcedureImage({ name, imageUrl, localPreview, size = "compact", className, alt, decorative = false }: ProcedureImageProps) {
+  const byName = useProcedureImageByName(name, imageUrl === undefined);
+  const preview = localPreviewSrc(localPreview);
+  const src = preview ?? safeProcedureImageSrc(imageUrl === undefined ? byName : imageUrl);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const shown = src && src !== failedSrc ? src : null;
   const frame = dimensions[size];
-  const accessibleAlt = decorative ? "" : alt ?? displayedImage.alt;
+  const initial = name.trim().charAt(0).toLocaleUpperCase("pt-BR");
 
   return (
     <span
-      className={cn("relative inline-grid shrink-0 place-items-center overflow-hidden bg-muted/60 text-muted-foreground", frame.className, className)}
-      role={!displayedImage.src && !decorative ? "img" : undefined}
-      aria-label={!displayedImage.src && !decorative ? `Imagem ilustrativa indisponível para ${name}` : undefined}
+      className={cn("relative inline-grid shrink-0 place-items-center overflow-hidden bg-accent font-bold text-accent-foreground", frame.className, className)}
+      role={!shown && !decorative ? "img" : undefined}
+      aria-label={!shown && !decorative ? `Sem imagem para ${name}` : undefined}
       aria-hidden={decorative || undefined}
     >
-      {displayedImage.src ? (
+      {shown ? (
         <Image
-          src={displayedImage.src}
-          alt={accessibleAlt}
+          src={shown}
+          alt={decorative ? "" : alt ?? `Imagem ilustrativa de ${name}`}
           fill
           sizes={frame.sizes}
           loading="lazy"
-          unoptimized={displayedImage.custom && /^https:\/\//i.test(displayedImage.src)}
+          // Imagens da clínica vêm de rota autenticada (o otimizador do Next não envia o cookie de sessão).
+          unoptimized={shown.startsWith("/api/") || shown.startsWith("blob:")}
           className="object-cover"
-          onError={() => setFailedSources((current) => new Set(current).add(displayedImage.src!))}
+          onError={() => setFailedSrc(shown)}
         />
       ) : (
-        <ImageIcon aria-hidden="true" className={cn("text-primary/50", size === "compact" ? "h-5 w-5" : "h-8 w-8")} />
+        <span aria-hidden="true" className="select-none leading-none">{initial || "?"}</span>
       )}
     </span>
   );
