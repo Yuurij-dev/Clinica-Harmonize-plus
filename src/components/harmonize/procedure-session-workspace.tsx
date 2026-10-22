@@ -204,7 +204,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
       const response = await fetch("/api/appointments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, journeyId, procedure: procedureAppointmentName(draft.procedureName), professional: draft.professional, date: scheduleDate, time: scheduleTime, notes: scheduleNotes }) });
       const result = await response.json().catch(() => ({})) as { appointment?: { id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string }; message?: string };
       if (!response.ok || !result.appointment) throw new Error(result.message ?? "Não foi possível agendar o procedimento.");
-      invalidateClientCache(key, "/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/history`, `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`);
+      invalidateClientCache(key, "/api/agenda", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/history`, `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`);
       const created = result.appointment;
       setData((current) => current ? { ...current, scheduledProcedure: { id: created.id, date: scheduleDate, time: created.time, procedure: created.procedure, professional: created.professional, status: created.status } } : current);
       showNotice(`Procedimento agendado para ${formatDay(scheduleDate)} às ${created.time}.`);
@@ -333,7 +333,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
         // O servidor moveu o agendamento para o início real: reflete aqui e invalida as agendas.
         const moved = result.appointment;
         setData((current) => current?.scheduledProcedure?.id === moved.id ? { ...current, scheduledProcedure: { ...current.scheduledProcedure, date: moved.date, time: moved.time } } : current);
-        invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+        invalidateClientCache("/api/agenda", "/api/dashboard/bootstrap");
       }
       if (!automatic) showNotice(status === "Concluída" ? `Sessão concluída.${result.pending?.length ? " Há materiais sem saldo que ficaram como saída pendente." : ""}` : status === "Em execução" ? "Início da sessão registrado." : "Rascunho salvo.");
       if (status === "Concluída") onCompleted(updated.id);

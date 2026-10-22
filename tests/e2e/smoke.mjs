@@ -1380,8 +1380,9 @@ async function startMovesAppointment() {
   check("início: banco do agendamento = hoje e hora atual, ainda Agendado", dayStr === clock.slice(0, 10) && rowA.time === winner?.data?.appointment?.time && rowA.status === "Agendado", JSON.stringify([rowA, clock]));
   const sessList = (await api("GET", `/api/patients/${P}/procedure-sessions?journeyId=${A.journeyId}&quoteId=${A.quoteId}`)).data;
   check("início: scheduledProcedure reflete a nova data/hora", sessList.scheduledProcedure?.id === apptA.id && sessList.scheduledProcedure.date === clock.slice(0, 10) && sessList.scheduledProcedure.time === rowA.time, JSON.stringify(sessList.scheduledProcedure));
-  const boot = (await api("GET", "/api/agenda/bootstrap")).data.appointments?.find((a) => a.id === apptA.id);
-  check("início: agenda/bootstrap mostra o agendamento de hoje na hora atual", boot && String(boot.date).slice(0, 10) === clock.slice(0, 10) && boot.time === rowA.time, JSON.stringify(boot));
+  const todayKey = clock.slice(0, 10);
+  const boot = (await api("GET", `/api/agenda?from=${todayKey}&to=${todayKey}`)).data.appointments?.find((a) => a.id === apptA.id);
+  check("início: agenda do dia (GET /api/agenda?from&to) mostra o agendamento de hoje na hora atual", boot && String(boot.date).slice(0, 10) === clock.slice(0, 10) && boot.time === rowA.time, JSON.stringify(boot));
   check("início: auditLog tem 'Agendamento alterado para o início' uma única vez", auditMoves(winner?.data?.session) === 1 && sessList.sessions?.find((s) => s.id === A.sessionId)?.status === "Em execução", `${auditMoves(winner?.data?.session)}`);
   check("início: Retorno, outra jornada e outro paciente NÃO foram tocados", await snap(retA.id) === before.ret && await snap(apptJ2.id) === before.j2 && await snap(apptO.id) === before.o, "");
 
@@ -2143,6 +2144,467 @@ async function procedureCatalogGaps() {
   }
 }
 
+// Paginação e carregamento sob demanda: lista de clientes paginada no servidor, busca limitada para seletores e agenda por período.
+async function paginationSuite() {
+  const tag = `Pg${run}`;
+  const mk = (name, phone, extra = {}) => api("POST", "/api/patients", { name, phone, age: 30, cpf: randomCpf(), ...extra });
+  const baseline = (await api("GET", "/api/patients?pageSize=1")).data.summary;
+  const N = baseline.total + 30;
+  const baseInativa = baseline.byStatus?.Inativa ?? 0, baseAtiva = baseline.byStatus?.Ativa ?? 0;
+  const created = [];
+  for (let i = 1; i <= 24; i += 1) created.push((await mk(`${tag} Paciente ${String(i).padStart(2, "0")}`, `119880${String(1000 + i)}`)).data.patient);
+  const special = {
+    jose: (await mk(`${tag} José Álvaro`, "11988002001")).data.patient,
+    angela: (await mk(`${tag} Ângela`, "11988002002")).data.patient,
+    conceicao: (await mk(`${tag} Conceição`, "11988002003")).data.patient,
+    off: (await mk(`${tag} 50% Off`, "11988002004")).data.patient,
+    inativoA: (await mk(`${tag} Inativo A`, "11988002005", { status: "Inativa" })).data.patient,
+    inativoB: (await mk(`${tag} Inativo B`, "11988002006", { status: "Inativa" })).data.patient,
+  };
+  const all = [...created, ...Object.values(special)];
+  check("paginação: 30 pacientes criados para o roteiro", all.length === 30 && all.every(Boolean), `${all.filter(Boolean).length}`);
+  const list = (query = "") => api("GET", `/api/patients${query ? `?${query}` : ""}`);
+  const ids = (r) => (r.data.patients ?? []).map((item) => item.id);
+  const names = (r) => (r.data.patients ?? []).map((item) => item.name);
+
+  // Padrão e formato.
+  let r = await list();
+  check("lista sem parâmetros: página 1, 20 por página, total e resumo corretos", r.status === 200 && r.data.patients.length === 20 && JSON.stringify(r.data.pagination) === JSON.stringify({ page: 1, pageSize: 20, total: N, pageCount: Math.ceil(N / 20) }) && r.data.summary.total === N, `${r.status} ${JSON.stringify(r.data.pagination)} ${JSON.stringify(r.data.summary)}`);
+  const item = r.data.patients[0];
+  check("lista: item enxuto (sem relações), com etapa atual", item && !("procedureRecords" in item) && !("updatedAt" in item) && ["evaluation", "quote", "procedure", "return"].includes(item.currentStage) && ["id", "name", "cpf", "phone", "age", "status", "lastVisit", "nextReturn", "totalValue", "createdAt"].every((key) => key in item), JSON.stringify(item));
+
+  // Páginas consecutivas: sem duplicar nem perder, na mesma ordem de uma lista única.
+  const single = await list("page=1&pageSize=100");
+  const walked = [];
+  const sizes = [];
+  const pages10 = Math.ceil(N / 10);
+  for (let page = 1; page <= pages10 + 1; page += 1) { const p = await list(`page=${page}&pageSize=10`); walked.push(...ids(p)); sizes.push(p.data.patients.length); }
+  const expectedSizes = [...Array.from({ length: pages10 }, (_, i) => (i < pages10 - 1 ? 10 : N - 10 * (pages10 - 1))), 0];
+  check("paginação: pageSize=10 percorre todos os itens sem duplicar nem perder, na ordem da lista única", JSON.stringify(sizes) === JSON.stringify(expectedSizes) && new Set(walked).size === N && JSON.stringify(walked) === JSON.stringify(ids(single)), `${sizes} ${new Set(walked).size}`);
+  check("paginação: todos os pacientes criados aparecem exatamente uma vez", all.every((patient) => walked.filter((id) => id === patient.id).length === 1), "");
+  const sortedNames = names(single);
+  check("ordenação por nome é estável (nomes iguais desempatam por id, repetir devolve a mesma ordem)", JSON.stringify(ids(await list("page=1&pageSize=100"))) === JSON.stringify(ids(single)) && sortedNames.indexOf(`${tag} Paciente 01`) < sortedNames.indexOf(`${tag} Paciente 02`), "");
+
+  // Limites e valores inválidos viram valores seguros (200, nunca 400/500).
+  const safe = [["page=0", 1, 20], ["page=-3", 1, 20], ["page=abc", 1, 20], ["page=2.5", 1, 20], ["pageSize=0", 1, 20], ["pageSize=-5", 1, 20], ["pageSize=abc", 1, 20], ["pageSize=1000", 1, 100], ["pageSize=101", 1, 100], ["pageSize=100", 1, 100], ["page=99999999999999999999", 1, 20], ["sort=zzz", 1, 20], ["q=%27%3B%20DROP%20TABLE%20%22Patient%22%3B--", 1, 20]];
+  const outcomes = [];
+  for (const [query, page, pageSize] of safe) { const x = await list(query); outcomes.push([query, x.status, x.data.pagination?.page, x.data.pagination?.pageSize]); }
+  check("parâmetros inválidos ou extremos: 200 com valores seguros (pageSize máx. 100)", outcomes.every(([, status, page, pageSize], index) => status === 200 && page === safe[index][1] && pageSize === safe[index][2]), JSON.stringify(outcomes.filter(([, status, page, pageSize], index) => !(status === 200 && page === safe[index][1] && pageSize === safe[index][2]))));
+  check("a clínica ainda tem todos os pacientes depois da busca com SQL malicioso", (await list("pageSize=100")).data.pagination.total === N, "");
+  r = await list("page=999&pageSize=10");
+  check("página além do fim: lista vazia com total e pageCount corretos", r.status === 200 && r.data.patients.length === 0 && r.data.pagination.total === N && r.data.pagination.pageCount === Math.ceil(N / 10) && r.data.pagination.page === 999, JSON.stringify(r.data.pagination));
+  r = await list("page=100000&pageSize=100");
+  check("página máxima aceita sem erro", r.status === 200 && r.data.patients.length === 0, r.status);
+
+  // Busca: nome, telefone, status; sem acento e sem diferenciar caixa.
+  const found = async (q, extra = "") => ids(await list(`q=${encodeURIComponent(q)}&pageSize=100${extra}`));
+  check("busca por nome (parte, caixa diferente)", (await found(`${tag} paciente 07`)).join() === created[6].id && (await found(`${tag.toUpperCase()} PACIENTE 07`)).join() === created[6].id, "");
+  check("busca sem acento encontra nome com acento (jose -> José, angela -> Ângela, conceicao -> Conceição)", (await found(`${tag} jose alvaro`)).join() === special.jose.id && (await found("ANGELA")).includes(special.angela.id) && (await found("conceicao")).includes(special.conceicao.id), "");
+  check("busca com acento encontra o mesmo (Álvaro, Conceição)", (await found("Álvaro")).includes(special.jose.id) && (await found("CONCEIÇÃO")).includes(special.conceicao.id), "");
+  check("busca por telefone", (await found("1198801005")).join() === created[4].id && (await found("119880100")).length === 9, "");
+  check("busca por status ('inativa' encontra os dois cadastrados como Inativa)", (await found("inativa")).sort().join() === [special.inativoA.id, special.inativoB.id].sort().join(), "");
+  check("busca em nome + telefone na mesma consulta (campos concatenados como na tela antiga)", (await found(`Paciente 03 119880`)).join() === created[2].id, "");
+  check("coringas do LIKE na busca são literais (% só acha '50% Off', _ não acha nada)", (await found("%")).join() === special.off.id && (await found("_")).length === 0 && (await found("50% off")).join() === special.off.id, "");
+  check("busca sem resultado: lista vazia com total 0 (resumo da clínica continua o mesmo)", await (async () => { const x = await list("q=naoexistexyz"); return x.status === 200 && x.data.patients.length === 0 && x.data.pagination.total === 0 && x.data.pagination.pageCount === 0 && x.data.summary.total === N; })(), "");
+  r = await list(`q=${encodeURIComponent(tag)}&pageSize=10&page=3`);
+  check("busca + paginação: total da busca = 30, 3ª página com 10 itens", r.data.pagination.total === 30 && r.data.patients.length === 10 && r.data.pagination.pageCount === 3, JSON.stringify(r.data.pagination));
+  const searchWalk = [];
+  for (let page = 1; page <= 3; page += 1) searchWalk.push(...ids(await list(`q=${encodeURIComponent(tag)}&pageSize=10&page=${page}`)));
+  const mineSet = new Set(all.map((patient) => patient.id));
+  check("busca paginada devolve a mesma ordem da lista única, sem duplicar", JSON.stringify(searchWalk) === JSON.stringify(ids(single).filter((id) => mineSet.has(id))), "");
+
+  // Filtro de status, ordenação por cadastro e resumo.
+  r = await list("status=Inativa&pageSize=100");
+  check("filtro status=Inativa: 2 pacientes meus, total confere", r.data.pagination.total === 2 + baseInativa && r.data.patients.every((p) => p.status === "Inativa"), JSON.stringify(r.data.pagination));
+  r = await list(`status=Inativa&q=${encodeURIComponent("Inativo A")}`);
+  check("filtro de status combina com a busca", r.data.pagination.total === 1 && r.data.patients[0].id === special.inativoA.id, JSON.stringify(r.data.pagination));
+  const recent = [];
+  for (let page = 1; page <= 6; page += 1) recent.push(...ids(await list(`sort=recent&page=${page}&pageSize=5`)));
+  check("sort=recent: mais novo primeiro, 30 itens sem duplicar em páginas de 5", recent[0] === special.inativoB.id && new Set(recent).size === 30 && recent.length === 30, `${recent.length} ${new Set(recent).size}`);
+  r = await list("pageSize=10&page=2&q=Paciente");
+  check("resumo (summary) conta a clínica toda, independente de página e busca", r.data.summary.total === N && r.data.summary.byStatus.Ativa === 28 + baseAtiva && (r.data.summary.byStatus.Inativa ?? 0) === 2 + baseInativa, JSON.stringify(r.data.summary));
+
+  // Busca limitada para seletores (agendamento, orçamento, pagamento).
+  r = await api("GET", `/api/patients/lookup?q=${encodeURIComponent(tag)}`);
+  check("lookup: padrão de 8 resultados, só id/name/cpf", r.status === 200 && r.data.patients.length === 8 && r.data.patients.every((p) => Object.keys(p).sort().join() === "cpf,id,name"), `${r.status} ${r.data.patients?.length}`);
+  r = await api("GET", `/api/patients/lookup?q=${encodeURIComponent(tag)}&limit=500`);
+  check("lookup: limit acima do máximo vira 20", r.data.patients.length === 20, r.data.patients?.length);
+  r = await api("GET", `/api/patients/lookup?q=${encodeURIComponent(tag)}&limit=3`);
+  check("lookup: limit=3 devolve 3", r.data.patients.length === 3, r.data.patients?.length);
+  r = await api("GET", "/api/patients/lookup?q=alvaro");
+  check("lookup: nome sem acento", r.data.patients.some((p) => p.id === special.jose.id), JSON.stringify(r.data.patients));
+  r = await api("GET", `/api/patients/lookup?q=${encodeURIComponent(created[3].cpf ?? "")}`);
+  check("lookup: busca por CPF", r.data.patients.length === 1 && r.data.patients[0].id === created[3].id, JSON.stringify(r.data.patients));
+  r = await api("GET", "/api/patients/lookup");
+  const oneLetter = await api("GET", "/api/patients/lookup?q=P");
+  const twoLetters = await api("GET", "/api/patients/lookup?q=Pg");
+  check("lookup sem termo ou com 1 caractere devolve lista vazia; com 2 caracteres pesquisa", r.status === 200 && r.data.patients.length === 0 && oneLetter.status === 200 && oneLetter.data.patients.length === 0 && twoLetters.data.patients.length > 0, `${oneLetter.data.patients?.length}/${twoLetters.data.patients?.length}`);
+  r = await api("GET", "/api/patients/lookup?q=0%25");
+  check("lookup: coringa % é literal", r.data.patients.length === 1 && r.data.patients[0].id === special.off.id, JSON.stringify(r.data.patients));
+
+  // Um paciente (abrir perfil fora da página) e opções sem lista de pacientes.
+  r = await api("GET", `/api/patients/${special.angela.id}`);
+  check("GET /api/patients/{id} devolve o paciente no formato da lista", r.status === 200 && r.data.patient.id === special.angela.id && r.data.patient.currentStage && !("procedureRecords" in r.data.patient), `${r.status} ${JSON.stringify(r.data).slice(0, 120)}`);
+  r = await api("GET", "/api/patients/inexistente-xyz");
+  check("GET /api/patients/{id} inexistente => 404", r.status === 404, r.status);
+  r = await api("GET", "/api/quotes/options");
+  check("quotes/options não carrega mais a lista de pacientes", r.status === 200 && !("patients" in r.data) && Array.isArray(r.data.procedures), `${r.status} ${Object.keys(r.data)}`);
+  r = await api("GET", "/api/agenda/bootstrap");
+  check("agenda/bootstrap só traz dados estáticos (sem agendamentos nem pacientes)", r.status === 200 && !("appointments" in r.data) && !("patients" in r.data) && Array.isArray(r.data.procedures) && Array.isArray(r.data.members) && r.data.settings?.openingTime, `${r.status} ${Object.keys(r.data)}`);
+
+  // Agenda por período.
+  const clinicId = (await prisma.patient.findUnique({ where: { id: all[0].id }, select: { clinicId: true } })).clinicId;
+  const instant = (d) => new Date(`${d}T12:00:00-03:00`);
+  const seed = (patient, d, time, extra = {}) => prisma.appointment.create({ data: { clinicId, patientId: patient.id, date: instant(d), time, procedure: "Retorno", professional: `Prof Pg ${run}`, status: "Agendado", notes: "reservado", ...extra } });
+  const a = {
+    dec31: await seed(all[0], "2030-12-31", "10:00"),
+    jan01: await seed(all[1], "2031-01-01", "09:00"),
+    jan31: await seed(all[2], "2031-01-31", "08:00"),
+    feb01: await seed(all[3], "2031-02-01", "08:00"),
+    feb10legacy: await seed(all[4], "2031-02-10", "14:00", { date: new Date("2031-02-10T00:00:00.000Z") }),
+    feb28late: await seed(all[5], "2031-02-28", "23:30"),
+    feb28early: await seed(all[6], "2031-02-28", "00:00"),
+    mar01: await seed(all[7], "2031-03-01", "00:00"),
+    mar01b: await seed(all[8], "2031-03-01", "09:30"),
+  };
+  const period = (from, to) => api("GET", `/api/agenda?from=${from}&to=${to}`);
+  const pids = (x) => (x.data.appointments ?? []).map((item) => item.id);
+  const want = (...keys) => keys.map((key) => a[key].id);
+  r = await period("2031-02-01", "2031-02-28");
+  check("agenda mês (fev/2031): inclui primeiro e último dia, o do banco à meia-noite UTC e 23:30; exclui 31/01 e 01/03", r.status === 200 && JSON.stringify(pids(r)) === JSON.stringify(want("feb01", "feb10legacy", "feb28early", "feb28late")) && r.data.total === 4, `${r.status} ${pids(r).length}`);
+  r = await period("2031-03-01", "2031-03-31");
+  check("agenda mês (mar/2031): só os de março, ordenados por horário", JSON.stringify(pids(r)) === JSON.stringify(want("mar01", "mar01b")), `${pids(r).length}`);
+  r = await period("2031-01-31", "2031-01-31");
+  check("agenda dia: só o dia pedido", JSON.stringify(pids(r)) === JSON.stringify(want("jan31")), `${pids(r).length}`);
+  r = await period("2030-12-29", "2031-01-04");
+  check("agenda semana na virada do ano: 31/12 e 01/01 juntos, sem 31/01", JSON.stringify(pids(r)) === JSON.stringify(want("dec31", "jan01")), `${pids(r).length}`);
+  r = await period("2031-02-27", "2031-03-01");
+  check("agenda na virada de mês: 28/02 (00:00 e 23:30) e 01/03 entram", JSON.stringify(pids(r)) === JSON.stringify(want("feb28early", "feb28late", "mar01", "mar01b")), `${pids(r).length}`);
+  r = await period("2031-02-02", "2031-02-09");
+  check("agenda sem atendimentos no período: lista vazia", r.status === 200 && r.data.appointments.length === 0 && r.data.total === 0, `${r.status}`);
+  r = await period("2031-02-28", "2031-02-28");
+  const row = r.data.appointments?.[0];
+  check("agenda: item enxuto {id,patientId,date,time,procedure,professional,status,patient:{name}}, sem observações", row && Object.keys(row).sort().join() === "date,id,patient,patientId,procedure,professional,status,time" && Object.keys(row.patient).join() === "name" && String(row.date).slice(0, 10) === "2031-02-28", JSON.stringify(row));
+  const bad = [[null, null], ["2031-02-01", null], [null, "2031-02-01"], ["2031-02-30", "2031-03-01"], ["2031-13-01", "2031-13-02"], ["20310201", "20310202"], ["2031-02-10", "2031-02-01"], ["2031-01-01", "2031-12-31"], ["abc", "def"]];
+  const badStatuses = [];
+  for (const [from, to] of bad) badStatuses.push((await api("GET", `/api/agenda?${[from && `from=${from}`, to && `to=${to}`].filter(Boolean).join("&")}`)).status);
+  check("agenda: parâmetros ausentes, inválidos, invertidos ou período > 93 dias => 400", badStatuses.every((status) => status === 400), badStatuses.join());
+  check("agenda: período de exatamente 93 dias é aceito", (await period("2031-01-01", "2031-04-03")).status === 200 && (await period("2031-01-01", "2031-04-04")).status === 400, "");
+
+  // Vencidos: "Agendado" cujo fim já passou, em qualquer período (alimenta o "Faltou" automático da Agenda).
+  const old = await seed(all[10], "2020-03-10", "09:00");
+  const oldInService = await seed(all[11], "2020-03-10", "10:00", { status: "Em atendimento" });
+  const oldDone = await seed(all[12], "2020-03-10", "11:00", { status: "Atendido" });
+  const oldCancelled = await seed(all[13], "2020-03-10", "12:00", { status: "Cancelado" });
+  const clock = new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" }).format(new Date());
+  const todayKey = clock.slice(0, 10);
+  const nowMinutes = Number(clock.slice(11, 13)) * 60 + Number(clock.slice(14, 16));
+  const future = await seed(all[14], day(5), "09:00");
+  const ongoing = nowMinutes >= 60 ? await seed(all[15], todayKey, `${String(Math.floor((nowMinutes - 30) / 60)).padStart(2, "0")}:${String((nowMinutes - 30) % 60).padStart(2, "0")}`) : null;
+  const finished = nowMinutes >= 150 ? await seed(all[16], todayKey, `${String(Math.floor((nowMinutes - 120) / 60)).padStart(2, "0")}:${String((nowMinutes - 120) % 60).padStart(2, "0")}`) : null;
+  r = await api("GET", "/api/agenda/overdue");
+  const overdueIds = (r.data.appointments ?? []).map((item) => item.id);
+  check("overdue: Agendado vencido num período que a tela não carregou aparece, com campos enxutos", r.status === 200 && overdueIds.includes(old.id) && Object.keys(r.data.appointments[0]).sort().join() === "date,id,patient,patientId,procedure,professional,status,time", `${r.status} ${overdueIds.length}`);
+  check("overdue: nunca traz Em atendimento, Atendido, Cancelado nem futuro", ![oldInService, oldDone, oldCancelled, future].some((item) => overdueIds.includes(item.id)) && r.data.appointments.every((item) => item.status === "Agendado"), "");
+  check("overdue: hoje só entra depois do fim real (início + duração): em andamento fora, encerrado dentro", (!ongoing || !overdueIds.includes(ongoing.id)) && (!finished || overdueIds.includes(finished.id)), `${ongoing ? overdueIds.includes(ongoing.id) : "-"} ${finished ? overdueIds.includes(finished.id) : "-"}`);
+  await prisma.appointment.createMany({ data: Array.from({ length: 205 }, (_, index) => ({ clinicId, patientId: all[17].id, date: instant("2019-05-01"), time: `${String(Math.floor(index / 12) + 6).padStart(2, "0")}:${String((index % 12) * 5).padStart(2, "0")}`, procedure: "Retorno", professional: `Prof Antigo ${run}`, status: "Agendado", notes: "" })) });
+  r = await api("GET", "/api/agenda/overdue");
+  const times = (r.data.appointments ?? []).map((item) => `${String(item.date).slice(0, 10)} ${item.time}`);
+  check("overdue: no máximo 200, dos mais antigos para os mais novos", r.status === 200 && r.data.appointments.length === 200 && JSON.stringify(times) === JSON.stringify([...times].sort()) && String(r.data.appointments[0].date).startsWith("2019-05-01"), `${r.data.appointments?.length} ${times[0]}`);
+
+  // Fluxo real: criar, alterar e excluir pela API aparece no período certo.
+  const target = day(3);
+  const createdAppt = await api("POST", "/api/appointments", { patientId: all[9].id, procedure: "Retorno", professional: `Prof Fluxo ${run}`, time: "15:00", date: target });
+  const inDay = async () => pids(await period(target, target));
+  check("agenda: agendamento criado pela API aparece no período do dia e não no dia seguinte", createdAppt.status === 201 && (await inDay()).includes(createdAppt.data.appointment.id) && !pids(await period(day(4), day(4))).includes(createdAppt.data.appointment.id), `${createdAppt.status}`);
+  await api("PATCH", `/api/appointments/${createdAppt.data.appointment.id}`, { status: "Cancelado" });
+  check("agenda: status alterado aparece na consulta seguinte", (await period(target, target)).data.appointments.find((x) => x.id === createdAppt.data.appointment.id)?.status === "Cancelado", "");
+  await api("DELETE", `/api/appointments/${createdAppt.data.appointment.id}`);
+  check("agenda: agendamento excluído some do período", !(await inDay()).includes(createdAppt.data.appointment.id), "");
+
+  // Outra clínica, STAFF e PROFESSIONAL, sem sessão.
+  const otherEmail = `e2e-pg-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E Paginacao Externa ${run}`;
+  const staffEmail = `e2e-pg-staff-${run}@example.com`, staffPassword = `E2e-${run}-Staff9!`;
+  const proEmail = `e2e-pg-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
+  const members = [];
+  try {
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990020", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    if (other?.status === 200) {
+      const probe = await withSession(other.cookie, async () => {
+        const mine = (await api("POST", "/api/patients", { name: `${tag} Externo`, phone: "11977770000", age: 40, cpf: randomCpf() })).data.patient;
+        const otherClinicId = (await prisma.patient.findUnique({ where: { id: mine.id }, select: { clinicId: true } })).clinicId;
+        await prisma.appointment.create({ data: { clinicId: otherClinicId, patientId: mine.id, date: instant("2031-02-10"), time: "11:00", procedure: "Retorno", professional: "Externo", status: "Agendado", notes: "" } });
+        return {
+          mine,
+          list: await api("GET", `/api/patients?q=${encodeURIComponent(tag)}&pageSize=100`),
+          lookup: await api("GET", `/api/patients/lookup?q=${encodeURIComponent(special.jose.name)}`),
+          single: await api("GET", `/api/patients/${special.jose.id}`),
+          agenda: await api("GET", "/api/agenda?from=2031-02-01&to=2031-02-28"),
+        };
+      });
+      check("outra clínica: lista só traz os próprios pacientes (1) e o resumo não soma os meus", probe.list.status === 200 && probe.list.data.pagination.total === 1 && probe.list.data.patients[0].id === probe.mine.id && probe.list.data.summary.total === 1, JSON.stringify(probe.list.data.pagination));
+      check("outra clínica: lookup não encontra paciente da minha clínica; GET por id => 404", probe.lookup.data.patients.length === 0 && probe.single.status === 404, `${probe.lookup.data.patients?.length} ${probe.single.status}`);
+      check("outra clínica: agenda do período só mostra o agendamento dela", probe.agenda.status === 200 && probe.agenda.data.appointments.length === 1 && probe.agenda.data.appointments[0].professional === "Externo", JSON.stringify(probe.agenda.data.appointments?.map((x) => x.professional)));
+      const mineAgain = await period("2031-02-01", "2031-02-28");
+      const mineList = await list(`q=${encodeURIComponent(tag)}&pageSize=100`);
+      const otherOverdue = await withSession(other.cookie, () => api("GET", "/api/agenda/overdue"));
+      check("overdue: outra clínica não enxerga os vencidos da minha (e não vaza os dela para mim)", otherOverdue.status === 200 && otherOverdue.data.appointments.length === 0, JSON.stringify(otherOverdue.data).slice(0, 100));
+      check("minha clínica não vê agendamento nem paciente da outra", mineAgain.data.appointments.every((x) => x.professional !== "Externo") && !mineList.data.patients.some((p) => p.id === probe.mine.id) && mineList.data.pagination.total === 30, `${mineList.data.pagination.total}`);
+    } else check("paginação: outra clínica criada", false, `register ${r.status}`);
+
+    for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
+      const made = await api("POST", "/api/team", { name: `E2E ${role} Pg`, email: memberEmail, password: memberPassword, role });
+      if (made.status === 201) members.push(made.data.member);
+      const session = made.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
+      if (session?.status !== 200) { check(`paginação: usuário ${role} criado`, false, `team ${made.status} login ${session?.status}`); continue; }
+      const out = await withSession(session.cookie, async () => ({
+        list: await api("GET", "/api/patients?pageSize=10"),
+        search: await api("GET", `/api/patients?q=${encodeURIComponent("ângela")}`),
+        lookup: await api("GET", "/api/patients/lookup?q=jose"),
+        agenda: await api("GET", "/api/agenda?from=2031-02-01&to=2031-02-28"),
+        boot: await api("GET", "/api/agenda/bootstrap"),
+        overdue: await api("GET", "/api/agenda/overdue"),
+      }));
+      check(`${role}: lê lista paginada, busca, lookup, agenda por período e bootstrap (200)`, out.list.status === 200 && out.list.data.pagination.total === N && out.search.data.patients.length === 1 && out.lookup.status === 200 && out.agenda.status === 200 && out.agenda.data.appointments.length === 4 && out.boot.status === 200 && out.overdue.status === 200, `${out.list.status}/${out.search.status}/${out.lookup.status}/${out.agenda.status}/${out.boot.status}`);
+    }
+
+    const anon = await withSession("", async () => [await api("GET", "/api/patients"), await api("GET", "/api/patients/lookup?q=a"), await api("GET", `/api/patients/${all[0].id}`), await api("GET", "/api/agenda?from=2031-02-01&to=2031-02-28"), await api("GET", "/api/agenda/overdue")]);
+    check("sem sessão: lista, lookup, paciente, agenda por período e overdue devolvem 401", anon.every((x) => x.status === 401), anon.map((x) => x.status).join());
+  } finally {
+    for (const member of members) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [otherEmail, staffEmail, proEmail] } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: [otherEmail, staffEmail, proEmail] } } });
+  }
+}
+
+// Lacunas da paginação, numa clínica externa nova (vazia), para não depender dos pacientes das outras partes:
+// 0/1/2/exatos pacientes, empates de nome e de createdAt, mutações entre páginas, busca hostil, resumo, agenda nos extremos,
+// permissões por papel e desempenho com 200 pacientes.
+async function paginationGaps() {
+  const tag = `Pgx${run}`;
+  const gapEmail = `e2e-pgx-${run}@example.com`, gapPassword = `E2e-${run}-Gap99!`, gapClinic = `E2E Paginacao Lacunas ${run}`;
+  const staffEmail = `e2e-pgx-staff-${run}@example.com`, staffPassword = `E2e-${run}-Stf99!`;
+  const proEmail = `e2e-pgx-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
+  const members = [];
+  const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: gapClinic, name: "E2E Lacunas", phone: "11999990030", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: gapEmail, password: gapPassword }));
+  const gap = reg.status === 201 ? await loginAs(gapEmail, gapPassword) : null;
+  if (gap?.status !== 200) { check("paginação (lacunas): clínica de apoio criada", false, `register ${reg.status}`); return; }
+  try {
+    await withSession(gap.cookie, async () => {
+      const clinicId = (await prisma.clinic.findFirst({ where: { name: gapClinic }, select: { id: true } })).id;
+      const list = (query = "") => api("GET", `/api/patients${query ? `?${query}` : ""}`);
+      const ids = (x) => (x.data.patients ?? []).map((item) => item.id);
+      const bulk = (count, name, extra = {}) => prisma.patient.createMany({ data: Array.from({ length: count }, (_, i) => ({ clinicId, name: typeof name === "function" ? name(i) : name, phone: `1197${String(1000000 + i).slice(-7)}`, age: 30, ...extra })) });
+      const walk = async (query, pageSize) => {
+        const seen = [];
+        for (let page = 1; page <= 200; page += 1) { const x = await list(`${query}${query ? "&" : ""}page=${page}&pageSize=${pageSize}`); if (!x.data.patients?.length) break; seen.push(...ids(x)); }
+        return seen;
+      };
+
+      // Clínica vazia.
+      let r = await list();
+      check("clínica vazia: lista [], página 1, total 0, pageCount 0, resumo zerado", r.status === 200 && r.data.patients.length === 0 && JSON.stringify(r.data.pagination) === JSON.stringify({ page: 1, pageSize: 20, total: 0, pageCount: 0 }) && r.data.summary.total === 0 && Object.keys(r.data.summary.byStatus).length === 0, JSON.stringify(r.data));
+      check("clínica vazia: page=5, sort=recent, status e q não quebram", (await Promise.all(["page=5", "sort=recent", "status=Ativa", "q=abc", "pageSize=100&page=2"].map((query) => list(query)))).every((x) => x.status === 200 && x.data.patients.length === 0 && x.data.pagination.total === 0), "");
+      r = await api("GET", "/api/patients/lookup?q=a");
+      check("clínica vazia: lookup devolve lista vazia", r.status === 200 && r.data.patients.length === 0, JSON.stringify(r.data));
+      r = await api("GET", "/api/agenda?from=2031-02-01&to=2031-02-28");
+      check("clínica vazia: agenda do período vazia e bootstrap sem agendamentos nem pacientes", r.status === 200 && r.data.total === 0 && (await api("GET", "/api/agenda/bootstrap")).status === 200, `${r.status}`);
+
+      // 1 e 2 pacientes.
+      const one = (await api("POST", "/api/patients", { name: `${tag} Unico`, phone: "11988880001", age: 30 })).data.patient;
+      r = await list();
+      check("1 paciente: total 1, pageCount 1, resumo 1", r.data.patients.length === 1 && r.data.pagination.total === 1 && r.data.pagination.pageCount === 1 && r.data.summary.total === 1 && r.data.summary.byStatus.Ativa === 1, JSON.stringify(r.data.pagination));
+      const two = (await api("POST", "/api/patients", { name: `${tag} Segundo`, phone: "11988880002", age: 31 })).data.patient;
+      r = await list("pageSize=1&page=2");
+      check("2 pacientes com pageSize=1: pageCount 2 e a página 2 traz o último por nome (Unico depois de Segundo)", r.data.pagination.pageCount === 2 && r.data.patients.length === 1 && r.data.patients[0].id === one.id && r.data.summary.total === 2, JSON.stringify(r.data.pagination));
+      await prisma.patient.deleteMany({ where: { clinicId } });
+
+      // Tamanhos exatos: pageSize, pageSize+1, 100 e 101.
+      await bulk(10, (i) => `${tag} Exato ${String(i).padStart(3, "0")}`);
+      r = await list("pageSize=10");
+      check("exatamente pageSize (10): 1 página, 10 itens", r.data.patients.length === 10 && r.data.pagination.pageCount === 1 && r.data.pagination.total === 10, JSON.stringify(r.data.pagination));
+      await bulk(1, `${tag} Exato 010`);
+      const [p1, p2, p3] = [await list("pageSize=10&page=1"), await list("pageSize=10&page=2"), await list("pageSize=10&page=3")];
+      check("pageSize+1 (11 com 10): 2 páginas, 10 + 1 + 0, sem repetir", p1.data.pagination.pageCount === 2 && p1.data.patients.length === 10 && p2.data.patients.length === 1 && p3.data.patients.length === 0 && new Set([...ids(p1), ...ids(p2)]).size === 11, `${p1.data.patients.length}/${p2.data.patients.length}/${p3.data.patients.length}`);
+      await prisma.patient.deleteMany({ where: { clinicId } });
+      await bulk(100, (i) => `${tag} Cem ${String(i).padStart(3, "0")}`);
+      r = await list("pageSize=100");
+      check("exatamente 100 com pageSize=100: 1 página de 100", r.data.patients.length === 100 && r.data.pagination.pageCount === 1, JSON.stringify(r.data.pagination));
+      await bulk(1, `${tag} Cem 100`);
+      const [h1, h2] = [await list("pageSize=100&page=1"), await list("pageSize=100&page=2")];
+      const h3 = await list("pageSize=1000&page=2");
+      check("101 pacientes: pageSize=100 devolve 100 + 1; pageSize=1000 vira 100 (mesma página 2)", h1.data.patients.length === 100 && h2.data.patients.length === 1 && h1.data.pagination.pageCount === 2 && JSON.stringify(ids(h3)) === JSON.stringify(ids(h2)) && h3.data.pagination.pageSize === 100, `${h1.data.patients.length}/${h2.data.patients.length}`);
+      await prisma.patient.deleteMany({ where: { clinicId } });
+
+      // 200 pacientes com empates: 60 com o mesmo nome e todos com o mesmo createdAt (um único INSERT).
+      await bulk(60, `${tag} Homonimo`);
+      await bulk(140, (i) => `${tag} Lote ${String(i % 70).padStart(2, "0")}`);
+      const all = (await prisma.patient.findMany({ where: { clinicId }, select: { id: true, createdAt: true } }));
+      const sameCreatedAt = new Set(all.map((p) => p.createdAt.getTime())).size;
+      check("preparo: 200 pacientes, com empates de nome (60 homônimos, 70 pares) e createdAt em poucos instantes", all.length === 200 && sameCreatedAt <= 2, `${all.length} createdAt distintos=${sameCreatedAt}`);
+      const universe = new Set(all.map((p) => p.id));
+      for (const sort of ["name", "recent"]) {
+        const reference = await walk(`sort=${sort}`, 100);
+        const outcomes = [];
+        for (const size of [7, 10, 13, 50]) { const seen = await walk(`sort=${sort}`, size); outcomes.push(`${size}:${seen.length}/${new Set(seen).size}/${JSON.stringify(seen) === JSON.stringify(reference)}`); }
+        check(`200 pacientes, sort=${sort} com empates: pageSize 7/10/13/50/100 percorrem exatamente o conjunto (sem duplicar nem perder) na mesma ordem`, reference.length === 200 && new Set(reference).size === 200 && reference.every((id) => universe.has(id)) && outcomes.every((x) => x.endsWith("true") && x.split(":")[1].startsWith("200/200")), outcomes.join(" "));
+      }
+      const homonymWalk = await walk(`q=${encodeURIComponent("homonimo")}`, 7);
+      check("busca com 60 homônimos paginada de 7 em 7: 60 distintos, total 60", homonymWalk.length === 60 && new Set(homonymWalk).size === 60 && (await list(`q=homonimo&pageSize=7`)).data.pagination.total === 60, `${homonymWalk.length}`);
+
+      // Desempenho e concorrência.
+      await prisma.patient.updateMany({ where: { clinicId, name: { contains: "Lote 05" } }, data: { name: `${tag} Conceição Lote` } });
+      const t0 = performance.now();
+      const accent = await list(`q=${encodeURIComponent("conceicao")}&pageSize=100`);
+      const accentMs = Math.round(performance.now() - t0);
+      const t1 = performance.now();
+      const fullWalk = await walk("", 20);
+      const walkMs = Math.round(performance.now() - t1);
+      check(`200 pacientes: busca com acento acha os renomeados (${accentMs} ms) e percorrer 10 páginas leva ${walkMs} ms`, accent.status === 200 && accent.data.pagination.total === (await prisma.patient.count({ where: { clinicId, name: { contains: "Conceição" } } })) && accent.data.pagination.total > 0 && fullWalk.length === 200 && accentMs < 3000 && walkMs < 15000, `acento=${accentMs}ms total=${accent.data.pagination?.total}; 10 páginas=${walkMs}ms`);
+      const t2 = performance.now();
+      const parallel = await Promise.all([list("pageSize=50"), list(`q=${encodeURIComponent("conceição")}`), list("sort=recent&page=2&pageSize=20"), api("GET", "/api/patients/lookup?q=lote"), list("status=Ativa&pageSize=100&page=2")]);
+      check(`5 consultas simultâneas (lista, busca, recentes, lookup, status) sem erro 5xx (${Math.round(performance.now() - t2)} ms)`, parallel.every((x) => x.status === 200), parallel.map((x) => x.status).join());
+
+      // Mutação entre páginas: criar e excluir mudam total/resumo e a ordem continua sem duplicar dentro de uma página.
+      const before = await list("pageSize=10&page=1");
+      const created = (await api("POST", "/api/patients", { name: `${tag} AAA Novo`, phone: "11988889999", age: 33 })).data.patient;
+      const after1 = await list("pageSize=10&page=1");
+      const after2 = await list("pageSize=10&page=2");
+      check("criar paciente entre páginas: total e resumo sobem em 1, o novo (nome menor) abre a página 1 e o 10º vai para a página 2 (sem perder ninguém)", after1.data.pagination.total === 201 && after1.data.summary.total === 201 && after1.data.patients[0].id === created.id && after2.data.patients[0].id === before.data.patients[9].id, `${after1.data.pagination.total} ${after1.data.patients[0]?.name}`);
+      await prisma.patient.update({ where: { id: created.id }, data: { status: "Arquivada" } });
+      r = await list("pageSize=10");
+      check("resumo muda ao arquivar: byStatus.Arquivada = 1 e total continua 201; lista por status=Arquivada devolve só ele", r.data.summary.byStatus.Arquivada === 1 && r.data.summary.byStatus.Ativa === 200 && r.data.summary.total === 201 && JSON.stringify(ids(await list("status=Arquivada"))) === JSON.stringify([created.id]), JSON.stringify(r.data.summary));
+      await prisma.patient.delete({ where: { id: created.id } });
+      r = await list("pageSize=10&q=aaa%20novo");
+      check("excluir paciente: resumo volta a 200 e o paciente some da busca e do GET por id", (await list("pageSize=10")).data.summary.total === 200 && r.data.pagination.total === 0 && (await api("GET", `/api/patients/${created.id}`)).status === 404, "");
+
+      // Busca hostil: o SQL cru não pode ser injetado nem quebrar; total e lista batem.
+      await prisma.patient.createMany({ data: [
+        { clinicId, name: `${tag} Barra\\Invertida`, phone: "11977000001", age: 30 },
+        { clinicId, name: `${tag} Aspas'Simples "Duplas"`, phone: "11977000002", age: 30 },
+        { clinicId, name: `${tag} Sublinha_Nome 100%`, phone: "11977000003", age: 30 },
+        { clinicId, name: `${tag} Ponto;Virgula -- <script>`, phone: "11977000004", age: 30 },
+        { clinicId, name: `${tag} Emoji 😀 Zoë`, phone: "11977000005", age: 30 },
+      ] });
+      const hostile = [["\\", "Barra\\Invertida"], ["'", "Aspas'Simples"], ['"Duplas"', "Aspas'Simples"], ["_Nome", "Sublinha_Nome"], ["100%", "Sublinha_Nome"], [";", "Ponto;Virgula"], ["--", "Ponto;Virgula"], ["<script>", "Ponto;Virgula"], ["😀", "Emoji"], ["zoe", "Emoji"]];
+      const hostileResults = [];
+      for (const [q, expected] of hostile) { const x = await list(`q=${encodeURIComponent(q)}&pageSize=100`); hostileResults.push([q, x.status, x.data.pagination?.total, (x.data.patients ?? []).some((p) => p.name.includes(expected)), x.data.patients?.length === x.data.pagination?.total]); }
+      check("busca com \\ ' \" _ % ; -- <script> emoji acha o paciente certo e total = tamanho da lista", hostileResults.every(([, status, , found, consistent]) => status === 200 && found && consistent), JSON.stringify(hostileResults.filter(([, status, , found, consistent]) => !(status === 200 && found && consistent))));
+      const payloads = ["' OR '1'='1", "'; DROP TABLE \"Patient\"; --", "%' OR 1=1 --", "\\' OR 1=1", "${1+1}", "a'||(select 1)||'"];
+      const injected = await Promise.all(payloads.map((q) => list(`q=${encodeURIComponent(q)}&pageSize=100`)));
+      check("payloads de injeção não devolvem pacientes, não dão 5xx e a tabela continua intacta", injected.every((x) => x.status === 200 && x.data.pagination.total === 0 && x.data.patients.length === 0) && (await prisma.patient.count({ where: { clinicId } })) === 205, injected.map((x) => `${x.status}/${x.data.pagination?.total}`).join(" "));
+      const wide = [["only spaces", "q=%20%20%20%20"], ["q muito longa (1500)", `q=${"a".repeat(1500)}`], ["q repetido", `q=${encodeURIComponent(tag)}&q=zzz`], ["status injetado", `status=${encodeURIComponent("Ativa' OR '1'='1")}`], ["status longo", `status=${"x".repeat(500)}`], ["sort injetado", "sort=name;DROP"], ["page array", "page=1&page=2&pageSize=5&pageSize=7"], ["page=1.5", "page=1.5"], ["page=1e2", "page=1e2&pageSize=1e1"], ["page= 2", "page=%202"], ["pageSize=0x10", "pageSize=0x10"]];
+      const wideResults = [];
+      for (const [label, query] of wide) { const x = await list(query); wideResults.push([label, x.status, x.data.pagination?.page, x.data.pagination?.pageSize, x.data.pagination?.total]); }
+      check("parâmetros estranhos (espaços, 1500 letras, repetidos, status/sort injetados, 1e2, 0x10) => 200", wideResults.every((x) => x[1] === 200), JSON.stringify(wideResults));
+      check("só espaços na busca = sem busca; q repetido usa o primeiro; status inexistente = 0; q longa trunca sem erro", wideResults[0][4] === 205 && wideResults[2][4] === 205 && wideResults[3][4] === 0 && wideResults[1][4] === 0, JSON.stringify(wideResults.map((x) => x[4])));
+      const nul = [await list("q=a%00b"), await api("GET", "/api/patients/lookup?q=a%00b"), await api("GET", "/api/patients/abc%00def"), await list("status=a%00b")];
+      check("byte nulo (%00) em q, lookup, id e status não gera erro 500", nul.every((x) => x.status < 500), nul.map((x) => x.status).join());
+      check("GET /api/patients/{id}: id de 5000 caracteres e com ../ => 404", (await api("GET", `/api/patients/${"a".repeat(5000)}`)).status === 404 && (await api("GET", "/api/patients/..%2F..%2Fx")).status === 404 && (await api("GET", `/api/patients/${one.id}`)).status === 404, "");
+
+      // Unicode: NFC e NFD na busca e no cadastro.
+      const nfdName = `${tag} José Nfd`, nfcName = `${tag} José Nfc`;
+      await prisma.patient.createMany({ data: [{ clinicId, name: nfdName, phone: "11977000010", age: 30 }, { clinicId, name: nfcName, phone: "11977000011", age: 30 }] });
+      const nfdFound = async (q) => (await list(`q=${encodeURIComponent(q)}&pageSize=100`)).data.patients.map((p) => p.name.normalize("NFC"));
+      check("busca por 'jose nfc'/'José NFC'/forma NFD acha o cadastrado em NFC", (await nfdFound("jose nfc")).length === 1 && (await nfdFound("José nfc")).length === 1 && (await nfdFound("José nfc")).length === 1, "");
+      check("busca encontra paciente cadastrado com nome em NFD (acento decomposto, ex.: colado do macOS)", (await nfdFound("jose nfd")).length === 1 && (await nfdFound("José nfd")).length === 1, `jose nfd=${(await nfdFound("jose nfd")).length}; José(NFC) nfd=${(await nfdFound("José nfd")).length}`);
+
+      // Telefone com e sem máscara.
+      await prisma.patient.create({ data: { clinicId, name: `${tag} Mascara`, phone: "(11) 98800-4321", age: 30, cpf: "52998224725" } });
+      const phoneOnes = [];
+      for (const q of ["(11) 98800-4321", "98800-4321", "98800", "(11)"]) phoneOnes.push((await list(`q=${encodeURIComponent(q)}`)).data.pagination.total >= 1);
+      check("telefone com máscara é achado digitando a máscara ou um pedaço dela", phoneOnes.every(Boolean), phoneOnes.join());
+      await prisma.patient.create({ data: { clinicId, name: `${tag} Cpf Formatado`, phone: "11977000020", age: 30, cpf: "111.444.777-35" } });
+      const lookupCpf = async (q) => (await api("GET", `/api/patients/lookup?q=${encodeURIComponent(q)}`)).data.patients.length;
+      check("lookup acha o CPF exatamente como foi cadastrado (só dígitos e formatado)", (await lookupCpf("52998224725")) === 1 && (await lookupCpf("111.444.777-35")) === 1, "");
+      check("lookup acha o CPF formatado digitando só os dígitos (e vice-versa)", (await lookupCpf("11144477735")) === 1 && (await lookupCpf("529.982.247-25")) === 1, `dígitos->formatado=${await lookupCpf("11144477735")} formatado->dígitos=${await lookupCpf("529.982.247-25")}`);
+
+      // Lookup: limites, campos e termos curtos.
+      const limits = [];
+      for (const limit of ["0", "-1", "21", "abc", "1.5", "", "3&limit=9"]) limits.push([limit, (await api("GET", `/api/patients/lookup?q=${encodeURIComponent(tag)}&limit=${limit}`)).data.patients?.length]);
+      check("lookup: limit 0/-1/abc/1.5/vazio => 8, 21 => 20, 3&limit=9 => 3 (primeiro valor; 1.5 e 0 não viram 1)", JSON.stringify(limits) === JSON.stringify([["0", 8], ["-1", 8], ["21", 20], ["abc", 8], ["1.5", 8], ["", 8], ["3&limit=9", 3]]), JSON.stringify(limits));
+      r = await api("GET", `/api/patients/lookup?q=${encodeURIComponent(tag)}&limit=20`);
+      check("lookup: só id, name e cpf em cada item (nenhum campo clínico, telefone ou status)", r.data.patients.length === 20 && r.data.patients.every((p) => Object.keys(p).sort().join() === "cpf,id,name"), JSON.stringify(Object.keys(r.data.patients[0] ?? {})));
+      check("lookup: uma letra devolve vazio (mínimo 2 caracteres), 2 letras pesquisam, só espaços e vazio devolvem lista vazia, q enorme não quebra", (await api("GET", "/api/patients/lookup?q=l")).data.patients.length === 0 && (await api("GET", "/api/patients/lookup?q=lo")).data.patients.length === 8 && (await api("GET", "/api/patients/lookup?q=%20%20")).data.patients.length === 0 && (await api("GET", `/api/patients/lookup?q=${"z".repeat(3000)}`)).status === 200, "");
+
+      // Agenda: extremos, domingo, viradas, bissexto, status, ordenação, outro paciente.
+      const patient = (await api("POST", "/api/patients", { name: `${tag} Agenda`, phone: "11977111111", age: 30 })).data.patient;
+      const noon = (d) => new Date(`${d}T12:00:00-03:00`);
+      const slot = (key, d, time, extra = {}) => prisma.appointment.create({ data: { clinicId, patientId: patient.id, date: noon(d), time, procedure: "Retorno", professional: `Prof ${key}`, status: "Agendado", notes: "", ...extra } });
+      const s = {
+        fromStart: await slot("fromStart", "2032-02-27", "00:00"),
+        fromEnd: await slot("fromEnd", "2032-02-27", "23:30"),
+        leap: await slot("leap", "2032-02-29", "10:00"),
+        sunday: await slot("sunday", "2032-02-29", "09:00", { status: "Atendido" }),
+        toStart: await slot("toStart", "2032-03-02", "00:00", { status: "Cancelado" }),
+        toEnd: await slot("toEnd", "2032-03-02", "23:30", { status: "Em atendimento" }),
+        beforeFrom: await slot("beforeFrom", "2032-02-26", "23:30"),
+        afterTo: await slot("afterTo", "2032-03-03", "00:00"),
+        yearEnd: await slot("yearEnd", "2032-12-31", "23:30"),
+        yearStart: await slot("yearStart", "2033-01-01", "00:00"),
+        tieB: await slot("tieB", "2032-05-10", "10:00"),
+        tieA: await slot("tieA", "2032-05-10", "10:00"),
+        early: await slot("early", "2032-05-10", "08:00"),
+        midnightLegacy: await slot("midnightLegacy", "2032-06-15", "13:00", { date: new Date("2032-06-15T00:00:00.000Z") }),
+      };
+      const rows = async (from, to) => (await api("GET", `/api/agenda?from=${from}&to=${to}`)).data.appointments ?? [];
+      const keyOf = (row) => Object.entries(s).find(([, v]) => v.id === row.id)?.[0];
+      let got = await rows("2032-02-27", "2032-03-02");
+      check("agenda: 00:00 e 23:30 do primeiro e do último dia entram; dia anterior e posterior ficam de fora", got.map(keyOf).sort().join() === ["fromStart", "fromEnd", "leap", "sunday", "toStart", "toEnd"].sort().join(), got.map(keyOf).join());
+      check("agenda: ordenada por data, hora e id (09:00 antes de 10:00 no dia 29/02 bissexto) e cancelado/atendido/em atendimento aparecem com o status", JSON.stringify(got.map(keyOf)) === JSON.stringify(["fromStart", "fromEnd", "sunday", "leap", "toStart", "toEnd"]) && got.find((x) => keyOf(x) === "toStart").status === "Cancelado" && got.find((x) => keyOf(x) === "sunday").status === "Atendido" && got.find((x) => keyOf(x) === "toEnd").status === "Em atendimento", JSON.stringify(got.map(keyOf)));
+      got = await rows("2032-05-10", "2032-05-10");
+      const tied = [s.tieA.id, s.tieB.id].sort();
+      check("agenda: mesmo dia e hora desempatam por id; 08:00 vem primeiro", JSON.stringify(got.map((x) => x.id)) === JSON.stringify([s.early.id, ...tied]), got.map(keyOf).join());
+      check("agenda: domingo 29/02/2032 (bissexto) pedido sozinho devolve os 2 atendimentos dele, e 29/02/2031 inexistente => 400", (await rows("2032-02-29", "2032-02-29")).length === 2 && (await api("GET", "/api/agenda?from=2031-02-29&to=2031-02-29")).status === 400, "");
+      check("agenda: virada de ano 31/12 23:30 e 01/01 00:00 caem cada um no seu período", JSON.stringify((await rows("2032-12-01", "2032-12-31")).map(keyOf)) === JSON.stringify(["yearEnd"]) && JSON.stringify((await rows("2033-01-01", "2033-01-31")).map(keyOf)) === JSON.stringify(["yearStart"]) && JSON.stringify((await rows("2032-12-31", "2033-01-01")).map(keyOf)) === JSON.stringify(["yearEnd", "yearStart"]), "");
+      check("agenda: linha legada à meia-noite UTC aparece no dia dela e em nenhum vizinho", JSON.stringify((await rows("2032-06-15", "2032-06-15")).map(keyOf)) === JSON.stringify(["midnightLegacy"]) && (await rows("2032-06-14", "2032-06-14")).length === 0 && (await rows("2032-06-16", "2032-06-16")).length === 0, "");
+      check("agenda: 93 dias aceito e 94 recusado também atravessando fevereiro bissexto", (await api("GET", "/api/agenda?from=2032-01-15&to=2032-04-16")).status === 200 && (await api("GET", "/api/agenda?from=2032-01-15&to=2032-04-17")).status === 400, "");
+      const edge = [await api("GET", "/api/agenda?from=2032-2-3&to=2032-02-05"), await api("GET", "/api/agenda?from=2032-13-01&to=2032-13-02"), await api("GET", "/api/agenda?from=2032-02-30&to=2032-03-01"), await api("GET", "/api/agenda?from=2032-02-05&to=2032-02-04"), await api("GET", "/api/agenda?from=2032-02-05T00:00:00Z&to=2032-02-06"), await api("GET", "/api/agenda?from=&to="), await api("GET", "/api/agenda")];
+      check("agenda: 2032-2-3, mês 13, 30/02, invertido, com hora, vazio e ausente => 400", edge.every((x) => x.status === 400 && typeof x.data.message === "string"), edge.map((x) => x.status).join());
+      const farFuture = await api("GET", "/api/agenda?from=9999-12-30&to=9999-12-31");
+      check("agenda: ano 9999 (fora de 1970 a 2100) => 400, nunca 5xx", farFuture.status === 400, `${farFuture.status}`);
+      check("agenda: item enxuto e sem observações/materiais mesmo com notas no banco", await (async () => { await prisma.appointment.update({ where: { id: s.leap.id }, data: { notes: "nota clínica secreta", materialsCheck: "ok" } }); const x = (await rows("2032-02-29", "2032-02-29")).find((row) => row.id === s.leap.id); return x && !JSON.stringify(x).includes("secreta") && Object.keys(x).sort().join() === "date,id,patient,patientId,procedure,professional,status,time"; })(), "");
+
+      // Agendamento criado pela API no último dia do período e à meia-noite.
+      const apiDay = day(20);
+      const viaApi = await api("POST", "/api/appointments", { patientId: patient.id, procedure: "Retorno", professional: `Prof Api ${run}`, time: "23:30", date: apiDay });
+      check("agendamento 23:30 criado pela API aparece no período que termina nesse dia e não no que termina na véspera", viaApi.status === 201 ? (await rows(day(10), apiDay)).some((x) => x.id === viaApi.data.appointment.id) && !(await rows(day(10), day(19))).some((x) => x.id === viaApi.data.appointment.id) : true, `POST ${viaApi.status}`);
+
+      // Papéis na clínica de apoio: comparar o que ADMIN, PROFESSIONAL e STAFF veem hoje.
+      const adminList = await list("pageSize=100&q=lote");
+      const adminLookup = await api("GET", "/api/patients/lookup?q=lote&limit=20");
+      const adminAgenda = await api("GET", "/api/agenda?from=2032-02-27&to=2032-03-02");
+      const adminBootstrap = await api("GET", "/api/agenda/bootstrap");
+      const options = await api("GET", "/api/quotes/options");
+      for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
+        const made = await api("POST", "/api/team", { name: `E2E ${role} Pgx`, email: memberEmail, password: memberPassword, role });
+        if (made.status === 201) members.push(made.data.member);
+        const session = made.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
+        if (session?.status !== 200) { check(`paginação (lacunas): usuário ${role} criado`, false, `team ${made.status}`); continue; }
+        const seen = await withSession(session.cookie, async () => ({
+          list: await list("pageSize=100&q=lote"), lookup: await api("GET", "/api/patients/lookup?q=lote&limit=20"),
+          agenda: await api("GET", "/api/agenda?from=2032-02-27&to=2032-03-02"), boot: await api("GET", "/api/agenda/bootstrap"),
+          one: await api("GET", `/api/patients/${ids(adminList)[0]}`), options: await api("GET", "/api/quotes/options"),
+        }));
+        check(`${role}: vê o mesmo que o ADMIN na lista, lookup, agenda, bootstrap, paciente e opções de orçamento (mesmos ids e mesmos campos)`,
+          JSON.stringify(ids(seen.list)) === JSON.stringify(ids(adminList)) && JSON.stringify(Object.keys(seen.list.data.patients[0]).sort()) === JSON.stringify(Object.keys(adminList.data.patients[0]).sort())
+          && JSON.stringify(seen.lookup.data.patients) === JSON.stringify(adminLookup.data.patients) && JSON.stringify(seen.agenda.data.appointments) === JSON.stringify(adminAgenda.data.appointments)
+          && seen.boot.status === 200 && JSON.stringify(Object.keys(seen.boot.data).sort()) === JSON.stringify(Object.keys(adminBootstrap.data).sort())
+          && seen.one.status === 200 && seen.options.status === 200 && !("patients" in seen.options.data) && Object.keys(seen.options.data).sort().join() === Object.keys(options.data).sort().join(),
+          [seen.list, seen.lookup, seen.agenda, seen.boot, seen.one, seen.options].map((x) => x.status).join());
+        check(`${role}: nenhum campo clínico (avaliação, fotos, notas) na lista, no lookup, no paciente e na agenda`, ![seen.list, seen.lookup, seen.agenda, seen.one].some((x) => /photo|evaluation|anamnes|observation|notes|materials/i.test(JSON.stringify(x.data, (key, value) => (key === "currentStage" ? undefined : value)))), "");
+      }
+    });
+  } finally {
+    for (const member of members) await withSession(gap.cookie, () => api("DELETE", "/api/team", { membershipId: member.id }));
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [gapEmail, staffEmail, proEmail] } } } });
+    await prisma.clinic.deleteMany({ where: { name: gapClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: [gapEmail, staffEmail, proEmail] } } });
+  }
+}
+
 // Partes do roteiro, na ordem em que rodam. `needs` lista as partes que criam os dados que esta usa.
 // Conflitos de agenda: o mesmo profissional ou paciente não tem dois atendimentos sobrepostos (criar, remarcar, reativar, concorrência).
 async function scheduleConflicts() {
@@ -2749,6 +3211,7 @@ const suites = {
   sessao_unica: { needs: [], run: () => sessionPerQuote() },
   agendar_procedimento: { needs: [], run: () => scheduledProcedure() },
   inicio_move_agenda: { needs: [], run: () => startMovesAppointment() },
+  paginacao: { needs: [], run: async () => { await paginationSuite(); await paginationGaps(); } },
   conflitos_agenda: { needs: [], run: async () => { await scheduleConflicts(); await scheduleConflictGaps(); } },
   telas: { needs: ["orcamentos"], run: (state) => browser(state.homonym) },
   login: { needs: [], run: () => loginLockout() },

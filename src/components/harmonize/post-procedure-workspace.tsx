@@ -222,7 +222,7 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
       const response = await fetch(cacheKey, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "start-return", appointmentId: returnAppointment.id }) });
       const result = await response.json().catch(() => ({})) as { message?: string };
       if (!response.ok) throw new Error(result.message ?? "Não foi possível iniciar o retorno.");
-      invalidateClientCache(cacheKey, "/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/history`, `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`);
+      invalidateClientCache(cacheKey, "/api/agenda", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/history`, `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`);
       await reload();
       setSelectedAppointmentId(returnAppointment.id);
       markDraftChanged();
@@ -292,7 +292,7 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
       const response = await fetch(cacheKey, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ professional: data.session.professional, complaints, observations, complications, guidanceText, guidanceSent: guidanceConfirmed, photos, removedPhotoIds, ...(recordAppointmentId ? { appointmentId: recordAppointmentId } : {}) }) });
       const result = await response.json().catch(() => ({})) as { message?: string };
       if (!response.ok) throw new Error(result.message ?? "Não foi possível salvar o acompanhamento.");
-      invalidateClientCache(cacheKey, "/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`, `/api/patients/${encodeURIComponent(patientId)}/history`);
+      invalidateClientCache(cacheKey, "/api/agenda", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`, `/api/patients/${encodeURIComponent(patientId)}/history`);
       await reload();
       setComplaints(""); setObservations(""); setComplications(""); setGuidanceText(""); setGuidanceConfirmed(false); setPhotos([]); setRemovedPhotoIds([]); setSelectedAppointmentId("");
       setNotice(activeView === "return" ? "Retorno registrado no histórico clínico." : "Acompanhamento registrado no histórico clínico.");
@@ -341,7 +341,7 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
       const response = await fetch("/api/appointments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, journeyId: data.session.journeyId, procedure: `Retorno - ${data.session.procedureName}`, professional: data.session.professional, date: appointmentDate, time: appointmentTime, notes: appointmentNotes }) });
       const result = await response.json().catch(() => ({})) as { appointment?: Appointment; message?: string };
       if (!response.ok || !result.appointment) throw new Error(result.message ?? "Não foi possível agendar o retorno.");
-      invalidateClientCache(cacheKey, "/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/history`, `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`);
+      invalidateClientCache(cacheKey, "/api/agenda", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/history`, `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`);
       setAppointmentNotice(`Retorno agendado para ${new Date(result.appointment.date).toLocaleDateString("pt-BR")} às ${result.appointment.time}.`);
       setAppointmentOpen(false); setAppointmentDate(""); setAppointmentTime(""); setAppointmentNotes(""); setAppointmentDateError(""); setAppointmentTimeError("");
       if (appointmentLaunchReturn) { setReturnAppointmentId(result.appointment.id); setActiveView("return"); setAppointmentLaunchReturn(false); }

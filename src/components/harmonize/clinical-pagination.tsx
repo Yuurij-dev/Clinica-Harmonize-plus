@@ -12,7 +12,7 @@ export function PaginationBar({ page, pageSize, total, sizes, noun, onPage, onPa
   const from = total ? (page - 1) * pageSize + 1 : 0;
   const to = Math.min(total, page * pageSize);
   return <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-    <span>Mostrando {from} a {to} de {total} {total === 1 ? noun[0] : noun[1]}</span>
+    <span aria-live="polite" aria-atomic="true">Mostrando {from} a {to} de {total} {total === 1 ? noun[0] : noun[1]}</span>
     <div className="flex items-center gap-1" role="navigation" aria-label="Paginação">
       <Button size="sm" variant="outline" disabled={page <= 1} aria-label="Página anterior" onClick={() => onPage(page - 1)}><ChevronLeft className="h-4 w-4" /></Button>
       {pageNumbers(page, pages).map((number, index) => number === 0 ? <span key={`gap${index}`} className="px-1">…</span> : <Button key={number} size="sm" variant={number === page ? "default" : "outline"} aria-current={number === page ? "page" : undefined} onClick={() => onPage(number)}>{number}</Button>)}

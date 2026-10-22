@@ -8,8 +8,8 @@ export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
 
-  const [patients, procedures, clinic] = await Promise.all([
-    prisma.patient.findMany({ where: { clinicId: user.clinicId }, orderBy: { name: "asc" }, select: { id: true, name: true, cpf: true } }),
+  // Pacientes não vêm mais aqui: os seletores pesquisam sob demanda em /api/patients/lookup.
+  const [procedures, clinic] = await Promise.all([
     prisma.procedure.findMany({
       where: { clinicId: user.clinicId },
       orderBy: { name: "asc" },
@@ -23,5 +23,5 @@ export async function GET() {
     const items = technicalSheet.map((item) => ({ name: item.product.name, unit: item.product.unit, quantity: item.quantity }));
     return { ...withImage(procedure), materials: describeTechnicalSheet(items), unit: items[0]?.unit ?? null };
   });
-  return NextResponse.json({ patients, procedures: options, clinicName: clinic?.name ?? null, costs: clinic ? { laborCost: clinic.laborCost, facilityCost: clinic.facilityCost, medicationCost: clinic.medicationCost } : { laborCost: 0, facilityCost: 0, medicationCost: 0 } });
+  return NextResponse.json({ procedures: options, clinicName: clinic?.name ?? null, costs: clinic ? { laborCost: clinic.laborCost, facilityCost: clinic.facilityCost, medicationCost: clinic.medicationCost } : { laborCost: 0, facilityCost: 0, medicationCost: 0 } });
 }
