@@ -63,6 +63,7 @@ import { readTechnicalSheet, TechnicalSheetEditor, type TechnicalSheetItem } fro
 import { MaterialCheckModal } from "./material-check-modal";
 import { ClinicTimePicker } from "./clinic-time-picker";
 import { latestAppointmentStart } from "@/lib/clinic-time";
+import { clientsHomeEvent } from "@/lib/section-events";
 import { ProcedureImage } from "./procedure-image";
 import type { Appointment, JourneyStageId, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
 
@@ -206,8 +207,11 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
       }
     };
     syncSelectedPatient();
+    // Menu lateral clicado estando já em Clientes: volta para a lista (sem pedir anamnese pendente do paciente anterior).
+    const goToList = () => { setAnamnesisRequest(null); setSelectedPatientName(null); };
     window.addEventListener("popstate", syncSelectedPatient);
-    return () => window.removeEventListener("popstate", syncSelectedPatient);
+    window.addEventListener(clientsHomeEvent, goToList);
+    return () => { window.removeEventListener("popstate", syncSelectedPatient); window.removeEventListener(clientsHomeEvent, goToList); };
   }, []);
 
   useEffect(() => {
