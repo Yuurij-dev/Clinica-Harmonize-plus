@@ -146,3 +146,9 @@ test("catalog search finds items by synonyms but only items that exist", async (
   const known = new Set(items.map((item) => item.slug));
   for (const list of Object.values(catalogSynonyms)) for (const slug of list) assert.ok(known.has(slug), `slug inexistente: ${slug}`);
 });
+
+test("duration above 1440 minutes is rejected with a clear message", async () => {
+  const { findFieldProblem } = await import("../src/lib/procedure-form-rules.ts");
+  assert.deepEqual(findFieldProblem({ price: 1, durationMinutes: 1441, margin: 5 }), { field: "duration", message: "A duração máxima é 1440 minutos." });
+  assert.equal(findFieldProblem({ price: 1, durationMinutes: 1440, margin: 5 }), null);
+});

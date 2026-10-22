@@ -306,7 +306,7 @@ function ConfigureStep({ editing, selection, procedures, materials, onBack, onSa
     setPick({ kind: "file", file, previewUrl: previewRef.current });
   }
 
-  const invalidProps = (field: string) => errorField === field ? { "aria-invalid": true as const, "aria-describedby": "procedure-form-error" } : {};
+  const invalidProps = (field: string, help?: string) => errorField === field ? { "aria-invalid": true as const, "aria-describedby": [help, "procedure-form-error"].filter(Boolean).join(" ") } : help ? { "aria-describedby": help } : {};
   const percentFormatter = (value: string) => { const digits = formatInteger(value, 3); return digits ? `${digits}%` : ""; };
 
   const libraryNote = editing?.catalogItemId ? "Imagem padrão" : "Sem imagem";
@@ -372,8 +372,8 @@ function ConfigureStep({ editing, selection, procedures, materials, onBack, onSa
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <FormField label="Valor sugerido" htmlFor="procedure-price"><MaskedInput {...invalidProps("price")} id="procedure-price" className={fieldClassName} formatter={formatCurrency} name="price" inputMode="decimal" defaultValue={editing ? formatCurrency(String(Math.round(editing.price * 100))) : ""} placeholder="R$ 0,00" required autoFocus={isCatalogNew} /></FormField>
-        <FormField label="Duração (minutos)" htmlFor="procedure-duration"><MaskedInput {...invalidProps("duration")} id="procedure-duration" className={fieldClassName} formatter={(value) => formatInteger(value, 3)} name="duration" inputMode="numeric" defaultValue={editing ? String(editing.durationMinutes) : ""} placeholder="60" required /></FormField>
+        <FormField label="Valor sugerido" htmlFor="procedure-price"><MaskedInput {...invalidProps("price", "procedure-price-help")} id="procedure-price" className={fieldClassName} formatter={formatCurrency} name="price" inputMode="decimal" defaultValue={editing ? formatCurrency(String(Math.round(editing.price * 100))) : ""} placeholder="R$ 0,00" required autoFocus={isCatalogNew} /><p id="procedure-price-help" className="text-xs text-muted-foreground">O valor é arredondado para reais inteiros.</p></FormField>
+        <FormField label="Duração (minutos)" htmlFor="procedure-duration"><MaskedInput {...invalidProps("duration")} id="procedure-duration" className={fieldClassName} formatter={(value) => formatInteger(value, 4)} name="duration" inputMode="numeric" defaultValue={editing ? String(editing.durationMinutes) : ""} placeholder="60" required /></FormField>
         <FormField label="Margem estimada (%)" htmlFor="procedure-margin"><MaskedInput {...invalidProps("margin")} id="procedure-margin" className={fieldClassName} formatter={percentFormatter} name="margin" inputMode="numeric" defaultValue={editing ? `${editing.marginPercent}%` : ""} placeholder="40%" required /></FormField>
       </div>
 

@@ -1046,6 +1046,8 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   const cachedProducts = readClientCache<{ products?: Product[] }>("/api/products");
   const [procedureRows, setProcedureRows] = useState<ProcedureRow[]>(() => mapApiProcedures(cachedProcedures?.procedures));
   const [productRows, setProductRows] = useState<Product[]>(cachedProducts?.products ?? []);
+  // Quem abriu o modal (Novo procedimento ou Editar); o foco volta para lá ao fechar.
+  const openerRef = useRef<HTMLElement | null>(null);
   const [editingProcedureId, setEditingProcedureId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(!cachedProcedures);
   const editingProcedure = editingProcedureId === null ? null : procedureRows.find((procedure) => procedure.id === editingProcedureId) ?? null;
@@ -1085,6 +1087,12 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   function closeProcedureModal() {
     setEditingProcedureId(null);
     onCreateClose();
+    const opener = openerRef.current;
+    // Depois do desmonte do diálogo; se o elemento sumiu (tabela recarregada), foca o botão Novo procedimento.
+    setTimeout(() => {
+      const target = opener?.isConnected ? opener : Array.from(document.querySelectorAll<HTMLElement>("main button, [data-hp-title] button")).find((button) => button.textContent?.trim() === "Novo procedimento");
+      target?.focus();
+    }, 50);
   }
 
   async function handleProcedureSaved(name: string, created: boolean) {
@@ -1105,19 +1113,19 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
           title="Procedimentos"
           description="Cadastro de serviços com valor sugerido, tempo estimado e a ficha técnica de materiais e produtos usada no estoque e no orçamento."
           action="Novo procedimento"
-          onAction={onCreateOpen}
+          onAction={() => { openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; onCreateOpen?.(); }}
         />
         {isLoading ? <LoadingTable columns={6} /> : <MiniTable
           columns={["Nome", "Valor sugerido", "Tempo", "Ficha técnica", "Margem", "Ação"]}
           rows={procedureRows.map((procedure) => [
-            <span className="flex min-w-0 items-center gap-2" key={`name-${procedure.id}`}><ProcedureImage name={procedure.name} imageUrl={procedure.imageUrl} decorative className="h-8 w-8 rounded" /><strong className="truncate uppercase italic text-[#121733]">{procedure.name}</strong></span>,
-            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-semibold tabular-nums text-[#34364b]" key={`price-${procedure.id}`}>{currency.format(procedure.price)}</span>,
-            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-medium tabular-nums text-[#34364b]" key={`duration-${procedure.id}`}>{procedure.duration}</span>,
+            <span className="flex min-w-0 items-center gap-2" key={`name-${procedure.id}`}><ProcedureImage name={procedure.name} imageUrl={procedure.imageUrl} decorative className="h-8 w-8 rounded" /><strong className="min-w-0 truncate py-0.5 text-sm font-semibold text-foreground" title={procedure.name}>{procedure.name}</strong></span>,
+            <span className="inline-flex rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-xs font-semibold tabular-nums text-foreground" key={`price-${procedure.id}`}>{currency.format(procedure.price)}</span>,
+            <span className="inline-flex whitespace-nowrap rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-xs font-medium tabular-nums text-foreground" key={`duration-${procedure.id}`}>{procedure.duration}</span>,
             <div className="w-full min-w-[190px] max-w-[300px] space-y-1.5" key={`sheet-${procedure.id}`}>
               {procedure.technicalSheet.length ? procedure.technicalSheet.map((material, materialIndex) => (
                 <div className="flex min-w-0 items-center gap-1.5" key={`${material.productId}-${materialIndex}`}>
-                  <span className="min-w-0 flex-1 truncate rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 font-sans text-[13px] font-semibold tracking-tight text-[#34364b]" title={material.name}>{material.name}</span>
-                  <span className="shrink-0 rounded-md border border-[#e1defe] bg-[#f3f1ff] px-2 py-1.5 font-sans text-xs font-bold tabular-nums text-[#5147dc]">
+                  <span className="min-w-0 flex-1 truncate rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-xs font-medium text-foreground" title={material.name}>{material.name}</span>
+                  <span className="shrink-0 whitespace-nowrap rounded-md bg-accent px-2 py-1.5 text-xs font-semibold tabular-nums text-accent-foreground">
                     {quantityFormat.format(material.quantity)} {material.unit === "unidade" ? "Un" : material.unit}
                   </span>
                 </div>
@@ -1125,7 +1133,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
               {procedure.materialsNeedReview ? <Badge variant="amber" title="Convertida automaticamente do texto antigo. Confira as quantidades e salve.">Revisar ficha</Badge> : null}
             </div>,
             <Badge key={`margin-${procedure.id}`} variant="green">{procedure.margin}</Badge>,
-            <Button key={`edit-${procedure.id}`} size="sm" variant="secondary" onClick={() => setEditingProcedureId(procedure.id)}>
+            <Button key={`edit-${procedure.id}`} size="sm" variant="secondary" onClick={(event) => { openerRef.current = event.currentTarget; setEditingProcedureId(procedure.id); }}>
               <PencilLine className="h-3.5 w-3.5" />
               Editar
             </Button>,
