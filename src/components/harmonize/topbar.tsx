@@ -7,7 +7,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Input } from "@/components/ui/input";
 import type { SectionId } from "@/types/clinic";
 import type { StockAlert } from "@/lib/stock-rules";
-import { StockAlertItem, useStockAlerts } from "./stock-alerts";
+import { StockAlertGroups, useStockAlerts } from "./stock-alerts";
 
 type TopbarProps = {
   onMenu: () => void;
@@ -226,7 +226,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
             {appointmentAlerts.length ? appointmentAlerts.map((alert) => <p className="mt-3 rounded-md bg-accent p-3 text-xs leading-5 text-accent-foreground" key={alert.id}>{alert.message}</p>) : <><p className="mt-3 rounded-md bg-muted p-3 text-xs leading-5 text-muted-foreground">Nenhum atendimento no horário neste momento.</p><p className="mt-2 rounded-md bg-muted p-3 text-xs leading-5 text-muted-foreground">As notificações dos próximos atendimentos aparecerão aqui.</p></>}
             {stockAlerts.length ? <>
               <p className="mt-4 text-xs font-semibold">Estoque</p>
-              <div className="mt-2 space-y-2">{stockAlerts.map((alert) => <StockAlertItem alert={alert} key={`${alert.kind}-${alert.lotId ?? alert.productId}-${alert.message}`} onOpen={() => { setNotificationsOpen(false); onOpenStockAlert(alert); }} />)}</div>
+              <div className="mt-2 space-y-3"><StockAlertGroups alerts={stockAlerts} onOpen={(alert) => { setNotificationsOpen(false); onOpenStockAlert(alert); }} /></div>
             </> : null}
           </DropdownMenuContent>
         </DropdownMenu>

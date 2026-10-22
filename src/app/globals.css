@@ -930,3 +930,11 @@ html.dark .hp-logo-light {
 html.dark .hp-logo-dark {
   display: block;
 }
+
+.stock-alert-dot {
+  background-color: #f4b65c;
+}
+
+html.dark .stock-alert-dot {
+  background-color: #ffd166;
+}
