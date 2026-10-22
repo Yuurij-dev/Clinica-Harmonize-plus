@@ -377,10 +377,7 @@ function ConfigureStep({ editing, selection, procedures, materials, onBack, onSa
         <FormField label="Margem estimada (%)" htmlFor="procedure-margin"><MaskedInput {...invalidProps("margin")} id="procedure-margin" className={fieldClassName} formatter={percentFormatter} name="margin" inputMode="numeric" defaultValue={editing ? `${editing.marginPercent}%` : ""} placeholder="40%" required /></FormField>
       </div>
 
-      <FormField label="Ficha técnica" description="Informe a quantidade aproximada de cada material ou produto usado por atendimento.">
-        {editing?.materialsNeedReview ? <p className="mb-2 rounded-[7px] bg-warning/10 px-3 py-2 text-[11px] font-semibold text-warning">Ficha convertida automaticamente do texto antigo com quantidade 1. Confira e salve para concluir a revisão.</p> : null}
-        <TechnicalSheetEditor materials={materialOptions} defaultValue={editing?.technicalSheet ?? []} />
-      </FormField>
+      <TechnicalSheetEditor materials={materialOptions} defaultValue={editing?.technicalSheet ?? []} materialsNeedReview={editing?.materialsNeedReview} />
 
       {error ? <p id="procedure-form-error" role="alert" className="rounded-[7px] bg-destructive/10 px-3 py-2 text-xs font-semibold text-destructive">{error}</p> : null}
       <div className="flex flex-col-reverse justify-end gap-2 sm:flex-row">
