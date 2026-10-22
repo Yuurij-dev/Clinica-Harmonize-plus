@@ -7,7 +7,7 @@ import {
   procedureNameKey as formKey, validateImageFile, validateProcedureFields,
 } from "../src/lib/procedure-form-rules.ts";
 
-const fields = { price: 250, durationMinutes: 45, margin: 40, technicalSheet: [{ productId: "p1", quantity: 2 }] };
+const fields = { price: 250, durationMinutes: 45, technicalSheet: [{ productId: "p1", quantity: 2 }] };
 
 test("name keys duplicated for dependency-free tests stay identical to normalizeSearch", () => {
   for (const value of ["  Toxina  Botulínica ", "PREENCHIMENTO de Olheira", "ação", ""]) {
@@ -15,8 +15,8 @@ test("name keys duplicated for dependency-free tests stay identical to normalize
     assert.equal(formKey(value), normalizeSearch(value));
   }
   // O limite do formulário precisa acompanhar o do servidor.
-  assert.equal(validateProcedureFields({ name: "a".repeat(maxProcedureNameLength + 1), price: 1, durationMinutes: 1, margin: 1 }), `O nome deve ter até ${maxProcedureNameLength} caracteres.`);
-  assert.equal(validateProcedureFields({ name: "a".repeat(maxProcedureNameLength), price: 1, durationMinutes: 1, margin: 1 }), null);
+  assert.equal(validateProcedureFields({ name: "a".repeat(maxProcedureNameLength + 1), price: 1, durationMinutes: 1 }), `O nome deve ter até ${maxProcedureNameLength} caracteres.`);
+  assert.equal(validateProcedureFields({ name: "a".repeat(maxProcedureNameLength), price: 1, durationMinutes: 1 }), null);
 });
 
 test("catalog search ignores accents, case and extra spaces and matches all terms", () => {
@@ -37,12 +37,11 @@ test("client image validation accepts JPEG/PNG/WebP up to 4 MB and explains refu
   assert.match(validateImageFile({ type: "image/png", size: 0 }), /vazio/);
 });
 
-test("field validation covers name, price, duration and margin", () => {
-  assert.equal(validateProcedureFields({ name: "  ", price: 1, durationMinutes: 30, margin: 10 }), "Informe o nome do procedimento.");
-  assert.equal(validateProcedureFields({ price: 0, durationMinutes: 30, margin: 0 }), null);
-  assert.match(validateProcedureFields({ price: -1, durationMinutes: 30, margin: 10 }), /valor/);
-  assert.match(validateProcedureFields({ price: 10, durationMinutes: 0, margin: 10 }), /duração/);
-  assert.match(validateProcedureFields({ price: 10, durationMinutes: 30, margin: 101 }), /margem/);
+test("field validation covers name, price, and duration", () => {
+  assert.equal(validateProcedureFields({ name: "  ", price: 1, durationMinutes: 30 }), "Informe o nome do procedimento.");
+  assert.equal(validateProcedureFields({ price: 0, durationMinutes: 30 }), null);
+  assert.match(validateProcedureFields({ price: -1, durationMinutes: 30 }), /valor/);
+  assert.match(validateProcedureFields({ price: 10, durationMinutes: 0 }), /duração/);
 });
 
 test("name duplicates are detected ignoring accents/case, except for the procedure being edited", () => {
@@ -113,13 +112,6 @@ test("local preview accepts only blob: URLs while API image sources stay strict"
   assert.equal(safeProcedureImageSrc("blob:http://localhost:3001/3f2c-aa"), null);
 });
 
-test("margin outside 0-100 is reported on the margin field, never clamped", async () => {
-  const { findFieldProblem } = await import("../src/lib/procedure-form-rules.ts");
-  assert.deepEqual(findFieldProblem({ price: 1, durationMinutes: 30, margin: 150 }), { field: "margin", message: "A margem deve ficar entre 0% e 100%." });
-  assert.equal(findFieldProblem({ price: 1, durationMinutes: 30, margin: 100 }), null);
-  assert.equal(findFieldProblem({ name: "", price: 1, durationMinutes: 30, margin: 5 }).field, "name");
-});
-
 test("upload 413/415 use the client message; other statuses keep the server text", async () => {
   const { uploadErrorMessage } = await import("../src/lib/procedure-form-rules.ts");
   assert.equal(uploadErrorMessage(415, "Envie PDF, JPG ou PNG"), "Use uma imagem JPEG, PNG ou WebP de até 4 MB.");
@@ -149,6 +141,6 @@ test("catalog search finds items by synonyms but only items that exist", async (
 
 test("duration above 1440 minutes is rejected with a clear message", async () => {
   const { findFieldProblem } = await import("../src/lib/procedure-form-rules.ts");
-  assert.deepEqual(findFieldProblem({ price: 1, durationMinutes: 1441, margin: 5 }), { field: "duration", message: "A duração máxima é 1440 minutos." });
-  assert.equal(findFieldProblem({ price: 1, durationMinutes: 1440, margin: 5 }), null);
+  assert.deepEqual(findFieldProblem({ price: 1, durationMinutes: 1441 }), { field: "duration", message: "A duração máxima é 1440 minutos." });
+  assert.equal(findFieldProblem({ price: 1, durationMinutes: 1440 }), null);
 });

@@ -23,7 +23,7 @@ export function withImage<T extends ImageFields>({ imageAssetId, imageCatalogIte
 }
 
 export const procedureSelect = {
-  id: true, name: true, category: true, price: true, durationMinutes: true, margin: true, materialsNeedReview: true, catalogItemId: true,
+  id: true, name: true, category: true, price: true, durationMinutes: true, materialsNeedReview: true, catalogItemId: true,
   ...procedureImageSelect, ...technicalSheetSelect,
 } as const;
 

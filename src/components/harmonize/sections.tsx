@@ -37,7 +37,6 @@ import {
   SectionIntro,
   StatusBadge,
 } from "./shared";
-import { CostCalculator } from "./cost-calculator";
 import { useCan } from "./current-user";
 import { PatientDetail } from "./patient-detail";
 import { useAnamnesisStartGate, type AnamnesisOpenMode } from "./anamnesis-start-gate";
@@ -1203,7 +1202,7 @@ function appointmentTone(appointment: AppointmentRow) {
   return { card: "border-[#e0647d] bg-[#fff0f2] text-[#9b3a4f]", pill: "bg-[#ffe0e5] text-[#a8465b]" };
 }
 
-type ApiProcedure = { id: string; name: string; category?: string; price: number; durationMinutes: number; margin: number; materialsNeedReview: boolean; catalogItemId?: string | null; image?: { kind: string; url: string | null } | null; technicalSheet: TechnicalSheetItem[] };
+type ApiProcedure = { id: string; name: string; category?: string; price: number; durationMinutes: number; materialsNeedReview: boolean; catalogItemId?: string | null; image?: { kind: string; url: string | null } | null; technicalSheet: TechnicalSheetItem[] };
 type ProcedureRow = Procedure & EditableProcedure;
 
 function mapApiProcedures(procedures: ApiProcedure[] = []): ProcedureRow[] {
@@ -1214,8 +1213,6 @@ function mapApiProcedures(procedures: ApiProcedure[] = []): ProcedureRow[] {
     duration: `${item.durationMinutes} min`,
     durationMinutes: item.durationMinutes,
     materials: describeTechnicalSheet(item.technicalSheet),
-    margin: `${item.margin}%`,
-    marginPercent: item.margin,
     technicalSheet: item.technicalSheet,
     materialsNeedReview: item.materialsNeedReview,
     catalogItemId: item.catalogItemId ?? null,
@@ -1236,13 +1233,13 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   const procedureModalOpen = openCreate || Boolean(editingProcedure);
   const [procedureModalMounted, setProcedureModalMounted] = useState(procedureModalOpen);
   const [procedureModalKey, setProcedureModalKey] = useState("new-procedure");
+  const materialOptions = productRows.filter((product): product is Product & { id: string } => Boolean(product.id));
+
   useEffect(() => {
     if (procedureModalOpen || !procedureModalMounted) return;
     const timeout = window.setTimeout(() => setProcedureModalMounted(false), 320);
     return () => window.clearTimeout(timeout);
   }, [procedureModalOpen, procedureModalMounted]);
-
-  const materialOptions = productRows.filter((product): product is Product & { id: string } => Boolean(product.id));
 
   async function loadProcedures() {
     setIsLoading(true);
@@ -1308,8 +1305,8 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
           action="Novo procedimento"
           onAction={() => { setProcedureModalKey("new-procedure"); setProcedureModalMounted(true); openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; onCreateOpen?.(); }}
         />
-        {isLoading ? <LoadingTable columns={6} /> : <MiniTable
-          columns={["Nome", "Valor sugerido", "Tempo", "Ficha técnica", "Margem", "Ação"]}
+        {isLoading ? <LoadingTable columns={5} /> : <MiniTable
+          columns={["Nome", "Valor sugerido", "Tempo", "Ficha técnica", "Ação"]}
           rows={procedureRows.map((procedure) => [
             <span className="flex min-w-0 items-center gap-2" key={`name-${procedure.id}`}><ProcedureImage name={procedure.name} imageUrl={procedure.imageUrl} decorative className="h-8 w-8 rounded" /><strong className="min-w-0 truncate py-0.5 text-sm font-semibold text-foreground" title={procedure.name}>{procedure.name}</strong></span>,
             <span className="inline-flex rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-xs font-semibold tabular-nums text-foreground" key={`price-${procedure.id}`}>{currency.format(procedure.price)}</span>,
@@ -1325,7 +1322,6 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
               )) : <span className="text-xs text-muted-foreground">Sem materiais</span>}
               {procedure.materialsNeedReview ? <Badge variant="amber" title="Convertida automaticamente do texto antigo. Confira as quantidades e salve.">Revisar ficha</Badge> : null}
             </div>,
-            <Badge key={`margin-${procedure.id}`} variant="green">{procedure.margin}</Badge>,
             <Button key={`edit-${procedure.id}`} size="sm" variant="secondary" onClick={(event) => { setProcedureModalKey(`edit-${procedure.id}`); setProcedureModalMounted(true); openerRef.current = event.currentTarget; setEditingProcedureId(procedure.id); }}>
               <PencilLine className="h-3.5 w-3.5" />
               Editar
@@ -1334,7 +1330,6 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
         />}
       </div>
 
-      <CostCalculator materials={productRows.filter((product) => !product.archivedAt)} charged={procedureRows[0]?.price ?? 0} procedureName={procedureRows[0]?.name} />
       {procedureModalMounted ? (
         <ProcedureFormModal
           key={procedureModalKey}

@@ -34,7 +34,7 @@ export function parseCatalogListParams(params: URLSearchParams) {
   };
 }
 
-type Common = { category: string; price: number; durationMinutes: number; margin: number };
+type Common = { category: string; price: number; durationMinutes: number };
 export type CreateProcedureInput =
   | ({ mode: "catalog"; catalogItemId: string } & Common)
   | ({ mode: "custom"; name: string; imageAssetId: string | null; catalogImageId: string | null } & Common);
@@ -68,12 +68,6 @@ export function parseDuration(value: unknown): ParseResult<number> {
   if (number > maxDurationMinutes) return { ok: false, message: `A duração máxima é ${maxDurationMinutes} minutos.` };
   return { ok: true, data: Math.max(1, number) };
 }
-// Margem em %, ajustada para 0–100 (valor numérico fora da faixa é limitado, não recusado).
-export function parseMargin(value: unknown): ParseResult<number> {
-  const number = parseNumeric(value);
-  if (number === null) return { ok: false, message: "Informe uma margem válida." };
-  return { ok: true, data: Math.max(0, Math.min(100, number)) };
-}
 
 // Nome: texto, espaços/quebras internas colapsam; recusa NUL e demais caracteres de controle e substitutos Unicode soltos.
 export function parseName(value: unknown): ParseResult<string> {
@@ -103,9 +97,7 @@ export function parseCreateProcedure(body: Record<string, unknown> | null): Pars
   if (!price.ok) return price;
   const durationMinutes = parseDuration(body.durationMinutes);
   if (!durationMinutes.ok) return durationMinutes;
-  const margin = parseMargin(body.margin);
-  if (!margin.ok) return margin;
-  const common: Common = { category: categoryOf(body.category), price: price.data, durationMinutes: durationMinutes.data, margin: margin.data };
+  const common: Common = { category: categoryOf(body.category), price: price.data, durationMinutes: durationMinutes.data };
   if (body.catalogItemId !== undefined && body.catalogItemId !== null) {
     const catalogItemId = idOf(body.catalogItemId);
     if (!catalogItemId) return { ok: false, message: "Procedimento do catálogo inválido." };
@@ -121,7 +113,7 @@ export function parseCreateProcedure(body: Record<string, unknown> | null): Pars
 // undefined = não alterar. "image" só existe quando o corpo mexe na imagem: null/null remove a escolha da clínica
 // (volta à imagem do catálogo habilitado, se houver, ou ao placeholder).
 export type PatchProcedureInput = {
-  name?: string; category?: string; price?: number; durationMinutes?: number; margin?: number;
+  name?: string; category?: string; price?: number; durationMinutes?: number;
   image?: { assetId: string | null; catalogImageId: string | null };
 };
 
@@ -147,11 +139,6 @@ export function parsePatchProcedure(body: Record<string, unknown> | null): Parse
     const duration = parseDuration(body.durationMinutes);
     if (!duration.ok) return duration;
     data.durationMinutes = duration.data;
-  }
-  if (body.margin !== undefined) {
-    const margin = parseMargin(body.margin);
-    if (!margin.ok) return margin;
-    data.margin = margin.data;
   }
   if (body.imageAssetId !== undefined || body.catalogImageId !== undefined) {
     const image = parseImageChoice(body);

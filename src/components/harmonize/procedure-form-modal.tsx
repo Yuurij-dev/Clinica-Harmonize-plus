@@ -37,7 +37,6 @@ export type EditableProcedure = {
   name: string;
   price: number;
   durationMinutes: number;
-  marginPercent: number;
   technicalSheet: TechnicalSheetItem[];
   materialsNeedReview: boolean;
   catalogItemId: string | null;
@@ -270,7 +269,6 @@ function ConfigureStep({ editing, selection, procedures, materials, onBack, onSa
     const fields = {
       price: parseCurrency(form.get("price")),
       durationMinutes: parseInteger(form.get("duration")),
-      margin: parseInteger(form.get("margin")),
       technicalSheet: sheet.items,
     };
     const problem = findFieldProblem({ name: nameEditable ? name : undefined, ...fields });
@@ -308,7 +306,6 @@ function ConfigureStep({ editing, selection, procedures, materials, onBack, onSa
   }
 
   const invalidProps = (field: string, help?: string) => errorField === field ? { "aria-invalid": true as const, "aria-describedby": [help, "procedure-form-error"].filter(Boolean).join(" ") } : help ? { "aria-describedby": help } : {};
-  const percentFormatter = (value: string) => { const digits = formatInteger(value, 3); return digits ? `${digits}%` : ""; };
 
   const libraryNote = editing?.catalogItemId ? "Imagem padrão" : "Sem imagem";
   const tabs: Array<{ id: ImageTab; label: string; icon: typeof Library }> = [
@@ -372,10 +369,9 @@ function ConfigureStep({ editing, selection, procedures, materials, onBack, onSa
         </fieldset>
       ) : null}
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2">
         <FormField label="Valor sugerido" htmlFor="procedure-price"><MaskedInput {...invalidProps("price", "procedure-price-help")} id="procedure-price" className={fieldClassName} formatter={formatCurrency} name="price" inputMode="decimal" defaultValue={editing ? formatCurrency(String(Math.round(editing.price * 100))) : ""} placeholder="R$ 0,00" required autoFocus={isCatalogNew} /><p id="procedure-price-help" className="text-xs text-muted-foreground">O valor é arredondado para reais inteiros.</p></FormField>
         <FormField label="Duração (minutos)" htmlFor="procedure-duration"><MaskedInput {...invalidProps("duration")} id="procedure-duration" className={fieldClassName} formatter={(value) => formatInteger(value, 4)} name="duration" inputMode="numeric" defaultValue={editing ? String(editing.durationMinutes) : ""} placeholder="60" required /></FormField>
-        <FormField label="Margem estimada (%)" htmlFor="procedure-margin"><MaskedInput {...invalidProps("margin")} id="procedure-margin" className={fieldClassName} formatter={percentFormatter} name="margin" inputMode="numeric" defaultValue={editing ? `${editing.marginPercent}%` : ""} placeholder="40%" required /></FormField>
       </div>
 
       <TechnicalSheetEditor materials={materialOptions} defaultValue={editing?.technicalSheet ?? []} materialsNeedReview={editing?.materialsNeedReview} />

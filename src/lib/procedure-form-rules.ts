@@ -32,15 +32,14 @@ export function imageFields(choice: ImageChoice): { imageAssetId?: string | null
 export type ProcedureFields = {
   price: number;
   durationMinutes: number;
-  margin: number;
   technicalSheet: Array<{ productId: string; quantity: number }>;
 };
 
 export const maxDurationMinutes = 1440;
 
-export type FieldProblem = { field: "name" | "price" | "duration" | "margin"; message: string };
+export type FieldProblem = { field: "name" | "price" | "duration"; message: string };
 
-export function findFieldProblem(input: { name?: string; durationMinutes: number; margin: number; price: number }): FieldProblem | null {
+export function findFieldProblem(input: { name?: string; durationMinutes: number; price: number }): FieldProblem | null {
   if (input.name !== undefined) {
     const name = input.name.trim();
     if (!name) return { field: "name", message: "Informe o nome do procedimento." };
@@ -48,12 +47,11 @@ export function findFieldProblem(input: { name?: string; durationMinutes: number
   }
   if (!Number.isFinite(input.price) || input.price < 0) return { field: "price", message: "Informe um valor sugerido válido." };
   if (!Number.isInteger(input.durationMinutes) || input.durationMinutes < 1) return { field: "duration", message: "A duração deve ser de pelo menos 1 minuto." };
-  if (!Number.isFinite(input.margin) || input.margin < 0 || input.margin > 100) return { field: "margin", message: "A margem deve ficar entre 0% e 100%." };
   if (input.durationMinutes > maxDurationMinutes) return { field: "duration", message: "A duração máxima é 1440 minutos." };
   return null;
 }
 
-export function validateProcedureFields(input: { name?: string; durationMinutes: number; margin: number; price: number }): string | null {
+export function validateProcedureFields(input: { name?: string; durationMinutes: number; price: number }): string | null {
   return findFieldProblem(input)?.message ?? null;
 }
 

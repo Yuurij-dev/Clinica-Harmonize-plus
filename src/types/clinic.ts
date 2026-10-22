@@ -108,7 +108,6 @@ export type Procedure = {
   price: number;
   duration: string;
   materials: string;
-  margin: string;
 };
 
 export type Quote = {

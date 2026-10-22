@@ -56,7 +56,7 @@ export async function POST(request: Request) {
       return tx.procedure.create({
         data: {
           clinicId, name, category: input.category, materials: sheet.description, catalogItemId, imageAssetId, imageCatalogItemId,
-          price: input.price, durationMinutes: input.durationMinutes, margin: input.margin,
+          price: input.price, durationMinutes: input.durationMinutes,
           technicalSheet: { create: sheet.items },
         },
         select: procedureSelect,

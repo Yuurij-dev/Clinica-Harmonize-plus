@@ -1808,12 +1808,11 @@ async function procedureCatalogGaps() {
     r = await mkCustom({ durationMinutes: sent });
     check(`duração inválida/acima de 1440 (${JSON.stringify(sent)}) devolve 400`, r.status === 400, r.status);
   }
-  for (const [sent, stored] of [[-5, 0], [150, 100], [33.3, 33.3], [0, 0], [100, 100]]) {
+  // Margem foi removida: cliente antigo que ainda a envia (qualquer valor) não leva 400, e a resposta não a devolve.
+  for (const sent of [-5, 150, 33.3, "x", {}]) {
     r = await mkCustom({ margin: sent });
-    check(`margem ${sent} grava ${stored}`, r.status === 201 && r.data.procedure.margin === stored, `${r.status} ${r.data.procedure?.margin}`);
+    check(`margem legada ${JSON.stringify(sent)} é ignorada (201, sem margin na resposta)`, r.status === 201 && !("margin" in r.data.procedure), `${r.status}`);
   }
-  r = await mkCustom({ margin: "x" });
-  check("margem em texto não numérico devolve 400", r.status === 400, r.status);
 
   // Nomes.
   r = await call("POST", "/api/procedures", { custom: true, name: "A".repeat(121), ...base });
@@ -1897,18 +1896,18 @@ async function procedureCatalogGaps() {
   check("PATCH preço 150.5 grava 151", r.status === 200 && r.data.procedure.price === 151, `${r.status} ${r.data.procedure?.price}`);
   r = await call("PATCH", `/api/procedures/${target.id}`, { price: -1 });
   check("PATCH preço negativo grava 0", r.status === 200 && r.data.procedure.price === 0, `${r.status} ${r.data.procedure?.price}`);
-  await call("PATCH", `/api/procedures/${target.id}`, { price: 500, durationMinutes: 45, margin: 40 });
-  for (const [label, body] of [["preço em texto", { price: "abc" }], ["duração decimal", { durationMinutes: 30.5 }], ["margem em texto", { margin: "x" }], ["preço null", { price: null }], ["preço vazio", { price: "" }], ["preço booleano", { price: true }], ["duração lista", { durationMinutes: [] }], ["margem objeto", { margin: {} }], ["categoria numérica", { category: 5 }]]) {
+  await call("PATCH", `/api/procedures/${target.id}`, { price: 500, durationMinutes: 45 });
+  for (const [label, body] of [["preço em texto", { price: "abc" }], ["duração decimal", { durationMinutes: 30.5 }], ["preço null", { price: null }], ["preço vazio", { price: "" }], ["preço booleano", { price: true }], ["duração lista", { durationMinutes: [] }], ["categoria numérica", { category: 5 }]]) {
     r = await call("PATCH", `/api/procedures/${target.id}`, body);
     const after = await listed(target.id);
-    check(`PATCH ${label} devolve 400 e nada muda (500/45/40)`, r.status === 400 && after.price === 500 && after.durationMinutes === 45 && after.margin === 40, `${r.status} ${JSON.stringify([after.price, after.durationMinutes, after.margin])}`);
+    check(`PATCH ${label} devolve 400 e nada muda (500/45)`, r.status === 400 && after.price === 500 && after.durationMinutes === 45, `${r.status} ${JSON.stringify([after.price, after.durationMinutes])}`);
   }
   r = await call("PATCH", `/api/procedures/${target.id}`, {});
-  check("PATCH com corpo vazio devolve 200 e não muda nada", r.status === 200 && r.data.procedure.price === 500 && r.data.procedure.durationMinutes === 45 && r.data.procedure.margin === 40, r.status);
+  check("PATCH com corpo vazio devolve 200 e não muda nada", r.status === 200 && r.data.procedure.price === 500 && r.data.procedure.durationMinutes === 45, r.status);
   r = await call("PATCH", `/api/procedures/${target.id}`, { durationMinutes: 0 });
   check("PATCH duração 0 vira 1", r.status === 200 && r.data.procedure.durationMinutes === 1, `${r.status}`);
   r = await call("PATCH", `/api/procedures/${target.id}`, { margin: 150 });
-  check("PATCH margem 150 vira 100", r.status === 200 && r.data.procedure.margin === 100, `${r.status}`);
+  check("PATCH com margem legada é ignorado (200, preço intacto, sem margin na resposta)", r.status === 200 && r.data.procedure.price === 500 && !("margin" in r.data.procedure), `${r.status}`);
   for (const sent of [1e30, 3e9]) {
     r = await call("PATCH", `/api/procedures/${target.id}`, { price: sent });
     check(`PATCH preço acima do limite do banco (${sent}) devolve 4xx, não 500`, r.status >= 400 && r.status < 500, r.status);

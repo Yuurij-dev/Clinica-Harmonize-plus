@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { checkUpload, maxUploadBytes } from "../src/lib/clinical-files-rules.ts";
-import { filterCatalog, isValidId, maxDurationMinutes, maxPriceReais, normalizeSearch, parseCatalogListParams, parseCreateProcedure, parseDuration, parseMargin, parseName, parseNumeric, parsePatchProcedure, parsePrice } from "../src/lib/procedure-catalog-rules.ts";
+import { filterCatalog, isValidId, maxDurationMinutes, maxPriceReais, normalizeSearch, parseCatalogListParams, parseCreateProcedure, parseDuration, parseName, parseNumeric, parsePatchProcedure, parsePrice } from "../src/lib/procedure-catalog-rules.ts";
 import { isSafeCatalogImageFile, orphanCutoff, orphanImageMaxAgeMs, orphanPurgeBatch, procedureImageUrl, resolveProcedureImageRef } from "../src/lib/procedure-image-rules.ts";
 
 const manifest = JSON.parse(readFileSync(new URL("../public/images/procedimentos/manifest.json", import.meta.url), "utf8"));
-const base = { price: 900, durationMinutes: 30, margin: 40 };
+const base = { price: 900, durationMinutes: 30 };
 
 test("imagem por id: enviada > biblioteca > catálogo > nenhuma, sem depender do nome", () => {
   assert.deepEqual(resolveProcedureImageRef({ assetId: "a1", libraryImageFile: "/images/procedimentos/botox.webp", catalogImageFile: "/images/procedimentos/skinbooster.webp" }), { kind: "custom", url: "/api/procedures/images/a1" });
@@ -48,7 +48,7 @@ test("criação a partir do catálogo: exige catalogItemId; categoria é opciona
   assert.equal(parseCreateProcedure({ catalogItemId: "cat_botox", ...base, durationMinutes: 30.5 }).ok, false);
   assert.equal(parseCreateProcedure(null).ok, false);
   const clamped = parseCreateProcedure({ catalogItemId: "x", price: -5, durationMinutes: 0, margin: 500, category: " Facial " });
-  assert.deepEqual(clamped.data, { mode: "catalog", catalogItemId: "x", category: "Facial", price: 0, durationMinutes: 1, margin: 100 });
+  assert.deepEqual(clamped.data, { mode: "catalog", catalogItemId: "x", category: "Facial", price: 0, durationMinutes: 1 });
 });
 
 test("criação personalizada: nome obrigatório, uma só imagem, sem category", () => {
@@ -68,12 +68,13 @@ test("criação personalizada: nome obrigatório, uma só imagem, sem category",
 test("edição: nome vazio recusado, imagem opcional, categoria não obrigatória", () => {
   assert.equal(parsePatchProcedure({ name: "   " }).ok, false);
   assert.deepEqual(parsePatchProcedure({ price: 10 }), { ok: true, data: { price: 10 } });
+  assert.deepEqual(parsePatchProcedure({ margin: 150 }), { ok: true, data: {} });
   assert.deepEqual(parsePatchProcedure({ name: " Novo  nome ", category: "" }).data, { name: "Novo nome", category: "" });
   assert.deepEqual(parsePatchProcedure({ imageAssetId: null, catalogImageId: null }).data, { image: { assetId: null, catalogImageId: null } });
   assert.deepEqual(parsePatchProcedure({ catalogImageId: "cat_botox" }).data, { image: { assetId: null, catalogImageId: "cat_botox" } });
   assert.equal(parsePatchProcedure({ imageAssetId: "a", catalogImageId: "b" }).ok, false);
   // campo enviado e inválido é recusado (não ignorado); só campo ausente é ignorado
-  for (const body of [{ price: "" }, { margin: null }, { durationMinutes: "" }, { price: true }, { durationMinutes: [] }, { margin: {} }, { category: 5 }]) assert.equal(parsePatchProcedure(body).ok, false, JSON.stringify(body));
+  for (const body of [{ price: "" }, { durationMinutes: "" }, { price: true }, { durationMinutes: [] }, { category: 5 }]) assert.equal(parsePatchProcedure(body).ok, false, JSON.stringify(body));
   assert.deepEqual(parsePatchProcedure({}).data, {});
 });
 
@@ -122,15 +123,11 @@ test("preço: reais inteiros, nunca negativo, teto do domínio", () => {
   for (const bad of [maxPriceReais + 1, 2147483648, 1e30, "abc", true]) assert.equal(parsePrice(bad).ok, false, String(bad));
 });
 
-test("duração: minutos inteiros de 1 ao teto; margem limitada a 0-100", () => {
+test("duração: minutos inteiros de 1 ao teto", () => {
   assert.equal(parseDuration(0).data, 1);
   assert.equal(parseDuration("45").data, 45);
   assert.equal(parseDuration(maxDurationMinutes).data, maxDurationMinutes);
   for (const bad of [maxDurationMinutes + 1, 30.5, 1e10, "0x10", [], true]) assert.equal(parseDuration(bad).ok, false, String(bad));
-  assert.equal(parseMargin(150).data, 100);
-  assert.equal(parseMargin(-1).data, 0);
-  assert.equal(parseMargin(33.3).data, 33.3);
-  assert.equal(parseMargin("x").ok, false);
 });
 
 test("nome: recusa NUL, controle e substituto solitário; espaços internos colapsam", () => {
@@ -142,8 +139,8 @@ test("nome: recusa NUL, controle e substituto solitário; espaços internos cola
 test("ids: só letras, números, _ e -, até 100; catalogItemId malformado não vira personalizado", () => {
   for (const ok of ["cat_botox", "cmvit41nv0005ua34rn5b6e4r", "a".repeat(100)]) assert.equal(isValidId(ok), true);
   for (const bad of ["", "a".repeat(101), "a\u0000b", "../x", "a b", "x%00", 5, null]) assert.equal(isValidId(bad), false, String(bad));
-  const base = { name: "Nome", price: 1, durationMinutes: 1, margin: 1 };
+  const base = { name: "Nome", price: 1, durationMinutes: 1 };
   for (const bad of [5, "", "a".repeat(101), "x y", ["a"], { $ne: 1 }, "../x"]) assert.equal(parseCreateProcedure({ ...base, catalogItemId: bad }).ok, false, JSON.stringify(bad));
   assert.equal(parseCreateProcedure({ ...base, catalogItemId: null }).data.mode, "custom");
-  for (const bad of [" ", "0x10", [], true, "1e3", "abc"]) assert.equal(parseCreateProcedure({ name: "A", price: bad, durationMinutes: 1, margin: 1 }).ok, false, JSON.stringify(bad));
+  for (const bad of [" ", "0x10", [], true, "1e3", "abc"]) assert.equal(parseCreateProcedure({ name: "A", price: bad, durationMinutes: 1 }).ok, false, JSON.stringify(bad));
 });
