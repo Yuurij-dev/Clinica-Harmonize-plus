@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { appointmentInstant, appointmentSlotError, clinicNow, parseAppointmentDay } from "@/lib/clinic-time";
+import { cleanProfessionalName } from "@/lib/appointment-conflict-rules";
+import { appointmentDurations, appointmentTransactionOptions, lockAppointmentSlots, scheduleConflictError } from "@/lib/appointment-conflict";
 import { prisma } from "@/lib/prisma";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 import { DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE, procedureAppointmentVariants } from "@/lib/procedure-session-rules";
@@ -22,11 +24,11 @@ export async function POST(request: Request) {
   if (!body || textFields.some((value) => value !== undefined && typeof value !== "string")) {
     return NextResponse.json({ message: "Dados do agendamento inválidos." }, { status: 400 });
   }
-  if (!body?.patientId || !body.procedure || !body.professional || !body.time) {
+  if (!body?.patientId || !body.procedure || !body.professional?.trim() || !body.time) {
     return NextResponse.json({ message: "Selecione um paciente, procedimento, profissional e horário." }, { status: 400 });
   }
 
-  const patient = await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId } });
+  const patient = await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId }, select: { id: true } });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
   if (body.journeyId && !await prisma.patientJourney.findFirst({ where: { id: body.journeyId, patientId: patient.id, clinicId: user.clinicId, archivedAt: null }, select: { id: true } })) {
     return NextResponse.json({ message: "Tratamento não encontrado." }, { status: 404 });
@@ -36,13 +38,13 @@ export async function POST(request: Request) {
   const day = body.date ? parseAppointmentDay(body.date) : now.date;
   if (!day) return NextResponse.json({ message: "Data inválida." }, { status: 400 });
 
-  const [clinic, procedure] = await Promise.all([
+  const [clinic, durationOf] = await Promise.all([
     prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { openingTime: true, closingTime: true } }),
-    prisma.procedure.findFirst({ where: { clinicId: user.clinicId, name: body.procedure }, select: { durationMinutes: true } }),
+    appointmentDurations(prisma, user.clinicId, [body.procedure]),
   ]);
   const openingTime = clinic?.openingTime ?? "08:00";
   const closingTime = clinic?.closingTime ?? "19:00";
-  const durationMinutes = procedure?.durationMinutes ?? 60;
+  const durationMinutes = durationOf(body.procedure);
   const slotError = appointmentSlotError(day, body.time, openingTime, closingTime, now, durationMinutes);
   if (slotError) return NextResponse.json({ message: slotError }, { status: 400 });
 
@@ -52,27 +54,35 @@ export async function POST(request: Request) {
   const variants = procedureAppointmentVariants(body.procedure);
   const procedureName = body.procedure;
   // Evita marcar o mesmo procedimento (nome puro ou "Procedimento - X") duas vezes na jornada; a trava serializa cliques simultâneos.
-  const appointment = await prisma.$transaction(async (tx) => {
+  // Ordem das travas: jornada, profissional, paciente (ver appointment-conflict.ts). Depois delas, a checagem de sobreposição
+  // enxerga qualquer agendamento já confirmado, então duas requisições para a mesma faixa não passam juntas.
+  const professional = cleanProfessionalName(body.professional);
+  const result = await prisma.$transaction(async (tx) => {
     if (variants) {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${journey.id}))`;
       const duplicate = await tx.appointment.findFirst({ where: { clinicId: user.clinicId, patientId: patient.id, journeyId: journey.id, procedure: { in: variants }, status: { in: ["Agendado", "Em atendimento"] } }, select: { id: true } });
-      if (duplicate) return null;
+      if (duplicate) return { duplicate: true as const };
     }
-    return tx.appointment.create({
+    await lockAppointmentSlots(tx, user.clinicId, professional, patient.id);
+    const conflict = await scheduleConflictError(tx, user.clinicId, { day, time: body.time!, professional, patientId: patient.id, procedure: procedureName });
+    if (conflict) return { conflict };
+    const created = await tx.appointment.create({
       data: {
         date: appointmentInstant(day),
         time: body.time!,
         patientId: patient.id,
         journeyId: journey.id,
         procedure: procedureName,
-        professional: body.professional!,
+        professional,
         notes: body.notes?.trim() ?? "",
         status: "Agendado",
         clinicId: user.clinicId,
       },
       include: { patient: { select: { name: true } } },
     });
-  });
-  if (!appointment) return NextResponse.json({ message: DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE }, { status: 409 });
-  return NextResponse.json({ appointment }, { status: 201 });
+    return { appointment: created };
+  }, appointmentTransactionOptions);
+  if ("duplicate" in result) return NextResponse.json({ message: DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE }, { status: 409 });
+  if ("conflict" in result) return NextResponse.json({ message: result.conflict }, { status: 409 });
+  return NextResponse.json({ appointment: result.appointment }, { status: 201 });
 }

@@ -28,6 +28,9 @@ import { visibleSections } from "@/lib/permissions";
 import { CurrentRoleProvider } from "./current-user";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
 import { clientsHomeEvent } from "@/lib/section-events";
+import { agendaPeriodKey, agendaPeriodRange } from "@/lib/agenda-period-rules";
+import { clinicToday } from "@/lib/clinic-time";
+import { patientListKey } from "@/lib/patient-list-rules";
 import { guardDraftNavigation } from "./use-draft-autosave";
 
 type CurrentUser = { id: string; clinicId: string; name: string; role: string; isOwner?: boolean; trialExpired?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
@@ -41,10 +44,11 @@ type StartupState =
   | { status: "error"; sessionConfirmed: boolean; clinicName?: string; message: string }
   | { status: "ready"; sessionConfirmed: true; clinicName?: string; message?: string };
 
-const initialScreenResources: Partial<Record<SectionId, { key: string; message: string }>> = {
+const initialScreenResources: Partial<Record<SectionId, { key: string; extraKeys?: () => string[]; message: string }>> = {
   dashboard: { key: "/api/dashboard/bootstrap", message: "Carregando os indicadores da clínica..." },
-  agenda: { key: "/api/agenda/bootstrap", message: "Carregando os dados da agenda..." },
-  clientes: { key: "/api/patients", message: "Carregando a lista de pacientes..." },
+  // A agenda abre na semana de hoje; clientes, na primeira página da lista (as mesmas chaves que as telas leem do cache).
+  agenda: { key: "/api/agenda/bootstrap", extraKeys: () => [agendaPeriodKey(agendaPeriodRange(clinicToday(), "Semana"))], message: "Carregando os dados da agenda..." },
+  clientes: { key: patientListKey(), message: "Carregando a lista de pacientes..." },
   procedimentos: { key: "/api/procedures", message: "Carregando os procedimentos..." },
   estoque: { key: "/api/products", message: "Carregando o estoque..." },
   compras: { key: "/api/purchases", message: "Carregando as compras..." },
@@ -164,7 +168,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
           clinicName,
           message: resource?.message ?? "Preparando seu ambiente de trabalho...",
         });
-        if (resource) await getCachedJson<unknown>(resource.key);
+        if (resource) await Promise.all([resource.key, ...(resource.extraKeys?.() ?? [])].map((key) => getCachedJson<unknown>(key)));
         if (active) setStartup({ status: "ready", sessionConfirmed: true, clinicName });
       } catch {
         if (!active) return;

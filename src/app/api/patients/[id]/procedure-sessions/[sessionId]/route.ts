@@ -24,7 +24,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   const invalid = validateSessionPayload(body);
   if (invalid) return NextResponse.json({ message: invalid }, { status: 400 });
-  const current = await prisma.patientProcedureSession.findFirst({ where: { id: sessionId, patientId, clinicId: user.clinicId }, select: { id: true, journeyId: true, quoteId: true, evaluationId: true, procedureId: true, procedureName: true, professional: true, performedAt: true, startedAt: true, status: true, updatedAt: true, auditLog: true, photos: true, journey: { select: { status: true } } } });
+  const current = await prisma.patientProcedureSession.findFirst({ where: { id: sessionId, patientId, clinicId: user.clinicId }, select: { id: true, journeyId: true, quoteId: true, evaluationId: true, procedureId: true, procedureName: true, professional: true, performedAt: true, startedAt: true, status: true, updatedAt: true, auditLog: true, photos: true, materialsSeededAt: true, journey: { select: { status: true } } } });
   if (!current) return NextResponse.json({ message: "Sessão não encontrada." }, { status: 404 });
   if (current.status === "Concluída") return NextResponse.json({ message: "Sessão concluída não pode ser alterada. Crie uma nova sessão para continuar o tratamento." }, { status: 409 });
 
@@ -99,6 +99,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     ...(body?.complications !== undefined ? { complications: String(body.complications).trim() } : {}),
     ...(body?.observations !== undefined ? { observations: String(body.observations).trim() } : {}),
     ...(materialSnapshot !== undefined ? { materials: materialSnapshot } : {}),
+    // O profissional assumiu a lista do rascunho: a ficha técnica não é mais aplicada (nem se ele esvaziar tudo).
+    ...(materials !== undefined && current.status === "Rascunho" && !current.materialsSeededAt ? { materialsSeededAt: new Date() } : {}),
     ...(photoSnapshot !== undefined ? { photos: photoSnapshot } : {}),
     auditLog,
     status: nextStatus,

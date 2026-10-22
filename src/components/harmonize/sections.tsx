@@ -37,7 +37,6 @@ import {
   SectionIntro,
   StatusBadge,
 } from "./shared";
-import { CostCalculator } from "./cost-calculator";
 import { useCan } from "./current-user";
 import { PatientDetail } from "./patient-detail";
 import { useAnamnesisStartGate, type AnamnesisOpenMode } from "./anamnesis-start-gate";
@@ -47,22 +46,26 @@ import {
   formatCpf,
   formatDate,
   formatInteger,
-  formatPercent,
   formatPhone,
   parseCurrency,
   parseInteger,
 } from "@/lib/input-masks";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
-import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
+import { CLIENT_CACHE_SCOPE_CHANGED_EVENT, CLIENT_CACHE_UNAUTHORIZED_EVENT, getCachedJson, invalidateClientCache, readClientCache, setClientCacheScope } from "@/lib/client-cache";
+import { cleanSearchQuery, defaultPatientPageSize, patientListKey, patientPageSizes } from "@/lib/patient-list-rules";
+import { capitalizeFirst, formatDayBR, agendaDayInvalidationKey, agendaNeighborRanges, agendaPeriodKey, agendaPeriodRange, dayInRange, shiftAgendaDay, type AgendaRange } from "@/lib/agenda-period-rules";
+import { PaginationBar } from "./clinical-pagination";
+import { usePatientLookup, type LookupPatient } from "./use-patient-lookup";
 import { runningAppointmentStatuses } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
-import { procedureCategories } from "@/data/categories";
-import { sendJson } from "@/lib/send-json";
 import { describeTechnicalSheet } from "@/lib/stock-rules";
-import { readTechnicalSheet, TechnicalSheetEditor, type TechnicalSheetItem } from "./technical-sheet-editor";
+import type { TechnicalSheetItem } from "./technical-sheet-editor";
+import { ProcedureFormModal, procedureCatalogCacheKey, type EditableProcedure } from "./procedure-form-modal";
 import { MaterialCheckModal } from "./material-check-modal";
 import { ClinicTimePicker } from "./clinic-time-picker";
 import { latestAppointmentStart } from "@/lib/clinic-time";
+import { appointmentProcedureDuration } from "@/lib/procedure-session-rules";
+import { toast } from "sonner";
 import { clientsHomeEvent } from "@/lib/section-events";
 import { ProcedureImage } from "./procedure-image";
 import type { Appointment, JourneyStageId, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
@@ -98,6 +101,19 @@ type ApiPatient = {
   currentStage?: JourneyStageId;
 };
 
+type PatientListResponse = {
+  patients: ApiPatient[];
+  pagination: { page: number; pageSize: number; total: number; pageCount: number };
+  summary: { total: number; byStatus: Record<string, number> };
+};
+const patientSearchDebounceMs = 300;
+
+// Dados estáticos e leves da agenda; os agendamentos vêm por período (GET /api/agenda?from&to).
+type AgendaBootstrap = { procedures: ApiProcedureOption[]; members: Array<{ role: string; user: { name: string } }>; settings?: { appointmentToleranceMinutes: number; openingTime: string; closingTime: string } };
+type ShownPeriod = { key: string; date: Date; view: CalendarView };
+type AgendaPeriodResponse = { appointments: ApiAppointment[]; range: AgendaRange; total: number };
+const agendaBootstrapKey = "/api/agenda/bootstrap";
+
 type AppointmentRow = Appointment & { id: string; patientId: string; date: string; durationMinutes: number; category: string };
 type ApiProcedureOption = { name: string; category: string; durationMinutes: number };
 type ApiAppointment = {
@@ -111,6 +127,12 @@ type ApiAppointment = {
   patient: { name: string };
 };
 
+// Mensagem de erro devolvida pelo servidor (ex.: conflito de horário) ou o texto padrão.
+async function responseMessage(response: Response, fallback: string) {
+  const data = await response.json().catch(() => null) as { message?: string } | null;
+  return data?.message ?? fallback;
+}
+
 function mapApiAppointment(appointment: ApiAppointment, procedures: ApiProcedureOption[] = []): AppointmentRow {
   const procedure = procedures.find((item) => item.name === appointment.procedure);
   return {
@@ -122,7 +144,8 @@ function mapApiAppointment(appointment: ApiAppointment, procedures: ApiProcedure
     procedure: appointment.procedure,
     professional: appointment.professional,
     status: appointment.status,
-    durationMinutes: procedure?.durationMinutes ?? 60,
+    // Mesma resolução do servidor: "Procedimento - X" / "Retorno - X" usam a duração de X.
+    durationMinutes: appointmentProcedureDuration(procedures, appointment.procedure) ?? 60,
     category: procedure?.category ?? appointment.procedure,
   };
 }
@@ -178,13 +201,28 @@ function useFinancialData() {
 
 export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
   const router = useRouter();
-  const cachedPatients = readClientCache<{ patients: ApiPatient[] }>("/api/patients");
   const [selectedPatientName, setSelectedPatientName] = useState<string | null>(null);
-  const [patientRows, setPatientRows] = useState<Patient[]>(() => cachedPatients?.patients.map(mapApiPatient) ?? []);
-  const [isLoading, setIsLoading] = useState(!cachedPatients);
+  // Lista paginada no servidor: a página/busca/tamanho compõem a chave do cache. A página anterior fica visível enquanto a nova carrega.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(defaultPatientPageSize);
+  const [queryInput, setQueryInput] = useState("");
+  const [query, setQuery] = useState("");
+  const appliedQuery = useRef("");
+  const listKey = patientListKey({ page, pageSize, q: query });
+  // Última página carregada (fica na tela enquanto a próxima chega) e a chave a que ela pertence.
+  const [list, setList] = useState<{ key: string; data: PatientListResponse | null; errorKey: string | null }>(() => {
+    const cached = readClientCache<PatientListResponse>(patientListKey());
+    return { key: cached ? patientListKey() : "", data: cached ?? null, errorKey: null };
+  });
+  const listData = list.data;
+  const listError = list.errorKey === listKey ? (list.data ? "Não foi possível carregar esta consulta. A tabela abaixo ainda mostra a consulta anterior." : "Não foi possível carregar os pacientes do servidor.") : "";
+  const isLoading = !listData && !listError;
+  const isFetching = list.key !== listKey && !listError;
+  const [reloadToken, setReloadToken] = useState(0);
+  const [retainedPatient, setRetainedPatient] = useState<Patient | null>(null);
   const [saveError, setSaveError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const [query, setQuery] = useState("");
+  const patientRows = useMemo(() => listData?.patients.map(mapApiPatient) ?? [], [listData]);
   // Depois do cadastro, quem pode preencher anamnese decide se começa agora ou depois (não é obrigatória).
   const canFillAnamnesis = useCan("anamnesis:write");
   const [justCreated, setJustCreated] = useState<Patient | null>(null);
@@ -214,28 +252,55 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
     return () => { window.removeEventListener("popstate", syncSelectedPatient); window.removeEventListener(clientsHomeEvent, goToList); };
   }, []);
 
+  // Busca no servidor com debounce: só consulta depois que o usuário para de digitar e volta para a página 1.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const next = cleanSearchQuery(queryInput);
+      if (next !== appliedQuery.current) { appliedQuery.current = next; setPage(1); setQuery(next); }
+    }, patientSearchDebounceMs);
+    return () => window.clearTimeout(timer);
+  }, [queryInput]);
+
   useEffect(() => {
     let active = true;
-    getCachedJson<{ patients: ApiPatient[] }>("/api/patients")
+    getCachedJson<PatientListResponse>(listKey)
       .then((data) => {
-        if (active) setPatientRows(data.patients.map(mapApiPatient));
+        if (!active) return;
+        setList({ key: listKey, data, errorKey: null });
+        // Página além do fim (ex.: a lista encolheu): volta para a última página existente.
+        if (data.patients.length === 0 && data.pagination.total > 0 && page > data.pagination.pageCount) setPage(data.pagination.pageCount);
       })
-      .catch(() => {
-        if (active) setSaveError("Não foi possível carregar os pacientes do servidor.");
-      })
-      .finally(() => {
-        if (active) setIsLoading(false);
-      });
-
+      .catch(() => { if (active) setList((current) => ({ ...current, errorKey: listKey })); });
     return () => { active = false; };
-  }, []);
-  const selectedPatient = patientRows.find((patient) => patient.id === selectedPatientName || patient.name === selectedPatientName);
-  const filteredPatients = patientRows.filter((patient) =>
-    `${patient.name} ${patient.phone} ${patient.status}`.toLowerCase().includes(query.toLowerCase()),
-  );
+    // `page` só é lido para corrigir a página além do fim; a consulta depende da chave.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listKey, reloadToken]);
+
+  const selectedInList = patientRows.find((patient) => patient.id === selectedPatientName || patient.name === selectedPatientName);
+  const retainedMatches = retainedPatient && selectedPatientName !== null && (retainedPatient.id === selectedPatientName || retainedPatient.name === selectedPatientName) ? retainedPatient : undefined;
+  // O perfil aberto não some se a lista recarregar sem ele (outra página/busca): fica o último registro conhecido.
+  const selectedPatient = selectedInList ?? retainedMatches;
+  const hasSelectedPatient = Boolean(selectedPatient);
+
+  // Perfil aberto fora da página carregada (link da Agenda, outra página, busca mudou): busca só esse paciente.
+  useEffect(() => {
+    if (!selectedPatientName || hasSelectedPatient) return;
+    let active = true;
+    getCachedJson<{ patient: ApiPatient }>(`/api/patients/${encodeURIComponent(selectedPatientName)}`)
+      .then((data) => { if (active) setRetainedPatient(mapApiPatient(data.patient)); })
+      .catch(() => {
+        if (!active) return;
+        toast.error("Paciente não encontrado.");
+        setSelectedPatientName(null);
+        router.replace("/clientes");
+      });
+    return () => { active = false; };
+  }, [selectedPatientName, hasSelectedPatient, router]);
+  const detailLoading = Boolean(selectedPatientName) && !selectedPatient;
 
   function openPatient(patient: Patient) {
     const key = patient.id ?? patient.name;
+    setRetainedPatient(patient);
     setAnamnesisRequest((current) => current && current.patientKey === key ? current : null);
     setSelectedPatientName(key);
     router.push(`/clientes?patient=${encodeURIComponent(key)}`);
@@ -276,8 +341,17 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
 
       const data = await response.json() as { patient: ApiPatient };
       const savedPatient = mapApiPatient(data.patient);
-      setPatientRows((current) => [savedPatient, ...current]);
-      invalidateClientCache("/api/patients", "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+      setRetainedPatient(savedPatient);
+      // Só depois do sucesso: derruba as páginas/buscas de clientes (e as buscas dos seletores) e recarrega a página atual.
+      invalidateClientCache("/api/patients", "/api/dashboard/bootstrap");
+      // Vai para a página 1 sem busca para o cadastro não ficar escondido por filtro ou página.
+      const wasFiltered = page !== 1 || appliedQuery.current !== "";
+      appliedQuery.current = "";
+      setQueryInput("");
+      setQuery("");
+      setPage(1);
+      setReloadToken((token) => token + 1);
+      if (wasFiltered) toast.success("Paciente cadastrado. A lista voltou à primeira página, sem busca.");
       onCreateClose();
       onSaved?.(`${savedPatient.name} foi adicionado aos clientes.`);
       if (canFillAnamnesis) setJustCreated(savedPatient);
@@ -288,6 +362,8 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
     }
   }
 
+  if (detailLoading) return <div><LoadingTable columns={6} /></div>;
+
   if (selectedPatient) {
     return (
       <PatientDetail
@@ -297,6 +373,8 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
         onBack={() => {
           setAnamnesisRequest(null);
           setSelectedPatientName(null);
+          // A lista volta a ficar visível: refaz a consulta da página atual (o perfil pode ter editado o paciente).
+          setReloadToken((token) => token + 1);
           router.replace("/clientes");
         }}
       />
@@ -311,12 +389,13 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
         action="Novo cliente"
         onAction={onCreateOpen}
       />
-      <SearchFilterBar placeholder="Buscar por nome, telefone ou status" value={query} onChange={setQuery} />
+      <SearchFilterBar placeholder="Buscar por nome, telefone ou status" value={queryInput} onChange={setQueryInput} />
+      {listError ? <div role="alert" className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-[7px] border border-[#ffd7d7] bg-[#fff7f7] px-3 py-2 text-xs font-semibold text-[#b42318]"><span>{listError}</span><Button size="sm" variant="secondary" onClick={() => { setList((current) => ({ ...current, errorKey: null })); setReloadToken((token) => token + 1); }}>Tentar novamente</Button></div> : null}
       {isLoading ? <LoadingTable columns={6} /> : null}
-      {!isLoading && !filteredPatients.length ? <EmptyState title="Nenhum cliente encontrado" description="Cadastre um cliente para começar o prontuário da clínica." /> : null}
-      {!isLoading && filteredPatients.length ? <MiniTable
+      {!isLoading && !listError && !patientRows.length ? <EmptyState title="Nenhum cliente encontrado" description={query ? "Nenhum cliente corresponde à busca. Tente outro nome, telefone ou status." : "Cadastre um cliente para começar o prontuário da clínica."} /> : null}
+      {!isLoading && patientRows.length ? <div aria-busy={isFetching} className={cn("transition-opacity", isFetching && "opacity-60")}><MiniTable
         columns={["Nome", "Telefone", "Status", "Etapa atual", "Próximo retorno", "Ação"]}
-        rows={filteredPatients.map((patient) => {
+        rows={patientRows.map((patient) => {
           const journey = journeyForPatient(patient);
           const currentStage = journey.find((stage) => stage.status === "current");
 
@@ -329,7 +408,8 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
           <Button key="open" size="sm" variant="secondary" onClick={() => openPatient(patient)}>Ver perfil <ArrowRight className="h-3 w-3" /></Button>,
           ];
         })}
-      /> : null}
+      /></div> : null}
+      {listData && !listError && listData.pagination.total > 0 ? <PaginationBar page={listData.pagination.page} pageSize={listData.pagination.pageSize} total={listData.pagination.total} sizes={patientPageSizes} noun={["cliente", "clientes"]} onPage={setPage} onPageSize={(size) => { setPageSize(size); setPage(1); }} /> : null}
       <div className="hp-panel-enter mt-5 flex items-center justify-between rounded-[7px] border border-[#e2e0f1] bg-[#f7f6ff] px-4 py-3">
         <div>
           <p className="text-xs font-bold text-[#454659]">Jornada conectada ao prontuário</p>
@@ -359,14 +439,31 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
 }
 
 export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved, focus }: CreateProps & { focus?: ScheduleFocus | null }) {
-  const cachedAgenda = readClientCache<{ appointments: ApiAppointment[]; patients: ApiPatient[]; procedures: ApiProcedureOption[]; members: Array<{ role: string; user: { name: string } }>; settings?: { appointmentToleranceMinutes: number; openingTime: string; closingTime: string } }>("/api/agenda/bootstrap");
+  // Período inicial (foco vindo de outra tela abre o dia) e o que já está em cache para ele, para a primeira pintura sem espera.
+  const [initial] = useState(() => {
+    const view: CalendarView = focus ? "Dia" : "Semana";
+    const date = focus ? focusDate(focus.date) : clinicNow();
+    const bootstrap = readClientCache<AgendaBootstrap>(agendaBootstrapKey);
+    const period = readClientCache<AgendaPeriodResponse>(agendaPeriodKey(agendaPeriodRange(calendarDateKey(date), view)));
+    return { view, date, bootstrap, period: bootstrap ? period : undefined };
+  });
+  const cachedAgenda = initial.bootstrap;
   const rowColors = ["#5147dc", "#6d5ce7", "#2f9c88", "#d86655", "#ddb63f"];
-  const [appointmentRows, setAppointmentRows] = useState<AppointmentRow[]>(() => cachedAgenda?.appointments.map((item) => mapApiAppointment(item, cachedAgenda.procedures)) ?? []);
-  const [isLoading, setIsLoading] = useState(!cachedAgenda);
+  const [appointmentRows, setAppointmentRows] = useState<AppointmentRow[]>(() => initial.period && initial.bootstrap ? initial.period.appointments.map((item) => mapApiAppointment(item, initial.bootstrap?.procedures)) : []);
+  // O calendário desenha o último período já carregado; ao navegar ele continua na tela até o novo chegar.
+  const [shownPeriod, setShownPeriod] = useState<ShownPeriod>({ key: initial.period ? agendaPeriodKey(agendaPeriodRange(calendarDateKey(initial.date), initial.view)) : "", date: initial.date, view: initial.view });
+  const [isLoading, setIsLoading] = useState(!initial.period);
   const [loadError, setLoadError] = useState("");
+  const [reloadToken, setReloadToken] = useState(0);
+  // "Agendado" já vencido em qualquer período (GET /api/agenda/overdue), para o "Faltou" automático além do período exibido.
+  const [overdueRows, setOverdueRows] = useState<AppointmentRow[]>([]);
+  const [overdueToken, setOverdueToken] = useState(0);
+  const hasShownPeriod = useRef(Boolean(initial.period));
+  const procedureCatalogRef = useRef<ApiProcedureOption[]>(cachedAgenda?.procedures ?? []);
+  const shownPeriodRef = useRef<ShownPeriod>({ key: "", date: initial.date, view: initial.view });
   const [isSaving, setIsSaving] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
-  const [patientOptions, setPatientOptions] = useState<ApiPatient[]>(cachedAgenda?.patients ?? []);
+  const [selectedPatientRecord, setSelectedPatientRecord] = useState<LookupPatient | null>(null);
   const [procedureCatalog, setProcedureCatalog] = useState<ApiProcedureOption[]>(cachedAgenda?.procedures ?? []);
   const [professionalChoices, setProfessionalChoices] = useState<string[]>(cachedAgenda?.members.map((member) => member.user.name) ?? []);
   const [professionalLoading, setProfessionalLoading] = useState(!cachedAgenda);
@@ -375,10 +472,13 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   const [appointmentTime, setAppointmentTime] = useState("");
   const [invalidAppointmentFields, setInvalidAppointmentFields] = useState<Set<string>>(new Set());
   const [appointmentFormError, setAppointmentFormError] = useState("");
-  const [activeView, setActiveView] = useState<"Dia" | "Semana" | "Mês">(() => focus ? "Dia" : "Semana");
-  const [calendarDate, setCalendarDate] = useState(() => focus ? focusDate(focus.date) : clinicNow());
+  const [activeView, setActiveView] = useState<CalendarView>(initial.view);
+  const [calendarDate, setCalendarDate] = useState(initial.date);
   const [calendarDatePickerOpen, setCalendarDatePickerOpen] = useState(false);
-  const [calendarDateDraft, setCalendarDateDraft] = useState(() => calendarDateKey(focus ? focusDate(focus.date) : clinicNow()));
+  const [calendarDateDraft, setCalendarDateDraft] = useState(() => calendarDateKey(initial.date));
+  const calendarDayKey = calendarDateKey(calendarDate);
+  // Navegou para um período cujos dados ainda não chegaram: o anterior continua na tela com o aviso "Carregando período...".
+  const periodLoading = shownPeriod.key !== agendaPeriodKey(agendaPeriodRange(calendarDayKey, activeView)) && !loadError;
   const focusTime = focus?.time;
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [professional, setProfessional] = useState("Todos");
@@ -391,32 +491,88 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   const autoMissedIds = useRef(new Set<string>());
   const autoCompletedIds = useRef(new Set<string>());
   const canRun = useCan("appointment:run");
-  const professionalOptions = useMemo(() => ["Todos", ...new Set(appointmentRows.map((item) => item.professional))], [appointmentRows]);
+  // Profissionais da equipe (estáveis ao navegar) mais os que aparecem nos agendamentos carregados.
+  const professionalOptions = useMemo(() => ["Todos", ...new Set([...professionalChoices, ...appointmentRows.map((item) => item.professional)])], [professionalChoices, appointmentRows]);
   const activeProfessional = professionalOptions.includes(professional) ? professional : "Todos";
   const filteredAppointments = appointmentRows.filter((appointment) => activeProfessional === "Todos" || appointment.professional === activeProfessional);
 
+  // Dados estáticos da agenda (horário, procedimentos, profissionais): não dependem do período.
   useEffect(() => {
     let active = true;
-    getCachedJson<{ appointments: ApiAppointment[]; patients: ApiPatient[]; procedures: ApiProcedureOption[]; members: Array<{ role: string; user: { name: string } }>; settings?: { appointmentToleranceMinutes: number; openingTime: string; closingTime: string } }>("/api/agenda/bootstrap")
+    getCachedJson<AgendaBootstrap>(agendaBootstrapKey)
       .then((data) => {
         if (!active) return;
-        setAppointmentRows(data.appointments.map((item) => mapApiAppointment(item, data.procedures)));
-        setPatientOptions(data.patients);
         setProcedureCatalog(data.procedures);
+        procedureCatalogRef.current = data.procedures;
         setAppointmentToleranceMinutes(data.settings?.appointmentToleranceMinutes ?? 15);
         setOpeningTime(data.settings?.openingTime ?? "08:00");
         setClosingTime(data.settings?.closingTime ?? "19:00");
         setProfessionalChoices(data.members.map((member) => member.user.name));
       })
-      .catch(() => {
-        if (active) setLoadError("Não foi possível carregar os dados da agenda.");
+      .catch(() => undefined)
+      .finally(() => { if (active) setProfessionalLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  // Agendamentos do período visível (dia/semana/mês). Ao navegar, o período anterior continua na tela até o novo chegar;
+  // depois de carregar, os períodos vizinhos são pré-carregados no cache.
+  useEffect(() => {
+    let active = true;
+    const range = agendaPeriodRange(calendarDayKey, activeView);
+    const periodKey = agendaPeriodKey(range);
+    const requestedDate = calendarDate;
+    const show = (period: AgendaPeriodResponse, bootstrap: AgendaBootstrap) => {
+      hasShownPeriod.current = true;
+      setAppointmentRows(period.appointments.map((item) => mapApiAppointment(item, bootstrap.procedures)));
+      shownPeriodRef.current = { key: periodKey, date: requestedDate, view: activeView };
+      setShownPeriod(shownPeriodRef.current);
+      setLoadError("");
+      setIsLoading(false);
+    };
+    Promise.all([getCachedJson<AgendaBootstrap>(agendaBootstrapKey), getCachedJson<AgendaPeriodResponse>(periodKey)])
+      .then(([bootstrap, period]) => {
+        if (!active) return;
+        show(period, bootstrap);
+        for (const neighbor of agendaNeighborRanges(calendarDayKey, activeView)) void getCachedJson(agendaPeriodKey(neighbor)).catch(() => undefined);
       })
-      .finally(() => {
+      .catch(() => {
         if (!active) return;
         setIsLoading(false);
-        setProfessionalLoading(false);
+        if (hasShownPeriod.current) {
+          // Não deixa o cabeçalho apontar para um período cujos dados não chegaram: volta ao último período exibido.
+          toast.error("Não foi possível carregar este período da agenda.");
+          setCalendarDate(shownPeriodRef.current.date);
+          setActiveView(shownPeriodRef.current.view);
+        } else setLoadError("Não foi possível carregar os dados da agenda.");
       });
     return () => { active = false; };
+    // calendarDate/activeView entram pela chave do dia e pela visão; shownPeriodRef é só leitura do último período exibido.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calendarDayKey, activeView, reloadToken]);
+
+  // Lido uma vez ao montar e de novo depois de mutações que mudam status. Sem cache: é leitura de decisão (marcar falta).
+  useEffect(() => {
+    let active = true;
+    fetch("/api/agenda/overdue", { cache: "no-store" })
+      .then((response) => {
+        if (response.status === 401) {
+          // Mesmo tratamento do cache: sessão expirada limpa o escopo e avisa o app.
+          setClientCacheScope(null);
+          window.dispatchEvent(new Event(CLIENT_CACHE_UNAUTHORIZED_EVENT));
+        }
+        return response.ok ? response.json() as Promise<{ appointments: ApiAppointment[] }> : null;
+      })
+      .then((data) => { if (active && data) setOverdueRows(data.appointments.map((item) => mapApiAppointment(item, procedureCatalogRef.current))); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [overdueToken]);
+
+  // Troca de conta/clínica ou sessão expirada: nada do escopo anterior pode alimentar o timer nem o PATCH.
+  useEffect(() => {
+    const reset = () => { setOverdueRows([]); autoMissedIds.current.clear(); autoCompletedIds.current.clear(); };
+    window.addEventListener(CLIENT_CACHE_SCOPE_CHANGED_EVENT, reset);
+    window.addEventListener(CLIENT_CACHE_UNAUTHORIZED_EVENT, reset);
+    return () => { window.removeEventListener(CLIENT_CACHE_SCOPE_CHANGED_EVENT, reset); window.removeEventListener(CLIENT_CACHE_UNAUTHORIZED_EVENT, reset); };
   }, []);
 
   useEffect(() => {
@@ -424,7 +580,10 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
 
     async function markExpiredAppointments() {
       const now = clinicNow();
-      const missed = appointmentRows.filter((appointment) => (
+      // Para o "Faltou" vale o que a tela já sabe (appointmentRows) sobre o mesmo id; os vencidos de outros períodos entram só se ainda "Agendado".
+      const loadedIds = new Set(appointmentRows.map((appointment) => appointment.id));
+      const missedSource = [...appointmentRows, ...overdueRows.filter((appointment) => !loadedIds.has(appointment.id))];
+      const missed = missedSource.filter((appointment) => (
         appointment.status === "Agendado"
         && appointmentHasPassed(appointment, now, appointmentToleranceMinutes)
         && !autoMissedIds.current.has(appointment.id)
@@ -450,18 +609,19 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
       const updated = new Map(results.filter((result): result is { id: string; status: string } => Boolean(result)).map((result) => [result.id, result.status]));
       if (!updated.size) return;
       setAppointmentRows((current) => current.map((appointment) => updated.has(appointment.id) ? { ...appointment, status: updated.get(appointment.id) ?? appointment.status } : appointment));
-      invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", ...transitions.map(({ appointment }) => `/api/patients/${appointment.patientId}/history`));
+      setOverdueRows((current) => current.filter((appointment) => !updated.has(appointment.id)));
+      invalidateClientCache(...new Set(transitions.map(({ appointment }) => agendaDayInvalidationKey(appointment.date))), "/api/dashboard/bootstrap", ...transitions.map(({ appointment }) => `/api/patients/${appointment.patientId}/history`));
     }
 
     void markExpiredAppointments();
     const timer = window.setInterval(() => { void markExpiredAppointments(); }, 30_000);
     return () => window.clearInterval(timer);
-  }, [appointmentRows, appointmentToleranceMinutes, isLoading, canRun]);
+  }, [appointmentRows, overdueRows, appointmentToleranceMinutes, isLoading, canRun]);
 
-  const matchingPatients = patientOptions.filter((patient) =>
-    `${patient.name} ${patient.cpf ?? ""}`.toLowerCase().includes(patientQuery.toLowerCase()),
-  );
-  const selectedPatient = patientOptions.find((patient) => patient.id === selectedPatientId);
+  // Seletor de paciente: busca sob demanda no servidor (nome ou CPF), com debounce, só enquanto o usuário digita.
+  const patientLookup = usePatientLookup(patientQuery, !selectedPatientId);
+  const matchingPatients = patientLookup.patients;
+  const selectedPatient = selectedPatientRecord?.id === selectedPatientId ? selectedPatientRecord : undefined;
 
   function clearAppointmentField(field: string) {
     setInvalidAppointmentFields((current) => {
@@ -471,6 +631,13 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
       return next;
     });
     setAppointmentFormError("");
+  }
+
+  // Só entra na tela se o dia estiver no período exibido; os demais períodos são buscados quando o usuário chegar neles.
+  function addRowIfVisible(appointment: ApiAppointment) {
+    const shownRange = agendaPeriodRange(calendarDateKey(shownPeriodRef.current.date), shownPeriodRef.current.view);
+    if (!dayInRange(calendarDateKey(appointment.date), shownRange)) return;
+    setAppointmentRows((current) => [...current.filter((item) => item.id !== appointment.id), mapApiAppointment(appointment, procedureCatalog)].sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`)));
   }
 
   async function saveAppointment(event: FormEvent<HTMLFormElement>) {
@@ -512,10 +679,17 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
           date: `${String(form.get("date"))}T00:00:00`,
         }),
       });
-      if (!response.ok) return;
-      const data = await response.json() as { appointment: ApiAppointment };
-      setAppointmentRows((current) => [...current, mapApiAppointment(data.appointment, procedureCatalog)].sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`)));
-      invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${selectedPatientId}/history`);
+      const data = await response.json().catch(() => null) as { appointment?: ApiAppointment; message?: string } | null;
+      if (!response.ok || !data?.appointment) {
+        // Mostra o motivo devolvido pelo servidor (conflito de horário, expediente, duplicidade).
+        const reason = data?.message ?? "Não foi possível criar o agendamento.";
+        setAppointmentFormError(reason);
+        // Conflito/expediente: marca o campo Horário como inválido para leitores de tela e destaque visual.
+        if (/horário|atendimento neste horário/i.test(reason)) setInvalidAppointmentFields(new Set(["time"]));
+        return;
+      }
+      addRowIfVisible(data.appointment!);
+      invalidateClientCache(agendaDayInvalidationKey(data.appointment!.date), "/api/dashboard/bootstrap", `/api/patients/${selectedPatientId}/history`);
       onCreateClose();
       setPatientQuery("");
       setSelectedPatientId("");
@@ -540,10 +714,10 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     const nextStatus = target.status === "Em atendimento" ? "Atendido" : "Em atendimento";
     setUpdatingId(target.id);
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: nextStatus }) });
-    if (!response.ok) { setUpdatingId(null); return; }
-    const nextRows = appointmentRows.map((item) => item.id === target.id ? { ...item, status: nextStatus } : item);
-    setAppointmentRows(nextRows);
-    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`, ...(nextStatus === "Atendido" ? ["/api/patients"] : []));
+    if (!response.ok) { setUpdatingId(null); toast.error(await responseMessage(response, "Não foi possível atualizar o atendimento.")); return; }
+    setAppointmentRows((current) => current.map((item) => item.id === target.id ? { ...item, status: nextStatus } : item));
+    setOverdueToken((token) => token + 1);
+    invalidateClientCache(agendaDayInvalidationKey(target.date), "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`, ...(nextStatus === "Atendido" ? ["/api/patients"] : []));
     setUpdatingId(null);
     onSaved?.(`${target.patient}: ${nextStatus}.`);
     if (nextStatus === "Atendido") setMaterialCheck({ id: target.id, patientId: target.patientId });
@@ -552,26 +726,27 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   async function markAppointmentAsMissed(target: AppointmentRow) {
     const previousStatus = target.status;
 
-    const nextRows = appointmentRows.map((item) => item.id === target.id ? { ...item, status: "Faltou" } : item);
     setUpdatingId(target.id);
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Faltou" }) });
-    if (!response.ok) { setUpdatingId(null); return; }
-    setAppointmentRows(nextRows);
-    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
+    if (!response.ok) { setUpdatingId(null); toast.error(await responseMessage(response, "Não foi possível marcar a falta.")); return; }
+    setAppointmentRows((current) => current.map((item) => item.id === target.id ? { ...item, status: "Faltou" } : item));
+    setOverdueRows((current) => current.filter((item) => item.id !== target.id));
+    invalidateClientCache(agendaDayInvalidationKey(target.date), "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
     setUpdatingId(null);
     onSaved?.(`${target.patient} foi marcado como faltou.`, () => {
-      const restoredRows = nextRows.map((item) => item.id === target.id ? { ...item, status: previousStatus } : item);
-      setAppointmentRows(restoredRows);
-      invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
+      setAppointmentRows((current) => current.map((item) => item.id === target.id ? { ...item, status: previousStatus } : item));
+      setOverdueToken((token) => token + 1);
+      invalidateClientCache(agendaDayInvalidationKey(target.date), "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
     });
   }
 
   async function cancelAppointment(target: AppointmentRow) {
     setUpdatingId(target.id);
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Cancelado" }) });
-    if (!response.ok) { setUpdatingId(null); return; }
+    if (!response.ok) { setUpdatingId(null); toast.error(await responseMessage(response, "Não foi possível cancelar o agendamento.")); return; }
     setAppointmentRows((current) => current.map((item) => item.id === target.id ? { ...item, status: "Cancelado" } : item));
-    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
+    setOverdueRows((current) => current.filter((item) => item.id !== target.id));
+    invalidateClientCache(agendaDayInvalidationKey(target.date), "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
     setUpdatingId(null);
     onSaved?.(`${target.patient}: agendamento cancelado.`);
   }
@@ -581,21 +756,22 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     const target = deleteTarget;
     setDeleteSaving(true);
     const response = await fetch(`/api/appointments/${target.id}`, { method: "DELETE" });
-    if (!response.ok) { setDeleteSaving(false); return; }
+    if (!response.ok) { setDeleteSaving(false); toast.error(await responseMessage(response, "Não foi possível excluir o agendamento.")); return; }
     setAppointmentRows((current) => current.filter((item) => item.id !== target.id));
+    setOverdueRows((current) => current.filter((item) => item.id !== target.id));
     setDeleteTarget(null);
     setDeleteSaving(false);
-    invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
+    invalidateClientCache(agendaDayInvalidationKey(target.date), "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
     onSaved?.(`${target.patient}: agendamento excluído.`, () => {
       void fetch("/api/appointments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ patientId: target.patientId, time: target.time, procedure: target.procedure, professional: target.professional, date: target.date }),
       }).then(async (restoreResponse) => {
-        if (!restoreResponse.ok) return;
+        if (!restoreResponse.ok) { toast.error(`Não foi possível desfazer a exclusão: ${await responseMessage(restoreResponse, "tente agendar novamente.")}`); return; }
         const data = await restoreResponse.json() as { appointment: ApiAppointment };
-        setAppointmentRows((current) => [...current, mapApiAppointment(data.appointment, procedureCatalog)].sort((a, b) => `${a.date}-${a.time}`.localeCompare(`${b.date}-${b.time}`)));
-        invalidateClientCache("/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
+        addRowIfVisible(data.appointment);
+        invalidateClientCache(agendaDayInvalidationKey(target.date), "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
       });
     });
   }
@@ -623,7 +799,8 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
           <Button variant="secondary" size="icon" aria-label="Período anterior" onClick={() => setCalendarDate((current) => shiftCalendarDate(current, activeView, -1))}><ChevronLeft className="h-4 w-4" /></Button>
           <Button variant="secondary" size="sm" onClick={() => setCalendarDate(clinicNow())}>Hoje</Button>
           <Button variant="secondary" size="icon" aria-label="Próximo período" onClick={() => setCalendarDate((current) => shiftCalendarDate(current, activeView, 1))}><ChevronRight className="h-4 w-4" /></Button>
-          <h3 className="ml-2 truncate text-base font-bold capitalize text-[#303144]">{calendarPeriodLabel(calendarDate, activeView)}</h3>
+          <h3 className="ml-2 truncate text-base font-bold text-[#303144]">{calendarPeriodLabel(calendarDate, activeView)}</h3>
+          {periodLoading ? <span role="status" className="flex items-center gap-1 text-[10px] font-semibold text-[#858696]"><Loader2 className="h-3 w-3 animate-spin text-[#5147dc]" />Carregando período...</span> : null}
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
           <div className="flex w-full min-w-0 basis-full flex-1 flex-wrap items-center gap-2 sm:w-auto sm:basis-auto sm:flex-none">
@@ -688,10 +865,11 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         </div>
       </div>
 
+      {loadError ? <div role="alert" className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-[7px] border border-[#ffd7d7] bg-[#fff7f7] px-3 py-2 text-xs font-semibold text-[#b42318]"><span>{loadError}</span><Button size="sm" variant="secondary" onClick={() => { setLoadError(""); setIsLoading(true); setReloadToken((token) => token + 1); }}>Tentar novamente</Button></div> : null}
       <ScheduleCalendar
         appointments={filteredAppointments}
-        date={calendarDate}
-        view={activeView}
+        date={shownPeriod.date}
+        view={shownPeriod.view}
         focusTime={focusTime}
         openingTime={openingTime}
         closingTime={closingTime}
@@ -710,7 +888,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
       <Modal open={Boolean(selectedAppointment)} onClose={() => setSelectedAppointment(null)} title="Detalhes do agendamento" description="Informações completas do atendimento selecionado.">
         {selectedAppointment ? <div className="space-y-4">
           <div className={cn("rounded-[8px] border-l-4 p-4", appointmentTone(selectedAppointment).card)}><p className="text-xs font-bold text-[#77788a]">{selectedAppointment.time} - {formatEndTime(selectedAppointment.time, selectedAppointment.durationMinutes)}</p><h3 className="mt-1 text-lg font-black text-[#303144]">{selectedAppointment.procedure}</h3><p className="mt-1 text-sm text-[#656678]">{selectedAppointment.patient}</p></div>
-          <div className="grid gap-3 sm:grid-cols-2">{[["Data", formatDate(selectedAppointment.date)], ["Profissional", selectedAppointment.professional], ["Tipo", selectedAppointment.category || "Atendimento"], ["Status", selectedAppointment.status]].map(([label, value]) => <div className="rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3" key={label}><p className="text-[9px] font-bold uppercase text-[#9697a7]">{label}</p><p className="mt-1 text-xs font-semibold text-[#4f5062]">{value}</p></div>)}</div>
+          <div className="grid gap-3 sm:grid-cols-2">{[["Data", formatDayBR(selectedAppointment.date)], ["Profissional", selectedAppointment.professional], ["Tipo", selectedAppointment.category || "Atendimento"], ["Status", selectedAppointment.status]].map(([label, value]) => <div className="rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3" key={label}><p className="text-[9px] font-bold uppercase text-[#9697a7]">{label}</p><p className="mt-1 text-xs font-semibold text-[#4f5062]">{value}</p></div>)}</div>
           <div className="flex justify-end gap-2">{selectedAppointment.status === "Agendado" ? <Button type="button" variant="secondary" disabled title="Confirmação por WhatsApp em breve"><MessageCircle className="h-3.5 w-3.5" />Confirmar por WhatsApp</Button> : null}<Button type="button" onClick={() => setSelectedAppointment(null)}>Fechar</Button></div>
         </div> : null}
       </Modal>
@@ -777,6 +955,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
                     key={patient.id}
                     type="button"
                     onClick={() => {
+                      setSelectedPatientRecord(patient);
                       setSelectedPatientId(patient.id);
                       setPatientQuery(`${patient.name}${patient.cpf ? ` · ${patient.cpf}` : ""}`);
                     }}
@@ -784,7 +963,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
                     <span className="font-bold text-[#303144]">{patient.name}</span>
                     <span className="text-[10px] text-[#858696]">{patient.cpf || "CPF não informado"}</span>
                   </button>
-                )) : <p className="px-3 py-2 text-xs text-[#858696]">Nenhum paciente encontrado.</p>}
+                )) : <p className="px-3 py-2 text-xs text-[#858696]">{patientLookup.tooShort ? "Digite pelo menos 2 letras." : patientLookup.loading ? "Buscando pacientes..." : patientLookup.error ? "Não foi possível buscar pacientes." : "Nenhum paciente encontrado."}</p>}
               </div>
             ) : null}
             {selectedPatientId ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {selectedPatient?.name}</p> : null}
@@ -793,7 +972,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
           <div className="relative"><FormField label="Horário"><ClinicTimePicker openingTime={openingTime} closingTime={closingTime} latestTime={latestAppointmentStart(closingTime)} value={appointmentTime} invalid={invalidAppointmentFields.has("time")} onChange={(value) => { setAppointmentTime(value); clearAppointmentField("time"); }} /></FormField><input name="time" type="hidden" value={appointmentTime} required /></div>
           <FormField label="Profissional"><div className="relative"><select className={cn(fieldClassName, invalidAppointmentFields.has("professional") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="professional" required disabled={professionalLoading || !professionalChoices.length} onChange={() => clearAppointmentField("professional")}><option value="">{professionalLoading ? "..." : professionalChoices.length ? "Selecione o profissional" : "Nenhum profissional cadastrado"}</option>{professionalChoices.map((professional) => <option key={professional} value={professional}>{professional}</option>)}</select>{professionalLoading ? <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#5147dc]" /> : null}</div></FormField>
           <div className="sm:col-span-2"><FormField label="Tipo de consulta"><div className="relative"><select className={cn(fieldClassName, invalidAppointmentFields.has("procedure") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="procedure" required onChange={() => clearAppointmentField("procedure")}><option value="">Selecione o tipo de consulta</option>{appointmentTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></div></FormField></div>
-          {appointmentFormError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{appointmentFormError}</p> : null}
+          {appointmentFormError ? <p role="alert" className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{appointmentFormError}</p> : null}
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || professionalLoading || !professionalChoices.length || !selectedPatientId} type="submit">{isSaving || professionalLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : professionalLoading ? "Carregando dados..." : "Criar agendamento"}</Button></div>
         </form>
       </Modal>
@@ -976,14 +1155,14 @@ function calendarDateKey(date: Date | string) {
 }
 
 function shiftCalendarDate(date: Date, view: CalendarView, amount: number) {
-  const days = view === "Dia" ? 1 : view === "Semana" ? 7 : 30;
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + amount * days);
+  const [year, month, day] = shiftAgendaDay(calendarDateKey(date), view, amount).split("-").map(Number);
+  return new Date(year, month - 1, day);
 }
 
 function calendarPeriodLabel(date: Date, view: CalendarView) {
-  if (view === "Dia") return new Intl.DateTimeFormat("pt-BR", { dateStyle: "long" }).format(date);
-  if (view === "Semana") { const days = getWeekDays(date); return `${new Intl.DateTimeFormat("pt-BR", { month: "long" }).format(days[0])} de ${days[0].getFullYear()}`; }
-  return new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(date);
+  if (view === "Dia") return capitalizeFirst(new Intl.DateTimeFormat("pt-BR", { dateStyle: "long" }).format(date));
+  if (view === "Semana") { const days = getWeekDays(date); return capitalizeFirst(`${new Intl.DateTimeFormat("pt-BR", { month: "long" }).format(days[0])} de ${days[0].getFullYear()}`); }
+  return capitalizeFirst(new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(date));
 }
 
 function appointmentMinutes(time: string) {
@@ -1023,20 +1202,21 @@ function appointmentTone(appointment: AppointmentRow) {
   return { card: "border-[#e0647d] bg-[#fff0f2] text-[#9b3a4f]", pill: "bg-[#ffe0e5] text-[#a8465b]" };
 }
 
-type ApiProcedure = { id: string; name: string; category: string; price: number; durationMinutes: number; margin: number; materialsNeedReview: boolean; technicalSheet: TechnicalSheetItem[] };
-type ProcedureRow = Procedure & { technicalSheet: TechnicalSheetItem[]; materialsNeedReview: boolean };
+type ApiProcedure = { id: string; name: string; category?: string; price: number; durationMinutes: number; materialsNeedReview: boolean; catalogItemId?: string | null; image?: { kind: string; url: string | null } | null; technicalSheet: TechnicalSheetItem[] };
+type ProcedureRow = Procedure & EditableProcedure;
 
 function mapApiProcedures(procedures: ApiProcedure[] = []): ProcedureRow[] {
   return procedures.map((item) => ({
     id: item.id,
     name: item.name,
-    category: item.category,
     price: item.price,
     duration: `${item.durationMinutes} min`,
+    durationMinutes: item.durationMinutes,
     materials: describeTechnicalSheet(item.technicalSheet),
-    margin: `${item.margin}%`,
     technicalSheet: item.technicalSheet,
     materialsNeedReview: item.materialsNeedReview,
+    catalogItemId: item.catalogItemId ?? null,
+    imageUrl: item.image?.url ?? null,
   }));
 }
 
@@ -1045,17 +1225,26 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   const cachedProducts = readClientCache<{ products?: Product[] }>("/api/products");
   const [procedureRows, setProcedureRows] = useState<ProcedureRow[]>(() => mapApiProcedures(cachedProcedures?.procedures));
   const [productRows, setProductRows] = useState<Product[]>(cachedProducts?.products ?? []);
-  const [editingProcedureIndex, setEditingProcedureIndex] = useState<number | null>(null);
+  // Quem abriu o modal (Novo procedimento ou Editar); o foco volta para lá ao fechar.
+  const openerRef = useRef<HTMLElement | null>(null);
+  const [editingProcedureId, setEditingProcedureId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(!cachedProcedures);
-  const [isSaving, setIsSaving] = useState(false);
-  const [formError, setFormError] = useState("");
-  const editingProcedure = editingProcedureIndex === null ? null : procedureRows[editingProcedureIndex];
-  const procedureModalOpen = openCreate || editingProcedureIndex !== null;
+  const editingProcedure = editingProcedureId === null ? null : procedureRows.find((procedure) => procedure.id === editingProcedureId) ?? null;
+  const procedureModalOpen = openCreate || Boolean(editingProcedure);
+  const [procedureModalMounted, setProcedureModalMounted] = useState(procedureModalOpen);
+  const [procedureModalKey, setProcedureModalKey] = useState("new-procedure");
   const materialOptions = productRows.filter((product): product is Product & { id: string } => Boolean(product.id));
+
+  useEffect(() => {
+    if (procedureModalOpen || !procedureModalMounted) return;
+    const timeout = window.setTimeout(() => setProcedureModalMounted(false), 320);
+    return () => window.clearTimeout(timeout);
+  }, [procedureModalOpen, procedureModalMounted]);
 
   async function loadProcedures() {
     setIsLoading(true);
-    invalidateClientCache("/api/procedures", "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+    // Só chamado depois de salvar com sucesso. O catálogo muda a marca "Já cadastrado".
+    invalidateClientCache("/api/procedures", procedureCatalogCacheKey, "/api/quotes/options", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
     const data = await getCachedJson<{ procedures?: ApiProcedure[] }>("/api/procedures");
     setProcedureRows(mapApiProcedures(data.procedures));
     setIsLoading(false);
@@ -1083,39 +1272,28 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   }, []);
 
   function closeProcedureModal() {
-    setEditingProcedureIndex(null);
-    setFormError("");
+    setProcedureModalMounted(true);
+    setEditingProcedureId(null);
     onCreateClose();
+    const opener = openerRef.current;
+    // Depois do desmonte do diálogo; se o elemento sumiu (tabela recarregada), foca o botão Novo procedimento.
+    setTimeout(() => {
+      const target = opener?.isConnected ? opener : Array.from(document.querySelectorAll<HTMLElement>("main button, [data-hp-title] button")).find((button) => button.textContent?.trim() === "Novo procedimento");
+      target?.focus();
+    }, 50);
   }
 
-  async function saveProcedure(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const sheet = readTechnicalSheet(form, materialOptions);
-    if (sheet.error !== undefined) {
-      setFormError(sheet.error);
-      return;
-    }
-    const name = String(form.get("name"));
-    const nextProcedure = {
-      name,
-      category: String(form.get("category")),
-      price: parseCurrency(form.get("price")),
-      durationMinutes: parseInteger(form.get("duration")),
-      technicalSheet: sheet.items,
-      margin: parseInteger(form.get("margin")),
-    };
-    setIsSaving(true);
-    setFormError("");
-    const { ok, data } = await sendJson(editingProcedure?.id ? `/api/procedures/${editingProcedure.id}` : "/api/procedures", editingProcedure?.id ? "PATCH" : "POST", nextProcedure);
-    setIsSaving(false);
-    if (!ok) {
-      setFormError(data?.message ?? "Não foi possível salvar o procedimento.");
-      return;
-    }
+  async function handleProcedureSaved(name: string, created: boolean) {
     await loadProcedures();
-    onSaved?.(`${name} ${editingProcedure ? "foi atualizado" : "foi adicionado aos procedimentos"}.`);
+    onSaved?.(`${name} ${created ? "foi adicionado aos procedimentos" : "foi atualizado"}.`);
     closeProcedureModal();
+  }
+
+  function editProcedure(procedureId: string) {
+    setProcedureModalKey(`edit-${procedureId}`);
+    setProcedureModalMounted(true);
+    onCreateClose();
+    setEditingProcedureId(procedureId);
   }
 
   return (
@@ -1125,28 +1303,26 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
           title="Procedimentos"
           description="Cadastro de serviços com valor sugerido, tempo estimado e a ficha técnica de materiais e produtos usada no estoque e no orçamento."
           action="Novo procedimento"
-          onAction={onCreateOpen}
+          onAction={() => { setProcedureModalKey("new-procedure"); setProcedureModalMounted(true); openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; onCreateOpen?.(); }}
         />
-        {isLoading ? <LoadingTable columns={7} /> : <MiniTable
-          columns={["Nome", "Categoria", "Valor sugerido", "Tempo", "Ficha técnica", "Margem", "Ação"]}
-          rows={procedureRows.map((procedure, index) => [
-            <span className="flex min-w-0 items-center gap-2" key={procedure.id}><ProcedureImage name={procedure.name} decorative className="h-8 w-8 rounded" /><strong className="truncate uppercase italic text-[#121733]">{procedure.name}</strong></span>,
-            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-medium text-[#34364b]">{procedure.category}</span>,
-            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-semibold tabular-nums text-[#34364b]">{currency.format(procedure.price)}</span>,
-            <span className="inline-flex rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 text-xs font-medium tabular-nums text-[#34364b]">{procedure.duration}</span>,
-            <div className="w-full min-w-[190px] max-w-[300px] space-y-1.5" key="sheet">
+        {isLoading ? <LoadingTable columns={5} /> : <MiniTable
+          columns={["Nome", "Valor sugerido", "Tempo", "Ficha técnica", "Ação"]}
+          rows={procedureRows.map((procedure) => [
+            <span className="flex min-w-0 items-center gap-2" key={`name-${procedure.id}`}><ProcedureImage name={procedure.name} imageUrl={procedure.imageUrl} decorative className="h-8 w-8 rounded" /><strong className="min-w-0 truncate py-0.5 text-sm font-semibold text-foreground" title={procedure.name}>{procedure.name}</strong></span>,
+            <span className="inline-flex rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-xs font-semibold tabular-nums text-foreground" key={`price-${procedure.id}`}>{currency.format(procedure.price)}</span>,
+            <span className="inline-flex whitespace-nowrap rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-xs font-medium tabular-nums text-foreground" key={`duration-${procedure.id}`}>{procedure.duration}</span>,
+            <div className="w-full min-w-[190px] max-w-[300px] space-y-1.5" key={`sheet-${procedure.id}`}>
               {procedure.technicalSheet.length ? procedure.technicalSheet.map((material, materialIndex) => (
                 <div className="flex min-w-0 items-center gap-1.5" key={`${material.productId}-${materialIndex}`}>
-                  <span className="min-w-0 flex-1 truncate rounded-md border border-[#e4e5ef] bg-[#fbfbfe] px-2.5 py-1.5 font-sans text-[13px] font-semibold tracking-tight text-[#34364b]" title={material.name}>{material.name}</span>
-                  <span className="shrink-0 rounded-md border border-[#e1defe] bg-[#f3f1ff] px-2 py-1.5 font-sans text-xs font-bold tabular-nums text-[#5147dc]">
+                  <span className="min-w-0 flex-1 truncate rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-xs font-medium text-foreground" title={material.name}>{material.name}</span>
+                  <span className="shrink-0 whitespace-nowrap rounded-md bg-accent px-2 py-1.5 text-xs font-semibold tabular-nums text-accent-foreground">
                     {quantityFormat.format(material.quantity)} {material.unit === "unidade" ? "Un" : material.unit}
                   </span>
                 </div>
               )) : <span className="text-xs text-muted-foreground">Sem materiais</span>}
               {procedure.materialsNeedReview ? <Badge variant="amber" title="Convertida automaticamente do texto antigo. Confira as quantidades e salve.">Revisar ficha</Badge> : null}
             </div>,
-            <Badge key={procedure.margin} variant="green">{procedure.margin}</Badge>,
-            <Button key="edit" size="sm" variant="secondary" onClick={() => setEditingProcedureIndex(index)}>
+            <Button key={`edit-${procedure.id}`} size="sm" variant="secondary" onClick={(event) => { setProcedureModalKey(`edit-${procedure.id}`); setProcedureModalMounted(true); openerRef.current = event.currentTarget; setEditingProcedureId(procedure.id); }}>
               <PencilLine className="h-3.5 w-3.5" />
               Editar
             </Button>,
@@ -1154,28 +1330,18 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
         />}
       </div>
 
-      <CostCalculator materials={productRows.filter((product) => !product.archivedAt)} charged={procedureRows[0]?.price ?? 0} procedureName={procedureRows[0]?.name} />
-      <Modal
-        key={editingProcedure ? `edit-${editingProcedure.name}` : `new-procedure-${openCreate ? "open" : "closed"}`}
-        open={procedureModalOpen}
-        onClose={closeProcedureModal}
-        title={editingProcedure ? "Editar procedimento" : "Novo procedimento"}
-        description="Defina preço, duração, margem e os materiais e produtos usados em cada atendimento."
-      >
-        <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveProcedure}>
-          <div className="sm:col-span-2"><FormField label="Nome"><div className="flex items-center gap-2"><ProcedureImage name={editingProcedure?.name ?? "Procedimento"} decorative className="h-10 w-10 rounded" /><input className={fieldClassName} name="name" defaultValue={editingProcedure?.name ?? ""} required /></div></FormField></div>
-          <FormField label="Categoria"><select className={fieldClassName} name="category" defaultValue={editingProcedure?.category ?? ""} required><option value="">Selecione uma categoria</option>{procedureCategories.map((category) => <option key={category}>{category}</option>)}</select></FormField>
-          <FormField label="Valor sugerido"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="price" inputMode="decimal" defaultValue={editingProcedure ? currency.format(editingProcedure.price) : ""} placeholder="R$ 0,00" required /></FormField>
-          <FormField label="Duração em minutos"><MaskedInput className={fieldClassName} formatter={(value) => formatInteger(value, 3)} name="duration" inputMode="numeric" defaultValue={editingProcedure?.duration ?? ""} placeholder="60" required /></FormField>
-          <FormField label="Margem estimada (%)"><MaskedInput className={fieldClassName} formatter={formatPercent} name="margin" inputMode="numeric" defaultValue={editingProcedure?.margin ?? ""} placeholder="40%" required /></FormField>
-          <div className="sm:col-span-2"><FormField label="Ficha técnica" description="Materiais e produtos, com as quantidades usadas, em cada atendimento deste procedimento.">
-            {editingProcedure?.materialsNeedReview ? <p className="mb-2 rounded-[7px] bg-warning/10 px-3 py-2 text-[11px] font-semibold text-warning">Ficha convertida automaticamente do texto antigo com quantidade 1. Confira e salve para concluir a revisão.</p> : null}
-            <TechnicalSheetEditor materials={materialOptions} defaultValue={editingProcedure?.technicalSheet ?? []} />
-          </FormField></div>
-          {formError ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{formError}</p> : null}
-          <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={closeProcedureModal}>Cancelar</Button><Button disabled={isSaving} type="submit">{isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : editingProcedure ? "Salvar alterações" : "Salvar procedimento"}</Button></div>
-        </form>
-      </Modal>
+      {procedureModalMounted ? (
+        <ProcedureFormModal
+          key={procedureModalKey}
+          open={procedureModalOpen}
+          editing={editingProcedure}
+          procedures={procedureRows}
+          materials={materialOptions}
+          onClose={closeProcedureModal}
+          onEdit={editProcedure}
+          onSaved={handleProcedureSaved}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1183,13 +1349,13 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
 export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
   type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; createdAt?: string; patient?: { name: string } | null };
   type QuoteRow = Quote & { createdAt?: string };
-  type QuoteOptions = { patients?: Array<{ id: string; name: string; cpf: string | null }>; procedures?: Array<{ id: string; name: string; price: number }>; costs?: { laborCost: number; facilityCost: number; medicationCost: number } };
+  type QuoteOptions = { procedures?: Array<{ id: string; name: string; price: number; image?: { url: string | null } | null }>; costs?: { laborCost: number; facilityCost: number; medicationCost: number } };
   const cachedQuotes = readClientCache<{ quotes?: ApiQuote[] }>("/api/quotes");
   const cachedQuoteOptions = readClientCache<QuoteOptions>("/api/quotes/options");
   const [quoteRows, setQuoteRows] = useState<QuoteRow[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
   const [isLoading, setIsLoading] = useState(!cachedQuotes);
   const [isSaving, setIsSaving] = useState(false);
-  const [quotePatients, setQuotePatients] = useState(cachedQuoteOptions?.patients ?? []);
+  const [selectedQuotePatient, setSelectedQuotePatient] = useState<LookupPatient | null>(null);
   const [quoteProcedures, setQuoteProcedures] = useState(cachedQuoteOptions?.procedures ?? []);
   const [quoteCosts, setQuoteCosts] = useState(cachedQuoteOptions?.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
   const [optionsLoading, setOptionsLoading] = useState(!cachedQuoteOptions);
@@ -1211,14 +1377,15 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
 
   useEffect(() => {
     getCachedJson<QuoteOptions>("/api/quotes/options").then((data) => {
-      setQuotePatients(data.patients ?? []);
       setQuoteProcedures(data.procedures ?? []);
       setQuoteCosts(data.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
       setOptionsLoading(false);
     }).catch(() => setOptionsLoading(false));
   }, []);
 
-  const matchingQuotePatients = quotePatients.filter((patient) => `${patient.name} ${patient.cpf ?? ""}`.toLowerCase().includes(patientQuery.toLowerCase()));
+  // Pesquisa de paciente sob demanda no servidor (nome ou CPF), em vez de carregar todos os pacientes nas opções.
+  const quotePatientLookup = usePatientLookup(patientQuery, !selectedPatientId);
+  const matchingQuotePatients = quotePatientLookup.patients;
   const procedureSubtotal = selectedProcedureNames.reduce((total, name) => total + (quoteProcedures.find((procedure) => procedure.name === name)?.price ?? 0), 0);
   const clinicCostsTotal = quoteCosts.laborCost + quoteCosts.facilityCost + quoteCosts.medicationCost;
   const suggestedTotal = procedureSubtotal + clinicCostsTotal;
@@ -1234,7 +1401,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
   });
 
   async function saveQuote(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patient = quotePatients.find((item) => item.id === selectedPatientId)?.name ?? "Paciente";
+    event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patient = selectedQuotePatient?.id === selectedPatientId ? selectedQuotePatient.name : "Paciente";
     const response = await fetch("/api/quotes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId: selectedPatientId, items: String(form.get("items")), total: parseCurrency(form.get("total")), expires: String(form.get("expires")) }) });
     setIsSaving(false);
     if (!response.ok) return;
@@ -1288,15 +1455,15 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveQuote}>
           <div className="relative sm:col-span-2">
             <FormField label="Paciente">
-              <input className={fieldClassName} name="patientSearch" placeholder={optionsLoading ? "Carregando pacientes..." : "Pesquise por nome ou CPF"} required value={patientQuery} disabled={optionsLoading} onChange={(event) => { setPatientQuery(event.target.value); setSelectedPatientId(""); }} />
+              <input className={fieldClassName} name="patientSearch" placeholder="Pesquise por nome ou CPF" required value={patientQuery} onChange={(event) => { setPatientQuery(event.target.value); setSelectedPatientId(""); }} />
             </FormField>
             {patientQuery && !selectedPatientId ? <div className="absolute left-0 right-0 top-[68px] z-20 max-h-44 overflow-auto rounded-[7px] border border-[#e5e5ee] bg-white p-1 shadow-xl">
-              {matchingQuotePatients.length ? matchingQuotePatients.map((patient) => <button className="flex w-full items-center justify-between rounded-[5px] px-3 py-2 text-left text-xs transition hover:bg-[#f5f4ff]" key={patient.id} type="button" onClick={() => { setSelectedPatientId(patient.id); setPatientQuery(`${patient.name}${patient.cpf ? ` · ${patient.cpf}` : ""}`); }}><span className="font-bold text-[#303144]">{patient.name}</span><span className="text-[10px] text-[#858696]">{patient.cpf || "CPF não informado"}</span></button>) : <p className="px-3 py-2 text-xs text-[#858696]">Nenhum paciente encontrado.</p>}
+              {matchingQuotePatients.length ? matchingQuotePatients.map((patient) => <button className="flex w-full items-center justify-between rounded-[5px] px-3 py-2 text-left text-xs transition hover:bg-[#f5f4ff]" key={patient.id} type="button" onClick={() => { setSelectedQuotePatient(patient); setSelectedPatientId(patient.id); setPatientQuery(`${patient.name}${patient.cpf ? ` · ${patient.cpf}` : ""}`); }}><span className="font-bold text-[#303144]">{patient.name}</span><span className="text-[10px] text-[#858696]">{patient.cpf || "CPF não informado"}</span></button>) : <p className="px-3 py-2 text-xs text-[#858696]">{quotePatientLookup.tooShort ? "Digite pelo menos 2 letras." : quotePatientLookup.loading ? "Buscando pacientes..." : quotePatientLookup.error ? "Não foi possível buscar pacientes." : "Nenhum paciente encontrado."}</p>}
             </div> : null}
-            {selectedPatientId ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {quotePatients.find((patient) => patient.id === selectedPatientId)?.name}</p> : null}
+            {selectedPatientId ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {selectedQuotePatient?.name}</p> : null}
           </div>
           <FormField label="Validade"><MaskedInput className={fieldClassName} formatter={formatDate} name="expires" inputMode="numeric" maxLength={10} placeholder="30/09/2026" required /></FormField>
-          <div className="sm:col-span-2"><FormField label="Procedimentos"><div className="flex min-h-10 flex-wrap gap-1.5 rounded-[7px] border border-[#dddfea] bg-white p-2">{selectedProcedureNames.map((name) => <span className="flex items-center gap-1 rounded-full bg-[#f0efff] py-1 pl-1 pr-2 text-[10px] font-bold text-[#5147dc]" key={name}><ProcedureImage name={name} decorative className="h-6 w-6 rounded-full" />{name}<button className="ml-0.5 text-[#5147dc] hover:text-[#b42318]" type="button" onClick={() => setSelectedProcedureNames((current) => current.filter((item) => item !== name))}>×</button></span>)}<select className="min-w-[150px] flex-1 bg-transparent text-sm font-semibold text-[#858696] outline-none" value="" disabled={optionsLoading || !quoteProcedures.length} onChange={(event) => { if (event.target.value) setSelectedProcedureNames((current) => current.includes(event.target.value) ? current : [...current, event.target.value]); }}><option value="">{optionsLoading ? "Carregando procedimentos..." : quoteProcedures.length ? "Adicionar procedimento" : "Nenhum procedimento cadastrado"}</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name} · {currency.format(procedure.price)}</option>)}</select></div><input className="sr-only" name="items" value={selectedProcedureNames.join(", ")} readOnly required /></FormField></div>
+          <div className="sm:col-span-2"><FormField label="Procedimentos"><div className="flex min-h-10 flex-wrap gap-1.5 rounded-[7px] border border-[#dddfea] bg-white p-2">{selectedProcedureNames.map((name) => <span className="flex items-center gap-1 rounded-full bg-[#f0efff] py-1 pl-1 pr-2 text-[10px] font-bold text-[#5147dc]" key={name}><ProcedureImage name={name} imageUrl={quoteProcedures.find((procedure) => procedure.name === name)?.image?.url ?? null} decorative className="h-6 w-6 rounded-full" />{name}<button className="ml-0.5 text-[#5147dc] hover:text-[#b42318]" type="button" onClick={() => setSelectedProcedureNames((current) => current.filter((item) => item !== name))}>×</button></span>)}<select className="min-w-[150px] flex-1 bg-transparent text-sm font-semibold text-[#858696] outline-none" value="" disabled={optionsLoading || !quoteProcedures.length} onChange={(event) => { if (event.target.value) setSelectedProcedureNames((current) => current.includes(event.target.value) ? current : [...current, event.target.value]); }}><option value="">{optionsLoading ? "Carregando procedimentos..." : quoteProcedures.length ? "Adicionar procedimento" : "Nenhum procedimento cadastrado"}</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name} · {currency.format(procedure.price)}</option>)}</select></div><input className="sr-only" name="items" value={selectedProcedureNames.join(", ")} readOnly required /></FormField></div>
           <div className="sm:col-span-2"><FormField label="Valor total"><MaskedInput key={selectedProcedureNames.join("|")} className={fieldClassName} formatter={formatCurrency} name="total" inputMode="decimal" defaultValue={suggestedTotal ? currency.format(suggestedTotal) : ""} placeholder="R$ 0,00" required /></FormField><p className="mt-1 text-[10px] text-[#858696]">Inclui {currency.format(procedureSubtotal)} em procedimentos e {currency.format(clinicCostsTotal)} em custos padrão da Calculadora.</p></div>
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || optionsLoading || !selectedPatientId || !selectedProcedureNames.length} type="submit">{isSaving ? "Salvando..." : "Salvar orçamento"}</Button></div>
         </form>
@@ -1314,7 +1481,9 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
   const [methodFilter, setMethodFilter] = useState("Todos");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [paymentPatients, setPaymentPatients] = useState(readClientCache<{ patients?: Array<{ id: string; name: string; cpf: string | null }> }>("/api/quotes/options")?.patients ?? []);
+  const [paymentPatientQuery, setPaymentPatientQuery] = useState("");
+  const [paymentPatient, setPaymentPatient] = useState<LookupPatient | null>(null);
+  const paymentLookup = usePatientLookup(paymentPatientQuery, !paymentPatient);
   const visiblePayments = paymentRows.filter((item) => {
     const matchesMethod = methodFilter === "Todos" || item.method === methodFilter;
     const paymentDate = item.dateRaw?.slice(0, 10) ?? "";
@@ -1330,12 +1499,8 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
     }).catch(() => setIsLoading(false));
   }, []);
 
-  useEffect(() => {
-    getCachedJson<{ patients?: Array<{ id: string; name: string; cpf: string | null }> }>("/api/quotes/options").then((data) => setPaymentPatients(data.patients ?? [])).catch(() => undefined);
-  }, []);
-
   async function savePayment(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patientId = String(form.get("patientId")); const patient = paymentPatients.find((item) => item.id === patientId)?.name ?? "Paciente";
+    event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patientId = paymentPatient?.id ?? ""; const patient = paymentPatient?.name ?? "Paciente";
     const response = await fetch("/api/payments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, value: parseCurrency(form.get("value")), method: String(form.get("method")), status: String(form.get("status")), installments: String(form.get("installments")) }) });
     setIsSaving(false);
     if (!response.ok) return;
@@ -1343,6 +1508,7 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
     const item = data.payment;
     invalidateClientCache("/api/payments", "/api/dashboard/bootstrap");
     setPaymentRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), dateRaw: item.date, status: item.status, installments: item.installments }, ...current]);
+    setPaymentPatient(null); setPaymentPatientQuery("");
     onCreateClose(); onSaved?.(`Pagamento de ${patient} foi registrado.`);
   }
 
@@ -1386,12 +1552,18 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
       />}
       <Modal open={openCreate} onClose={onCreateClose} title="Registrar pagamento" description="O lançamento aparecerá imediatamente no histórico financeiro.">
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={savePayment}>
-          <div className="sm:col-span-2"><FormField label="Paciente"><select className={fieldClassName} name="patientId" required defaultValue=""><option value="" disabled>Selecione o paciente</option>{paymentPatients.map((item) => <option key={item.id} value={item.id}>{item.name}{item.cpf ? ` · ${item.cpf}` : ""}</option>)}</select></FormField></div>
+          <div className="relative sm:col-span-2">
+            <FormField label="Paciente"><input className={fieldClassName} name="patientSearch" placeholder="Pesquise por nome ou CPF" required value={paymentPatientQuery} onChange={(event) => { setPaymentPatientQuery(event.target.value); setPaymentPatient(null); }} /></FormField>
+            {paymentPatientQuery && !paymentPatient ? <div className="absolute left-0 right-0 top-[68px] z-20 max-h-44 overflow-auto rounded-[7px] border border-[#e5e5ee] bg-white p-1 shadow-xl">
+              {paymentLookup.patients.length ? paymentLookup.patients.map((item) => <button className="flex w-full items-center justify-between rounded-[5px] px-3 py-2 text-left text-xs transition hover:bg-[#f5f4ff]" key={item.id} type="button" onClick={() => { setPaymentPatient(item); setPaymentPatientQuery(`${item.name}${item.cpf ? ` · ${item.cpf}` : ""}`); }}><span className="font-bold text-[#303144]">{item.name}</span><span className="text-[10px] text-[#858696]">{item.cpf || "CPF não informado"}</span></button>) : <p className="px-3 py-2 text-xs text-[#858696]">{paymentLookup.tooShort ? "Digite pelo menos 2 letras." : paymentLookup.loading ? "Buscando pacientes..." : paymentLookup.error ? "Não foi possível buscar pacientes." : "Nenhum paciente encontrado."}</p>}
+            </div> : null}
+            {paymentPatient ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {paymentPatient.name}</p> : null}
+          </div>
           <FormField label="Valor"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="value" inputMode="decimal" placeholder="R$ 0,00" required /></FormField>
           <FormField label="Forma"><select className={fieldClassName} name="method"><option>Pix</option><option>Cartão de crédito</option><option>Cartão de débito</option><option>Dinheiro</option></select></FormField>
           <FormField label="Status"><select className={fieldClassName} name="status"><option>Pago</option><option>Parcial</option><option>Pendente</option></select></FormField>
           <FormField label="Parcelamento"><input className={fieldClassName} name="installments" defaultValue="À vista" required /></FormField>
-          <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving} type="submit">{isSaving ? "Salvando..." : "Registrar pagamento"}</Button></div>
+          <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || !paymentPatient} type="submit">{isSaving ? "Salvando..." : "Registrar pagamento"}</Button></div>
         </form>
       </Modal>
     </div>

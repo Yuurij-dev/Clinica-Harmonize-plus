@@ -69,6 +69,7 @@ model Clinic {
   purchases                   Purchase[]
   recurringExpenses           RecurringExpense[]
   pendingStockOutputs         PendingStockOutput[]
+  procedureImageAssets        ProcedureImageAsset[]
 }
 
 model ClinicMembership {
@@ -159,23 +160,76 @@ model Appointment {
   @@index([clinicId, date, time])
 }
 
+// Catálogo global somente leitura (sem clinicId). Cada clínica habilita itens criando um Procedure com catalogItemId.
+// imageFile referencia explicitamente o arquivo estático em public/.
+model ProcedureCatalogItem {
+  id         String      @id
+  slug       String      @unique
+  name       String
+  imageFile  String
+  imageAlt   String
+  sortOrder  Int
+  active     Boolean     @default(true)
+  procedures Procedure[]
+  imageUsers Procedure[] @relation("ProcedureLibraryImage")
+
+  @@index([active, sortOrder])
+}
+
+// Imagem personalizada de procedimento, por clínica. Bytes em ProcedureImageBlob (ou no bucket privado, via storageKey).
+model ProcedureImageAsset {
+  id            String              @id @default(cuid())
+  clinicId      String
+  mimeType      String
+  sizeBytes     Int
+  sha256        String
+  width         Int?
+  height        Int?
+  storageDriver String              @default("db")
+  storageKey    String?
+  uploadedBy    String
+  createdAt     DateTime            @default(now()) @db.Timestamptz(6)
+  clinic        Clinic              @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  blob          ProcedureImageBlob?
+  procedures    Procedure[]
+
+  @@index([clinicId])
+}
+
+model ProcedureImageBlob {
+  assetId String              @id
+  data    Bytes
+  asset   ProcedureImageAsset @relation(fields: [assetId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
 model Procedure {
-  id                  String              @id @default(cuid())
+  id                  String                @id @default(cuid())
   clinicId            String?
   name                String
-  category            String
+  // Legado: não é mais exigida nem exibida no cadastro; mantida para dados existentes e cor da agenda.
+  category            String                @default("")
+  catalogItemId       String?
+  imageAssetId        String?
+  // Imagem escolhida da biblioteca do catálogo (sem habilitar o item); catalogItemId é o item habilitado.
+  imageCatalogItemId  String?
   price               Int
   durationMinutes     Int
   materials           String
-  materialsNeedReview Boolean             @default(false)
-  margin              Float
-  createdAt           DateTime            @default(now()) @db.Timestamptz(6)
-  updatedAt           DateTime            @default(now()) @updatedAt @db.Timestamptz(6)
-  clinic              Clinic?             @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  materialsNeedReview Boolean               @default(false)
+  // Legado: margem estimada removida da interface e da API; mantida (default 0) até uma limpeza futura que a remova.
+  margin              Float                 @default(0)
+  createdAt           DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
+  clinic              Clinic?               @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   technicalSheet      ProcedureMaterial[]
+  catalogItem         ProcedureCatalogItem? @relation(fields: [catalogItemId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  imageCatalogItem    ProcedureCatalogItem? @relation("ProcedureLibraryImage", fields: [imageCatalogItemId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  imageAsset          ProcedureImageAsset?  @relation(fields: [imageAssetId], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@unique([clinicId, name])
+  @@unique([clinicId, catalogItemId])
   @@index([clinicId])
+  @@index([imageAssetId])
 }
 
 model PatientProcedure {
@@ -217,45 +271,47 @@ model PatientProcedurePhotoSession {
 }
 
 model PatientProcedureSession {
-  id               String                         @id @default(cuid())
-  clinicId         String
-  patientId        String
-  journeyId        String
-  evaluationId     String
-  procedureId      String
-  quoteId          String
-  procedureName    String
-  technique        String                         @default("")
-  treatedAreas     String                         @default("")
-  professional     String
-  performedAt      DateTime                       @db.Timestamptz(6)
-  startedAt        DateTime?                      @db.Timestamptz(6)
-  endedAt          DateTime?                      @db.Timestamptz(6)
-  estimatedMinutes Int?
-  durationMinutes  Int?
-  anesthesia       String                         @default("")
-  complications    String                         @default("")
-  observations     String                         @default("")
-  materials        String                         @default("[]")
-  photos           String                         @default("[]")
-  auditLog         String                         @default("[]")
-  status           String                         @default("Rascunho")
-  createdBy        String
-  updatedBy        String
-  completedBy      String?
-  completedAt      DateTime?                      @db.Timestamptz(6)
-  createdAt        DateTime                       @default(now()) @db.Timestamptz(6)
-  updatedAt        DateTime                       @updatedAt @db.Timestamptz(6)
-  clinic           Clinic                         @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  patient          Patient                        @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  journey          PatientJourney                 @relation(fields: [journeyId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  evaluation       Evaluation                     @relation(fields: [evaluationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  procedure        PatientProcedure               @relation(fields: [procedureId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  quote            Quote                          @relation(fields: [quoteId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  stockMovements   StockMovement[]
-  pendingOutputs   PendingStockOutput[]
-  followUps        PatientProcedureFollowUp[]
-  followUpDraft    PatientProcedureFollowUpDraft?
+  id                String                         @id @default(cuid())
+  clinicId          String
+  patientId         String
+  journeyId         String
+  evaluationId      String
+  procedureId       String
+  quoteId           String
+  procedureName     String
+  technique         String                         @default("")
+  treatedAreas      String                         @default("")
+  professional      String
+  performedAt       DateTime                       @db.Timestamptz(6)
+  startedAt         DateTime?                      @db.Timestamptz(6)
+  endedAt           DateTime?                      @db.Timestamptz(6)
+  estimatedMinutes  Int?
+  durationMinutes   Int?
+  anesthesia        String                         @default("")
+  complications     String                         @default("")
+  observations      String                         @default("")
+  materials         String                         @default("[]")
+  /// Quando os materiais foram preenchidos pela ficha técnica (uma vez só). NULL = ainda não semeado.
+  materialsSeededAt DateTime?                      @db.Timestamptz(6)
+  photos            String                         @default("[]")
+  auditLog          String                         @default("[]")
+  status            String                         @default("Rascunho")
+  createdBy         String
+  updatedBy         String
+  completedBy       String?
+  completedAt       DateTime?                      @db.Timestamptz(6)
+  createdAt         DateTime                       @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime                       @updatedAt @db.Timestamptz(6)
+  clinic            Clinic                         @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  patient           Patient                        @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  journey           PatientJourney                 @relation(fields: [journeyId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  evaluation        Evaluation                     @relation(fields: [evaluationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  procedure         PatientProcedure               @relation(fields: [procedureId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  quote             Quote                          @relation(fields: [quoteId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  stockMovements    StockMovement[]
+  pendingOutputs    PendingStockOutput[]
+  followUps         PatientProcedureFollowUp[]
+  followUpDraft     PatientProcedureFollowUpDraft?
 
   @@index([clinicId, patientId, performedAt])
   @@index([journeyId, performedAt])

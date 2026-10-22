@@ -1,13 +1,13 @@
 "use client";
 
 import { type FormEvent, useEffect, useState } from "react";
-import { AlertTriangle, Loader2, PackageX, TriangleAlert } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fieldClassName, FormField } from "@/components/ui/modal";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { sendJson } from "@/lib/send-json";
-import type { StockAlert } from "@/lib/stock-rules";
+import type { StockAlert, StockKind } from "@/lib/stock-rules";
 import { cn } from "@/lib/utils";
 import { StockKindBadge } from "./stock-kind";
 
@@ -38,15 +38,41 @@ export function useStockAlerts(enabled: boolean) {
 
 // Sem onOpen o aviso é só texto (span), para caber dentro de outros botões.
 export function StockAlertItem({ alert, onOpen, variant = "boxed" }: { alert: StockAlert; onOpen?: () => void; variant?: "boxed" | "plain" }) {
-  const Icon = alert.kind === "below_minimum" ? PackageX : AlertTriangle;
   const tone = alert.kind === "expired" ? "text-destructive" : "text-warning";
   const boxTone = alert.kind === "expired" ? "bg-destructive/10" : "bg-warning/10";
   const Tag = onOpen ? "button" : "span";
   return (
     <Tag type={onOpen ? "button" : undefined} className={`flex items-start gap-2 text-left text-[11px] font-semibold leading-5 ${tone} ${variant === "boxed" ? `w-full rounded-md p-3 ${boxTone}` : "w-fit"}`} onClick={onOpen}>
-      <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-      <span>{alert.productKind ? <StockKindBadge className="mr-1.5 align-middle" kind={alert.productKind} /> : null}{alert.message}</span>
+      <span aria-hidden="true" className="stock-alert-dot mt-1.5 h-2 w-2 shrink-0 rounded-full" />
+      <span>{alert.message}</span>
     </Tag>
+  );
+}
+
+type StockAlertGroup = { key: string; productKind?: StockKind; alerts: StockAlert[] };
+
+function groupStockAlerts(alerts: StockAlert[]): StockAlertGroup[] {
+  const groups = new Map<string, StockAlertGroup>();
+  for (const alert of alerts) {
+    const key = alert.productKind ?? `other:${alert.kind}`;
+    const group = groups.get(key);
+    if (group) group.alerts.push(alert);
+    else groups.set(key, { key, productKind: alert.productKind, alerts: [alert] });
+  }
+  return Array.from(groups.values());
+}
+
+export function StockAlertGroups({ alerts, onOpen, variant = "boxed" }: { alerts: StockAlert[]; onOpen?: (alert: StockAlert) => void; variant?: "boxed" | "plain" | "list" }) {
+  return (
+    <>
+      {groupStockAlerts(alerts).map((group) => {
+        const badge = group.productKind ? <StockKindBadge kind={group.productKind} /> : null;
+        const items = group.alerts.map((alert) => <StockAlertItem alert={alert} key={`${alert.kind}-${alert.lotId ?? alert.productId}-${alert.message}`} onOpen={onOpen ? () => onOpen(alert) : undefined} variant={variant === "boxed" ? "boxed" : "plain"} />);
+        if (variant === "plain") return <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1" key={group.key}>{badge}{items}</span>;
+        if (variant === "list") return <span className="inline-flex flex-col items-start gap-2" key={group.key}>{badge}{items}</span>;
+        return <div className="space-y-2" key={group.key}>{badge}{items}</div>;
+      })}
+    </>
   );
 }
 
@@ -55,8 +81,8 @@ export function stockAlertSection(alert: StockAlert): "estoque" | "compras" {
   return alert.kind === "pending" ? "compras" : "estoque";
 }
 
-// Ícone de aviso da seção; os avisos aparecem ao passar o mouse (ou ao focar, no toque e no teclado).
-// No menu lateral fica dentro do botão do item, então vira um span e a lista abre à direita.
+// Indicador de aviso da seção; a lista continua aparecendo ao passar o mouse ou focar.
+// No menu lateral ele fica dentro do botão do item, então o trigger é um span.
 export function SectionWarning({ section, enabled, inMenu = false }: { section: "estoque" | "compras"; enabled: boolean; inMenu?: boolean }) {
   const alerts = useStockAlerts(enabled).filter((alert) => stockAlertSection(alert) === section);
   if (!alerts.length) return null;
@@ -64,12 +90,12 @@ export function SectionWarning({ section, enabled, inMenu = false }: { section: 
   const Trigger = inMenu ? "span" : "button";
   return (
     <span className="group/warning relative inline-flex">
-      <Trigger type={inMenu ? undefined : "button"} aria-label={label} className={cn("grid place-items-center rounded-md border border-warning/40 bg-warning/15 transition-colors hover:bg-warning/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", inMenu ? "h-6 w-6" : "h-8 w-8")}>
-        <TriangleAlert className={inMenu ? "h-3.5 w-3.5" : "h-[18px] w-[18px]"} fill="#f4b65c" stroke="#3b2a12" strokeWidth={2.25} />
+      <Trigger type={inMenu ? undefined : "button"} aria-label={label} className={cn("grid place-items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", inMenu ? "h-6 w-6" : "h-8 w-8")}>
+        <span aria-hidden="true" className={cn("stock-alert-dot block rounded-full", inMenu ? "h-1.5 w-1.5" : "h-2 w-2")} />
       </Trigger>
       <span role="tooltip" className={cn("pointer-events-none invisible absolute z-50 w-72 rounded-md border border-border bg-card p-3 text-left opacity-0 shadow-lg transition-opacity duration-150 group-hover/warning:visible group-hover/warning:opacity-100 group-focus-within/warning:visible group-focus-within/warning:opacity-100", inMenu ? "left-full top-1/2 ml-2 -translate-y-1/2" : "left-0 top-full mt-2")}>
         <span className="block text-xs font-semibold text-foreground">{label}</span>
-        <span className="mt-2 flex flex-col gap-2">{alerts.map((alert) => <StockAlertItem alert={alert} key={`${alert.kind}-${alert.lotId ?? alert.productId}-${alert.message}`} variant="plain" />)}</span>
+        <span className="mt-2 flex flex-col gap-3"><StockAlertGroups alerts={alerts} variant="list" /></span>
       </span>
     </span>
   );
@@ -81,7 +107,7 @@ export function StockAlertsCard({ onOpen }: { onOpen: (alert: StockAlert) => voi
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center" aria-label={`${alerts.length} ${alerts.length === 1 ? "aviso de estoque" : "avisos de estoque"}`}>
       <span className="text-xs font-bold text-muted-foreground">{alerts.length} {alerts.length === 1 ? "aviso" : "avisos"}</span>
-      {alerts.map((alert) => <StockAlertItem alert={alert} key={`${alert.kind}-${alert.lotId ?? alert.productId}-${alert.message}`} onOpen={() => onOpen(alert)} variant="plain" />)}
+      <StockAlertGroups alerts={alerts} onOpen={onOpen} variant="plain" />
     </div>
   );
 }
