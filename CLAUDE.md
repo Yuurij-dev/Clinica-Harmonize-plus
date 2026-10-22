@@ -60,3 +60,7 @@ Depois de adicionar ou alterar uma funcionalidade com rota em `src/app/api`, use
 ### Domain docs
 
 Single-context: um `GLOSSARY.md` e `docs/adr/` na raiz do repositório. See `docs/agents/domain.md`.
+
+### Skills do projeto
+
+Em `.claude/skills`: use `new-data-screen` ao criar ou alterar tela com dados ou mudar resposta de API, `create-migration` ao criar migration, `ponytail` em tarefas de código (menor mudança que resolve) e `graphify` para perguntas de arquitetura/relações entre arquivos (a CLI `graphify` precisa estar no PATH; a saída fica em `graphify-out/`, ignorada pelo Git).
