@@ -57,7 +57,7 @@ export function TechnicalSheetEditor({ materials, defaultValue = [] }: { materia
         );
       })}
       <Button type="button" variant="secondary" size="sm" disabled={!options.length} onClick={() => { setRows((current) => [...current, { key: nextKey, productId: "", quantity: "1" }]); setNextKey((current) => current + 1); }}>
-        <CirclePlus className="h-3.5 w-3.5" />Adicionar item
+        <CirclePlus className="h-3.5 w-3.5" />Adicionar material
       </Button>
       {!options.length ? <p className="text-[10px] text-muted-foreground">Cadastre materiais ou produtos no Estoque para montar a ficha técnica.</p> : null}
     </div>

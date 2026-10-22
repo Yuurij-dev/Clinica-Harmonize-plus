@@ -185,7 +185,7 @@ function ChooseStep({ onSelect, onEdit }: { onSelect: (selection: Selection) => 
               <li key={item.id} className={cn("flex flex-col overflow-hidden rounded-lg border bg-card", item.enabled ? "border-border opacity-90" : "border-border hover:border-primary/50")}>
                 {item.enabled ? (
                   <div className="flex h-full flex-col">
-                    <ProcedureImage name={item.name} imageUrl={item.imageUrl} decorative className="h-24 w-full rounded-none" />
+                    <ProcedureImage name={item.name} imageUrl={item.imageUrl} size="card" decorative className="h-24 w-full rounded-none" />
                     <div className="flex flex-1 flex-col gap-2 p-2.5">
                       <strong className="text-sm leading-tight text-foreground">{item.name}</strong>
                       <Badge variant="green" className="w-fit"><Check className="mr-1 h-3 w-3" aria-hidden="true" />Já cadastrado</Badge>
@@ -199,7 +199,7 @@ function ChooseStep({ onSelect, onEdit }: { onSelect: (selection: Selection) => 
                     onClick={() => onSelect({ kind: "catalog", item })}
                     aria-label={`Selecionar ${item.name}`}
                   >
-                    <ProcedureImage name={item.name} imageUrl={item.imageUrl} decorative className="h-24 w-full rounded-none" />
+                    <ProcedureImage name={item.name} imageUrl={item.imageUrl} size="card" decorative className="h-24 w-full rounded-none" />
                     <span className="p-2.5 text-sm font-semibold leading-tight text-foreground">{item.name}</span>
                   </button>
                 )}
@@ -377,7 +377,7 @@ function ConfigureStep({ editing, selection, procedures, materials, onBack, onSa
         <FormField label="Margem estimada (%)" htmlFor="procedure-margin"><MaskedInput {...invalidProps("margin")} id="procedure-margin" className={fieldClassName} formatter={percentFormatter} name="margin" inputMode="numeric" defaultValue={editing ? `${editing.marginPercent}%` : ""} placeholder="40%" required /></FormField>
       </div>
 
-      <FormField label="Ficha técnica" description="Materiais e produtos, com as quantidades usadas, em cada atendimento deste procedimento.">
+      <FormField label="Ficha técnica" description="Informe a quantidade aproximada de cada material ou produto usado por atendimento.">
         {editing?.materialsNeedReview ? <p className="mb-2 rounded-[7px] bg-warning/10 px-3 py-2 text-[11px] font-semibold text-warning">Ficha convertida automaticamente do texto antigo com quantidade 1. Confira e salve para concluir a revisão.</p> : null}
         <TechnicalSheetEditor materials={materialOptions} defaultValue={editing?.technicalSheet ?? []} />
       </FormField>
@@ -412,7 +412,7 @@ function LibraryPicker({ selectedId, onPick }: { selectedId: string | null; onPi
                 onClick={() => onPick(item)}
                 className={cn("relative block w-full overflow-hidden rounded-lg border-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", selectedId === item.id ? "border-primary" : "border-transparent hover:border-primary/40")}
               >
-                <ProcedureImage name={item.name} imageUrl={item.imageUrl} decorative className="h-16 w-full rounded-none" />
+                <ProcedureImage name={item.name} imageUrl={item.imageUrl} size="card" decorative className="h-16 w-full rounded-none" />
                 {selectedId === item.id ? <span className="absolute right-1 top-1 grid h-5 w-5 place-items-center rounded-full bg-primary text-primary-foreground"><Check className="h-3 w-3" aria-hidden="true" /></span> : null}
               </button>
             </li>
