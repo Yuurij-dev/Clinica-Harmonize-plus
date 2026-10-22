@@ -27,6 +27,7 @@ import { CLIENT_CACHE_UNAUTHORIZED_EVENT, getCachedJson, setClientCacheScope } f
 import { visibleSections } from "@/lib/permissions";
 import { CurrentRoleProvider } from "./current-user";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
+import { clientsHomeEvent } from "@/lib/section-events";
 import { guardDraftNavigation } from "./use-draft-autosave";
 
 type CurrentUser = { id: string; clinicId: string; name: string; role: string; isOwner?: boolean; trialExpired?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
@@ -122,6 +123,8 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     if (section === "compras") setPurchasesTab(tab);
     setMobileOpen(false);
     setCreateDialog(null);
+    // Já em Clientes: a tela está montada e guarda o paciente aberto; avisa para voltar à lista (a URL sozinha não limpa o estado).
+    if (section === "clientes" && active === "clientes") window.dispatchEvent(new Event(clientsHomeEvent));
     router.push(sectionPaths[section]);
   }
 
