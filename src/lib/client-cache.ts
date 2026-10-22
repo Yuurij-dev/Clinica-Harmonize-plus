@@ -14,7 +14,7 @@ let scope: string | null = null;
 let generation = 0;
 
 function policyFor(key: string): CachePolicy {
-  if (key.startsWith("/api/agenda/bootstrap")) return { freshFor: 20_000, retainFor: 90_000 };
+  if (key.startsWith("/api/agenda")) return { freshFor: 20_000, retainFor: 90_000 };
   if (key.startsWith("/api/dashboard/bootstrap")) return { freshFor: 45_000, retainFor: 180_000 };
   if (key.includes("/history?")) return { freshFor: 30_000, retainFor: 120_000 };
   if (key.includes("/follow-ups")) return { freshFor: 30_000, retainFor: 90_000 };
@@ -23,6 +23,12 @@ function policyFor(key: string): CachePolicy {
     return { freshFor: 300_000, retainFor: 900_000 };
   }
   return { freshFor: 60_000, retainFor: 300_000 };
+}
+
+// Chave de período da agenda (/api/agenda?from=..&to=..) que contém o dia AAAA-MM-DD.
+export function agendaKeyCoversDay(cacheKey: string, day: string) {
+  const match = /^\/api\/agenda\?from=(\d{4}-\d{2}-\d{2})&to=(\d{4}-\d{2}-\d{2})$/.exec(cacheKey);
+  return Boolean(match) && match![1] <= day && day <= match![2];
 }
 
 function isPhotoKey(key: string) {
@@ -51,6 +57,7 @@ export function setClientCacheScope(nextScope: string | null) {
   if (scope === nextScope) return;
   clearClientCache();
   scope = nextScope;
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(CLIENT_CACHE_SCOPE_CHANGED_EVENT));
 }
 
 export function readClientCache<T>(key: string) {
@@ -101,6 +108,7 @@ export async function getCachedJson<T>(key: string, url = key) {
 }
 
 export const CLIENT_CACHE_INVALIDATED_EVENT = "client-cache:invalidated";
+export const CLIENT_CACHE_SCOPE_CHANGED_EVENT = "client-cache:scope-changed";
 export const CLIENT_CACHE_UNAUTHORIZED_EVENT = "client-cache:unauthorized";
 
 export function invalidateClientCache(...keys: string[]) {
@@ -127,8 +135,17 @@ export function invalidateClientCache(...keys: string[]) {
     const anamnesisSource = key.match(/^\/api\/patients\/([^/?]+)\/anamnesis(?:[/?]|$)/);
     if (anamnesisSource) affected.add(`/api/patients/${anamnesisSource[1]}/documents`);
   }
+  // A lista de pacientes e as buscas dos seletores (/api/patients/lookup) partilham as mesmas mudanças (paciente novo/editado).
+  if (keys.some((key) => key === "/api/patients" || key.startsWith("/api/patients?"))) {
+    affected.add("/api/patients/lookup");
+    // Os registros individuais (/api/patients/<id>) também mudam com a lista; subrecursos (/api/patients/<id>/...) não.
+    for (const cachedKey of [...cache.keys()]) if (/^\/api\/patients\/[^/?]+(?:\?.*)?$/.test(cachedKey)) remove(cachedKey);
+  }
+  // "/api/agenda?day=AAAA-MM-DD" derruba só os períodos da agenda em cache que contêm esse dia (os demais continuam válidos).
+  const changedDays = keys.map((key) => /^\/api\/agenda\?day=(\d{4}-\d{2}-\d{2})$/.exec(key)?.[1]).filter((day): day is string => Boolean(day));
+  if (changedDays.length) for (const cachedKey of [...cache.keys()]) if (changedDays.some((day) => agendaKeyCoversDay(cachedKey, day))) remove(cachedKey);
   // Agendamentos e conferência de materiais alteram o próximo retorno e as pendências de qualquer paciente em cache.
-  if (keys.some((key) => key.startsWith("/api/agenda/bootstrap") || key.startsWith("/api/appointments") || key.startsWith("/api/stock/pending"))) {
+  if (keys.some((key) => key.startsWith("/api/agenda") || key.startsWith("/api/appointments") || key.startsWith("/api/stock/pending"))) {
     for (const cachedKey of cache.keys()) { const match = cachedKey.match(/^(\/api\/patients\/[^/?]+\/encounters)(?:\?|$)/); if (match) affected.add(match[1]); }
   }
   for (const cachedKey of cache.keys()) {

@@ -4,8 +4,8 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 type SlidingIndicatorProps = {
-  /** "line": barra inferior de 2px (abas). "block": fundo do item ativo (sidebar), desliza na vertical. */
-  variant?: "line" | "block";
+  /** "line": barra inferior de 2px (abas). "block": fundo ativo (sidebar). "dot": marcador ativo da sidebar. */
+  variant?: "line" | "block" | "dot";
   className?: string;
 };
 
@@ -28,6 +28,9 @@ export function SlidingIndicator({ variant = "line", className }: SlidingIndicat
     indicator.style.opacity = "1";
     if (variant === "line") {
       indicator.style.transform = `translate3d(${active.offsetLeft}px, 0, 0) scaleX(${active.offsetWidth})`;
+    } else if (variant === "dot") {
+      const size = 6;
+      indicator.style.transform = `translate3d(0, ${active.offsetTop + (active.offsetHeight - size) / 2}px, 0)`;
     } else {
       indicator.style.height = `${active.offsetHeight}px`;
       indicator.style.transform = `translate3d(0, ${active.offsetTop}px, 0)`;
@@ -63,7 +66,11 @@ export function SlidingIndicator({ variant = "line", className }: SlidingIndicat
       data-variant={variant}
       className={cn(
         "hp-sliding-indicator pointer-events-none absolute left-0 opacity-0",
-        variant === "line" ? "bottom-0 h-0.5 w-px origin-left bg-primary" : "top-0 w-full rounded-md bg-accent",
+        variant === "line"
+          ? "bottom-0 h-0.5 w-px origin-left bg-primary"
+          : variant === "dot"
+            ? "top-0 left-auto right-3 h-1.5 w-1.5 rounded-full bg-[#5147dc]"
+            : "top-0 w-full rounded-md bg-accent",
         className,
       )}
     />

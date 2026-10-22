@@ -51,7 +51,7 @@ export function ClinicTimePicker({ openingTime, closingTime, latestTime, value, 
   }, [open]);
 
   return <div ref={rootRef} className="relative">
-    <button type="button" disabled={disabled || !hours.length} aria-haspopup="listbox" aria-expanded={open} onClick={() => { setDraftHour(selectedHour); setOpen((current) => !current); }} className={cn("flex h-10 w-full items-center justify-between rounded-md border border-border bg-background px-3 text-left text-xs transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-60", invalid && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]", className)}>
+    <button type="button" disabled={disabled || !hours.length} aria-haspopup="listbox" aria-invalid={invalid || undefined} aria-expanded={open} onClick={() => { setDraftHour(selectedHour); setOpen((current) => !current); }} className={cn("flex h-10 w-full items-center justify-between rounded-md border border-border bg-background px-3 text-left text-xs transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-60", invalid && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]", className)}>
       <span className={value ? "text-foreground" : "text-muted-foreground"}>{value || "Selecione o horário"}</span>
       <Clock3 className="h-4 w-4 text-muted-foreground" />
     </button>

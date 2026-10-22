@@ -54,6 +54,7 @@ export function Sidebar({
 
       <nav className="relative space-y-0.5">
         <SlidingIndicator variant="block" />
+        <SlidingIndicator variant="dot" />
         {visibleNavItems.map((item) => {
           const Icon = item.icon;
           const isActive = active === item.id;
@@ -79,7 +80,6 @@ export function Sidebar({
               </span>
               <span className="flex items-center gap-2">
                 {item.id === "estoque" || item.id === "compras" ? <SectionWarning section={item.id} enabled={role === "ADMIN"} inMenu /> : null}
-                {isActive ? <span className="h-1.5 w-1.5 rounded-full bg-[#5147dc]" /> : null}
               </span>
             </button>
           );

@@ -7,6 +7,7 @@ import { consentCounts } from "@/lib/clinical-files-server";
 import { consentSummary } from "@/lib/consent-rules";
 import { prisma } from "@/lib/prisma";
 import { lotBalances } from "@/lib/stock";
+import { seedDraftMaterials } from "@/lib/session-materials";
 import { combinedProcedureName, shouldRefreshDraftName } from "@/lib/procedure-session-rules";
 
 type SessionPhotoInput = { id?: string; name?: string; phase?: string; category?: string; imageUrl?: string; sourceEvaluationPhotoId?: string; width?: number; height?: number };
@@ -41,7 +42,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const procedureIds = storedItems.map((item) => item.procedureId).filter(Boolean);
   const [procedureCatalog, products, balances] = await Promise.all([
     prisma.procedure.findMany({ where: { clinicId: user.clinicId, ...(procedureIds.length ? { id: { in: procedureIds } } : {}) }, select: { id: true, name: true, durationMinutes: true, technicalSheet: { select: { productId: true, quantity: true } } } }),
-    prisma.product.findMany({ where: { clinicId: user.clinicId, archivedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true, unit: true, lots: { where: { expiresOn: { gte: new Date(`${clinicToday()}T00:00:00Z`) } }, orderBy: { expiresOn: "asc" }, select: { id: true, code: true, expiresOn: true } } } }),
+    prisma.product.findMany({ where: { clinicId: user.clinicId, archivedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true, kind: true, unit: true, lots: { where: { expiresOn: { gte: new Date(`${clinicToday()}T00:00:00Z`) } }, orderBy: { expiresOn: "asc" }, select: { id: true, code: true, expiresOn: true } } } }),
     lotBalances(user.clinicId),
   ]);
   const selected = storedItems.length ? storedItems : restoreLegacyQuoteItems(quote.items, procedureCatalog);
@@ -53,7 +54,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     quote: { id: quote.id, status: quote.status, approvedAt: quote.approvedAt, items: selected },
     evaluation: { id: evaluation.id, chiefComplaint: evaluation.chiefComplaint, patientGoal: evaluation.patientGoal, allergies: evaluation.allergies, contraindications: evaluation.contraindications, photos: evaluationPhotos },
     procedures: procedures.map((procedure) => ({ ...procedure, suggestedMaterials: procedure.technicalSheet.map((item) => ({ productId: item.productId, quantity: item.quantity })) })),
-    materials: products.map((product) => ({ id: product.id, name: product.name, unit: product.unit, lots: product.lots.map((lot) => ({ id: lot.id, code: lot.code, expiresOn: dateOnly(lot.expiresOn), balance: balances.get(lot.id) ?? 0 })).filter((lot) => lot.balance > 0) })),
+    materials: products.map((product) => ({ id: product.id, name: product.name, kind: product.kind, unit: product.unit, lots: product.lots.map((lot) => ({ id: lot.id, code: lot.code, expiresOn: dateOnly(lot.expiresOn), balance: balances.get(lot.id) ?? 0 })).filter((lot) => lot.balance > 0) })),
     sessions: sessions.map((session) => ({ ...session, materials: parseJson<unknown[]>(session.materials, []), photos: resolvePhotos(session.photos, evaluation.photos), auditLog: parseJson<unknown[]>(session.auditLog, []) })),
     scheduledProcedure: scheduled ? { ...scheduled, date: appointmentDay(scheduled.date) } : null,
     consent: consentSummary(await consentCounts(user.clinicId, patientId, journeyId)),
@@ -90,11 +91,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const assignedProfessional = journey.professional.trim() || user.name;
   const sessionName = combinedProcedureName(lines.map((item) => item.name));
   const estimated = lines.reduce((total, item) => total + (catalog.find((procedure) => procedure.id === item.procedureId)?.durationMinutes ?? 0) * Math.max(1, item.quantity ?? 1), 0);
-  const { session, reused } = await prisma.$transaction(async (tx) => {
+  const { session: persisted, reused } = await prisma.$transaction(async (tx) => {
     // Serializa criações concorrentes do mesmo orçamento (clique duplo/corrida) e reaproveita o rascunho aberto.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${quote.id}))`;
     const open = await tx.patientProcedureSession.findFirst({ where: { clinicId: user.clinicId, patientId, journeyId: journey.id, quoteId: quote.id, status: { in: ["Rascunho", "Em execução"] } }, orderBy: { createdAt: "desc" } });
     if (open) {
+      // Rascunho vazio ainda não semeado (inclusive legado) é semeado após o commit (ver seedDraftMaterials).
       if (!shouldRefreshDraftName(open, sessionName)) return { session: open, reused: true };
       // Rascunho legado (por item): alinha ao combinado do orçamento. Em execução/concluída nunca é alterada.
       const refreshed = await tx.patientProcedureSession.updateMany({ where: { id: open.id, clinicId: user.clinicId, status: "Rascunho" }, data: { procedureName: sessionName, ...(estimated > 0 ? { estimatedMinutes: Math.min(estimated, 1440) } : {}) } });
@@ -115,6 +117,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     } });
     return { session: created, reused: false };
   });
+  // Fora da transação: falha ao semear nunca desfaz nem impede a criação da sessão.
+  const session = await seedDraftMaterials({ clinicId: user.clinicId, session: persisted, lines });
   // Em reuso o cliente recarrega a sessão completa (fotos resolvidas) pelo GET.
   return NextResponse.json({ session: { ...session, materials: parseJson<unknown[]>(session.materials, []), photos: [], auditLog: parseJson<unknown[]>(session.auditLog, []) }, reused }, { status: reused ? 200 : 201 });
 }

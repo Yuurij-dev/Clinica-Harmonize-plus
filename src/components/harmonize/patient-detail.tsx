@@ -688,7 +688,7 @@ function PatientEditModal({ patient, open, onClose, onUpdated }: { patient: Pati
         return;
       }
       onUpdated({ ...patient, ...data.patient });
-      invalidateClientCache("/api/patients", `/api/patients/${patient.id}/history`);
+      invalidateClientCache("/api/patients", `/api/patients/${patient.id}`, `/api/patients/${patient.id}/history`);
       toast.success("Dados atualizados.");
       onClose();
     } catch {
@@ -1062,7 +1062,7 @@ function ProceduresTab({ requestStart, patientId, onOpenTab, pinnedJourneyKey, o
       const data = await response.json().catch(() => null) as { message?: string } | null;
       if (!response.ok) throw new Error(data?.message ?? "Não foi possível atualizar o procedimento.");
       setAppointmentStatuses((current) => ({ ...current, [appointment.id as string]: status }));
-      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/patients", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/patients", "/api/agenda", "/api/dashboard/bootstrap");
       if (status === "Atendido") setCheckAppointmentId(appointment.id);
       return true;
     } catch (appointmentError) {
@@ -1658,7 +1658,7 @@ function AppointmentsTab({ requestStart, patientId, history, loading, error, onR
       const data = await response.json().catch(() => null) as { message?: string } | null;
       if (!response.ok) throw new Error(data?.message ?? "Não foi possível atualizar o atendimento.");
       setEditedAppointments((current) => ({ ...current, [appointment.id as string]: { ...appointment, status } }));
-      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/agenda/bootstrap", "/api/dashboard/bootstrap", ...(status === "Atendido" ? ["/api/patients"] : []));
+      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/agenda", "/api/dashboard/bootstrap", ...(status === "Atendido" ? ["/api/patients"] : []));
       if (status === "Atendido") setCheckAppointmentId(appointment.id);
       return true;
     } catch (statusError) {
@@ -1738,7 +1738,7 @@ function AppointmentsTab({ requestStart, patientId, history, loading, error, onR
       } else {
         setCreatedAppointments((current) => mergePatientAppointments(current, [appointmentRecord]));
       }
-      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/patients", "/api/agenda/bootstrap", "/api/dashboard/bootstrap");
+      invalidateClientCache(`/api/patients/${patientId}/history`, "/api/patients", "/api/agenda", "/api/dashboard/bootstrap");
       setEditingAppointment(null); setProfessionalChoice(null);
       onReturnAppointmentClose();
     } catch (scheduleError) {

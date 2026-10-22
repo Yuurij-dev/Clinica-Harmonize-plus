@@ -20,6 +20,7 @@ import { revealValidationTarget } from "./reveal-validation-target";
 import { JourneyProgress } from "./journey-progress";
 import { ClinicTimePicker } from "./clinic-time-picker";
 import { useBodyScrollLock } from "./use-body-scroll-lock";
+import { PhotoPreviewModal } from "./photo-preview-modal";
 
 type ClinicalPhoto = { id: string; name: string; category: string; phase: string; imageUrl: string; width: number; height: number; capturedAt: string; source: string; sessionId: string | null };
 type Appointment = { id: string; date: string; time: string; procedure: string; professional: string; status: string; notes: string };
@@ -222,7 +223,7 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
       const response = await fetch(cacheKey, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "start-return", appointmentId: returnAppointment.id }) });
       const result = await response.json().catch(() => ({})) as { message?: string };
       if (!response.ok) throw new Error(result.message ?? "Não foi possível iniciar o retorno.");
-      invalidateClientCache(cacheKey, "/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/history`, `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`);
+      invalidateClientCache(cacheKey, "/api/agenda", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/history`, `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`);
       await reload();
       setSelectedAppointmentId(returnAppointment.id);
       markDraftChanged();
@@ -292,7 +293,7 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
       const response = await fetch(cacheKey, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ professional: data.session.professional, complaints, observations, complications, guidanceText, guidanceSent: guidanceConfirmed, photos, removedPhotoIds, ...(recordAppointmentId ? { appointmentId: recordAppointmentId } : {}) }) });
       const result = await response.json().catch(() => ({})) as { message?: string };
       if (!response.ok) throw new Error(result.message ?? "Não foi possível salvar o acompanhamento.");
-      invalidateClientCache(cacheKey, "/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`, `/api/patients/${encodeURIComponent(patientId)}/history`);
+      invalidateClientCache(cacheKey, "/api/agenda", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`, `/api/patients/${encodeURIComponent(patientId)}/history`);
       await reload();
       setComplaints(""); setObservations(""); setComplications(""); setGuidanceText(""); setGuidanceConfirmed(false); setPhotos([]); setRemovedPhotoIds([]); setSelectedAppointmentId("");
       setNotice(activeView === "return" ? "Retorno registrado no histórico clínico." : "Acompanhamento registrado no histórico clínico.");
@@ -341,7 +342,7 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
       const response = await fetch("/api/appointments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, journeyId: data.session.journeyId, procedure: `Retorno - ${data.session.procedureName}`, professional: data.session.professional, date: appointmentDate, time: appointmentTime, notes: appointmentNotes }) });
       const result = await response.json().catch(() => ({})) as { appointment?: Appointment; message?: string };
       if (!response.ok || !result.appointment) throw new Error(result.message ?? "Não foi possível agendar o retorno.");
-      invalidateClientCache(cacheKey, "/api/agenda/bootstrap", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/history`, `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`);
+      invalidateClientCache(cacheKey, "/api/agenda", "/api/dashboard/bootstrap", `/api/patients/${encodeURIComponent(patientId)}/history`, `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`);
       setAppointmentNotice(`Retorno agendado para ${new Date(result.appointment.date).toLocaleDateString("pt-BR")} às ${result.appointment.time}.`);
       setAppointmentOpen(false); setAppointmentDate(""); setAppointmentTime(""); setAppointmentNotes(""); setAppointmentDateError(""); setAppointmentTimeError("");
       if (appointmentLaunchReturn) { setReturnAppointmentId(result.appointment.id); setActiveView("return"); setAppointmentLaunchReturn(false); }
@@ -408,7 +409,7 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
       </div>
       <aside className="space-y-4 xl:sticky xl:top-20 xl:self-start"><Card className="space-y-2 p-4"><h2 className="text-sm font-bold">Resumo do procedimento</h2><Summary label="Procedimento" value={data.session.procedureName} /><Summary label="Profissional" value={data.session.professional} /><Summary label="Data" value={new Date(data.session.performedAt).toLocaleDateString("pt-BR")} /><Summary label="Técnica" value={data.session.technique || "Não informada"} /><Summary label="Região tratada" value={data.session.treatedAreas || "Não informada"} /><Summary label="Anestesia" value={data.session.anesthesia || "Não informada"} />{data.session.startedAt && data.session.endedAt ? <Summary label="Duração" value={`${Math.max(0, Math.round((Date.parse(data.session.endedAt) - Date.parse(data.session.startedAt)) / 60000))} min`} /> : null}{data.session.complications ? <div className="border-t border-border pt-2"><p className="text-xs font-semibold text-muted-foreground">Intercorrências</p><p className="mt-1 whitespace-pre-wrap text-xs">{data.session.complications}</p></div> : null}{data.session.observations ? <div className="border-t border-border pt-2"><p className="text-xs font-semibold text-muted-foreground">Observações da sessão</p><p className="mt-1 whitespace-pre-wrap text-xs">{data.session.observations}</p></div> : null}</Card></aside>
     </div>
-    {preview ? <div className="fixed inset-0 z-[60] grid place-items-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Visualização da fotografia" onClick={() => setPreview(null)}><div className="relative max-h-[92vh] max-w-[92vw]" onClick={(event) => event.stopPropagation()}><img src={preview.imageUrl} alt={preview.name} className="max-h-[88vh] max-w-[90vw] object-contain" /><button type="button" aria-label="Fechar visualização" onClick={() => setPreview(null)} className="absolute -right-3 -top-3 rounded-full bg-white p-2 text-[#27283b]"><X className="h-4 w-4" /></button></div></div> : null}
+    <PhotoPreviewModal photo={preview} onClose={() => setPreview(null)} />
     {photoRemovalDialog}
   </div>;
 
@@ -472,19 +473,16 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
         <Card className="space-y-2 border-emerald-200 bg-emerald-50/60 p-4"><h2 className="flex items-center gap-2 text-sm font-bold text-emerald-950"><ShieldCheck className="h-4 w-4" />Sessão concluída</h2><p className="text-xs text-emerald-900">A sessão foi concluída. O tratamento permanece em andamento até ser encerrado na jornada.</p></Card>
       </aside>
     </div>
-    {appointmentOpen ? (
-      <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-labelledby="return-title">
-        <form noValidate onSubmit={(event) => void scheduleReturn(event)} className="max-h-[calc(100vh-2rem)] w-full max-w-md space-y-4 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden rounded-md border border-border bg-background p-5 shadow-xl">
-          <div className="flex items-start justify-between"><div><h2 id="return-title" className="text-base font-bold">Agendar retorno</h2><p className="mt-1 text-xs text-muted-foreground">O agendamento será criado na agenda da clínica e vinculado a esta jornada.</p></div><Button type="button" variant="ghost" size="icon" aria-label="Fechar" onClick={() => setAppointmentOpen(false)}><X className="h-4 w-4" /></Button></div>
+    <Modal open={appointmentOpen} onClose={() => setAppointmentOpen(false)} closeOnOverlayClick={false} title="Agendar retorno" description="O agendamento será criado na agenda da clínica e vinculado a esta jornada." panelClassName="max-w-md" bodyClassName="p-5">
+        <form noValidate onSubmit={(event) => void scheduleReturn(event)} className="space-y-4">
           <label id="return-date-field" tabIndex={-1} className="block scroll-mt-24 text-xs font-medium">Data<input key={`appointment-date-${appointmentErrorAnimation}`} required aria-invalid={Boolean(appointmentDateError)} aria-describedby={appointmentDateError ? "appointment-date-error" : undefined} type="date" value={appointmentDate} onChange={(event) => { setAppointmentDate(event.target.value); setAppointmentDateError(""); setAppointmentFormError(""); }} min={today} className={cn("mt-1 h-10 w-full rounded-md border border-border bg-background px-3 text-sm", appointmentDateError && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} />{appointmentDateError ? <span id="appointment-date-error" role="alert" className="mt-1 block text-xs font-medium text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{appointmentDateError}</span> : null}</label>
           <label id="return-time-field" tabIndex={-1} className="block scroll-mt-24 text-xs font-medium">Horário{appointmentHours ? <ClinicTimePicker openingTime={appointmentHours.openingTime} closingTime={appointmentHours.closingTime} latestTime={appointmentLatestStart} value={appointmentTime} invalid={Boolean(appointmentTimeError)} disabled={appointmentHoursLoading || !appointmentHasSlots} onChange={(value) => { setAppointmentTime(value); setAppointmentTimeError(""); setAppointmentFormError(""); }} /> : <button type="button" disabled className="mt-1 flex h-10 w-full items-center rounded-md border border-border bg-background px-3 text-left text-xs text-muted-foreground opacity-60">Carregando horários...</button>}{appointmentTimeError ? <span id="appointment-time-error" role="alert" className="mt-1 block text-xs text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{appointmentTimeError}</span> : null}{appointmentHours ? <span className="mt-1 block text-xs text-muted-foreground">{appointmentHasSlots ? `Horários disponíveis: ${appointmentHours.openingTime} às ${appointmentLatestStart}.` : "Não há horários disponíveis para a duração deste retorno."}</span> : null}</label>
           <label className="block text-xs font-medium">Observação<textarea value={appointmentNotes} onChange={(event) => { setAppointmentNotes(event.target.value); setAppointmentFormError(""); }} maxLength={500} rows={3} className="text-sm mt-1 w-full rounded-md border border-border bg-background p-3" /></label>
           {appointmentFormError ? <div id="return-form-error" tabIndex={-1} key={appointmentErrorAnimation} role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{appointmentFormError}<Button className="ml-2 h-auto p-0 text-xs" variant="link" type="button" onClick={() => { setAppointmentHours(null); setAppointmentFormError(""); setAppointmentHoursRetry((value) => value + 1); }}>Tentar novamente</Button></div> : null}
           <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setAppointmentOpen(false)}>Cancelar</Button><Button type="submit" disabled={booking || appointmentHoursLoading || !appointmentHours || !appointmentHasSlots}>{booking ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CalendarDays className="h-4 w-4" />}Confirmar retorno</Button></div>
         </form>
-      </div>
-    ) : null}
-    {preview ? <div className="fixed inset-0 z-[60] grid place-items-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Visualização da fotografia" onClick={() => setPreview(null)}><div className="relative max-h-[92vh] max-w-[92vw]" onClick={(event) => event.stopPropagation()}><img src={preview.imageUrl} alt={preview.name} className="max-h-[88vh] max-w-[90vw] object-contain" /><button type="button" aria-label="Fechar visualização" onClick={() => setPreview(null)} className="absolute -right-3 -top-3 rounded-full bg-white p-2 text-[#27283b]"><X className="h-4 w-4" /></button></div></div> : null}
+    </Modal>
+    <PhotoPreviewModal photo={preview} onClose={() => setPreview(null)} />
     {photoRemovalDialog}
   </div>;
 }

@@ -6,7 +6,7 @@ import { prisma } from "./prisma";
 //   Os bytes continuam passando pela rota autenticada do app (nunca há URL pública). Ainda não validado contra um projeto real.
 // Cada linha guarda o driver com que foi gravada, então trocar o driver não quebra arquivos antigos.
 
-export type StorageKind = "document" | "photo";
+export type StorageKind = "document" | "photo" | "procedure-image";
 export type StoredRef = { storageDriver: string; storageKey: string | null };
 
 type SupabaseConfig = { url: string; key: string; bucket: string };
@@ -48,7 +48,9 @@ export async function readStoredBytes(kind: StorageKind, id: string, ref: Stored
   }
   const row = kind === "document"
     ? await prisma.clinicalDocumentBlob.findUnique({ where: { documentId: id }, select: { data: true } })
-    : await prisma.clinicalPhotoBlob.findUnique({ where: { photoId: id }, select: { data: true } });
+    : kind === "procedure-image"
+      ? await prisma.procedureImageBlob.findUnique({ where: { assetId: id }, select: { data: true } })
+      : await prisma.clinicalPhotoBlob.findUnique({ where: { photoId: id }, select: { data: true } });
   return row ? row.data : null;
 }
 
