@@ -234,8 +234,9 @@ async function browser(homonym) {
     await page.getByRole("cell", { name: "R$ 150,50" }).first().waitFor();
     check("tela de Pagamentos mostra R$ 150,50", true);
     await page.getByRole("button", { name: "Registrar pagamento" }).first().click();
-    await page.locator(`select[name="patientId"] option[value="${homonym.id}"]`).waitFor({ state: "attached" });
-    await page.locator(`select[name="patientId"]`).selectOption(homonym.id);
+    // Busca de paciente: o homônimo é o que não tem CPF.
+    await page.locator(`input[name="patientSearch"]`).fill(homonym.name);
+    await page.getByRole("button").filter({ hasText: homonym.name }).filter({ hasText: "CPF não informado" }).first().click();
     await page.locator(`input[name="value"]`).pressSequentially("1234");
     check("campo de valor formata R$ 12,34", (await page.locator(`input[name="value"]`).inputValue()).replace(/\s/g, " ") === "R$ 12,34", await page.locator(`input[name="value"]`).inputValue());
     await page.locator(`form button[type="submit"]`).click();
@@ -292,7 +293,8 @@ async function browser(homonym) {
     await page.goto(`${baseUrl}/compras`);
     await page.getByRole("button", { name: "Nova compra" }).first().waitFor();
     await page.getByRole("button", { name: "Notificações" }).click();
-    await page.getByRole("button", { name: /saída de estoque pendente/ }).click();
+    // Singular ou plural: com outras partes rodando antes, pode haver mais de uma saída pendente.
+    await page.getByRole("button", { name: /saídas? de estoque pendentes?/ }).click();
     await page.getByLabel("Tipo de pendência").waitFor();
     check("aviso de pendência abre Compras na aba Pendências", page.url() === `${baseUrl}/compras`, page.url());
 
@@ -302,7 +304,7 @@ async function browser(homonym) {
     const titleWarning = page.getByRole("main").getByRole("button", { name: /^\d+ avisos?$/ });
     await titleWarning.hover();
     const comprasTip = page.getByRole("main").getByRole("tooltip");
-    await comprasTip.getByText(/saída de estoque pendente/).waitFor();
+    await comprasTip.getByText(/saídas? de estoque pendentes?/).waitFor();
     check("⚠ de Compras mostra só as pendências", (await comprasTip.getByText(baixo.name).count()) === 0);
     await page.goto(`${baseUrl}/estoque`);
     await titleWarning.hover();
@@ -3712,6 +3714,137 @@ async function sessionMaterialsGaps() {
   }
 }
 
+// --- Pendências de estoque: conferência, saída pendente e conclusão (API e tela) ---
+
+async function pendingStock(patient) {
+  const lots = async (productId) => Object.fromEntries(((await api("GET", `/api/products/${productId}`)).data.product?.lots ?? []).map((lot) => [lot.code, lot.balance]));
+  const pendingList = async () => (await api("GET", "/api/stock/pending")).data;
+  const tag = `P${run}`;
+
+  let r = await api("POST", "/api/products", { name: `Pend ${tag}`, kind: "produto", unit: "unidade", costCents: 100, supplier: "F" });
+  const prod = r.data.product;
+  r = await api("POST", "/api/products", { name: `Outro ${tag}`, kind: "material", unit: "frasco", costCents: 100, supplier: "F" });
+  const other = r.data.product;
+
+  // Atendido => entra em "conferências pendentes".
+  const appt = (await api("POST", "/api/appointments", { patientId: patient.id, procedure: "Pendência e2e", professional: "Teste", time: "09:00", date: `${day(1)}T00:00:00` })).data.appointment;
+  await api("PATCH", `/api/appointments/${appt.id}`, { status: "Atendido" });
+  let p = await pendingList();
+  check("pendências: atendido aparece em conferências pendentes com nome do paciente", p.checks?.some((c) => c.id === appt.id && c.patientName === patient.name), JSON.stringify(p.checks?.slice(0, 2)));
+
+  // Conferência sem saldo => saída pendente; sai das conferências.
+  r = await api("POST", `/api/appointments/${appt.id}/materials`, { items: [{ productId: prod.id, quantity: 3 }] });
+  check("pendências: conferência sem saldo gera 1 saída pendente", r.status === 200 && r.data.pending?.length === 1, `${r.status} ${JSON.stringify(r.data).slice(0, 120)}`);
+  r = await api("POST", `/api/appointments/${appt.id}/materials`, { items: [{ productId: prod.id, quantity: 3 }] });
+  check("pendências: conferir de novo => 409 (sem duplicar pendência)", r.status === 409, r.status);
+  p = await pendingList();
+  const out = p.outputs?.find((o) => o.product.id === prod.id);
+  check("pendências: conferência sai da lista de conferências", !p.checks?.some((c) => c.id === appt.id));
+  check("pendências: saída pendente com quantidade 3, paciente e sem lotes", out?.quantity === 3 && out.patientName === patient.name && out.lots.length === 0 && out.attendanceKind, JSON.stringify(out));
+
+  r = await api("POST", `/api/stock/pending/${out.id}`, {});
+  check("pendências: concluir sem saldo => 400 saldo insuficiente", r.status === 400 && /Saldo insuficiente/.test(r.data.message), `${r.status} ${r.data.message}`);
+  check("pendências: continua pendente após falha", (await pendingList()).outputs?.some((o) => o.id === out.id));
+
+  // Lote A (2, vence depois), B (5, vence antes), V vencido (10) e um lote de outro produto.
+  r = await api("POST", "/api/purchases", { supplier: "F", purchasedOn: day(0), paymentMethod: "Pix", installments: 1, items: [
+    { productId: prod.id, lotCode: `A${tag}`, expiresOn: day(300), quantity: 2, unitPriceCents: 100 },
+    { productId: prod.id, lotCode: `B${tag}`, expiresOn: day(100), quantity: 5, unitPriceCents: 100 },
+    { productId: prod.id, lotCode: `V${tag}`, expiresOn: day(-5), quantity: 10, unitPriceCents: 100 },
+    { productId: other.id, lotCode: `O${tag}`, expiresOn: day(200), quantity: 10, unitPriceCents: 100 },
+  ] });
+  check("pendências: compra registrada", r.status === 201, `${r.status} ${r.data.message ?? ""}`);
+  p = await pendingList();
+  const out2 = p.outputs?.find((o) => o.id === out.id);
+  check("pendências: lista mostra só lotes não vencidos, por validade, com saldo", out2?.lots.map((l) => `${l.code}:${l.balance}`).join() === `B${tag}:5,A${tag}:2`, JSON.stringify(out2?.lots));
+  const lotA = out2.lots.find((l) => l.code === `A${tag}`);
+  const lotO = (await api("GET", `/api/products/${other.id}`)).data.product.lots[0];
+  const lotV = (await api("GET", `/api/products/${prod.id}`)).data.product.lots.find((l) => l.code === `V${tag}`);
+
+  r = await api("POST", `/api/stock/pending/${out.id}`, { lotId: lotA.id });
+  check("pendências: lote escolhido com saldo menor que o pedido => 400 e nada baixado", r.status === 400 && (await lots(prod.id))[`A${tag}`] === 2, `${r.status} ${r.data.message}`);
+  r = await api("POST", `/api/stock/pending/${out.id}`, { lotId: lotO.id });
+  check("pendências: lote de outro produto => 400 lote inválido", r.status === 400 && /lote válido/.test(r.data.message), `${r.status} ${r.data.message}`);
+  r = await api("POST", `/api/stock/pending/${out.id}`, { lotId: lotV?.id });
+  check("pendências: lote vencido => 400 lote inválido", r.status === 400 && /lote válido/.test(r.data.message), `${r.status} ${r.data.message}`);
+  check("pendências: continua pendente após recusas", (await pendingList()).outputs?.some((o) => o.id === out.id));
+
+  // STAFF e PROFESSIONAL: 403 no GET e no POST.
+  const members = [];
+  try {
+    for (const role of ["STAFF", "PROFESSIONAL"]) {
+      const login = `e2e-pend-${role.toLowerCase()}-${run}@example.com`, secret = `E2e-${run}-Pend9!`;
+      const created = await api("POST", "/api/team", { name: `E2E ${role} Pend`, email: login, password: secret, role });
+      if (created.status === 201) members.push(created.data.member);
+      const s = created.status === 201 ? await loginAs(login, secret) : null;
+      const res = s?.status === 200 ? await withSession(s.cookie, async () => [await api("GET", "/api/stock/pending"), await api("POST", `/api/stock/pending/${out.id}`, {})]) : [];
+      check(`pendências: ${role} recebe 403 no GET e no POST`, res.length === 2 && res.every((x) => x.status === 403), res.map((x) => x.status).join() || `team ${created.status} login ${s?.status}`);
+    }
+  } finally {
+    // A clínica de teste precisa voltar a ter só a conta de teste, senão resetTestClinic recusa a limpeza.
+    for (const m of members) await api("DELETE", "/api/team", { membershipId: m.id });
+  }
+  r = await withSession("", () => api("POST", `/api/stock/pending/${out.id}`, {}));
+  check("pendências: sem sessão => 401", r.status === 401, r.status);
+
+  // Outra clínica: não vê e não conclui.
+  const otherEmail = `e2e-pend-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E Pend Externa ${run}`;
+  try {
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990020", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const ext = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    const res = ext?.status === 200 ? await withSession(ext.cookie, async () => [await api("GET", "/api/stock/pending"), await api("POST", `/api/stock/pending/${out.id}`, {})]) : null;
+    check("pendências: outra clínica não vê a pendência e concluir => 400", res && !JSON.stringify(res[0].data).includes(prod.name) && res[1].status === 400, res ? `${res[0].status} ${res[1].status}` : `registro ${r.status}`);
+    check("pendências: tentativa externa não concluiu nem baixou", (await pendingList()).outputs?.some((o) => o.id === out.id) && (await lots(prod.id))[`B${tag}`] === 5);
+  } finally {
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: otherEmail } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: otherEmail } });
+  }
+
+  // Concluir duas vezes ao mesmo tempo, sem lote (FEFO): só uma passa e baixa uma vez do lote B.
+  const pair = await Promise.all([api("POST", `/api/stock/pending/${out.id}`, {}), api("POST", `/api/stock/pending/${out.id}`, {})]);
+  check("pendências: conclusão dupla simultânea => 200 + 400", pair.map((x) => x.status).sort().join() === "200,400", pair.map((x) => x.status).join());
+  const after = await lots(prod.id);
+  check("pendências: FEFO baixou 3 do lote B (vence antes), A intacto", after[`B${tag}`] === 2 && after[`A${tag}`] === 2, JSON.stringify(after));
+  check("pendências: saída concluída some da lista", !(await pendingList()).outputs?.some((o) => o.id === out.id));
+  const moves = await prisma.stockMovement.findMany({ where: { productId: prod.id, quantity: { lt: 0 } }, select: { quantity: true, appointmentId: true, patientId: true, notes: true } });
+  check("pendências: movimento ligado ao atendimento e ao paciente", moves.length === 1 && moves[0].quantity === -3 && moves[0].appointmentId === appt.id && moves[0].patientId === patient.id && moves[0].notes === "Saída pendente concluída", JSON.stringify(moves));
+  r = await api("POST", `/api/stock/pending/${out.id}`, {});
+  check("pendências: concluir de novo => 400 já concluída", r.status === 400 && /já concluída/.test(r.data.message), `${r.status} ${r.data.message}`);
+  r = await api("POST", "/api/stock/pending/inexistente", {});
+  check("pendências: id inexistente => 400", r.status === 400, r.status);
+
+  // Saldo parcial: a conferência baixa o que há (B 2 + A 2) e só a falta (5) fica pendente, com aviso.
+  const appt2 = (await api("POST", "/api/appointments", { patientId: patient.id, procedure: "Pendência e2e 2", professional: "Teste", time: "10:00", date: `${day(1)}T00:00:00` })).data.appointment;
+  await api("PATCH", `/api/appointments/${appt2.id}`, { status: "Atendido" });
+  r = await api("POST", `/api/appointments/${appt2.id}/materials`, { items: [{ productId: prod.id, quantity: 9 }] });
+  const partial = await lots(prod.id);
+  check("pendências: conferência com saldo parcial baixa o que há e só a falta fica pendente", r.data.pending?.[0]?.quantity === 5 && partial[`A${tag}`] === 0 && partial[`B${tag}`] === 0, JSON.stringify([r.data.pending, partial]));
+  const alerts = (await api("GET", "/api/stock/alerts")).data.alerts ?? [];
+  check("pendências: aviso de saída pendente aparece", alerts.some((a) => a.kind === "pending" && /saídas? de estoque pendentes?/.test(a.message)), JSON.stringify(alerts.map((a) => a.kind)));
+
+  // Tela: Compras > Pendências mostra a saída, filtra, escolhe o lote e conclui.
+  await api("POST", "/api/purchases", { supplier: "F", purchasedOn: day(0), paymentMethod: "Pix", installments: 1, items: [{ productId: prod.id, lotCode: `C${tag}`, expiresOn: day(400), quantity: 20, unitPriceCents: 100 }] });
+  const lotC = (await api("GET", `/api/products/${prod.id}`)).data.product.lots.find((l) => l.code === `C${tag}`);
+  await withPage(async (page, pageErrors) => {
+    await page.goto(`${baseUrl}/compras`);
+    await page.getByRole("main").getByRole("button", { name: "Pendências", exact: true }).click();
+    const rows = page.locator("div.flex-col").filter({ hasText: `Pend ${tag}` }).filter({ has: page.getByRole("button", { name: "Concluir saída" }) });
+    await rows.first().waitFor();
+    check("pendências (tela): saída pendente aparece em Compras > Pendências", true);
+    await page.getByLabel("Tipo de pendência").selectOption("checks");
+    check("pendências (tela): filtro de conferências esconde as saídas", (await page.getByRole("button", { name: "Concluir saída" }).count()) === 0);
+    await page.getByLabel("Tipo de pendência").selectOption("all");
+    await rows.first().getByLabel("Lote").selectOption(lotC.id);
+    await rows.first().getByRole("button", { name: "Concluir saída" }).click();
+    await page.getByText(`Saída de Pend ${tag} concluída.`).waitFor();
+    await rows.first().waitFor({ state: "detached" });
+    const balances = await lots(prod.id);
+    check("pendências (tela): concluir baixa 5 do lote escolhido (C) e a saída some da lista", balances[`C${tag}`] === 15 && balances[`V${tag}`] === 10, JSON.stringify(balances));
+    check("pendências (tela): sem erro de JavaScript", pageErrors.length === 0, pageErrors.join(" | "));
+  });
+}
+
 const suites = {
   pacientes: { needs: [], run: async (state) => Object.assign(state, await patientsAndPayments()) },
   orcamentos: { needs: ["pacientes"], run: async (state) => { state.quote = await quotesAndProcedures(state.patient); } },
@@ -3719,6 +3852,7 @@ const suites = {
   jornadas: { needs: ["orcamentos"], run: (state) => journeys(state.patient, state.quote) },
   configuracoes: { needs: [], run: () => settings() },
   estoque: { needs: ["pacientes"], run: (state) => stock(state.patient) },
+  pendencias: { needs: ["pacientes"], run: (state) => pendingStock(state.patient) },
   anamnese: { needs: [], run: () => anamnesis() },
   documentos: { needs: [], run: () => clinicalFiles() },
   catalogo: { needs: [], run: async () => { await procedureCatalog(); await procedureCatalogGaps(); } },
