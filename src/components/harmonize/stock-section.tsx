@@ -1,18 +1,20 @@
 "use client";
 
 import { type FormEvent, useEffect, useMemo, useState } from "react";
-import { Archive, ArchiveRestore, ChevronDown, Loader2, PackagePlus, PencilLine, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, ChevronDown, Loader2, PackagePlus, PencilLine, ShoppingCart, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { MaskedInput } from "@/components/ui/masked-input";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
 import { sendJson } from "@/lib/send-json";
-import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, readClientCache } from "@/lib/client-cache";
+import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { formatCurrency, parseCurrency } from "@/lib/input-masks";
 import { formatQuantity, parseQuantity, stockKindLabels, stockKinds, stockUnits, type StockKind, validateQuantity, type LotStatus, type ManualReason } from "@/lib/stock-rules";
 import { LotUsage, ManualMovementForm, MovementHistory } from "./stock-movements";
 import { useCurrentRole } from "./current-user";
+import { invalidateFinanceCache } from "./finance-section";
+import { PurchaseFormModal } from "./purchases-panel";
 import { EmptyState, LoadingTable, MiniTable, SectionIntro } from "./shared";
 import { SectionWarning, useStockAlerts, warningTabClass } from "./stock-alerts";
 import { formatDateOnly, invalidateStockCache, type StockMaterial } from "./stock-shared";
@@ -39,6 +41,10 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
   const [refreshKey, setRefreshKey] = useState(0);
   const [editing, setEditing] = useState<StockMaterial | { kind: StockKind } | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  // Logo após cadastrar um item: pergunta se quer registrar compra ou lote dele.
+  const [nextStep, setNextStep] = useState<StockMaterial | null>(null);
+  const [purchaseFor, setPurchaseFor] = useState<StockMaterial | null>(null);
+  const [openWithLot, setOpenWithLot] = useState(false);
   const [itemKind, setItemKind] = useState<StockKind>("material");
   const [statusByKind, setStatusByKind] = useState<Record<StockKind, "all" | "below" | "ok" | "archived">>({ material: "all", produto: "all" });
   const materialStatus = statusByKind[itemKind];
@@ -120,7 +126,7 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
               formatQuantity(material.minStock, material.unit),
               `${currency.format(material.costCents / 100)} / ${material.unit}`,
               material.archivedAt ? <Badge key="status" variant="slate">Arquivado</Badge> : material.belowMinimum ? <Badge key="status" variant="amber">Abaixo do mínimo</Badge> : <Badge key="status" variant="green">OK</Badge>,
-              <Button key="open" size="sm" variant="secondary" onClick={() => setOpenId(material.id)}>Abrir</Button>,
+              <Button key="open" size="sm" variant="secondary" onClick={() => { setOpenWithLot(false); setOpenId(material.id); }}>Abrir</Button>,
             ])}
           />
         </div>
@@ -130,8 +136,16 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
         setEditing(null);
         refresh(material.id);
         onSaved?.(created ? `${material.name} foi adicionado ao estoque.` : `${material.name} foi atualizado.`);
+        if (created) setNextStep(material);
       }} /> : null}
-      {openId ? <MaterialDetailModal productId={openId} onClose={() => setOpenId(null)} onEdit={(material) => { setOpenId(null); setEditing(material); }} onChanged={(message) => { refresh(openId); if (message) onSaved?.(message); }} onRemoved={(message) => { setOpenId(null); refresh(); onSaved?.(message); }} /> : null}
+      {nextStep ? <NextStepModal material={nextStep} onClose={() => setNextStep(null)} onPurchase={() => { setPurchaseFor(nextStep); setNextStep(null); }} onLot={() => { setOpenWithLot(true); setOpenId(nextStep.id); setNextStep(null); }} /> : null}
+      {purchaseFor ? <PurchaseFormModal
+        materials={[...materials.filter((material) => !material.archivedAt && material.id !== purchaseFor.id), purchaseFor]}
+        initialProduct={purchaseFor}
+        onClose={() => setPurchaseFor(null)}
+        onSaved={(message) => { setPurchaseFor(null); invalidateClientCache("/api/purchases"); invalidateStockCache(); invalidateFinanceCache(); onSaved?.(message); }}
+      /> : null}
+      {openId ? <MaterialDetailModal productId={openId} startWithInitialBalance={openWithLot} onClose={() => { setOpenId(null); setOpenWithLot(false); }} onEdit={(material) => { setOpenId(null); setEditing(material); }} onChanged={(message) => { refresh(openId); if (message) onSaved?.(message); }} onRemoved={(message) => { setOpenId(null); refresh(); onSaved?.(message); }} /> : null}
     </div>
   );
 }
@@ -190,7 +204,30 @@ function MaterialFormModal({ material, kind, onClose, onSaved }: { material: Sto
   );
 }
 
-function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved }: { productId: string; onClose: () => void; onEdit: (material: StockMaterial) => void; onChanged: (message?: string) => void; onRemoved: (message: string) => void }) {
+function NextStepModal({ material, onClose, onPurchase, onLot }: { material: StockMaterial; onClose: () => void; onPurchase: () => void; onLot: () => void }) {
+  const options = [
+    { icon: ShoppingCart, title: "Registrar compra", description: "Entrada pela nota de compra: lote, validade, quantidade e preço. Gera a despesa no Financeiro.", onClick: onPurchase },
+    { icon: PackagePlus, title: "Registrar lote", description: "Lança o que já está na prateleira (lote, validade e quantidade), sem gerar despesa.", onClick: onLot },
+  ];
+  return (
+    <Modal open onClose={onClose} title={`${material.name} cadastrado`} description="Quer dar entrada no estoque agora?">
+      <div className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2">
+          {options.map(({ icon: Icon, title, description, onClick }) => (
+            <button key={title} type="button" className="flex flex-col gap-2 rounded-[8px] border border-border p-4 text-left transition hover:border-primary hover:bg-muted/40" onClick={onClick}>
+              <Icon className="h-5 w-5 text-primary" />
+              <span className="text-sm font-bold text-foreground">{title}</span>
+              <span className="text-xs text-muted-foreground">{description}</span>
+            </button>
+          ))}
+        </div>
+        <div className="flex justify-end"><Button type="button" variant="secondary" onClick={onClose}>Agora não</Button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function MaterialDetailModal({ productId, startWithInitialBalance = false, onClose, onEdit, onChanged, onRemoved }: { productId: string; startWithInitialBalance?: boolean; onClose: () => void; onEdit: (material: StockMaterial) => void; onChanged: (message?: string) => void; onRemoved: (message: string) => void }) {
   const detailKey = `/api/products/${productId}`;
   const [detail, setDetail] = useState<StockMaterialDetail | null>(() => readClientCache<{ product?: StockMaterialDetail }>(detailKey)?.product ?? null);
   const [error, setError] = useState("");
@@ -203,7 +240,7 @@ function MaterialDetailModal({ productId, onClose, onEdit, onChanged, onRemoved 
   // Só um painel por vez abaixo dos lotes: saída, histórico ou pacientes.
   // O "Lançar saldo inicial" começa recolhido e só abre quando pedido; abrir um painel o recolhe
   // e expandir o saldo inicial fecha o painel.
-  const [initialBalanceOpen, setInitialBalanceOpen] = useState(false);
+  const [initialBalanceOpen, setInitialBalanceOpen] = useState(startWithInitialBalance);
 
   // Lista de lotes enxuta: recolhível, só os 3 primeiros a vencer e sem os zerados,
   // mas sempre mostrando o lote que está com painel aberto.
