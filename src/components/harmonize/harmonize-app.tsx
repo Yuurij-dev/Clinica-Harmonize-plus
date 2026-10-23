@@ -60,6 +60,19 @@ const initialScreenResources: Partial<Record<SectionId, { key: string; extraKeys
   configuracoes: { key: "/api/clinic/cost-settings", message: "Carregando as configurações da clínica..." },
 };
 
+// Sessão inválida no cliente mas aceita pelo servidor (ex.: banco instável) faz /login e / se redirecionarem sem parar.
+// Na terceira volta em 30 s o cookie é descartado, o que encerra o ciclo.
+async function leaveToLogin(replace: (path: string) => void) {
+  try {
+    const now = Date.now();
+    const recent = (JSON.parse(window.sessionStorage.getItem("harmonize-login-redirects") ?? "[]") as number[]).filter((time) => now - time < 30_000);
+    recent.push(now);
+    window.sessionStorage.setItem("harmonize-login-redirects", JSON.stringify(recent));
+    if (recent.length >= 3) await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
+  } catch { /* sessionStorage indisponível: segue só com o redirecionamento */ }
+  replace("/login");
+}
+
 type SessionCheck = { status: number; user?: CurrentUser };
 let sessionCheck: Promise<SessionCheck> | null = null;
 
@@ -148,7 +161,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
         if (!active) return;
         if (session.status === 401) {
           setClientCacheScope(null);
-          router.replace("/login");
+          void leaveToLogin(router.replace);
           return;
         }
         if (session.status < 200 || session.status >= 300 || !session.user) {
@@ -190,7 +203,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   useEffect(() => {
     const handleUnauthorized = () => {
       setCurrentUser(null);
-      router.replace("/login");
+      void leaveToLogin(router.replace);
     };
     const handleSessionChange = (event: StorageEvent) => {
       if (event.key !== "harmonize-session-change") return;
