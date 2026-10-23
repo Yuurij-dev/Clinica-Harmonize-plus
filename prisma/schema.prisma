@@ -33,6 +33,14 @@ model Clinic {
   id                          String               @id @default(cuid())
   name                        String
   slug                        String               @unique
+  cnpj                        String?
+  phone                       String?
+  email                       String?
+  address                     String?
+  appointmentNotificationsEnabled Boolean            @default(true)
+  appointmentNotificationSoundEnabled Boolean        @default(true)
+  stockNotificationsEnabled   Boolean                @default(true)
+  requireCancellationReason   Boolean                @default(false)
   laborCost                   Int                  @default(0)
   facilityCost                Int                  @default(0)
   medicationCost              Int                  @default(0)

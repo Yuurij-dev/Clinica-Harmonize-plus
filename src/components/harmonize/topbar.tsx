@@ -51,13 +51,15 @@ function formatTrialRemaining(milliseconds: number) {
 export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStockAlert, onLogout, user }: TopbarProps) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
+  const [stockNotificationsEnabled, setStockNotificationsEnabled] = useState(true);
+  const [appointmentNotificationSoundEnabled, setAppointmentNotificationSoundEnabled] = useState(true);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [themeReady, setThemeReady] = useState(false);
   const [trialRemaining, setTrialRemaining] = useState<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const previousAlertIdsRef = useRef<string[] | null>(null);
-  const stockAlerts = useStockAlerts(user?.role === "ADMIN");
+  const stockAlerts = useStockAlerts(user?.role === "ADMIN" && stockNotificationsEnabled);
   const notificationCount = appointmentAlerts.length + stockAlerts.length;
 
   function primeNotificationAudio() {
@@ -156,8 +158,10 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
     async function loadAppointmentAlerts() {
       const response = await fetch("/api/agenda/alerts", { cache: "no-store" }).catch(() => null);
       if (!response?.ok) return;
-      const data = await response.json() as { appointments?: Array<{ id: string; date: string; time: string; status: string; patient?: { name?: string } }> };
+      const data = await response.json() as { appointments?: Array<{ id: string; date: string; time: string; status: string; patient?: { name?: string } }>; settings?: { appointmentNotificationsEnabled?: boolean; appointmentNotificationSoundEnabled?: boolean; stockNotificationsEnabled?: boolean } };
       if (!active) return;
+      setStockNotificationsEnabled(data.settings?.stockNotificationsEnabled ?? true);
+      setAppointmentNotificationSoundEnabled(data.settings?.appointmentNotificationSoundEnabled ?? true);
 
       const now = clinicNow();
       const today = clinicDateKey(now);
@@ -174,15 +178,18 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
         })
         .map((appointment) => ({ id: appointment.id, message: `É hora do atendimento de ${appointment.patient?.name ?? "um cliente"}.` }));
       const previousAlertIds = previousAlertIdsRef.current;
-      if (previousAlertIds && alerts.some((alert) => !previousAlertIds.includes(alert.id))) playNotificationSound();
+      const soundEnabled = data.settings?.appointmentNotificationSoundEnabled ?? appointmentNotificationSoundEnabled;
+      if (soundEnabled && previousAlertIds && alerts.some((alert) => !previousAlertIds.includes(alert.id))) playNotificationSound();
       previousAlertIdsRef.current = alerts.map((alert) => alert.id);
       setAppointmentAlerts(alerts);
     }
 
     void loadAppointmentAlerts();
     const timer = window.setInterval(() => { void loadAppointmentAlerts(); }, 30_000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [user?.id]);
+    const handleSettingsChange = () => { void loadAppointmentAlerts(); };
+    window.addEventListener("harmonize-notification-settings-updated", handleSettingsChange);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener("harmonize-notification-settings-updated", handleSettingsChange); };
+  }, [user?.id, appointmentNotificationSoundEnabled]);
 
   async function handleLogout() {
     setIsLoggingOut(true);

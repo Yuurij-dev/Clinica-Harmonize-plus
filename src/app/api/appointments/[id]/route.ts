@@ -10,15 +10,22 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
 
-  const body = await request.json().catch(() => null) as { status?: string; date?: string; time?: string; procedure?: string; professional?: string; notes?: string } | null;
+  const body = await request.json().catch(() => null) as { status?: string; date?: string; time?: string; procedure?: string; professional?: string; notes?: string; cancellationReason?: string } | null;
   if (!body?.status && !body?.date && !body?.time && !body?.procedure && !body?.professional && body?.notes === undefined) return NextResponse.json({ message: "Informe uma alteração para o agendamento." }, { status: 400 });
   if (body.status && !appointmentStatuses.includes(body.status)) return NextResponse.json({ message: "Status inválido." }, { status: 400 });
   if (body.time && parseClockMinutes(body.time) === null) return NextResponse.json({ message: "Horário inválido." }, { status: 400 });
   const day = body.date ? parseAppointmentDay(body.date) : null;
   if (body.date && !day) return NextResponse.json({ message: "Data inválida." }, { status: 400 });
   const id = (await params).id;
-  const current = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, select: { status: true, date: true, time: true } });
+  const current = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, select: { status: true, date: true, time: true, notes: true } });
   if (!current) return NextResponse.json({ message: "Agendamento não encontrado." }, { status: 404 });
+  if (body.cancellationReason !== undefined && typeof body.cancellationReason !== "string") return NextResponse.json({ message: "Motivo de cancelamento inválido." }, { status: 400 });
+  const cancellationReason = body.cancellationReason?.trim();
+  if (cancellationReason && cancellationReason.length > 500) return NextResponse.json({ message: "O motivo do cancelamento deve ter até 500 caracteres." }, { status: 400 });
+  if (body.status === "Cancelado") {
+    const clinic = await prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { requireCancellationReason: true } });
+    if (clinic?.requireCancellationReason && !cancellationReason) return NextResponse.json({ message: "Informe o motivo para cancelar este agendamento." }, { status: 400 });
+  }
   if (!appointmentStatusChangeAllowed(user.role, current.status, body.status)) {
     return NextResponse.json({ message: "O atendimento é conduzido pela equipe clínica." }, { status: 403 });
   }
@@ -32,6 +39,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     ...(body.procedure?.trim() ? { procedure: body.procedure.trim() } : {}),
     ...(body.professional?.trim() ? { professional: body.professional.trim() } : {}),
     ...(body.notes !== undefined ? { notes: body.notes.trim() } : {}),
+    ...(cancellationReason ? { notes: [(body.notes ?? current.notes).trim(), `Motivo do cancelamento: ${cancellationReason}`].filter(Boolean).join("\n\n") } : {}),
   } });
   if (result.count === 0) return NextResponse.json({ message: "O atendimento já foi iniciado." }, { status: 409 });
   // Todo atendimento finalizado (na tela ou automaticamente pela agenda) fica com a conferência de materiais pendente.

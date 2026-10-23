@@ -30,9 +30,9 @@ export async function GET() {
     }),
     prisma.clinic.findUnique({
       where: { id: user.clinicId },
-      select: { appointmentToleranceMinutes: true, openingTime: true, closingTime: true },
+      select: { appointmentToleranceMinutes: true, openingTime: true, closingTime: true, requireCancellationReason: true },
     }),
   ]);
 
-  return NextResponse.json({ appointments, patients, procedures, members, settings: clinic ?? { appointmentToleranceMinutes: 15, openingTime: "08:00", closingTime: "19:00" } });
+  return NextResponse.json({ appointments, patients, procedures, members, settings: clinic ?? { appointmentToleranceMinutes: 15, openingTime: "08:00", closingTime: "19:00", requireCancellationReason: false } });
 }

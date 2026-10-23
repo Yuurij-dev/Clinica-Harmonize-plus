@@ -112,6 +112,7 @@ export type Procedure = {
 
 export type Quote = {
   id?: string;
+  patientId?: string;
   patient: string;
   items: string;
   total: string;
@@ -121,6 +122,7 @@ export type Quote = {
 
 export type Payment = {
   id?: string;
+  patientId?: string;
   patient: string;
   value: string;
   method: string;
