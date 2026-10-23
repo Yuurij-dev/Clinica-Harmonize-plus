@@ -345,6 +345,44 @@ export function contentFromEvaluation(evaluation: EvaluationAnamnesisFields): An
   return content;
 }
 
+export type EvaluationPrefill = { chiefComplaint?: string; patientGoal?: string; allergies?: string; pregnancyStatus?: string; anticoagulantUse?: string; autoimmuneDiseases?: string; previousProcedures?: string };
+
+const triToChoice = (value: TriState | null | undefined) => value === "yes" ? "Sim" : value === "no" ? "Não" : undefined;
+
+// Inverso de `contentFromEvaluation` para os campos Sim/Não da avaliação. Só devolve o que a anamnese responde de fato:
+// null/"not_informed" NUNCA vira "Não". Alergias: "Sim" se qualquer item for sim; "Não" só se TODOS os itens forem não.
+export function evaluationFieldsFromAnamnesis(content: AnamnesisContent): EvaluationPrefill {
+  const result: EvaluationPrefill = {};
+  const complaint = content.complaint.chiefComplaint.trim();
+  const goal = content.complaint.treatmentGoal.trim();
+  if (complaint) result.chiefComplaint = complaint;
+  if (goal) result.patientGoal = goal;
+  const allergyAnswers = Object.values(content.allergies.items).map((answer) => answer.value);
+  const allergies = allergyAnswers.includes("yes") ? "Sim" : allergyAnswers.every((value) => value === "no") ? "Não" : undefined;
+  if (allergies) result.allergies = allergies;
+  const pregnancy = triToChoice(content.health.items.pregnancy.value);
+  if (pregnancy) result.pregnancyStatus = pregnancy;
+  const anticoagulants = triToChoice(content.health.items.anticoagulants.value);
+  if (anticoagulants) result.anticoagulantUse = anticoagulants;
+  const autoimmune = triToChoice(content.health.items.autoimmune.value);
+  if (autoimmune) result.autoimmuneDiseases = autoimmune;
+  const previous = triToChoice(content.previousProcedures.hadPrevious);
+  if (previous) result.previousProcedures = previous;
+  return result;
+}
+
+// Aplica o pré-preenchimento só nos campos da avaliação que estão vazios; nunca sobrescreve o que foi escrito.
+// Devolve o mesmo objeto quando nada muda.
+export function fillEmptyEvaluationFields<T extends Record<keyof EvaluationPrefill, string>>(assessment: T, prefill: EvaluationPrefill): T {
+  const next = { ...assessment };
+  let changed = false;
+  for (const key of Object.keys(prefill) as Array<keyof EvaluationPrefill>) {
+    const value = prefill[key];
+    if (value && !assessment[key].trim()) { next[key] = value as T[typeof key]; changed = true; }
+  }
+  return changed ? next : assessment;
+}
+
 // Alertas informativos quando só existe o registro antigo da avaliação (sem anamnese).
 export function alertsFromEvaluation(evaluation: EvaluationAnamnesisFields | null | undefined): AnamnesisAlert[] {
   if (!evaluation) return [];

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
 import { can } from "@/lib/permissions";
 import { ensurePatientJourney } from "@/lib/patient-journey";
+import { assessmentCompletionError } from "@/lib/evaluation-rules";
 
 type EvaluationPhotoPayload = {
   id?: string;
@@ -102,7 +103,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const body = await request.json().catch(() => null) as ({ evaluationId?: string; journeyId?: string; photos?: EvaluationPhotoPayload[]; assessment?: AssessmentPayload; status?: string } | null);
   const photos = body?.photos;
   if (!Array.isArray(photos)) return NextResponse.json({ message: "Envie as fotos da avaliação." }, { status: 400 });
-  const existingEvaluation = body?.evaluationId ? await prisma.evaluation.findFirst({ where: { id: body.evaluationId, patientId, clinicId: user.clinicId }, select: { id: true, journeyId: true, chiefComplaint: true } }) : null;
+  const existingEvaluation = body?.evaluationId ? await prisma.evaluation.findFirst({ where: { id: body.evaluationId, patientId, clinicId: user.clinicId }, select: { id: true, journeyId: true, status: true, chiefComplaint: true, patientGoal: true, allergies: true, pregnancyStatus: true, anticoagulantUse: true, autoimmuneDiseases: true, previousProcedures: true, clinicalNotes: true } }) : null;
   if (body?.evaluationId && !existingEvaluation) {
     return NextResponse.json({ message: "Avaliação não encontrada." }, { status: 404 });
   }
@@ -128,8 +129,10 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       if (value !== undefined) assessment[field] = value.trim();
     }
   }
-  if (body?.status === "Concluída" && !(assessment.chiefComplaint ?? existingEvaluation?.chiefComplaint ?? "").trim()) {
-    return NextResponse.json({ message: "Informe a queixa principal para concluir a avaliação." }, { status: 400 });
+  if (body?.status === "Concluída") {
+    // Avaliação já concluída (possivelmente antiga): só exige o que estava preenchido e foi esvaziado.
+    const incomplete = assessmentCompletionError({ ...existingEvaluation, ...assessment }, existingEvaluation?.status === "Concluída" ? existingEvaluation : null);
+    if (incomplete) return NextResponse.json({ message: incomplete }, { status: 400 });
   }
   const journey = existingEvaluation ? null : await ensurePatientJourney(patientId, user.clinicId, body?.journeyId);
 
