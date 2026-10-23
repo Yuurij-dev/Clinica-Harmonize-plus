@@ -9,9 +9,7 @@ import { inputVariants } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { CountUp } from "@/components/ui/count-up";
 import { DetailCard, LoadingSkeleton, PageContainer, ProgressBar, StatCard, StatusBadge } from "./shared";
-import { StockAlertsCard } from "./stock-alerts";
 import type { SectionId } from "@/types/clinic";
-import type { StockAlert } from "@/lib/stock-rules";
 import { getCachedJson, readClientCache } from "@/lib/client-cache";
 import { Bar, CartesianGrid, ComposedChart, Line, Rectangle, ResponsiveContainer, Tooltip, XAxis, YAxis, type BarShapeProps } from "recharts";
 import { useRevealOnView } from "@/lib/use-reveal-on-view";
@@ -20,7 +18,7 @@ const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "
 const percentFormat = (value: number) => `${Math.round(value)}%`;
 const patientNameLinkClassName = "origin-left transition-transform hover:scale-[1.03] focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]";
 
-export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "Usuário" }: { onAction: (action: "client" | "appointment" | "quote" | "payment") => void; onNavigate: (section: SectionId, focus?: { date: string; time: string }) => void; onOpenStockAlert: (alert: StockAlert) => void; userName?: string }) {
+export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onAction: (action: "client" | "appointment" | "quote" | "payment") => void; onNavigate: (section: SectionId, focus?: { date: string; time: string }) => void; userName?: string }) {
   type DashboardData = { appointmentCount: number; appointments: Array<{ id: string; date: string; time: string; procedure: string; status: string; patient?: { id: string; name: string } | null }>; patients: Array<{ id: string; name: string; status: string; lastVisit: string | null; createdAt: string }>; quotes: Array<{ id: string; items: string; total: number; status: string; patient?: { id: string; name: string } | null }>; payments: Array<{ value: number; status: string; date: string }> };
   const cachedDashboard = readClientCache<DashboardData>("/api/dashboard/bootstrap");
   const [data, setData] = useState<DashboardData | null>(cachedDashboard ?? null);
@@ -102,7 +100,6 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
         </div>
       </div>
 
-      <StockAlertsCard onOpen={onOpenStockAlert} />
       <div className="hp-list-stagger grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         {stats.map((stat) => (
           <StatCard key={stat.label} label={stat.label} value={<CountUp value={stat.value} format={stat.format} />} detail={stat.detail} icon={TrendingUp} />
