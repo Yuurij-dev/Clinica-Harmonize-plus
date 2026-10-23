@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { serializeQuote, toCents } from "@/lib/finance";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 import { calculateQuote, type QuoteLineInput } from "@/lib/quote-rules";
+import { cpfForRole } from "@/lib/patient-cpf-mask";
 import { matchPaymentQuotes } from "@/lib/patient-finance-rules";
 
 export async function GET(request: Request) {
@@ -20,7 +21,7 @@ export async function GET(request: Request) {
       ...(patientId ? { evaluation: { select: { professional: true } }, clinic: { select: { name: true } } } : {}),
     },
   });
-  const serialized = quotes.map(serializeQuote);
+  const serialized = quotes.map((quote) => serializeQuote({ ...quote, patient: cpfForRole(user.role, quote.patient) }));
   if (!patientId) return NextResponse.json({ quotes: serialized });
 
   const payments = await prisma.payment.findMany({

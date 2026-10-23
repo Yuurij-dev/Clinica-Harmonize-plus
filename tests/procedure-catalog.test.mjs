@@ -115,12 +115,19 @@ test("números: só número finito ou texto decimal simples", () => {
   for (const bad of [" ", "", "0x10", "1e3", "NaN", "Infinity", NaN, Infinity, true, [], [5], {}, null, undefined, "1,5"]) assert.equal(parseNumeric(bad), null, JSON.stringify(bad));
 });
 
-test("preço: reais inteiros, nunca negativo, teto do domínio", () => {
-  assert.equal(parsePrice(150.5).data, 151);
-  assert.equal(parsePrice("99.9").data, 100);
+test("preço: reais com centavos (2 casas), vírgula pt-BR, nunca negativo, teto do domínio", () => {
+  assert.equal(parsePrice(150.5).data, 150.5);
+  assert.equal(parsePrice("99.9").data, 99.9);
+  assert.equal(parsePrice("349,90").data, 349.9);
+  assert.equal(parsePrice("1.234,50").data, 1234.5);
+  assert.equal(parsePrice(349.9).data, 349.9);
+  assert.equal(parsePrice(0.1 + 0.2).data, 0.3);
+  assert.equal(parsePrice(1.999).data, 2);
+  assert.equal(parsePrice("0,00").data, 0);
+  assert.equal(parsePrice("-5,50").data, 0);
   assert.equal(parsePrice(-5).data, 0);
   assert.equal(parsePrice(maxPriceReais).data, maxPriceReais);
-  for (const bad of [maxPriceReais + 1, 2147483648, 1e30, "abc", true]) assert.equal(parsePrice(bad).ok, false, String(bad));
+  for (const bad of [maxPriceReais + 1, 2147483648, 1e30, "abc", true, NaN, Infinity, "1,2,3", "12,5x", null, ""]) assert.equal(parsePrice(bad).ok, false, String(bad));
 });
 
 test("duração: minutos inteiros de 1 ao teto", () => {

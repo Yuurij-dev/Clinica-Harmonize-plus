@@ -212,7 +212,7 @@ model Procedure {
   imageAssetId        String?
   // Imagem escolhida da biblioteca do catálogo (sem habilitar o item); catalogItemId é o item habilitado.
   imageCatalogItemId  String?
-  price               Int
+  price               Float
   durationMinutes     Int
   materials           String
   materialsNeedReview Boolean               @default(false)

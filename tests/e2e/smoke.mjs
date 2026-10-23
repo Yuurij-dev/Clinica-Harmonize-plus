@@ -2044,9 +2044,9 @@ async function procedureCatalogGaps() {
   check("renomear outro procedimento para o nome de um existente devolve 409", r.status === 409, r.status);
 
   // Valores: preço com centavos, limites, texto e tipos estranhos (POST).
-  for (const [sent, stored] of [[150.5, 151], [150.4, 150], ["99.9", 100], [0, 0], [-5, 0], [100000000, 100000000]]) {
+  for (const [sent, stored] of [[150.5, 150.5], [150.4, 150.4], ["99.9", 99.9], ["349,90", 349.9], [1.999, 2], [0, 0], [-5, 0], [100000000, 100000000]]) {
     r = await mkCustom({ price: sent });
-    check(`preço ${JSON.stringify(sent)} é arredondado para inteiro (${stored}), nunca negativo`, r.status === 201 && r.data.procedure.price === stored, `${r.status} ${r.data.procedure?.price}`);
+    check(`preço ${JSON.stringify(sent)} é gravado com centavos (${stored}), nunca negativo`, r.status === 201 && r.data.procedure.price === stored, `${r.status} ${r.data.procedure?.price}`);
   }
   for (const sent of ["abc", {}, "NaN", "Infinity", "", null, undefined, " ", [], true, "0x10", "1e3", [5]]) {
     r = await mkCustom({ price: sent });
@@ -2155,7 +2155,9 @@ async function procedureCatalogGaps() {
   // PATCH: valores.
   const target = (await mkCustom()).data.procedure;
   r = await call("PATCH", `/api/procedures/${target.id}`, { price: 150.5 });
-  check("PATCH preço 150.5 grava 151", r.status === 200 && r.data.procedure.price === 151, `${r.status} ${r.data.procedure?.price}`);
+  check("PATCH preço 150.5 grava 150.5", r.status === 200 && r.data.procedure.price === 150.5, `${r.status} ${r.data.procedure?.price}`);
+  r = await call("PATCH", `/api/procedures/${target.id}`, { price: "349,90" });
+  check("PATCH preço \"349,90\" (vírgula pt-BR) grava 349.9", r.status === 200 && r.data.procedure.price === 349.9, `${r.status} ${r.data.procedure?.price}`);
   r = await call("PATCH", `/api/procedures/${target.id}`, { price: -1 });
   check("PATCH preço negativo grava 0", r.status === 200 && r.data.procedure.price === 0, `${r.status} ${r.data.procedure?.price}`);
   await call("PATCH", `/api/procedures/${target.id}`, { price: 500, durationMinutes: 45 });
@@ -2390,7 +2392,7 @@ async function procedureCatalogGaps() {
     const renamedProc = (await call("PATCH", `/api/procedures/${renamedBeforeQuote.id}`, { name: uniq("RenomeadoInt"), price: 1200 })).data.procedure;
     const integrationProcs = [
       ["catálogo", (await call("POST", "/api/procedures", { catalogItemId: free[5].id, ...base })).data.procedure],
-      ["personalizado", (await mkCustom({ price: 450 })).data.procedure],
+      ["personalizado", (await mkCustom({ price: "349,90" })).data.procedure],
       ["renomeado", renamedProc],
     ];
     for (const [label, proc] of integrationProcs) {
@@ -2399,6 +2401,10 @@ async function procedureCatalogGaps() {
       const evaluation = (await api("PUT", `/api/patients/${patientId}/evaluation`, { journeyId: journey.id, photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
       const quote = await api("POST", "/api/quotes", { patientId, journeyId: journey.id, evaluationId: evaluation.id, details: [{ procedureId: proc.id, quantity: 1, discountCents: 0 }], paymentMethod: "Pix", installments: 1, notes: "" });
       check(`integração (${label}): orçamento criado com o nome e o valor do procedimento`, quote.status === 201 && String(quote.data.quote.items).includes(proc.name) && quote.data.quote.total === proc.price, `${quote.status} ${quote.data.quote?.items} ${quote.data.quote?.total} vs ${proc.price}`);
+      if (label === "personalizado") {
+        const triple = await api("POST", "/api/quotes", { patientId, journeyId: journey.id, evaluationId: evaluation.id, details: [{ procedureId: proc.id, quantity: 3, discountCents: 0 }], paymentMethod: "Pix", installments: 1, notes: "", status: "Rascunho" });
+        check("centavos: 349,90 x3 = 1049,70 no orçamento", triple.status === 201 && triple.data.quote.total === 1049.7, `${triple.status} ${triple.data.quote?.total}`);
+      }
       for (const status of ["Enviado", "Aprovado"]) await api("PATCH", `/api/quotes/${quote.data.quote.id}`, { status, evaluationId: evaluation.id });
       const session = (await api("POST", `/api/patients/${patientId}/procedure-sessions`, { journeyId: journey.id, quoteId: quote.data.quote.id, procedureId: proc.id })).data.session;
       check(`integração (${label}): sessão criada com o nome do procedimento`, session?.procedureName === proc.name, session?.procedureName);
@@ -4105,9 +4111,118 @@ async function pendingStock(patient) {
   });
 }
 
+// CPF mascarado para STAFF: listas, lookup, detalhe, PATCH, POST e orçamentos. ADMIN vê completo e pode limpar.
+async function patientCpfMask() {
+  const staffEmail = `e2e-staff-cpf-${run}@example.com`;
+  const staffPassword = `E2e-${run}-Staff9!`;
+  const cpf = randomCpf();
+  const masked = `***.***.***-${cpf.slice(-2)}`;
+  const nameKey = `Mascara ${run}`;
+  let team = null;
+  let r = await api("POST", "/api/patients", { name: nameKey, phone: "11999990077", age: 33, cpf });
+  const target = r.data.patient;
+  check("CPF (máscara): ADMIN cadastra e recebe o CPF completo", r.status === 201 && target?.cpf === cpf, `${r.status} ${target?.cpf}`);
+  r = await api("GET", `/api/patients?q=${encodeURIComponent(nameKey)}`);
+  check("CPF (máscara): ADMIN vê CPF completo na lista", r.data.patients?.find((p) => p.id === target.id)?.cpf === cpf);
+  r = await api("GET", `/api/patients/lookup?q=${cpf.slice(0, 5)}`);
+  check("CPF (máscara): ADMIN busca CPF parcial (5 dígitos) no lookup e vê completo", r.data.patients?.find((p) => p.id === target.id)?.cpf === cpf, JSON.stringify(r.data).slice(0, 120));
+  try {
+    r = await api("POST", "/api/team", { name: "E2E Atendente CPF", email: staffEmail, password: staffPassword, role: "STAFF" });
+    team = r.status === 201 ? r.data.member : null;
+    const staff = team ? await loginAs(staffEmail, staffPassword) : null;
+    if (staff?.status !== 200) { check("usuário STAFF criado para testar o CPF mascarado", false, `team ${r.status} login ${staff?.status}`); return; }
+    const has = (value) => JSON.stringify(value).includes(cpf);
+    const s = await withSession(staff.cookie, async () => {
+      const out = {};
+      out.list = await api("GET", `/api/patients?q=${encodeURIComponent(nameKey)}`);
+      out.plain = await api("GET", "/api/patients");
+      out.one = await api("GET", `/api/patients/${target.id}`);
+      out.partial = await api("GET", `/api/patients/lookup?q=${cpf.slice(0, 5)}`);
+      out.tenDigits = await api("GET", `/api/patients/lookup?q=${cpf.slice(0, 10)}`);
+      out.formatted = await api("GET", `/api/patients/lookup?q=${encodeURIComponent(`${cpf.slice(0, 3)}.${cpf.slice(3, 6)}.${cpf.slice(6, 9)}-${cpf.slice(9)}`)}`);
+      out.exact = await api("GET", `/api/patients/lookup?q=${cpf}`);
+      out.byName = await api("GET", `/api/patients/lookup?q=${encodeURIComponent(nameKey)}`);
+      out.quotes = await api("GET", "/api/quotes");
+      out.maskedPost = await api("POST", "/api/patients", { name: `Mascarado ${run}`, phone: "11999990078", age: 30, cpf: "***.***.***-12" });
+      out.patchAbsent = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} B`, phone: "11999990077", age: 34 });
+      out.patchMasked = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} C`, phone: "11999990077", age: 35, cpf: masked });
+      out.patchEmpty = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36, cpf: "" });
+      return out;
+    });
+    const row = (res) => res.data.patients?.find((p) => p.id === target.id);
+    check("CPF (máscara): STAFF recebe só os 2 últimos dígitos na lista paginada e na lista simples", row(s.list)?.cpf === masked && !has(s.list.data) && !has(s.plain.data), row(s.list)?.cpf);
+    check("CPF (máscara): STAFF recebe CPF mascarado no detalhe do paciente", s.one.status === 200 && s.one.data.patient?.cpf === masked && !has(s.one.data), s.one.data.patient?.cpf);
+    check("CPF (máscara): STAFF com trecho de CPF (5 e 10 dígitos) não encontra o paciente", !row(s.partial) && !row(s.tenDigits) && s.partial.status === 200 && s.tenDigits.status === 200, `${s.partial.data.patients?.length}/${s.tenDigits.data.patients?.length}`);
+    check("CPF (máscara): STAFF com os 11 dígitos exatos encontra o paciente, mascarado", row(s.exact)?.cpf === masked && !has(s.exact.data), JSON.stringify(s.exact.data).slice(0, 120));
+    check("CPF (máscara): STAFF com CPF formatado completo encontra o paciente", row(s.formatted)?.cpf === masked, JSON.stringify(s.formatted.data).slice(0, 120));
+    check("CPF (máscara): STAFF busca por nome e vê mascarado", row(s.byName)?.cpf === masked && !has(s.byName.data));
+    check("CPF (máscara): lista de orçamentos do STAFF não vaza o CPF", s.quotes.status === 200 && !has(s.quotes.data), s.quotes.status);
+    check("CPF (máscara): POST com asteriscos no CPF é recusado (400)", s.maskedPost.status === 400, s.maskedPost.status);
+    check("CPF (máscara): PATCH do STAFF sem cpf, com cpf mascarado ou vazio responde 200 e devolve mascarado", [s.patchAbsent, s.patchMasked, s.patchEmpty].every((x) => x.status === 200 && x.data.patient?.cpf === masked), [s.patchAbsent, s.patchMasked, s.patchEmpty].map((x) => `${x.status}:${x.data.patient?.cpf}`).join(" "));
+    const stored = await prisma.patient.findUnique({ where: { id: target.id }, select: { cpf: true, name: true, age: true } });
+    check("CPF (máscara): no banco o CPF original foi mantido após os PATCH do STAFF, mas nome/idade mudaram", stored.cpf === cpf && stored.name === `${nameKey} D` && stored.age === 36, JSON.stringify(stored));
+    const fresh = randomCpf();
+    const staffNew = await withSession(staff.cookie, () => api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36, cpf: fresh }));
+    check("CPF (máscara): STAFF consegue informar um CPF completo novo (e vê mascarado)", staffNew.status === 200 && staffNew.data.patient?.cpf === `***.***.***-${fresh.slice(-2)}` && (await prisma.patient.findUnique({ where: { id: target.id }, select: { cpf: true } })).cpf === fresh, `${staffNew.status} ${staffNew.data.patient?.cpf}`);
+    r = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36, cpf });
+    check("CPF (máscara): ADMIN volta ao CPF original e vê completo", r.status === 200 && r.data.patient?.cpf === cpf, `${r.status} ${r.data.patient?.cpf}`);
+    r = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36, cpf: masked });
+    check("CPF (máscara): ADMIN enviando CPF mascarado não grava o valor mascarado", r.status === 200 && (await prisma.patient.findUnique({ where: { id: target.id }, select: { cpf: true } })).cpf === cpf, r.status);
+    r = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36 });
+    check("CPF (máscara): ADMIN sem cpf no PATCH mantém o CPF", r.status === 200 && r.data.patient?.cpf === cpf);
+    r = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36, cpf: "" });
+    check("CPF (máscara): ADMIN com cpf vazio limpa o CPF", r.status === 200 && r.data.patient?.cpf == null && (await prisma.patient.findUnique({ where: { id: target.id }, select: { cpf: true } })).cpf === null, `${r.status} ${r.data.patient?.cpf}`);
+  } finally {
+    if (team) await api("DELETE", "/api/team", { membershipId: team.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: staffEmail } } });
+    await prisma.user.deleteMany({ where: { email: staffEmail } });
+  }
+}
+
+// Preço com centavos no catálogo e no orçamento (Procedure.price é Float): ida e volta, vírgula pt-BR, multiplicação, desconto.
+async function quoteCents() {
+  const patient = (await api("POST", "/api/patients", { name: `Centavos ${run}`, phone: "11999990066", age: 29 })).data.patient;
+  const mk = (name, price) => api("POST", "/api/procedures", { custom: true, name: `E2E Cent ${name} ${run}`, category: "Teste", price, durationMinutes: 30, margin: 30 });
+  let r = await mk("a", "349,90");
+  const a = r.data.procedure;
+  check("centavos: procedimento \"349,90\" grava 349.9 e volta igual na listagem", r.status === 201 && a?.price === 349.9 && (await api("GET", "/api/procedures")).data.procedures?.find((p) => p.id === a.id)?.price === 349.9, `${r.status} ${a?.price}`);
+  r = await mk("b", "1.234,50");
+  const b = r.data.procedure;
+  check("centavos: \"1.234,50\" grava 1234.5", r.status === 201 && b?.price === 1234.5, `${r.status} ${b?.price}`);
+  r = await mk("c", 200);
+  const c = r.data.procedure;
+  check("centavos: preço inteiro (200) segue inteiro", r.status === 201 && c?.price === 200 && (await prisma.procedure.findUnique({ where: { id: c.id }, select: { price: true } })).price === 200, `${r.status} ${c?.price}`);
+  r = await api("PATCH", `/api/procedures/${c.id}`, { price: 0.1 });
+  check("centavos: PATCH 0.1 grava 0.1", r.status === 200 && r.data.procedure.price === 0.1, `${r.status} ${r.data.procedure?.price}`);
+  for (const bad of ["Infinity", "abc", 1e12, "1e3", "12,3,4"]) {
+    const bad2 = await mk("x", bad);
+    check(`centavos: preço ${JSON.stringify(bad)} é recusado (400)`, bad2.status === 400, bad2.status);
+  }
+  r = await mk("neg", -5);
+  check("centavos: preço negativo vira 0", r.status === 201 && r.data.procedure?.price === 0, `${r.status} ${r.data.procedure?.price}`);
+
+  const journey = (await api("POST", `/api/patients/${patient.id}/journeys`, { name: `Jornada cent ${run}`, professionalId: (await api("GET", "/api/team/professionals")).data.professionals?.[0]?.id })).data.journey;
+  const evaluation = (await api("PUT", `/api/patients/${patient.id}/evaluation`, { journeyId: journey.id, photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
+  const quoteBody = (details) => ({ patientId: patient.id, journeyId: journey.id, evaluationId: evaluation.id, details, paymentMethod: "Pix", installments: 1, notes: "", status: "Rascunho" });
+  r = await api("POST", "/api/quotes", quoteBody([{ procedureId: a.id, quantity: 3, discountCents: 0 }]));
+  check("centavos: orçamento 349,90 x 3 = 1049,70", r.status === 201 && r.data.quote?.total === 1049.7, `${r.status} ${r.data.quote?.total}`);
+  const firstId = r.data.quote?.id;
+  const dbFirst = await prisma.quote.findUnique({ where: { id: firstId }, select: { totalCents: true } });
+  check("centavos: totalCents no banco é 104970", dbFirst?.totalCents === 104970, dbFirst?.totalCents);
+  r = await api("POST", "/api/quotes", quoteBody([{ procedureId: a.id, quantity: 3, discountCents: 1000 }, { procedureId: b.id, quantity: 1, discountCents: 50 }]));
+  check("centavos: desconto em centavos (349,90x3 - 10,00 + 1234,50 - 0,50 = 2273,70)", r.status === 201 && r.data.quote?.total === 2273.7, `${r.status} ${r.data.quote?.total}`);
+  const quoteId = r.data.quote?.id;
+  r = await api("GET", `/api/quotes?patientId=${patient.id}`);
+  check("centavos: listagem de orçamentos devolve o mesmo total", r.data.quotes?.find((item) => item.id === quoteId)?.total === 2273.7, r.status);
+  r = await api("POST", "/api/quotes", quoteBody([{ procedureId: a.id, quantity: 1, discountCents: 34991 }]));
+  check("centavos: desconto maior que o subtotal em 1 centavo é recusado", r.status === 400, r.status);
+  r = await api("POST", "/api/quotes", quoteBody([{ procedureId: (await mk("int", 200)).data.procedure.id, quantity: 2, discountCents: 0 }]));
+  check("centavos: procedimento de preço inteiro antigo segue 200 x 2 = 400", r.status === 201 && r.data.quote?.total === 400, `${r.status} ${r.data.quote?.total}`);
+}
+
 const suites = {
-  pacientes: { needs: [], run: async (state) => Object.assign(state, await patientsAndPayments()) },
-  orcamentos: { needs: ["pacientes"], run: async (state) => { state.quote = await quotesAndProcedures(state.patient); } },
+  pacientes: { needs: [], run: async (state) => { Object.assign(state, await patientsAndPayments()); await patientCpfMask(); } },
+  orcamentos: { needs: ["pacientes"], run: async (state) => { state.quote = await quotesAndProcedures(state.patient); await quoteCents(); } },
   agenda: { needs: ["pacientes"], run: (state) => appointments(state.patient) },
   jornadas: { needs: ["orcamentos"], run: (state) => journeys(state.patient, state.quote) },
   configuracoes: { needs: [], run: () => settings() },

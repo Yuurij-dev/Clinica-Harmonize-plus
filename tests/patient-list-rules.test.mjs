@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  accentFrom, accentTo, cleanSearchQuery, escapeLikePattern, normalizeSearchText, paginationMeta, parsePageParams,
+  cpfSearchPlan, accentFrom, accentTo, cleanSearchQuery, escapeLikePattern, normalizeSearchText, paginationMeta, parsePageParams,
   parsePatientListQuery, parsePatientLookupLimit, patientListKey, patientLookupKey, patientLookupMinLength, isPatientIdFormat, searchDigits, stripControlChars,
 } from "../src/lib/patient-list-rules.ts";
 
@@ -89,4 +89,16 @@ test("lookup limit is small by default and capped", () => {
   assert.equal(parsePatientLookupLimit("0"), 8);
   assert.equal(parsePatientLookupLimit("5"), 5);
   assert.equal(parsePatientLookupLimit("500"), 20);
+});
+
+test("cpfSearchPlan: STAFF só busca CPF inteiro (exato); ADMIN/PROFESSIONAL por trecho", () => {
+  assert.deepEqual(cpfSearchPlan("123", true), { digits: "123", exact: false });
+  assert.deepEqual(cpfSearchPlan("123.456", true), { digits: "123456", exact: false });
+  assert.equal(cpfSearchPlan("123", false), null);
+  assert.equal(cpfSearchPlan("1234567890", false), null);
+  assert.deepEqual(cpfSearchPlan("123.456.789-01", false), { digits: "12345678901", exact: true });
+  assert.deepEqual(cpfSearchPlan("12345678901", false), { digits: "12345678901", exact: true });
+  assert.equal(cpfSearchPlan("123456789012", false), null);
+  assert.equal(cpfSearchPlan("Ana", false), null);
+  assert.equal(cpfSearchPlan("Ana", true), null);
 });

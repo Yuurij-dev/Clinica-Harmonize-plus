@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { rejectInvalidCpf } from "@/lib/patient-cpf";
 import { patientListSelect, searchPatientIds, withCurrentStage } from "@/lib/patient-list-server";
+import { cpfForRole, isMaskedCpf, patientsForRole } from "@/lib/patient-cpf-mask";
 import { paginationMeta, parsePatientListQuery, type PatientSort } from "@/lib/patient-list-rules";
 import { prisma } from "@/lib/prisma";
 
@@ -21,7 +22,7 @@ export async function GET(request: Request) {
   ]);
   const byStatus = Object.fromEntries(statusGroups.map((group) => [group.status, group._count._all]));
   const summary = { total: statusGroups.reduce((sum, group) => sum + group._count._all, 0), byStatus };
-  return NextResponse.json({ patients: await withCurrentStage(clinicId, listed.patients), pagination: paginationMeta(page, pageSize, listed.total), summary });
+  return NextResponse.json({ patients: patientsForRole(user.role, await withCurrentStage(clinicId, listed.patients)), pagination: paginationMeta(page, pageSize, listed.total), summary });
 }
 
 async function listPlain(clinicId: string, options: { status: string; sort: PatientSort; skip: number; take: number }) {
@@ -68,6 +69,7 @@ export async function POST(request: Request) {
   if (!name || !phone || !Number.isInteger(age) || age < 0 || age > 130) {
     return NextResponse.json({ message: "Nome, telefone e idade válida são obrigatórios." }, { status: 400 });
   }
+  if (isMaskedCpf(cpf)) return NextResponse.json({ message: "Informe o CPF completo, sem asteriscos." }, { status: 400 });
   const cpfError = await rejectInvalidCpf(user.clinicId, cpf);
   if (cpfError) return cpfError;
 
@@ -84,7 +86,7 @@ export async function POST(request: Request) {
       clinicId: user.clinicId,
     },
   });
-  return NextResponse.json({ patient }, { status: 201 });
+  return NextResponse.json({ patient: cpfForRole(user.role, patient) }, { status: 201 });
 }
 
 function parseDate(value?: string) {
