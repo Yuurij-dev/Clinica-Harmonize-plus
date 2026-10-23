@@ -1,5 +1,6 @@
 import { jwtVerify, SignJWT } from "jose";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
+import { parseBearerToken } from "./bearer-rules";
 import { getAuthSecret } from "./auth-secret";
 import { prisma } from "./prisma";
 
@@ -28,11 +29,13 @@ const globalAuthCache = globalThis as typeof globalThis & {
 const authCache = globalAuthCache.harmonizeAuthCache ?? new Map();
 if (!globalAuthCache.harmonizeAuthCache) globalAuthCache.harmonizeAuthCache = authCache;
 
-export async function createSession(userId: string) {
+// ttl: a web usa 7d; o app mobile usa um token mais curto (3d). Não há revogação antes do vencimento (a mitigação é o TTL curto);
+// invalidar tokens na troca de senha exigiria tokenVersion/passwordChangedAt no schema (backlog).
+export async function createSession(userId: string, ttl = "7d") {
   return new SignJWT({ userId })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime("7d")
+    .setExpirationTime(ttl)
     .sign(getAuthSecret());
 }
 
@@ -48,22 +51,33 @@ export function invalidateUserAuthCache(userId: string) {
   authCache.delete(userId);
 }
 
-export async function getCurrentUser({ requireActiveTrial = false }: CurrentUserOptions = {}) {
-  const token = (await cookies()).get(sessionCookieName)?.value;
+// userId de um JWT válido; sessão de troca de senha (passwordChangeOnly) nunca vale, seja qual for a origem.
+async function verifiedUserId(token: string | null | undefined) {
   if (!token) return null;
-
   try {
     const { payload } = await jwtVerify(token, getAuthSecret());
-    if (typeof payload.userId !== "string") return null;
-    if (payload.passwordChangeOnly === true) return null;
-    const cached = authCache.get(payload.userId);
+    if (typeof payload.userId !== "string" || payload.passwordChangeOnly === true) return null;
+    return payload.userId;
+  } catch {
+    return null;
+  }
+}
+
+export async function getCurrentUser({ requireActiveTrial = false }: CurrentUserOptions = {}) {
+  // Web: cookie. App mobile: "Authorization: Bearer <jwt>" (mesmo JWT). Cookie válido tem prioridade; cookie inválido/expirado cai para o Bearer.
+  const cookieToken = (await cookies()).get(sessionCookieName)?.value;
+  const userId = await verifiedUserId(cookieToken) ?? await verifiedUserId(parseBearerToken((await headers()).get("authorization")));
+  if (!userId) return null;
+
+  try {
+    const cached = authCache.get(userId);
     if (cached?.expiresAt && cached.expiresAt > Date.now()) {
       const cachedUser = cached.pending ? await cached.pending : cached.value ?? null;
       return requireActiveTrial && cachedUser?.trialExpired ? null : cachedUser;
     }
 
     const pending = prisma.user.findUnique({
-        where: { id: payload.userId },
+        where: { id: userId },
         select: {
           id: true,
           name: true,
@@ -89,9 +103,17 @@ export async function getCurrentUser({ requireActiveTrial = false }: CurrentUser
         clinic: membership.clinic,
       };
     });
-    authCache.set(payload.userId, { expiresAt: Date.now() + authCacheTtl, pending });
-    const user = await pending;
-    authCache.set(payload.userId, { expiresAt: Date.now() + authCacheTtl, value: user });
+    const entry = { expiresAt: Date.now() + authCacheTtl, pending };
+    authCache.set(userId, entry);
+    let user: AuthenticatedUser | null;
+    try {
+      user = await pending;
+    } catch (error) {
+      // Falha momentânea do banco não pode virar 401 em cache por 15 s.
+      if (authCache.get(userId) === entry) authCache.delete(userId);
+      throw error;
+    }
+    authCache.set(userId, { expiresAt: Date.now() + authCacheTtl, value: user });
     return requireActiveTrial && user?.trialExpired ? null : user;
   } catch {
     return null;

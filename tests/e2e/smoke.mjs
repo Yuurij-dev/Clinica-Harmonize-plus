@@ -4220,6 +4220,582 @@ async function quoteCents() {
   check("centavos: procedimento de preço inteiro antigo segue 200 x 2 = 400", r.status === 201 && r.data.quote?.total === 400, `${r.status} ${r.data.quote?.total}`);
 }
 
+// App mobile: login por token, Bearer nas rotas existentes, envio de uma foto à avaliação (append-only) e miniaturas.
+async function mobilePhotos() {
+  const sharp = (await import("sharp")).default;
+  const jpg = (width, height) => sharp({ create: { width, height, channels: 3, background: { r: 200, g: 120, b: 90 } } }).jpeg().toBuffer();
+  const png = (width, height) => sharp({ create: { width, height, channels: 3, background: { r: 20, g: 120, b: 90 } } }).png().toBuffer();
+  const mobileLogin = async (loginName, secret) => {
+    const response = await fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ login: loginName, password: secret }) });
+    return { status: response.status, data: await response.json().catch(() => null), setCookie: response.headers.getSetCookie() };
+  };
+  const call = (token, method, path, { form, json } = {}) => fetch(`${baseUrl}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(json ? { "Content-Type": "application/json" } : {}) }, body: form ?? (json ? JSON.stringify(json) : undefined) });
+  const callJson = async (...args) => { const response = await call(...args); return { status: response.status, data: await response.json().catch(() => null) }; };
+  const makeForm = (buffer, fields = {}, { type = "image/jpeg", filename = "foto.jpg" } = {}) => {
+    const form = new FormData();
+    form.set("file", new Blob([buffer], { type }), filename);
+    for (const [key, value] of Object.entries({ width: "400", height: "300", ...fields })) if (value !== undefined) form.set(key, String(value));
+    return form;
+  };
+  const upload = (token, patientId, buffer, fields = {}, options = {}) => callJson(token, "POST", `/api/patients/${patientId}/evaluation/photos`, { form: makeForm(buffer, fields, options) });
+  const evalCount = (patientId) => prisma.evaluation.count({ where: { patientId } });
+  const small = await jpg(400, 300);
+  const decoded = (id) => prisma.evaluationPhoto.findUnique({ where: { id }, select: { width: true, height: true } });
+
+  // --- Login do app ---
+  const good = await mobileLogin(email, password);
+  const token = good.data?.token;
+  const expires = Date.parse(good.data?.expiresAt);
+  check("mobile: login 200 devolve token, expiresAt (~3 dias), usuário e clínica, sem Set-Cookie", good.status === 200 && typeof token === "string" && expires > Date.now() + 2.9 * 86_400_000 && expires < Date.now() + 3.1 * 86_400_000 && good.data.user?.email === email && good.data.user?.role === "ADMIN" && good.data.user?.clinic?.name === testClinicName && "trialEndsAt" in good.data.user.clinic && good.setCookie.length === 0, `${good.status} ${JSON.stringify(good.data).slice(0, 120)}`);
+  let r = await mobileLogin(email, "senha-errada");
+  check("mobile: senha errada devolve 401 com a mensagem da web e sem token", r.status === 401 && r.data.message === "Usuário ou senha inválidos." && !r.data.token, r.status);
+  const ghost = await mobileLogin(`ninguem-${run}@example.com`, "qualquer-senha");
+  check("mobile: usuário inexistente devolve a mesma resposta 401 da senha errada", ghost.status === 401 && ghost.data.message === "Usuário ou senha inválidos.", ghost.status);
+  r = await mobileLogin("", "");
+  check("mobile: corpo sem usuário/senha devolve 400", r.status === 400, r.status);
+  const webLogin = await withSession("", () => api("POST", "/api/auth/login", { login: email, password }));
+  check("web: a resposta do login continua sem token no corpo", webLogin.status === 200 && !("token" in webLogin.data) && !JSON.stringify(webLogin.data).includes(token), JSON.stringify(Object.keys(webLogin.data)));
+
+  // --- Bearer x cookie nas rotas existentes ---
+  r = await callJson(token, "GET", "/api/auth/me");
+  check("Bearer: GET /api/auth/me devolve o usuário", r.status === 200 && r.data.user?.email === email, r.status);
+  check("Bearer: sem credencial e token adulterado/malformado recebem 401", (await callJson(null, "GET", "/api/auth/me")).status === 401 && (await callJson(`${token}x`, "GET", "/api/auth/me")).status === 401 && (await callJson("abc", "GET", "/api/auth/me")).status === 401);
+  // Cookie válido tem prioridade; cookie inválido cai para o Bearer; sessão de troca de senha nunca vale.
+  const withHeaders = async (headers) => { const response = await fetch(`${baseUrl}/api/auth/me`, { headers }); return response.status; };
+  const mixed = [await withHeaders({ cookie: "harmonize_session=lixo", Authorization: `Bearer ${token}` }), await withHeaders({ cookie, Authorization: "Bearer lixo" }), await withHeaders({ cookie: "harmonize_session=lixo", Authorization: "Bearer lixo" })];
+  check("cookie+Bearer: cookie inválido usa o Bearer válido (200), cookie válido ignora Bearer ruim (200), ambos inválidos 401", mixed.join("/") === "200/200/401", mixed.join("/"));
+  const cookieMe = await api("GET", "/api/auth/me");
+  check("cookie continua funcionando em /api/auth/me", cookieMe.status === 200 && cookieMe.data.user?.id === r.data.user?.id, cookieMe.status);
+
+  const patient = (await api("POST", "/api/patients", { name: `Foto App ${run}`, phone: "11999990101", age: 33 })).data.patient;
+  r = await callJson(token, "GET", `/api/patients/lookup?q=${encodeURIComponent(`Foto App ${run}`)}`);
+  check("Bearer: GET /api/patients/lookup?q= encontra o paciente", r.status === 200 && JSON.stringify(r.data).includes(patient.id), `${r.status} ${JSON.stringify(r.data).slice(0, 100)}`);
+
+  // --- Envio: validações antes de existir qualquer avaliação ---
+  const url = `/api/patients/${patient.id}/evaluation/photos`;
+  r = await upload(null, patient.id, small);
+  check("upload: sem token devolve 401", r.status === 401, r.status);
+  r = await upload(token, patient.id, Buffer.from("isto não é imagem"), {}, { type: "text/plain", filename: "a.txt" });
+  const rPdf = await upload(token, patient.id, Buffer.from("%PDF-1.4 teste"), {}, { type: "application/pdf", filename: "a.pdf" });
+  const rMismatch = await upload(token, patient.id, await png(40, 40), {}, { type: "image/jpeg" });
+  check("upload: texto, PDF e MIME divergente do conteúdo devolvem 415", [r, rPdf, rMismatch].every((x) => x.status === 415), [r, rPdf, rMismatch].map((x) => x.status).join("/"));
+  const big = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(4 * 1024 * 1024 + 10)]);
+  r = await upload(token, patient.id, big);
+  check("upload: arquivo acima de 4 MB devolve 413", r.status === 413, r.status);
+  const bad = [["categoria", { category: "Costas" }], ["largura 0", { width: "0" }], ["altura 8001", { height: "8001" }], ["5000x5001 > 25 MP", { width: "5000", height: "5001" }], ["largura decimal", { width: "12.5" }], ["sem largura", { width: undefined }]];
+  const badResults = [];
+  for (const [label, fields] of bad) badResults.push([label, (await upload(token, patient.id, small, fields)).status]);
+  check("upload: categoria e dimensões inválidas devolvem 400", badResults.every(([, status]) => status === 400), JSON.stringify(badResults));
+  const noFile = new FormData(); noFile.set("width", "10"); noFile.set("height", "10");
+  check("upload: sem arquivo devolve 400", (await callJson(token, "POST", url, { form: noFile })).status === 400);
+  check("upload: nada foi criado pelas recusas", (await evalCount(patient.id)) === 0);
+  const wrongSize = await upload(token, patient.id, small, { width: "4000", height: "3000" });
+  check("upload: dimensões declaradas muito diferentes das reais devolvem 400", wrongSize.status === 400 && /não correspondem/.test(wrongSize.data.message) && (await evalCount(patient.id)) === 0, JSON.stringify(wrongSize.data));
+  r = await upload(token, patient.id, small, { journeyId: "naoexiste" });
+  check("upload: tratamento inexistente devolve 404", r.status === 404 && (await evalCount(patient.id)) === 0, r.status);
+  r = await upload(token, patient.id, small, { evaluationId: "naoexiste" });
+  check("upload: avaliação inexistente devolve 404", r.status === 404 && (await evalCount(patient.id)) === 0, r.status);
+
+  // --- Envio: cria rascunho, reaproveita, não apaga as outras ---
+  const first = await upload(token, patient.id, small, { category: "Frontal", name: "frontal.jpg" });
+  const evId = first.data.evaluation?.id;
+  check("upload: primeira foto cria avaliação Rascunho (201) com a resposta do contrato", first.status === 201 && first.data.evaluation?.status === "Rascunho" && first.data.evaluation.photoCount === 1 && first.data.evaluation.created === true && first.data.photo?.sortOrder === 0 && first.data.photo.category === "Frontal" && first.data.photo.name === "frontal" && first.data.photo.width === 400 && first.data.photo.height === 300, `${first.status} ${JSON.stringify(first.data)}`);
+  const dbEval = await prisma.evaluation.findUnique({ where: { id: evId }, select: { status: true, clinicId: true, journeyId: true, professional: true } });
+  check("upload: avaliação criada na clínica, com jornada e profissional", dbEval?.status === "Rascunho" && dbEval.clinicId === good.data.user.clinic.id && Boolean(dbEval.journeyId) && dbEval.professional === good.data.user.name, JSON.stringify(dbEval));
+  const dbPhoto = await prisma.evaluationPhoto.findUnique({ where: { id: first.data.photo.id } });
+  check("upload: foto gravada como data URL com annotations []", dbPhoto?.imageUrl.startsWith("data:image/jpeg;base64,") && dbPhoto.annotations === "[]" && dbPhoto.evaluationId === evId);
+  const near = await upload(token, patient.id, small, { width: "410", height: "305" });
+  const swapped = await upload(token, patient.id, small, { width: "300", height: "400" });
+  const nearDb = await decoded(near.data.photo?.id);
+  const swappedDb = await decoded(swapped.data.photo?.id);
+  check("upload: dimensões levemente diferentes ou com lados trocados (EXIF) são aceitas e o servidor grava as reais dos bytes", near.status === 201 && swapped.status === 201 && nearDb.width === 400 && nearDb.height === 300 && swappedDb.width === 400 && swappedDb.height === 300 && near.data.photo.width === 400, `${near.status}/${swapped.status} ${JSON.stringify(nearDb)}`);
+  await prisma.evaluationPhoto.deleteMany({ where: { id: { in: [near.data.photo.id, swapped.data.photo.id] } } });
+  const second = await upload(token, patient.id, await png(300, 400), { category: "Perfil direito", width: "300", height: "400" }, { type: "image/png", filename: "p.png" });
+  check("upload: segunda foto reaproveita o rascunho (created=false, sortOrder 1, photoCount 2)", second.status === 201 && second.data.evaluation.id === evId && second.data.evaluation.created === false && second.data.photo.sortOrder === 1 && second.data.evaluation.photoCount === 2, JSON.stringify(second.data));
+  const viaCookie = await (async () => { const response = await fetch(`${baseUrl}${url}`, { method: "POST", headers: { cookie }, body: makeForm(small, { evaluationId: evId }) }); return { status: response.status, data: await response.json() }; })();
+  check("upload: o mesmo endpoint aceita cookie e evaluationId explícito (Rascunho)", viaCookie.status === 201 && viaCookie.data.evaluation.id === evId && viaCookie.data.photo.sortOrder === 2 && viaCookie.data.photo.category === "Outra", JSON.stringify(viaCookie.data));
+  check("upload: as fotos anteriores continuam com o mesmo id e há uma só avaliação", (await prisma.evaluationPhoto.count({ where: { id: { in: [first.data.photo.id, second.data.photo.id] }, evaluationId: evId } })) === 2 && (await evalCount(patient.id)) === 1);
+  const audit = await prisma.clinicalFileAudit.count({ where: { clinicId: good.data.user.clinic.id, patientId: patient.id, action: "UPLOAD", fileId: { in: [first.data.photo.id, second.data.photo.id, viaCookie.data.photo.id].map((id) => `evaluation:${id}`) } } });
+  check("upload: cada foto gera um registro de auditoria UPLOAD", audit === 3, audit);
+
+  // --- Leitura pelo sistema web e pelo app ---
+  r = await api("GET", `/api/patients/${patient.id}/evaluation?evaluationId=${evId}`);
+  check("GET da avaliação (web) mostra as 3 fotos do app em ordem", r.status === 200 && r.data.evaluation?.photos?.map((p) => p.sortOrder).join(",") === "0,1,2" && r.data.evaluation.photos[0].id === first.data.photo.id && r.data.evaluation.photos[0].annotations.length === 0, r.status);
+  r = await callJson(token, "GET", `/api/patients/${patient.id}/photos`);
+  const gallery = r.data?.photos ?? [];
+  check("Bearer: GET /photos lista as fotos da avaliação (sem base64)", r.status === 200 && gallery.some((p) => p.id === `evaluation:${first.data.photo.id}` && p.category === "Frontal") && !JSON.stringify(r.data).includes("base64"), `${r.status} ${gallery.length}`);
+  const imageUrl = `/api/patients/${patient.id}/photos/${encodeURIComponent(`evaluation:${first.data.photo.id}`)}/image`;
+  const full = await call(token, "GET", imageUrl);
+  const fullBytes = Buffer.from(await full.arrayBuffer());
+  check("Bearer: GET .../image devolve o original sem mudança (no-store)", full.status === 200 && full.headers.get("content-type") === "image/jpeg" && fullBytes.equals(small) && /no-store/.test(full.headers.get("cache-control") ?? ""), `${full.status} ${full.headers.get("cache-control")}`);
+  check("image sem token devolve 401", (await call(null, "GET", imageUrl)).status === 401);
+  const bigPhoto = await upload(token, patient.id, await jpg(1600, 1200), { width: "1600", height: "1200" });
+  const bigUrl = `/api/patients/${patient.id}/photos/${encodeURIComponent(`evaluation:${bigPhoto.data.photo?.id}`)}/image`;
+  const thumb = await call(token, "GET", `${bigUrl}?size=thumb`);
+  const thumbBytes = Buffer.from(await thumb.arrayBuffer());
+  const meta = await sharp(thumbBytes).metadata();
+  check("miniatura: JPEG 480x360 (lado maior <= 480), Cache-Control private, no-store", thumb.status === 200 && thumb.headers.get("content-type") === "image/jpeg" && meta.format === "jpeg" && meta.width === 480 && meta.height === 360 && thumb.headers.get("cache-control") === "private, no-store", `${thumb.status} ${meta.width}x${meta.height} ${thumb.headers.get("cache-control")}`);
+  const smallThumb = await sharp(Buffer.from(await (await call(token, "GET", `${imageUrl}?size=thumb`)).arrayBuffer())).metadata();
+  check("miniatura: imagem pequena não é ampliada", smallThumb.width === 400 && smallThumb.height === 300, `${smallThumb.width}x${smallThumb.height}`);
+  check("miniatura: size inválido devolve 400 e sem token 401", (await call(token, "GET", `${imageUrl}?size=huge`)).status === 400 && (await call(null, "GET", `${imageUrl}?size=thumb`)).status === 401);
+  const viewAudit = await prisma.clinicalFileAudit.count({ where: { patientId: patient.id, action: "VIEW", fileId: `evaluation:${first.data.photo.id}` } });
+  check("miniatura e original continuam auditados como VIEW (uma vez na janela)", viewAudit === 1, viewAudit);
+
+  // --- Avaliação concluída nunca é reaberta ---
+  const closedPatient = (await api("POST", "/api/patients", { name: `Foto Concluída ${run}`, phone: "11999990102", age: 40 })).data.patient;
+  const closed = (await api("PUT", `/api/patients/${closedPatient.id}/evaluation`, { photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
+  r = await upload(token, closedPatient.id, small, { evaluationId: closed.id });
+  const closedRow = await prisma.evaluation.findUnique({ where: { id: closed.id }, select: { status: true, _count: { select: { photos: true } } } });
+  check("upload: avaliação Concluída pedida por id devolve 409 e permanece Concluída sem fotos", r.status === 409 && /já concluída/.test(r.data.message) && closedRow.status === "Concluída" && closedRow._count.photos === 0, `${r.status} ${r.data.message}`);
+  r = await upload(token, closedPatient.id, small);
+  check("upload: sem evaluationId e sem rascunho cria nova avaliação, sem tocar a concluída", r.status === 201 && r.data.evaluation.created === true && r.data.evaluation.id !== closed.id && (await prisma.evaluation.findUnique({ where: { id: closed.id }, select: { status: true } })).status === "Concluída", JSON.stringify(r.data.evaluation));
+  r = await upload(token, closedPatient.id, small);
+  check("upload: com concluída e rascunho novo, usa o rascunho", r.status === 201 && r.data.evaluation.created === false && r.data.evaluation.photoCount === 2, JSON.stringify(r.data.evaluation));
+
+  // --- Limite de 20 fotos ---
+  const fullPatient = (await api("POST", "/api/patients", { name: `Foto Cheia ${run}`, phone: "11999990103", age: 41 })).data.patient;
+  const tiny = `data:image/jpeg;base64,${small.toString("base64")}`;
+  const nineteen = Array.from({ length: 19 }, (_, index) => ({ name: `f${index}`, imageUrl: tiny, width: 400, height: 300, category: "Outra", sortOrder: index }));
+  const draft19 = (await api("PUT", `/api/patients/${fullPatient.id}/evaluation`, { photos: nineteen })).data.evaluation;
+  const twentieth = await upload(token, fullPatient.id, small);
+  const twentyFirst = await upload(token, fullPatient.id, small);
+  check("upload: a foto 20 entra (sortOrder 19) e a 21 devolve 409 sem gravar", twentieth.status === 201 && twentieth.data.photo.sortOrder === 19 && twentyFirst.status === 409 && (await prisma.evaluationPhoto.count({ where: { evaluationId: draft19.id } })) === 20, `${twentieth.status}/${twentyFirst.status}`);
+
+  // --- Concorrência: paciente novo (sem jornada), 5 envios simultâneos ---
+  const racePatient = (await api("POST", "/api/patients", { name: `Foto Corrida ${run}`, phone: "11999990104", age: 29 })).data.patient;
+  const race = await Promise.all(Array.from({ length: 5 }, (_, index) => upload(token, racePatient.id, small, { name: `r${index}` })));
+  const raceEvals = await prisma.evaluation.findMany({ where: { patientId: racePatient.id }, select: { id: true, photos: { select: { sortOrder: true } } } });
+  const orders = raceEvals.flatMap((evaluation) => evaluation.photos.map((photo) => photo.sortOrder)).sort();
+  check("concorrência: 5 envios simultâneos = 5x 201, 1 avaliação, 1 jornada, sortOrder 0..4 distintos, 1 created=true", race.every((x) => x.status === 201) && raceEvals.length === 1 && orders.join(",") === "0,1,2,3,4" && race.filter((x) => x.data.evaluation.created).length === 1 && (await prisma.patientJourney.count({ where: { patientId: racePatient.id } })) === 1, `${race.map((x) => x.status).join("/")} aval=${raceEvals.length} ordens=${orders.join(",")}`);
+
+  // --- Outras clínicas, papéis e limites de login ---
+  const otherEmail = `e2e-fotos-outra-${run}@example.com`;
+  const otherPassword = `E2e-${run}-Outra9!`;
+  const otherClinic = `E2E Fotos Externa ${run}`;
+  const staffEmail = `e2e-fotos-staff-${run}@example.com`;
+  const staffPassword = `E2e-${run}-Staff9!`;
+  const proEmail = `e2e-fotos-pro-${run}@example.com`;
+  const proPassword = `E2e-${run}-Pro9!`;
+  let staffTeam = null;
+  let proTeam = null;
+  try {
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990120", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const otherToken = r.status === 201 ? (await mobileLogin(otherEmail, otherPassword)).data?.token : null;
+    if (otherToken) {
+      const before = await prisma.evaluationPhoto.count({ where: { evaluation: { patientId: patient.id } } });
+      const crossPatient = await upload(otherToken, patient.id, small);
+      const crossEval = await upload(otherToken, patient.id, small, { evaluationId: evId });
+      const crossImage = await call(otherToken, "GET", `${imageUrl}?size=thumb`);
+      check("isolamento: outra clínica recebe 404 no upload (paciente e avaliação) e na imagem, e nada é gravado", crossPatient.status === 404 && crossEval.status === 404 && crossImage.status === 404 && (await prisma.evaluationPhoto.count({ where: { evaluation: { patientId: patient.id } } })) === before, `${crossPatient.status}/${crossEval.status}/${crossImage.status}`);
+    } else check("segunda clínica criada para testar o app", false, `registro ${r.status}`);
+
+    r = await api("POST", "/api/team", { name: "E2E Atendente App", email: staffEmail, password: staffPassword, role: "STAFF" });
+    staffTeam = r.status === 201 ? r.data.member : null;
+    r = await api("POST", "/api/team", { name: "E2E Profissional App", email: proEmail, password: proPassword, role: "PROFESSIONAL" });
+    proTeam = r.status === 201 ? r.data.member : null;
+    if (staffTeam && proTeam) {
+      const first403 = await mobileLogin(staffEmail, staffPassword);
+      check("mobile: colaborador no primeiro acesso recebe 403 passwordChangeRequired, sem token nem cookie", first403.status === 403 && first403.data.passwordChangeRequired === true && !first403.data.token && first403.setCookie.length === 0, JSON.stringify(first403.data));
+      // O token de troca de senha (cookie da web no primeiro acesso) não vale como Bearer.
+      const savedCookie = cookie; cookie = "";
+      const changeLogin = await api("POST", "/api/auth/login", { login: proEmail, password: proPassword });
+      const changeToken = cookie.split("=")[1]; cookie = savedCookie;
+      check("Bearer: sessão de primeiro acesso (passwordChangeOnly) não autentica rotas", changeLogin.data.passwordChangeRequired === true && (await callJson(changeToken, "GET", "/api/auth/me")).status === 401);
+      const staff = await loginAs(staffEmail, staffPassword);
+      await loginAs(proEmail, proPassword);
+      const staffMobile = await mobileLogin(staffEmail, `${staffPassword}-nova`);
+      check("mobile: STAFF recebe 403 'O app é para a equipe clínica.' sem token", staffMobile.status === 403 && staffMobile.data.message === "O app é para a equipe clínica." && !staffMobile.data.token, JSON.stringify(staffMobile.data));
+      const proMobile = await mobileLogin(proEmail, `${proPassword}-nova`);
+      check("mobile: PROFESSIONAL entra e envia foto", proMobile.status === 200 && proMobile.data.user.role === "PROFESSIONAL" && (await upload(proMobile.data.token, patient.id, small)).status === 201, proMobile.status);
+      const beforeStaff = await prisma.evaluationPhoto.count({ where: { evaluation: { patientId: patient.id } } });
+      const staffUpload = await withSession(staff.cookie, async () => (await fetch(`${baseUrl}${url}`, { method: "POST", headers: { cookie }, body: makeForm(small) })).status);
+      check("upload: STAFF (sessão web) recebe 403 e nada é gravado", staffUpload === 403 && (await prisma.evaluationPhoto.count({ where: { evaluation: { patientId: patient.id } } })) === beforeStaff, staffUpload);
+      const wrong = [];
+      for (let attempt = 0; attempt < 10; attempt += 1) wrong.push((await mobileLogin(staffEmail, "errada")).status);
+      const locked = await mobileLogin(staffEmail, `${staffPassword}-nova`);
+      check("mobile: 10 falhas devolvem 401 e a 11ª (mesmo com a senha certa) 429", wrong.every((status) => status === 401) && locked.status === 429 && !locked.data.token, `${wrong.join(",")} → ${locked.status}`);
+    } else check("usuários STAFF/PROFESSIONAL criados para testar o app", false, `team ${r.status}`);
+  } finally {
+    for (const member of [staffTeam, proTeam]) if (member) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [otherEmail, staffEmail, proEmail] } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: [otherEmail, staffEmail, proEmail] } } });
+  }
+}
+
+// App mobile, lacunas: login (bordas, bloqueio, papéis), Bearer x cookie, validações do envio, concorrência, escolha da avaliação, trial, miniaturas.
+async function mobilePhotosGaps() {
+  const sharp = (await import("sharp")).default;
+  const { SignJWT } = await import("jose");
+  const { hash } = await import("bcryptjs");
+  const jpg = (width, height, extra) => { const s = sharp({ create: { width, height, channels: 3, background: { r: 200, g: 120, b: 90 } } }); return (extra ? s.jpeg().withMetadata(extra) : s.jpeg()).toBuffer(); };
+  const mobileLogin = async (loginName, secret, rawBody) => {
+    const response = await fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: rawBody ?? JSON.stringify({ login: loginName, password: secret }) });
+    return { status: response.status, data: await response.json().catch(() => null), headers: response.headers };
+  };
+  const raw = async (headers, method, path, body) => { const response = await fetch(`${baseUrl}${path}`, { method, headers, body, redirect: "manual" }); const text = await response.text(); let data; try { data = JSON.parse(text); } catch { data = text.slice(0, 120); } return { status: response.status, data, headers: response.headers }; };
+  const bearer = (token) => ({ Authorization: `Bearer ${token}` });
+  const makeForm = (buffer, fields = {}, { type = "image/jpeg", filename = "foto.jpg", fileField = "file" } = {}) => {
+    const form = new FormData();
+    form.set(fileField, new Blob([buffer], { type }), filename);
+    for (const [key, value] of Object.entries({ width: "400", height: "300", ...fields })) if (value !== undefined) form.set(key, String(value));
+    return form;
+  };
+  const up = (token, patientId, buffer, fields, options) => raw(bearer(token), "POST", `/api/patients/${patientId}/evaluation/photos`, makeForm(buffer, fields, options));
+  const newPatient = async (label, n) => (await api("POST", "/api/patients", { name: `${label} ${run}`, phone: `1199999${String(n).padStart(4, "0")}`, age: 30 })).data.patient;
+  const imgUrl = (patientId, photoId, query = "") => `/api/patients/${patientId}/photos/${encodeURIComponent(`evaluation:${photoId}`)}/image${query}`;
+  const small = await jpg(400, 300);
+  const ownerToken = (await mobileLogin(email, password)).data.token;
+  const adminId = (await api("GET", "/api/auth/me")).data.user.id;
+  const clinicId = (await prisma.clinicMembership.findFirst({ where: { userId: adminId }, select: { clinicId: true } })).clinicId;
+
+  const proEmail = `e2e-gap-pro-${run}@example.com`, proPass = `E2e-${run}-GapPro9!`;
+  const staffEmail = `e2e-gap-staff-${run}@example.com`, staffPass = `E2e-${run}-GapStaff9!`;
+  const noClinicEmail = `e2e-gap-semclinica-${run}@example.com`;
+  const trialEmail = `e2e-gap-trial-${run}@example.com`, trialPass = `E2e-${run}-Trial9!`, trialClinic = `E2E Gap Trial ${run}`;
+  let proTeam = null, staffTeam = null;
+  try {
+    // ===== Login do app =====
+    let r = await mobileLogin("", "", "isto não é json");
+    const rArr = await mobileLogin("", "", "[]");
+    const rNum = await mobileLogin("", "", JSON.stringify({ login: 123, password: 456 }));
+    const rNoPass = await mobileLogin("", "", JSON.stringify({ login: email }));
+    const rNoUser = await mobileLogin("", "", JSON.stringify({ password: "x" }));
+    check("login mobile: corpo não-JSON, array, tipos errados e campo faltando devolvem 400", [r, rArr, rNum, rNoPass, rNoUser].every((x) => x.status === 400 && !x.data.token), [r, rArr, rNum, rNoPass, rNoUser].map((x) => x.status).join("/"));
+    r = await mobileLogin(`  ${email.toUpperCase()}  `, password);
+    check("login mobile: e-mail com MAIÚSCULAS e espaços nas pontas entra e devolve o e-mail normalizado", r.status === 200 && r.data.user.email === email, r.status);
+    check("login mobile: senha com espaço nas pontas NÃO é aparada (401)", (await mobileLogin(email, ` ${password} `)).status === 401);
+    const unknown = await mobileLogin(`nao-existe-${run}@example.com`, "qualquer");
+    const wrongKnown = await mobileLogin(email, "senha-errada-x");
+    check("login mobile: usuário inexistente e senha errada têm a mesma resposta (401, mesma mensagem, no-store)", unknown.status === 401 && wrongKnown.status === 401 && unknown.data.message === wrongKnown.data.message && /no-store/.test(unknown.headers.get("cache-control") ?? ""), `${unknown.status}/${wrongKnown.status}`);
+    check("login mobile: sucesso traz Cache-Control no-store; GET na rota devolve 405", /no-store/.test(r.headers.get("cache-control") ?? "") && (await raw({}, "GET", "/api/mobile/auth/login")).status === 405);
+    r = await api("POST", "/api/team", { name: "E2E Gap Pro", email: proEmail, password: proPass, role: "PROFESSIONAL" }); proTeam = r.status === 201 ? r.data.member : null;
+    r = await api("POST", "/api/team", { name: "E2E Gap Staff", email: staffEmail, password: staffPass, role: "STAFF" }); staffTeam = r.status === 201 ? r.data.member : null;
+    if (!proTeam || !staffTeam) { check("equipe de teste criada", false, r.status); return; }
+    const firstPro = await mobileLogin(proEmail, proPass);
+    const firstProWrong = await mobileLogin(proEmail, "errada");
+    check("login mobile: PROFESSIONAL no primeiro acesso, senha certa = 403 passwordChangeRequired sem token; senha errada = 401", firstPro.status === 403 && firstPro.data.passwordChangeRequired === true && !firstPro.data.token && firstProWrong.status === 401, `${firstPro.status}/${firstProWrong.status}`);
+    await loginAs(proEmail, proPass); await loginAs(staffEmail, staffPass);
+    const proNew = `${proPass}-nova`, staffNew = `${staffPass}-nova`;
+    const staffWrong = await mobileLogin(staffEmail, "errada");
+    const staffRight = await mobileLogin(staffEmail, staffNew);
+    check("login mobile: STAFF com senha errada = 401 igual a qualquer usuário (não revela o papel); só com senha certa = 403", staffWrong.status === 401 && staffWrong.data.message === unknown.data.message && staffRight.status === 403 && !staffRight.data.token, `${staffWrong.status}/${staffRight.status}`);
+    await prisma.user.create({ data: { name: "Sem Clínica", email: noClinicEmail, passwordHash: await hash("SemClinica#1", 10), role: "ADMIN", emailVerifiedAt: new Date() } });
+    const nc = await mobileLogin(noClinicEmail, "SemClinica#1");
+    check("login mobile: usuário sem clínica = 403 sem token; senha errada dele = 401", nc.status === 403 && !nc.data.token && (await mobileLogin(noClinicEmail, "x")).status === 401, nc.status);
+
+    // ===== Bearer x cookie =====
+    const proToken = (await mobileLogin(proEmail, proNew)).data.token;
+    const authSecret = process.env.AUTH_SECRET ?? "";
+    const nowS = Math.floor(Date.now() / 1000);
+    const forge = (secret, payload, exp) => new SignJWT(payload).setProtectedHeader({ alg: "HS256" }).setIssuedAt(nowS - 7200).setExpirationTime(exp).sign(new TextEncoder().encode(secret));
+    const expired = authSecret.length >= 32 ? await forge(authSecret, { userId: adminId }, nowS - 3600) : null;
+    const otherSecret = await forge("outro-segredo-qualquer-com-mais-de-32-bytes!!", { userId: adminId }, nowS + 3600);
+    const noUserId = authSecret.length >= 32 ? await forge(authSecret, { foo: 1 }, nowS + 3600) : null;
+    const ghostUser = authSecret.length >= 32 ? await forge(authSecret, { userId: "usuario-inexistente" }, nowS + 3600) : null;
+    const noneAlg = `${Buffer.from('{"alg":"none"}').toString("base64url")}.${Buffer.from(JSON.stringify({ userId: adminId })).toString("base64url")}.`;
+    const meWith = (headers) => raw(headers, "GET", "/api/auth/me");
+    const rejected = [];
+    for (const [label, token] of [["expirado", expired], ["outro segredo", otherSecret], ["sem userId", noUserId], ["userId inexistente", ghostUser], ["alg none", noneAlg], ["token de 5000 chars", "a".repeat(5000)]]) if (token) rejected.push([label, (await meWith(bearer(token))).status]);
+    check(`Bearer: tokens ruins devolvem 401 (${authSecret.length >= 32 ? "AUTH_SECRET disponível" : "SEM AUTH_SECRET no ambiente do teste: expirado não testado"})`, rejected.length >= 3 && rejected.every(([, status]) => status === 401), JSON.stringify(rejected));
+    const hdr = [["bearer minúsculo", { Authorization: `bearer ${ownerToken}` }, 200], ["BEARER maiúsculo", { Authorization: `BEARER ${ownerToken}` }, 200], ["Bearer vazio", { Authorization: "Bearer " }, 401], ["só Bearer", { Authorization: "Bearer" }, 401], ["header vazio", { Authorization: "" }, 401], ["esquema Basic", { Authorization: `Basic ${ownerToken}` }, 401], ["dois espaços", { Authorization: `Bearer  ${ownerToken}` }, 401], ["token + lixo", { Authorization: `Bearer ${ownerToken} x` }, 401], ["sem esquema", { Authorization: ownerToken }, 401]];
+    const hdrOut = [];
+    for (const [label, headers, want] of hdr) hdrOut.push([label, (await meWith(headers)).status, want]);
+    check("Bearer: esquema não diferencia caixa; vazio, sem esquema, Basic e formatos estranhos = 401", hdrOut.every(([, got, want]) => got === want), JSON.stringify(hdrOut.filter(([, got, want]) => got !== want)));
+    const both = await meWith({ ...bearer(ownerToken), cookie });
+    const conflict = await meWith({ ...bearer(proToken), cookie });
+    const staleCookie = await meWith({ ...bearer(ownerToken), cookie: "harmonize_session=lixo" });
+    check("Bearer x cookie: ambos do mesmo usuário = 200; em conflito o COOKIE vence (admin, não o profissional)", both.status === 200 && conflict.status === 200 && conflict.data.user.id === adminId, `${both.status}/${conflict.status} ${conflict.data.user?.email}`);
+    const expiredCookie = expired ? await meWith({ ...bearer(ownerToken), cookie: `harmonize_session=${expired}` }) : { status: 200 };
+    const badBoth = await meWith({ ...bearer("lixo"), cookie: "harmonize_session=lixo" });
+    check("Bearer x cookie: cookie inválido ou expirado cai para o Bearer válido (200); os dois inválidos = 401", staleCookie.status === 200 && expiredCookie.status === 200 && badBoth.status === 401, `${staleCookie.status}/${expiredCookie.status}/${badBoth.status}`);
+    const gapPatient = await newPatient("Gap Bearer", 1);
+    const pid = gapPatient.id;
+    const one = await up(ownerToken, pid, small, { category: "Frontal" });
+    const eId = one.data.evaluation.id;
+    const routes = [["GET", "/api/auth/me"], ["GET", "/api/patients/lookup?q=Gap%20Bearer"], ["GET", "/api/patients"], ["GET", `/api/patients/${pid}`], ["GET", `/api/patients/${pid}/photos`], ["GET", `/api/patients/${pid}/evaluation`], ["GET", `/api/patients/${pid}/evaluation?evaluationId=${eId}`], ["GET", imgUrl(pid, one.data.photo.id)]];
+    const withB = [], without = [];
+    for (const [m, p] of routes) { withB.push((await raw(bearer(ownerToken), m, p)).status); without.push((await raw({}, m, p)).status); }
+    check("Bearer: me, lookup, lista de pacientes, paciente, photos, evaluation (lista e id) e image = 200; sem credencial = 401", withB.every((s) => s === 200) && without.every((s) => s === 401), `${withB.join(",")} | ${without.join(",")}`);
+    check("Bearer: token de PROFESSIONAL lê as fotos da clínica (200)", (await raw(bearer(proToken), "GET", `/api/patients/${pid}/photos`)).status === 200);
+    const staffCookie = (await loginAs(staffEmail, staffNew)).cookie;
+    const staffReads = await withSession(staffCookie, async () => [(await api("GET", `/api/patients/${pid}/photos`)).status, (await api("GET", `/api/patients/${pid}/evaluation`)).status]);
+    check("STAFF (cookie) segue sem ver fotos/avaliação (403) mesmo com fotos do app", staffReads.every((s) => s === 403), staffReads.join(","));
+
+    // ===== Envio: formatos, tamanhos, tipos =====
+    const pTypes = await newPatient("Gap Tipos", 2);
+    const png = await sharp({ create: { width: 64, height: 64, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toBuffer();
+    const webp = await sharp({ create: { width: 64, height: 64, channels: 3, background: { r: 10, g: 20, b: 200 } } }).webp().toBuffer();
+    const ok3 = [await up(ownerToken, pTypes.id, small, { category: "Sorriso" }), await up(ownerToken, pTypes.id, png, { width: 64, height: 64 }, { type: "image/png", filename: "a.png" }), await up(ownerToken, pTypes.id, webp, { width: 64, height: 64 }, { type: "image/webp", filename: "a.webp" })];
+    const prefixes = (await prisma.evaluationPhoto.findMany({ where: { id: { in: ok3.map((x) => x.data.photo?.id).filter(Boolean) } }, orderBy: { sortOrder: "asc" }, select: { imageUrl: true } })).map((x) => x.imageUrl.slice(0, 22));
+    check("upload: JPEG, PNG e WebP válidos = 201 e a data URL guarda o MIME real", ok3.every((x) => x.status === 201) && prefixes[0]?.startsWith("data:image/jpeg;") && prefixes[1]?.startsWith("data:image/png;") && prefixes[2]?.startsWith("data:image/webp;"), `${ok3.map((x) => x.status)} ${prefixes.join("|")}`);
+    const noType = await up(ownerToken, pTypes.id, small, {}, { type: "", filename: "sem-tipo" });
+    const octet = await up(ownerToken, pTypes.id, small, {}, { type: "application/octet-stream", filename: "x.bin" });
+    check("upload: MIME declarado vazio ou application/octet-stream é aceito se o CONTEÚDO é imagem (201)", noType.status === 201 && octet.status === 201, `${noType.status}/${octet.status}`);
+    const pdf = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\n%%EOF");
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    const html = Buffer.from("<!doctype html><script>alert(1)</script>");
+    const gif = Buffer.concat([Buffer.from("GIF89a"), Buffer.alloc(20)]);
+    const bad415 = [["PDF .jpg/image/jpeg", pdf, "image/jpeg", "a.jpg"], ["PDF application/pdf", pdf, "application/pdf", "a.pdf"], ["SVG .jpg", svg, "image/jpeg", "a.jpg"], ["SVG image/svg+xml", svg, "image/svg+xml", "a.svg"], ["HTML .jpg", html, "image/jpeg", "a.jpg"], ["GIF", gif, "image/gif", "a.gif"], ["PNG dizendo webp", png, "image/webp", "a.webp"]];
+    const out415 = [];
+    for (const [label, buf, type, filename] of bad415) out415.push([label, (await up(ownerToken, pTypes.id, buf, {}, { type, filename })).status]);
+    check("upload: PDF, SVG, HTML, GIF e MIME divergente = 415", out415.every(([, s]) => s === 415), JSON.stringify(out415));
+    const empty = await up(ownerToken, pTypes.id, Buffer.alloc(0));
+    check("upload: arquivo vazio = 400", empty.status === 400, `${empty.status} ${empty.data.message}`);
+    const countTypes = await prisma.evaluationPhoto.count({ where: { evaluation: { patientId: pTypes.id } } });
+    check("upload: recusas não gravaram nada (só as 5 fotos válidas)", countTypes === 5, countTypes);
+    const exact = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(4 * 1024 * 1024 - 3)]);
+    const over = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(4 * 1024 * 1024 - 2)]);
+    const pBig = await newPatient("Gap 4MB", 3);
+    const rExact = await up(ownerToken, pBig.id, exact);
+    const rOver = await up(ownerToken, pBig.id, over);
+    check("upload: exatamente 4 MB = 201 e 4 MB + 1 byte = 413", rExact.status === 201 && rOver.status === 413 && (await prisma.evaluationPhoto.count({ where: { evaluation: { patientId: pBig.id } } })) === 1, `${rExact.status}/${rOver.status}`);
+    const garbageThumb = await fetch(`${baseUrl}${imgUrl(pBig.id, rExact.data.photo?.id, "?size=thumb")}`, { headers: bearer(ownerToken) });
+    const garbageBytes = Buffer.from(await garbageThumb.arrayBuffer());
+    check("miniatura: imagem corrompida (4 MB de zeros com cabeçalho JPEG) não dá 500; devolve o original", garbageThumb.status === 200 && garbageBytes.length === exact.length, `${garbageThumb.status} ${garbageBytes.length} ${garbageThumb.headers.get("content-type")}`);
+    const pBroken = await newPatient("Gap Quebrada", 4);
+    const brokenEval = await prisma.evaluation.create({ data: { patientId: pBroken.id, clinicId, professional: "x", status: "Rascunho" } });
+    const brokenPhotos = [];
+    for (const [label, url] of [["base64 lixo", "data:image/jpeg;base64,AAAA"], ["sem vírgula", "data:image/jpeg;base64"], ["texto", "nao-e-data-url"], ["vazia", ""]]) brokenPhotos.push([label, await prisma.evaluationPhoto.create({ data: { evaluationId: brokenEval.id, name: label, imageUrl: url, width: 10, height: 10, category: "Outra", sortOrder: brokenPhotos.length, annotations: "[]" } })]);
+    const brokenOut = [];
+    for (const [label, row] of brokenPhotos) brokenOut.push([label, (await raw(bearer(ownerToken), "GET", imgUrl(pBroken.id, row.id, "?size=thumb"))).status]);
+    check("miniatura: foto corrompida no banco nunca devolve 5xx", brokenOut.every(([, s]) => s < 500), JSON.stringify(brokenOut));
+
+    // ===== Envio: campos =====
+    const pFields = await newPatient("Gap Campos", 5);
+    const notMultipart = await raw({ ...bearer(ownerToken), "Content-Type": "application/json" }, "POST", `/api/patients/${pFields.id}/evaluation/photos`, JSON.stringify({ width: 10, height: 10 }));
+    const chunked = await fetch(`${baseUrl}/api/patients/${pFields.id}/evaluation/photos`, { method: "POST", headers: bearer(ownerToken), body: new Response(makeForm(small)).body, duplex: "half" }).catch(() => ({ status: "erro" }));
+    check("upload: corpo JSON = 400; multipart sem Content-Length (chunked) = 413", notMultipart.status === 400 && (chunked.status === 413 || chunked.status === "erro"), `${notMultipart.status}/${chunked.status}`);
+    const wrongField = await up(ownerToken, pFields.id, small, {}, { fileField: "photo" });
+    const stringFile = new FormData(); stringFile.set("file", "texto"); stringFile.set("width", "10"); stringFile.set("height", "10");
+    const noHeight = await up(ownerToken, pFields.id, small, { height: undefined });
+    const noBoth = await up(ownerToken, pFields.id, small, { width: undefined, height: undefined });
+    check("upload: campo do arquivo com outro nome, arquivo como texto, sem height, sem width/height = 400", wrongField.status === 400 && (await raw(bearer(ownerToken), "POST", `/api/patients/${pFields.id}/evaluation/photos`, stringFile)).status === 400 && noHeight.status === 400 && noBoth.status === 400, `${wrongField.status}/${noHeight.status}/${noBoth.status}`);
+    const dimBad = [["width 0", { width: "0" }], ["width -5", { width: "-5" }], ["height -1", { height: "-1" }], ["width 9000", { width: "9000" }], ["8001", { width: "8001" }], ["8000x8000", { width: "8000", height: "8000" }], ["5000x5001", { width: "5000", height: "5001" }], ["1e3", { width: "1e3" }], ["0x10", { width: "0x10" }], ["texto", { width: "abc" }], ["vazio", { width: "" }], ["123456", { width: "123456" }], ["+400", { width: "+400" }], ["400.0", { width: "400.0" }]];
+    const dimOut = [];
+    for (const [label, f] of dimBad) dimOut.push([label, (await up(ownerToken, pFields.id, small, f)).status]);
+    check("upload: dimensões inválidas (0, negativo, >8000, produto >25 MP, 1e3, hex, texto, vazio, 6 dígitos, +, decimal) = 400", dimOut.every(([, s]) => s === 400), JSON.stringify(dimOut.filter(([, s]) => s !== 400)));
+    const big25 = await jpg(5000, 5000), wide = await jpg(8000, 3125), onePx = await jpg(1, 1);
+    const dimOk = [await up(ownerToken, pFields.id, big25, { width: "5000", height: "5000" }), await up(ownerToken, pFields.id, wide, { width: "8000", height: "3125" }), await up(ownerToken, pFields.id, small, { width: " 400 ", height: "00300" }), await up(ownerToken, pFields.id, onePx, { width: "1", height: "1" })];
+    check("upload: bordas válidas com imagem real (5000x5000 = 25 MP, 8000x3125, espaços/zeros à esquerda, 1x1) = 201", dimOk.every((x) => x.status === 201), dimOk.map((x) => x.status).join(","));
+    const mismatch = await up(ownerToken, pFields.id, small, { width: "5000", height: "5000" });
+    const near = await up(ownerToken, pFields.id, small, { width: "410", height: "305" });
+    const swapped = await up(ownerToken, pFields.id, small, { width: "300", height: "400" });
+    const far = await up(ownerToken, pFields.id, small, { width: "500", height: "300" });
+    const dbDims = await prisma.evaluationPhoto.findMany({ where: { id: { in: [near.data.photo?.id, swapped.data.photo?.id].filter(Boolean) } }, select: { id: true, width: true, height: true } });
+    check("upload: dimensão declarada x real — 5000x5000 p/ JPEG 400x300 = 400; 410x305 (dentro de 10%) e 300x400 (lados trocados) = 201 gravando as REAIS 400x300; 500x300 = 400", mismatch.status === 400 && near.status === 201 && swapped.status === 201 && far.status === 400 && dbDims.length === 2 && dbDims.every((z) => z.width === 400 && z.height === 300) && near.data.photo.width === 400, `${mismatch.status}/${near.status}/${swapped.status}/${far.status} ${JSON.stringify(dbDims)}`);
+    const huge = await up(ownerToken, pFields.id, await jpg(9000, 100), { width: "9000", height: "100" });
+    const hugeLie = await up(ownerToken, pFields.id, await jpg(9000, 100), { width: "400", height: "300" });
+    check("upload: imagem real com lado > 8000 = 400, declarando certo ou mentindo", huge.status === 400 && hugeLie.status === 400, `${huge.status}/${hugeLie.status}`);
+    const catOut = [];
+    for (const [label, f, want] of [["sem category", {}, "Outra"], ["category vazia", { category: "" }, "Outra"], ["category com espaços", { category: " Frontal " }, "Frontal"], ["Perfil esquerdo", { category: "Perfil esquerdo" }, "Perfil esquerdo"]]) { const x = await up(ownerToken, pFields.id, small, f); catOut.push([label, x.status, x.data.photo?.category === want]); }
+    const catBad = [await up(ownerToken, pFields.id, small, { category: "frontal" }), await up(ownerToken, pFields.id, small, { category: "Costas" }), await up(ownerToken, pFields.id, small, { category: "Frontal; DROP" })];
+    check("upload: category ausente/vazia assume \"Outra\" (201), espaços são aparados, valor desconhecido ou de outra caixa = 400", catOut.every(([, s, ok]) => s === 201 && ok) && catBad.every((x) => x.status === 400), JSON.stringify(catOut) + catBad.map((x) => x.status));
+    const longName = await up(ownerToken, pFields.id, small, { name: "A".repeat(1000) });
+    const pathName = await up(ownerToken, pFields.id, small, { name: "../../etc/passwd.jpg" });
+    const xssName = await up(ownerToken, pFields.id, small, { name: "<img src=x onerror=alert(1)>.png" });
+    const fallbackName = await up(ownerToken, pFields.id, small, {}, { filename: "Minha Foto 1.JPG" });
+    check("upload: name longo é cortado em 160, caminho vira só o arquivo, <>:\"|?* são removidos, sem name usa o nome do arquivo sem extensão", longName.status === 201 && longName.data.photo.name.length === 160 && pathName.data.photo?.name === "passwd" && !/[<>]/.test(xssName.data.photo?.name ?? "<") && fallbackName.data.photo?.name === "Minha Foto 1", `${longName.data.photo?.name.length} ${pathName.data.photo?.name} ${xssName.data.photo?.name} ${fallbackName.data.photo?.name}`);
+    const evalsFields = await prisma.evaluation.count({ where: { patientId: pFields.id } });
+    const orders = (await prisma.evaluationPhoto.findMany({ where: { evaluation: { patientId: pFields.id } }, select: { sortOrder: true } })).map((z) => z.sortOrder).sort((a, b) => a - b);
+    check("upload: toda a sequência acima ficou em 1 avaliação com sortOrder contíguo 0..n-1", evalsFields === 1 && orders.every((value, index) => value === index), `${evalsFields} ${orders.join(",")}`);
+
+    // ===== Envio: avaliação alvo =====
+    const pT = await newPatient("Gap Alvo", 6);
+    const pOther = await newPatient("Gap Alvo Outro", 7);
+    const otherEval = (await up(ownerToken, pOther.id, small)).data.evaluation;
+    const crossPatient = await up(ownerToken, pT.id, small, { evaluationId: otherEval.id });
+    check("upload: evaluationId de OUTRO paciente da mesma clínica = 404 e nada gravado", crossPatient.status === 404 && (await prisma.evaluationPhoto.count({ where: { evaluation: { patientId: pT.id } } })) === 0, crossPatient.status);
+    const otherJourney = await prisma.patientJourney.findFirst({ where: { patientId: pOther.id } });
+    const jOther = await up(ownerToken, pT.id, small, { journeyId: otherJourney.id });
+    check("upload: journeyId de outro paciente = 404 e nenhuma avaliação criada", jOther.status === 404 && (await prisma.evaluation.count({ where: { patientId: pT.id } })) === 0, `${jOther.status} jornadas=${await prisma.patientJourney.count({ where: { patientId: pT.id } })}`);
+    const d1 = (await api("PUT", `/api/patients/${pT.id}/evaluation`, { photos: [] })).data.evaluation;
+    const d2 = (await api("PUT", `/api/patients/${pT.id}/evaluation`, { photos: [] })).data.evaluation;
+    let x = await up(ownerToken, pT.id, small);
+    check("upload: sem evaluationId e com 2 rascunhos, usa o MAIS RECENTE (updatedAt)", x.status === 201 && x.data.evaluation.id === d2.id, `${x.data.evaluation?.id === d2.id ? "d2" : x.data.evaluation?.id === d1.id ? "d1" : "?"}`);
+    x = await up(ownerToken, pT.id, small, { evaluationId: d1.id });
+    check("upload: evaluationId do rascunho ANTIGO é respeitado (foto vai para ele)", x.status === 201 && x.data.evaluation.id === d1.id && x.data.evaluation.photoCount === 1, JSON.stringify(x.data.evaluation));
+    x = await up(ownerToken, pT.id, small);
+    console.log(`NOTA: depois de enviar para o rascunho antigo ele vira o "mais recente" (updatedAt tocado): o envio seguinte sem evaluationId foi para ${x.data.evaluation.id === d1.id ? "d1 (o antigo)" : "d2"}.`);
+    const pC = await newPatient("Gap Concluida", 8);
+    const draftOld = (await api("PUT", `/api/patients/${pC.id}/evaluation`, { photos: [] })).data.evaluation;
+    const doneNew = (await api("PUT", `/api/patients/${pC.id}/evaluation`, { photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
+    x = await up(ownerToken, pC.id, small);
+    check("upload: última avaliação Concluída + rascunho mais antigo => usa o rascunho, nunca a concluída", x.status === 201 && x.data.evaluation.id === draftOld.id && (await prisma.evaluationPhoto.count({ where: { evaluationId: doneNew.id } })) === 0, JSON.stringify(x.data.evaluation));
+    const pD = await newPatient("Gap SoConcluida", 9);
+    await api("PUT", `/api/patients/${pD.id}/evaluation`, { photos: [], assessment: fullAssessment, status: "Concluída" });
+    const journeysBefore = await prisma.patientJourney.count({ where: { patientId: pD.id } });
+    x = await up(ownerToken, pD.id, small);
+    const journeysAfter = await prisma.patientJourney.count({ where: { patientId: pD.id } });
+    const newEval = await prisma.evaluation.findUnique({ where: { id: x.data.evaluation.id }, select: { journeyId: true } });
+    const oldEval = await prisma.evaluation.findFirst({ where: { patientId: pD.id, status: "Concluída" }, select: { journeyId: true } });
+    check("upload: só há concluída => cria rascunho NOVO na MESMA jornada, sem jornada duplicada", x.status === 201 && x.data.evaluation.created && journeysBefore === 1 && journeysAfter === 1 && newEval.journeyId === oldEval.journeyId, `jornadas ${journeysBefore}->${journeysAfter}`);
+    const pJ = await newPatient("Gap Jornadas", 10);
+    const profId = (await api("GET", "/api/team/professionals")).data.professionals?.[0]?.id;
+    const j1 = (await api("POST", `/api/patients/${pJ.id}/journeys`, { name: `J1 ${run}`, professionalId: profId })).data.journey;
+    const j2 = (await api("POST", `/api/patients/${pJ.id}/journeys`, { name: `J2 ${run}`, professionalId: profId })).data.journey;
+    const inJ2 = await up(ownerToken, pJ.id, small, { journeyId: j2.id });
+    const noJ = await up(ownerToken, pJ.id, small);
+    const evJ = async (id) => (await prisma.evaluation.findUnique({ where: { id }, select: { journeyId: true } })).journeyId;
+    check("upload: journeyId escolhe a jornada; sem journeyId vai para a ativa mais antiga; jornadas não duplicam", inJ2.status === 201 && (await evJ(inJ2.data.evaluation.id)) === j2.id && noJ.status === 201 && (await evJ(noJ.data.evaluation.id)) === j1.id && noJ.data.evaluation.id !== inJ2.data.evaluation.id && (await prisma.patientJourney.count({ where: { patientId: pJ.id } })) === 2, `${inJ2.status}/${noJ.status}`);
+    const mism = await up(ownerToken, pJ.id, small, { evaluationId: inJ2.data.evaluation.id, journeyId: j1.id });
+    check("upload: evaluationId + journeyId de outra jornada = 400", mism.status === 400, mism.status);
+    await prisma.patientJourney.update({ where: { id: j2.id }, data: { archivedAt: new Date() } });
+    check("upload: journeyId de jornada arquivada = 404", (await up(ownerToken, pJ.id, small, { journeyId: j2.id })).status === 404);
+
+    // ===== Limite de 20 e remoção =====
+    const p20 = await newPatient("Gap Vinte", 11);
+    const tiny = `data:image/jpeg;base64,${small.toString("base64")}`;
+    const mk = (n) => Array.from({ length: n }, (_, index) => ({ name: `f${index}`, imageUrl: tiny, width: 400, height: 300, category: "Outra", sortOrder: index }));
+    const ev20 = (await api("PUT", `/api/patients/${p20.id}/evaluation`, { photos: mk(19) })).data.evaluation;
+    const race20 = await Promise.all(Array.from({ length: 4 }, () => up(ownerToken, p20.id, small)));
+    const st20 = race20.map((y) => y.status).sort();
+    const rows20 = await prisma.evaluationPhoto.findMany({ where: { evaluationId: ev20.id }, select: { id: true, sortOrder: true }, orderBy: { sortOrder: "asc" } });
+    check("limite: 4 envios simultâneos com 19 fotos => exatamente 1x 201 e 3x 409; total 20, sortOrder único", st20.join(",") === "201,409,409,409" && rows20.length === 20 && new Set(rows20.map((z) => z.sortOrder)).size === 20, `${st20} total=${rows20.length}`);
+    const current = (await api("GET", `/api/patients/${p20.id}/evaluation?evaluationId=${ev20.id}`)).data.evaluation;
+    const keep = current.photos.filter((photo) => photo.id !== rows20[5].id).map((photo) => ({ id: photo.id, name: photo.name, imageUrl: photo.imageUrl, width: photo.width, height: photo.height, category: photo.category, sortOrder: photo.sortOrder, annotations: photo.annotations }));
+    const put19 = await api("PUT", `/api/patients/${p20.id}/evaluation`, { evaluationId: ev20.id, photos: keep });
+    const again = await up(ownerToken, p20.id, small);
+    const again2 = await up(ownerToken, p20.id, small);
+    check("limite: remover 1 (PUT 19) volta a aceitar 1 envio (sortOrder = máximo + 1) e o seguinte é 409", put19.status === 200 && again.status === 201 && again.data.photo.sortOrder === 20 && again2.status === 409, `${put19.status}/${again.status} so=${again.data.photo?.sortOrder}/${again2.status}`);
+
+    // ===== Concorrência =====
+    const pRace = await newPatient("Gap Corrida", 12);
+    const first = await up(ownerToken, pRace.id, small);
+    const race10 = await Promise.all(Array.from({ length: 10 }, (_, i) => up(ownerToken, pRace.id, small, { name: `c${i}` })));
+    const ord10 = (await prisma.evaluationPhoto.findMany({ where: { evaluation: { patientId: pRace.id } }, select: { sortOrder: true } })).map((z) => z.sortOrder).sort((a, b) => a - b);
+    check("concorrência: 10 envios com rascunho existente = 10x 201, 1 avaliação, sortOrder 0..10 únicos, nenhum created", race10.every((y) => y.status === 201 && !y.data.evaluation.created) && (await prisma.evaluation.count({ where: { patientId: pRace.id } })) === 1 && ord10.join(",") === Array.from({ length: 11 }, (_, i) => i).join(","), `${race10.map((y) => y.status)} ${ord10}`);
+    const pRace2 = await newPatient("Gap Corrida2", 13);
+    const race10n = await Promise.all(Array.from({ length: 10 }, (_, i) => up(ownerToken, pRace2.id, small, { name: `n${i}` })));
+    const ord10n = (await prisma.evaluationPhoto.findMany({ where: { evaluation: { patientId: pRace2.id } }, select: { sortOrder: true } })).map((z) => z.sortOrder).sort((a, b) => a - b);
+    check("concorrência: 10 envios SEM rascunho/jornada = 10x 201, 1 avaliação, 1 jornada, 1 created, sortOrder 0..9", race10n.every((y) => y.status === 201) && race10n.filter((y) => y.data.evaluation.created).length === 1 && (await prisma.evaluation.count({ where: { patientId: pRace2.id } })) === 1 && (await prisma.patientJourney.count({ where: { patientId: pRace2.id } })) === 1 && ord10n.join(",") === "0,1,2,3,4,5,6,7,8,9", `${race10n.map((y) => y.status)} ${ord10n}`);
+    const pa = await newPatient("Gap ParA", 14), pb = await newPatient("Gap ParB", 15);
+    const par = await Promise.all([...Array.from({ length: 5 }, () => up(ownerToken, pa.id, small)), ...Array.from({ length: 5 }, () => up(ownerToken, pb.id, small))]);
+    const evA = await prisma.evaluation.findMany({ where: { patientId: pa.id }, select: { id: true, _count: { select: { photos: true } } } });
+    const evB = await prisma.evaluation.findMany({ where: { patientId: pb.id }, select: { id: true, _count: { select: { photos: true } } } });
+    check("concorrência: 2 pacientes em paralelo (5+5) = 10x 201, cada um com 1 avaliação e 5 fotos, sem mistura", par.every((y) => y.status === 201) && evA.length === 1 && evB.length === 1 && evA[0]._count.photos === 5 && evB[0]._count.photos === 5 && evA[0].id !== evB[0].id, `${par.map((y) => y.status)}`);
+    const raceId = await Promise.all(Array.from({ length: 6 }, () => up(ownerToken, pRace.id, small, { evaluationId: first.data.evaluation.id })));
+    check("concorrência: 6 envios com evaluationId explícito sobre 11 fotos => 6x 201 e sortOrder único (17 fotos)", raceId.every((y) => y.status === 201) && new Set((await prisma.evaluationPhoto.findMany({ where: { evaluationId: first.data.evaluation.id }, select: { sortOrder: true } })).map((z) => z.sortOrder)).size === 17);
+
+    // ===== Leitura e auditoria =====
+    const idx = await raw(bearer(ownerToken), "GET", `/api/patients/${pRace.id}/photos`);
+    const entry = (idx.data.photos ?? []).find((z) => z.id === `evaluation:${first.data.photo.id}`);
+    check("photos index: foto do app aparece com source \"evaluation\", sem base64", idx.status === 200 && entry?.source === "evaluation" && !JSON.stringify(idx.data).includes("base64"), `${idx.status} ${JSON.stringify(entry)?.slice(0, 160)}`);
+    const upAudit = await prisma.clinicalFileAudit.findFirst({ where: { patientId: pRace.id, action: "UPLOAD", fileId: `evaluation:${first.data.photo.id}` } });
+    check("auditoria UPLOAD: clínica, paciente, ator (id/nome), categoria e nome preenchidos", upAudit?.clinicId === clinicId && upAudit.actorId === adminId && upAudit.actorName === "E2E Admin" && upAudit.fileKind === "PHOTO" && upAudit.category === "Outra" && upAudit.fileName.length > 0, JSON.stringify(upAudit));
+    const proId = (await prisma.user.findUnique({ where: { email: proEmail }, select: { id: true } })).id;
+    const v1 = await fetch(`${baseUrl}${imgUrl(pRace.id, first.data.photo.id, "?size=thumb")}`, { headers: bearer(proToken) });
+    await v1.arrayBuffer();
+    const viewAudit = await prisma.clinicalFileAudit.findFirst({ where: { patientId: pRace.id, action: "VIEW", fileId: `evaluation:${first.data.photo.id}` } });
+    check("auditoria VIEW pela miniatura com Bearer: ator = quem usou o token (PROFESSIONAL)", v1.status === 200 && viewAudit?.actorId === proId && viewAudit.clinicId === clinicId, JSON.stringify(viewAudit));
+    const dl = await fetch(`${baseUrl}${imgUrl(pRace.id, first.data.photo.id, "?size=thumb&download=1")}`, { headers: bearer(ownerToken) });
+    const dlBytes = Buffer.from(await dl.arrayBuffer());
+    const dlAudit = await prisma.clinicalFileAudit.count({ where: { patientId: pRace.id, action: "DOWNLOAD", fileId: `evaluation:${first.data.photo.id}` } });
+    check("miniatura: size=thumb&download=1 baixa o ORIGINAL (attachment) e audita DOWNLOAD", dl.status === 200 && dlBytes.equals(small) && /attachment/.test(dl.headers.get("content-disposition") ?? "") && dlAudit === 1, `${dl.status} ${dlBytes.length} ${dlAudit}`);
+
+    // ===== Miniaturas =====
+    const pTh = await newPatient("Gap Thumb", 16);
+    const thumbOf = async (buffer, type, filename, w = 400, h = 300) => {
+      const created = await up(ownerToken, pTh.id, buffer, { width: w, height: h }, { type, filename });
+      const response = await fetch(`${baseUrl}${imgUrl(pTh.id, created.data.photo.id, "?size=thumb")}`, { headers: bearer(ownerToken) });
+      const bytes = Buffer.from(await response.arrayBuffer());
+      return { response, bytes, meta: await sharp(bytes).metadata().catch(() => ({})), id: created.data.photo.id };
+    };
+    const rgba = await sharp({ create: { width: 800, height: 600, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).composite([{ input: await sharp({ create: { width: 200, height: 200, channels: 3, background: { r: 255, g: 0, b: 0 } } }).png().toBuffer(), left: 300, top: 200 }]).png().toBuffer();
+    const t1 = await thumbOf(rgba, "image/png", "t.png", 800, 600);
+    const corner = await sharp(t1.bytes).extract({ left: 2, top: 2, width: 1, height: 1 }).raw().toBuffer();
+    check("miniatura: PNG 800x600 com transparência => JPEG 480x360", t1.response.status === 200 && t1.meta.format === "jpeg" && t1.meta.width === 480 && t1.meta.height === 360, `${t1.meta.format} ${t1.meta.width}x${t1.meta.height}`);
+    console.log(`NOTA: miniatura de PNG transparente é JPEG (sem alfa); pixel do canto (era transparente) = rgb(${[...corner].join(",")}).`);
+    const t2 = await thumbOf(await sharp({ create: { width: 1000, height: 500, channels: 3, background: { r: 1, g: 2, b: 3 } } }).webp().toBuffer(), "image/webp", "t.webp", 1000, 500);
+    const t3 = await thumbOf(await jpg(600, 1200), "image/jpeg", "t.jpg", 600, 1200);
+    const t4 = await thumbOf(await jpg(480, 480), "image/jpeg", "t.jpg", 480, 480);
+    const t5 = await thumbOf(await jpg(481, 100), "image/jpeg", "t.jpg", 481, 100);
+    const t6 = await thumbOf(await jpg(800, 400, { orientation: 6 }), "image/jpeg", "t.jpg", 800, 400);
+    const dims = (t) => `${t.meta.width}x${t.meta.height}`;
+    check("miniatura: WebP 1000x500 = 480x240; retrato 600x1200 = 240x480; 480x480 fica igual; 481x100 = 480x100; EXIF orientation respeitado (800x400 rot.6 = 240x480)", t2.response.status === 200 && t2.meta.format === "jpeg" && dims(t2) === "480x240" && dims(t3) === "240x480" && dims(t4) === "480x480" && dims(t5) === "480x100" && dims(t6) === "240x480", [t2, t3, t4, t5, t6].map(dims).join(" "));
+    const hd = t1.response.headers;
+    check("miniatura: cabeçalhos (Content-Length = corpo, private no-store, Vary com Authorization, nosniff)", Number(hd.get("content-length")) === t1.bytes.length && hd.get("cache-control") === "private, no-store" && /Authorization/i.test(hd.get("vary") ?? "") && hd.get("x-content-type-options") === "nosniff", `${hd.get("content-length")}/${t1.bytes.length} ${hd.get("cache-control")} ${hd.get("vary")}`);
+    const sizes = [];
+    for (const q of ["?size=THUMB", "?size=", "?size=thumb%20", "?size=full", "?size=0"]) sizes.push([q, (await raw(bearer(ownerToken), "GET", imgUrl(pTh.id, t1.id, q))).status]);
+    check("miniatura: size diferente de \"thumb\" (THUMB, vazio, espaço, full, 0) = 400", sizes.every(([, s]) => s === 400), JSON.stringify(sizes));
+    const viaCookie = await fetch(`${baseUrl}${imgUrl(pTh.id, t1.id, "?size=thumb")}`, { headers: { cookie } });
+    check("miniatura: cookie da web também recebe a miniatura (JPEG pequeno)", viaCookie.status === 200 && viaCookie.headers.get("content-type") === "image/jpeg" && (await viaCookie.arrayBuffer()).byteLength === t1.bytes.length);
+    const bomb = await sharp({ create: { width: 7000, height: 7000, channels: 3, background: { r: 9, g: 9, b: 9 } } }).png({ compressionLevel: 9 }).toBuffer();
+    const bombViaApi = await up(ownerToken, pTh.id, bomb, { width: "7000", height: "7000" });
+    check("upload: PNG real de 49 MP (7000x7000, declarado certo) = 400 (acima de 25 MP)", bombViaApi.status === 400, bombViaApi.status);
+    // Se algo acima de 40 MP chegar ao banco por outro caminho, a miniatura não pode dar 5xx.
+    const bombEval = await prisma.evaluation.create({ data: { patientId: pTh.id, clinicId, professional: "x", status: "Concluída" } });
+    const bombRow = await prisma.evaluationPhoto.create({ data: { evaluationId: bombEval.id, name: "bomba", imageUrl: `data:image/png;base64,${bomb.toString("base64")}`, width: 10, height: 10, category: "Outra", sortOrder: 0, annotations: "[]" } });
+    const tb = await fetch(`${baseUrl}${imgUrl(pTh.id, bombRow.id, "?size=thumb")}`, { headers: bearer(ownerToken) });
+    const tbBytes = Buffer.from(await tb.arrayBuffer());
+    console.log(`NOTA: PNG 7000x7000 (49 MP, ${bomb.length} bytes) no banco: miniatura => ${tb.status} ${tb.headers.get("content-type")} ${tbBytes.length} bytes (${tbBytes.length === bomb.length ? "devolveu o ORIGINAL" : "reduzida"}).`);
+    check("miniatura: imagem acima de 40 MP no banco não derruba (nunca 5xx)", tb.status < 500, tb.status);
+
+    // ===== PUT do editor web com fotos do app =====
+    const pE = await newPatient("Gap Editor", 17);
+    const a1 = await up(ownerToken, pE.id, small, { category: "Frontal" });
+    const a2 = await up(ownerToken, pE.id, small, { category: "Sorriso" });
+    const ed = a1.data.evaluation.id;
+    const snapshot = (await api("GET", `/api/patients/${pE.id}/evaluation?evaluationId=${ed}`)).data.evaluation;
+    const asEditor = (photos) => photos.map((photo, index) => ({ id: photo.id, name: photo.name, imageUrl: photo.imageUrl, width: photo.width, height: photo.height, category: photo.category, sortOrder: index, annotations: [{ type: "arrow" }] }));
+    const putSame = await api("PUT", `/api/patients/${pE.id}/evaluation`, { evaluationId: ed, photos: asEditor(snapshot.photos), assessment: { chiefComplaint: "Queixa web" } });
+    const afterPut = await prisma.evaluationPhoto.findMany({ where: { evaluationId: ed }, orderBy: { sortOrder: "asc" }, select: { id: true, annotations: true } });
+    check("editor web: PUT com as fotos do app (ids mantidos) = 200, fotos e ids preservados, anotações gravadas, imagem ainda servida", putSame.status === 200 && afterPut.map((z) => z.id).join() === `${a1.data.photo.id},${a2.data.photo.id}` && afterPut[0].annotations.includes("arrow") && (await raw(bearer(ownerToken), "GET", imgUrl(pE.id, a1.data.photo.id))).status === 200, `${putSame.status} ${afterPut.length}`);
+    const a3 = await up(ownerToken, pE.id, small, { category: "Outra" });
+    const putStale = await api("PUT", `/api/patients/${pE.id}/evaluation`, { evaluationId: ed, photos: asEditor(snapshot.photos) });
+    const lost = (await prisma.evaluationPhoto.count({ where: { id: a3.data.photo.id } })) === 0;
+    console.log(`NOTA (descarte conhecido): editor com GET antigo + upload do app + PUT/autosave do editor => foto do app ${lost ? "DESCARTADA" : "preservada"} (PUT ${putStale.status}).`);
+    check("editor web: PUT com GET desatualizado devolve 200 (foto do app enviada depois é descartada: limitação documentada)", putStale.status === 200 && lost === true, `${putStale.status} perdida=${lost}`);
+    const afterStaleUp = await up(ownerToken, pE.id, small);
+    check("depois do PUT do editor o app continua enviando para a mesma avaliação (sortOrder = máximo + 1)", afterStaleUp.status === 201 && afterStaleUp.data.evaluation.id === ed && afterStaleUp.data.photo.sortOrder === 2, `${afterStaleUp.status} ${afterStaleUp.data.photo?.sortOrder}`);
+
+    // ===== Trial vencido e outra clínica =====
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: trialClinic, name: "E2E Trial", phone: "11999990130", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: trialEmail, password: trialPass }));
+    if (reg.status === 201) {
+      const tClinic = (await prisma.clinicMembership.findFirst({ where: { user: { email: trialEmail } }, select: { clinicId: true } })).clinicId;
+      const tPatient = await prisma.patient.create({ data: { clinicId: tClinic, name: `Trial Pac ${run}`, phone: "11999990131", age: 30 } });
+      await prisma.clinic.update({ where: { id: tClinic }, data: { trialEndsAt: new Date(Date.now() - 86_400_000) } });
+      const tLogin = await mobileLogin(trialEmail, trialPass);
+      const tTok = tLogin.data?.token;
+      const tUp = await up(tTok, tPatient.id, small);
+      const tGet = await raw(bearer(tTok), "GET", "/api/patients");
+      const tPhotos = await raw(bearer(tTok), "GET", `/api/patients/${tPatient.id}/photos`);
+      check("trial vencido: login mobile entra (200), envio de foto = 401 sem gravar, leituras (pacientes, photos) = 200", tLogin.status === 200 && tUp.status === 401 && tGet.status === 200 && tPhotos.status === 200 && (await prisma.evaluation.count({ where: { patientId: tPatient.id } })) === 0, `${tLogin.status}/${tUp.status}/${tGet.status}/${tPhotos.status}`);
+      const crossRead = await raw(bearer(tTok), "GET", `/api/patients/${pRace.id}/photos`);
+      const crossThumb = await raw(bearer(tTok), "GET", imgUrl(pRace.id, first.data.photo.id, "?size=thumb"));
+      check("isolamento: token de outra clínica não lê fotos/miniatura (404) nem vê pacientes da clínica de teste na lista", crossRead.status === 404 && crossThumb.status === 404 && !JSON.stringify(tGet.data).includes(pRace.id), `${crossRead.status}/${crossThumb.status}`);
+      await prisma.patient.deleteMany({ where: { clinicId: tClinic } });
+    } else check("clínica de trial vencido criada", false, `registro ${reg.status}`);
+
+    // ===== Bloqueio de login (por último: usa o PROFESSIONAL de teste) =====
+    const wrong = [];
+    for (let i = 0; i < 10; i += 1) wrong.push((await mobileLogin(proEmail, "errada")).status);
+    const lockedRight = await mobileLogin(proEmail, proNew);
+    const lockedWrong = await mobileLogin(proEmail, "errada");
+    const lockedWeb = await withSession("", () => api("POST", "/api/auth/login", { login: proEmail, password: proNew }));
+    check("bloqueio: 10 falhas = 401; depois 429 com senha certa, com errada e na web; token antigo continua válido", wrong.every((s) => s === 401) && lockedRight.status === 429 && lockedWrong.status === 429 && lockedWeb.status === 429 && (await raw(bearer(proToken), "GET", "/api/auth/me")).status === 200, `${wrong.join("")} ${lockedRight.status}/${lockedWrong.status}/${lockedWeb.status}`);
+    const lockedRow = await prisma.user.findUnique({ where: { email: proEmail }, select: { lockedUntil: true, failedLogins: true } });
+    const minutes = (lockedRow.lockedUntil.getTime() - Date.now()) / 60_000;
+    check("bloqueio: dura ~15 minutos e zera o contador", minutes > 13 && minutes <= 15 && lockedRow.failedLogins === 0, `${minutes.toFixed(1)} min`);
+    await prisma.user.update({ where: { email: proEmail }, data: { lockedUntil: new Date(Date.now() - 1000) } });
+    const unlocked = await mobileLogin(proEmail, proNew);
+    check("bloqueio: expirado o prazo, a senha certa entra (200) e limpa o bloqueio", unlocked.status === 200 && (await prisma.user.findUnique({ where: { email: proEmail }, select: { lockedUntil: true } })).lockedUntil === null, unlocked.status);
+    await mobileLogin(email, password); // um acerto antes: zera as 2 falhas deliberadas do começo desta suíte
+    const nine = [];
+    for (let i = 0; i < 9; i += 1) nine.push((await mobileLogin(email, "errada")).status);
+    const okAfter9 = await mobileLogin(email, password);
+    const next = await mobileLogin(email, "errada");
+    const last = await mobileLogin(email, password);
+    check("bloqueio: 9 falhas seguidas de um acerto zeram o contador (a falha seguinte dá 401, não 429)", okAfter9.status === 200 && next.status === 401 && last.status === 200, `${nine.join("")} ${okAfter9.status}/${next.status}/${last.status}`);
+  } finally {
+    for (const member of [staffTeam, proTeam]) if (member) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [proEmail, staffEmail, trialEmail] } } } });
+    await prisma.clinic.deleteMany({ where: { name: trialClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: [proEmail, staffEmail, noClinicEmail, trialEmail] } } });
+    await prisma.user.update({ where: { email }, data: { failedLogins: 0, lockedUntil: null } });
+  }
+}
+
 const suites = {
   pacientes: { needs: [], run: async (state) => { Object.assign(state, await patientsAndPayments()); await patientCpfMask(); } },
   orcamentos: { needs: ["pacientes"], run: async (state) => { state.quote = await quotesAndProcedures(state.patient); await quoteCents(); } },
@@ -4241,6 +4817,7 @@ const suites = {
   conflitos_agenda: { needs: [], run: async () => { await scheduleConflicts(); await scheduleConflictGaps(); } },
   telas: { needs: ["orcamentos"], run: (state) => browser(state.homonym) },
   login: { needs: [], run: () => loginLockout() },
+  fotos: { needs: [], run: async () => { await mobilePhotos(); await mobilePhotosGaps(); } },
 };
 
 // Sem nomes, roda tudo. Com nomes, roda essas partes e as que elas precisam.
