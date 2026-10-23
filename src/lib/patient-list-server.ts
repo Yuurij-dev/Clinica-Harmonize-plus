@@ -1,18 +1,23 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { accentFrom, accentTo, escapeLikePattern, normalizeSearchText, searchDigits, type PatientSort } from "@/lib/patient-list-rules";
+import { accentFrom, accentTo, cpfSearchPlan, escapeLikePattern, normalizeSearchText, searchDigits, type PatientSort } from "@/lib/patient-list-rules";
 
 // Pacientes da clínica que casam com a busca, sem acento nem caixa. "list" pesquisa nome, telefone e status (como a tela de
 // Clientes sempre fez); "lookup" pesquisa nome e CPF (seletores de paciente). Devolve só ids + total; o chamador busca os campos.
-export async function searchPatientIds(clinicId: string, options: { q: string; fields: "list" | "lookup"; status?: string; sort: PatientSort; skip: number; take: number }) {
+// `fullCpfAccess` (só no lookup): false para STAFF, que busca CPF apenas pelo número inteiro (ver cpfSearchPlan); a lista não busca CPF.
+export async function searchPatientIds(clinicId: string, options: { q: string; fields: "list" | "lookup"; fullCpfAccess?: boolean; status?: string; sort: PatientSort; skip: number; take: number }) {
   const pattern = `%${escapeLikePattern(normalizeSearchText(options.q))}%`;
-  const haystack = options.fields === "lookup" ? Prisma.sql`coalesce("name", '') || ' ' || coalesce("cpf", '')` : Prisma.sql`"name" || ' ' || "phone" || ' ' || "status"`;
+  const fullCpf = options.fullCpfAccess ?? false;
+  const cpfInText = options.fields === "lookup" && fullCpf;
+  const haystack = options.fields === "lookup" ? (cpfInText ? Prisma.sql`coalesce("name", '') || ' ' || coalesce("cpf", '')` : Prisma.sql`coalesce("name", '')`) : Prisma.sql`"name" || ' ' || "phone" || ' ' || "status"`;
   // normalize(NFC) antes do translate: nome com acento decomposto (NFD, ex.: colado do macOS) também é achado. Exige Postgres 13+.
   const textMatch = Prisma.sql`lower(translate(normalize(${haystack}, NFC), ${accentFrom}::text, ${accentTo}::text)) LIKE ${pattern}::text ESCAPE '\\'`;
   // Busca só numérica (3+ dígitos) também compara dígitos: CPF no lookup, telefone na lista, com ou sem máscara.
-  const digits = searchDigits(options.q);
+  const plan = options.fields === "lookup" ? cpfSearchPlan(options.q, fullCpf) : (() => { const digits = searchDigits(options.q); return digits ? { digits, exact: false } : null; })();
   const digitColumn = options.fields === "lookup" ? Prisma.sql`"cpf"` : Prisma.sql`"phone"`;
-  const digitMatch = digits ? Prisma.sql` OR regexp_replace(coalesce(${digitColumn}, ''), '\\D', '', 'g') LIKE ${`%${digits}%`}::text` : Prisma.empty;
+  const digitMatch = !plan ? Prisma.empty
+    : plan.exact ? Prisma.sql` OR regexp_replace(coalesce(${digitColumn}, ''), '\\D', '', 'g') = ${plan.digits}::text`
+    : Prisma.sql` OR regexp_replace(coalesce(${digitColumn}, ''), '\\D', '', 'g') LIKE ${`%${plan.digits}%`}::text`;
   const where = Prisma.sql`"clinicId" = ${clinicId}
     ${options.status ? Prisma.sql`AND "status" = ${options.status}` : Prisma.empty}
     AND (${textMatch}${digitMatch})`;

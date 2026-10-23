@@ -62,6 +62,16 @@ export function searchDigits(value: string) {
   return digits.length >= 3 ? digits : "";
 }
 
+// Busca por CPF no lookup. ADMIN/PROFESSIONAL: trecho de 3+ dígitos. STAFF (vê o CPF mascarado): só o CPF inteiro (11 dígitos,
+// comparação exata), para a busca parcial não revelar o CPF dígito a dígito; abaixo disso, só nome. Sem limite de tentativas
+// (residual aceito por ora): quem já sabe o CPF completo só confirma se o cliente existe.
+export function cpfSearchPlan(query: string, fullAccess: boolean): { digits: string; exact: boolean } | null {
+  const digits = searchDigits(query);
+  if (!digits) return null;
+  if (fullAccess) return { digits, exact: false };
+  return digits.length === 11 ? { digits, exact: true } : null;
+}
+
 // Ids de paciente são cuid; qualquer outra forma (byte nulo, "../", 5000 letras) nem chega ao banco.
 export function isPatientIdFormat(value: string) {
   return /^[A-Za-z0-9_-]{1,64}$/.test(value);

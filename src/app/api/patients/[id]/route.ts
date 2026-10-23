@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { rejectInvalidCpf } from "@/lib/patient-cpf";
+import { canSeeFullCpf, cpfForRole, isMaskedCpf } from "@/lib/patient-cpf-mask";
 import { patientListSelect, withCurrentStage } from "@/lib/patient-list-server";
 import { isPatientIdFormat } from "@/lib/patient-list-rules";
 import { prisma } from "@/lib/prisma";
@@ -14,7 +15,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const patient = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: patientListSelect });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
   const [withStage] = await withCurrentStage(user.clinicId, [patient]);
-  return NextResponse.json({ patient: withStage });
+  return NextResponse.json({ patient: cpfForRole(user.role, withStage) });
 }
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -23,7 +24,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   const body = await request.json().catch(() => null) as { name?: string; cpf?: string; phone?: string; age?: number } | null;
   const name = body?.name?.trim();
-  const cpf = body?.cpf?.trim() || null;
+  // cpf ausente ou mascarado (STAFF não vê o CPF inteiro) = manter o CPF atual; "" = limpar, exceto para STAFF, que não
+  // apaga um CPF que não enxerga (o pedido vazio é ignorado e o CPF é mantido, sem erro).
+  const keepCpf = typeof body?.cpf !== "string" || isMaskedCpf(body.cpf) || (!body.cpf.trim() && !canSeeFullCpf(user.role));
+  const cpf = keepCpf ? undefined : body?.cpf?.trim() || null;
   const phone = body?.phone?.trim();
   const age = Number(body?.age);
   if (!name || !phone || !Number.isInteger(age) || age < 0 || age > 130) {
@@ -42,5 +46,5 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (!patient.count) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
 
   const updated = await prisma.patient.findFirst({ where: { id, clinicId: user.clinicId } });
-  return NextResponse.json({ patient: updated });
+  return NextResponse.json({ patient: cpfForRole(user.role, updated) });
 }

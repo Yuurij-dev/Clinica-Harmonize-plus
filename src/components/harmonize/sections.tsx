@@ -1386,9 +1386,10 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
   // Pesquisa de paciente sob demanda no servidor (nome ou CPF), em vez de carregar todos os pacientes nas opções.
   const quotePatientLookup = usePatientLookup(patientQuery, !selectedPatientId);
   const matchingQuotePatients = quotePatientLookup.patients;
-  const procedureSubtotal = selectedProcedureNames.reduce((total, name) => total + (quoteProcedures.find((procedure) => procedure.name === name)?.price ?? 0), 0);
+  // Somado em centavos inteiros: preços têm centavos e 0,1 + 0,2 não pode acumular erro de ponto flutuante.
+  const procedureSubtotal = selectedProcedureNames.reduce((total, name) => total + Math.round((quoteProcedures.find((procedure) => procedure.name === name)?.price ?? 0) * 100), 0) / 100;
   const clinicCostsTotal = quoteCosts.laborCost + quoteCosts.facilityCost + quoteCosts.medicationCost;
-  const suggestedTotal = procedureSubtotal + clinicCostsTotal;
+  const suggestedTotal = Math.round(procedureSubtotal * 100 + clinicCostsTotal * 100) / 100;
   const visibleQuotes = quoteRows.filter((quote) => {
     const normalizedName = quoteSearch.trim().toLocaleLowerCase("pt-BR");
     const normalizedItems = itemSearch.trim().toLocaleLowerCase("pt-BR");

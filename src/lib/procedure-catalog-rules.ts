@@ -3,7 +3,7 @@
 
 export const maxProcedureNameLength = 120;
 export const maxCategoryLength = 60;
-// Tetos do domínio (e abaixo do Int32 do banco): preço em reais inteiros até R$ 100.000.000; duração até 24 h.
+// Tetos do domínio: preço em reais (com centavos; coluna Float/double) até R$ 100.000.000; duração até 24 h (coluna Int).
 export const maxPriceReais = 100_000_000;
 export const maxDurationMinutes = 1440;
 
@@ -53,11 +53,12 @@ export function parseNumeric(value: unknown): number | null {
   return null;
 }
 
-// Preço em reais inteiros (centavos arredondam), nunca negativo.
+// Preço em reais com até 2 casas (centavos), nunca negativo. Texto aceita vírgula pt-BR ("349,90", "1.234,50").
 export function parsePrice(value: unknown): ParseResult<number> {
-  const number = parseNumeric(value);
+  const text = typeof value === "string" && value.includes(",") ? value.replace(/\./g, "").replace(",", ".") : value;
+  const number = parseNumeric(text);
   if (number === null) return { ok: false, message: "Informe um preço válido." };
-  const price = Math.max(0, Math.round(number));
+  const price = Math.max(0, Math.round(number * 100) / 100);
   if (price > maxPriceReais) return { ok: false, message: `O preço máximo é R$ ${maxPriceReais.toLocaleString("pt-BR")}.` };
   return { ok: true, data: price };
 }

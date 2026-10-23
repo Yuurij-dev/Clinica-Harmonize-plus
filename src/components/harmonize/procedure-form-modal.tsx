@@ -370,7 +370,7 @@ function ConfigureStep({ editing, selection, procedures, materials, onBack, onSa
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <FormField label="Valor sugerido" htmlFor="procedure-price"><MaskedInput {...invalidProps("price", "procedure-price-help")} id="procedure-price" className={fieldClassName} formatter={formatCurrency} name="price" inputMode="decimal" defaultValue={editing ? formatCurrency(String(Math.round(editing.price * 100))) : ""} placeholder="R$ 0,00" required autoFocus={isCatalogNew} /><p id="procedure-price-help" className="text-xs text-muted-foreground">O valor é arredondado para reais inteiros.</p></FormField>
+        <FormField label="Valor sugerido" htmlFor="procedure-price"><MaskedInput {...invalidProps("price", "procedure-price-help")} id="procedure-price" className={fieldClassName} formatter={formatCurrency} name="price" inputMode="decimal" defaultValue={editing ? formatCurrency(String(Math.round(editing.price * 100))) : ""} placeholder="R$ 0,00" required autoFocus={isCatalogNew} /><p id="procedure-price-help" className="text-xs text-muted-foreground">Aceita centavos, por exemplo R$ 349,90.</p></FormField>
         <FormField label="Duração (minutos)" htmlFor="procedure-duration"><MaskedInput {...invalidProps("duration")} id="procedure-duration" className={fieldClassName} formatter={(value) => formatInteger(value, 4)} name="duration" inputMode="numeric" defaultValue={editing ? String(editing.durationMinutes) : ""} placeholder="60" required /></FormField>
       </div>
 

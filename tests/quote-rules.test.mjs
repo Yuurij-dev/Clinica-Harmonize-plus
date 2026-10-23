@@ -29,6 +29,19 @@ test("cent-based calculation preserves fractional cents distribution without flo
   assert.equal(result?.totalCents, 9_999);
 });
 
+test("price with cents: 349,90 x3 = 1049,70, and a fractional catalog price converts to exact cents", () => {
+  // Mesma conversão de toCents em src/lib/finance.ts (não importado: o módulo puxa o Prisma e não roda nos testes node).
+  const toCents = (reais) => Math.max(0, Math.round(reais * 100));
+  assert.equal(toCents(349.9), 34_990);
+  assert.equal(toCents(0.1 + 0.2), 30);
+  const result = calculateQuote([{ procedureId: "p", quantity: 3, discountCents: 0 }], [{ id: "p", name: "P", priceCents: toCents(349.9) }], { laborCents: 0, facilityCents: 0, medicationCents: 0 });
+  assert.equal(result?.totalCents, 104_970);
+  // desconto de 10% sobre 1049,70 = 104,97 (em centavos inteiros)
+  const discounted = calculateQuote([{ procedureId: "p", quantity: 3, discountCents: Math.round(104_970 * 0.1) }], [{ id: "p", name: "P", priceCents: 34_990 }], { laborCents: 0, facilityCents: 0, medicationCents: 0 });
+  assert.equal(discounted?.totalCents, 94_473);
+  assert.equal(calculateQuote([{ procedureId: "p", quantity: 1, discountCents: 34_991 }], [{ id: "p", name: "P", priceCents: 34_990 }], { laborCents: 0, facilityCents: 0, medicationCents: 0 }), null);
+});
+
 test("quote calculation rejects unknown, duplicate, invalid quantity, and excessive discounts", () => {
   assert.equal(calculateQuote([{ procedureId: "missing", quantity: 1, discountCents: 0 }], catalog, costs), null);
   assert.equal(calculateQuote([{ procedureId: "filler", quantity: 1, discountCents: 1 }, { procedureId: "filler", quantity: 1, discountCents: 0 }], catalog, costs), null);

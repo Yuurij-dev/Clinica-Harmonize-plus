@@ -60,6 +60,7 @@ import { appointmentSlotError, appointmentWithinStartWindow, canRequestAppointme
 import { appointmentMatchesProcedure, assignProcedureAppointmentsToCards,mergePatientAppointments, procedureCardScheduleAction } from "@/lib/patient-appointments";
 import { FormField, fieldClassName } from "@/components/ui/modal";
 import { formatCpf, formatInteger, formatPhone } from "@/lib/input-masks";
+import { isMaskedCpf } from "@/lib/patient-cpf-mask";
 import { PatientOverview, PatientTreatments, type PatientJourneySummary } from "./patient-profile-views";
 import { ProcedureImage } from "./procedure-image";
 import { ClinicTimePicker } from "./clinic-time-picker";
@@ -655,6 +656,7 @@ function PatientEditModal({ patient, open, onClose, onUpdated }: { patient: Pati
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [invalidFields, setInvalidFields] = useState<Set<string>>(new Set());
+  const cpfMasked = isMaskedCpf(patient.cpf);
 
   async function savePatient(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -677,7 +679,9 @@ function PatientEditModal({ patient, open, onClose, onUpdated }: { patient: Pati
     setSaving(true);
     setError("");
     try {
-      const response = await fetch(`/api/patients/${patient.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, cpf, phone, age }) });
+      // CPF mascarado (recepção): campo vazio = manter o atual, então não enviamos o CPF.
+      const keepCpf = cpfMasked && !cpf;
+      const response = await fetch(`/api/patients/${patient.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, ...(keepCpf ? {} : { cpf }), phone, age }) });
       const data = await response.json().catch(() => null) as { patient?: Patient; message?: string } | null;
       if (!response.ok || !data?.patient) {
         setError(data?.message ?? "Não foi possível atualizar os dados.");
@@ -702,7 +706,7 @@ function PatientEditModal({ patient, open, onClose, onUpdated }: { patient: Pati
     <Modal open={open} onClose={() => { if (!saving) { setError(""); onClose(); } }} title="Editar dados" description={`Atualize os dados cadastrais de ${patient.name}.`}>
       <form className="grid gap-4 sm:grid-cols-2" noValidate onSubmit={savePatient} key={`${patient.id}-${open}`}>
         <FormField label="Nome"><input className={cn(fieldClassName, invalidFields.has("name") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="name" defaultValue={patient.name} required /></FormField>
-        <FormField label="CPF"><MaskedInput className={cn(fieldClassName, invalidFields.has("cpf") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={formatCpf} name="cpf" inputMode="numeric" maxLength={14} placeholder="000.000.000-00" defaultValue={patient.cpf ?? ""} /></FormField>
+        <FormField label="CPF"><MaskedInput className={cn(fieldClassName, invalidFields.has("cpf") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={formatCpf} name="cpf" inputMode="numeric" maxLength={14} placeholder={cpfMasked ? `${patient.cpf} (em branco mantém)` : "000.000.000-00"} defaultValue={cpfMasked ? "" : patient.cpf ?? ""} /></FormField>
         <FormField label="Telefone"><MaskedInput className={cn(fieldClassName, invalidFields.has("phone") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={formatPhone} name="phone" inputMode="tel" maxLength={15} placeholder="(00) 00000-0000" defaultValue={patient.phone} required /></FormField>
         <FormField label="Idade"><MaskedInput className={cn(fieldClassName, invalidFields.has("age") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={(value) => formatInteger(value, 3)} name="age" inputMode="numeric" maxLength={3} defaultValue={String(patient.age)} required /></FormField>
         {error ? <p role="alert" className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{error}</p> : null}
