@@ -58,4 +58,6 @@ if (isProduction && !skip) {
   console.log(`Migrations ignoradas (VERCEL_ENV=${process.env.VERCEL_ENV ?? "local"}${skip ? ", SKIP_PRISMA_MIGRATE=1" : ""}).`);
 }
 
+// O postinstall do Prisma pode não rodar (npm bloqueia scripts) e o cache da Vercel restaura um client antigo: sempre gera o client do schema atual antes do build.
+run("npx", ["prisma", "generate"]);
 run("npx", ["next", "build"]);
