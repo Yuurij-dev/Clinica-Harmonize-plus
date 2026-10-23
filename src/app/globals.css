@@ -1063,6 +1063,12 @@ html.dark [class*="border-[#3d9be9]"] {
   border-color: currentColor !important;
 }
 
+/* Bordas de erro de validação não podem virar cinza no tema escuro. */
+html.dark [class*="border-[#d92d20]"],
+html.dark [class*="border-[#b42318]"] {
+  border-color: #ff6b61 !important;
+}
+
 .hp-logo-dark {
   display: none;
 }
