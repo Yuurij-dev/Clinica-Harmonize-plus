@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { localPreviewSrc, safeProcedureImageSrc } from "@/lib/procedure-image-rules";
+import { catalogImagePrefix, localPreviewSrc, safeProcedureImageSrc } from "@/lib/procedure-image-rules";
 import { useProcedureImageByName } from "./procedure-image-lookup";
 
 type ProcedureImageProps = {
@@ -47,7 +47,9 @@ export function ProcedureImage({ name, imageUrl, localPreview, size = "compact",
           sizes={frame.sizes}
           loading="lazy"
           // Imagens da clínica vêm de rota autenticada (o otimizador do Next não envia o cookie de sessão).
-          unoptimized={shown.startsWith("/api/") || shown.startsWith("blob:")}
+          // As do catálogo já são webp pequenos; no Next 16.3.5 um pedido ao otimizador cancelado no início
+          // (ex.: fechar o modal de procedimento) pode deixar a imagem presa no servidor até reiniciar.
+          unoptimized={shown.startsWith("/api/") || shown.startsWith("blob:") || shown.startsWith(catalogImagePrefix)}
           className="object-cover"
           onError={() => setFailedSrc(shown)}
         />
