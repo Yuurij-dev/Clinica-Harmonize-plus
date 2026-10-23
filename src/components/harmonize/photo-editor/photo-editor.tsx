@@ -9,6 +9,9 @@ import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
+import { evaluationFieldsFromAnamnesis, fillEmptyEvaluationFields } from "@/lib/anamnesis-rules";
+import { assessmentFieldErrors, type RequiredAssessmentField } from "@/lib/evaluation-rules";
+import { anamnesisKey, type AnamnesisOverview } from "../patient-clinical-data";
 import { LoadingSkeleton } from "../shared";
 import { EditorToolbar } from "./editor-toolbar";
 import { EvaluationResult } from "./evaluation-result";
@@ -75,7 +78,10 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   const [hydrated, setHydrated] = useState(!evaluationCacheKey);
   const [saveError, setSaveError] = useState("");
   const [photoUploadError, setPhotoUploadError] = useState("");
-  const [assessmentError, setAssessmentError] = useState("");
+  const [assessmentErrors, setAssessmentErrors] = useState<Partial<Record<RequiredAssessmentField, string>>>({});
+  const prefillDoneRef = useRef("");
+  // Valores gravados de uma avaliação já concluída: campo que já era vazio nela não bloqueia salvar fotos/marcações.
+  const concludedBaselineRef = useRef<ClinicalAssessment | null>(cachedEvaluation?.evaluation && cachedEvaluation.evaluation.status !== "Rascunho" ? { ...emptyAssessment, ...cachedEvaluation.evaluation } : null);
   const [assessmentValidationAttempt, setAssessmentValidationAttempt] = useState(0);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraError, setCameraError] = useState("");
@@ -115,6 +121,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
         const restored = data.evaluation?.photos ?? [];
         currentEvaluationIdRef.current = evaluationId;
         setAssessment({ ...emptyAssessment, ...data.evaluation });
+        concludedBaselineRef.current = data.evaluation && data.evaluation.status !== "Rascunho" ? { ...emptyAssessment, ...data.evaluation } : null;
         setProfessional(data.evaluation?.professional ?? "");
         setEvaluationStatus(data.evaluation?.status === "Rascunho" ? "Rascunho" : "Concluída");
         setLoadError(false);
@@ -138,6 +145,27 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
       });
     return () => { active = false; };
   }, [evaluationCacheKey, evaluationId, isEncounterMode, loadAttempt]);
+
+  // Pré-preenche os campos vazios com a anamnese do paciente, só numa avaliação nova ou em rascunho aberta pelo usuário.
+  // Nunca sobrescreve o que já foi escrito e não toca em avaliação concluída.
+  useEffect(() => {
+    const prefillKey = `${patientId}:${evaluationId ?? ""}`;
+    if (prefillDoneRef.current === prefillKey || !hydrated || loadError || readOnly || evaluationStatus !== "Rascunho" || !(encounter || evaluationId)) return;
+    prefillDoneRef.current = prefillKey;
+    let active = true;
+    let finished = false;
+    getCachedJson<AnamnesisOverview>(anamnesisKey(patientId))
+      .then((overview) => {
+        if (!active) return;
+        finished = true;
+        if (overview.restricted) return;
+        const source = overview.current ?? overview.draft;
+        if (source) setAssessment((current) => fillEmptyEvaluationFields(current, evaluationFieldsFromAnamnesis(source.content)));
+      })
+      .catch(() => { prefillDoneRef.current = ""; });
+    // Se o efeito for refeito antes de a resposta chegar (ex.: Strict Mode), a próxima execução tenta de novo.
+    return () => { active = false; if (!finished) prefillDoneRef.current = ""; };
+  }, [hydrated, loadError, readOnly, evaluationStatus, encounter, evaluationId, patientId]);
 
   useEffect(() => {
     if (!notice) return;
@@ -354,7 +382,18 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     setAssessment((current) => ({ ...current, [field]: value }));
     markDirty();
     setSaveError("");
-    if (field === "chiefComplaint" && value.trim()) setAssessmentError("");
+    if (value.trim() && field in assessmentErrors) setAssessmentErrors((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== field)));
+  }
+
+  // Todos os campos obrigatórios da avaliação; mostra os erros, rola e foca o primeiro inválido.
+  function validateAssessment() {
+    const errors = assessmentFieldErrors(assessment, concludedBaselineRef.current);
+    const firstInvalid = Object.keys(errors)[0];
+    if (!firstInvalid) return true;
+    setAssessmentErrors(errors);
+    setAssessmentValidationAttempt((current) => current + 1);
+    revealValidationTarget("evaluation-assessment-card", `assessment-field-${firstInvalid}`);
+    return false;
   }
 
   function deleteSelected() {
@@ -372,6 +411,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
       revealValidationTarget("evaluation-photo-card", "evaluation-notice");
       return null;
     }
+    if (status === "Concluída" && !automatic && !validateAssessment()) return null;
     setIsSaving(true);
     setSaveError("");
     const startedRevision = editRevisionRef.current;
@@ -410,12 +450,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
 
   async function continueToQuote() {
     if (readOnly) { if (currentEvaluationIdRef.current) encounter?.onContinue(currentEvaluationIdRef.current); return; }
-    if (!assessment.chiefComplaint.trim()) {
-      setAssessmentError("Informe a queixa principal para avançar.");
-      setAssessmentValidationAttempt((current) => current + 1);
-      revealValidationTarget("evaluation-assessment-card");
-      return;
-    }
+    if (!validateAssessment()) return;
     if (!await autosave.flush()) { revealValidationTarget("evaluation-header-card"); return; }
     const savedEvaluationId = await saveEvaluation("Concluída");
     if (savedEvaluationId) encounter?.onContinue(savedEvaluationId);
@@ -454,7 +489,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
 
         <div inert={readOnly} className={cn("grid gap-4 p-4", encounter && "grid-cols-1 p-0 lg:grid-cols-[minmax(0,1fr)_290px]")}>
           <div className="min-w-0">
-            {encounter || evaluationId ? <AssessmentForm assessment={assessment} error={assessmentError} validationAttempt={assessmentValidationAttempt} onChange={changeAssessment} /> : null}
+            {encounter || evaluationId ? <AssessmentForm assessment={assessment} errors={assessmentErrors} validationAttempt={assessmentValidationAttempt} onChange={changeAssessment} /> : null}
             <section id="evaluation-photo-card" tabIndex={-1} className={cn("mt-4 grid scroll-mt-24 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)]", encounter && "rounded-md border border-[#e3e5f0] bg-white p-3 sm:p-4", saveError && "border-destructive")} aria-label="Registro fotográfico e marcação">
               {encounter ? <div className="flex items-center gap-2 lg:col-span-2"><Camera className="h-4 w-4 text-primary" /><h3 className="text-sm font-bold">Registro fotográfico e marcação</h3></div> : null}
               {isLoading ? <div className="grid min-h-[420px] gap-4 rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-5 lg:col-span-2"><LoadingSkeleton className="h-7 w-52" /><LoadingSkeleton className="h-3 w-80" /><div className="grid min-h-[300px] place-items-center rounded-[7px] border border-[#e4e6ef] bg-white"><div className="w-full max-w-md space-y-3 px-8"><LoadingSkeleton className="h-56 w-full" /><LoadingSkeleton className="mx-auto h-3 w-40" /><LoadingSkeleton className="mx-auto h-2.5 w-56" /></div></div></div> : loadError ? <div className="grid min-h-[360px] place-items-center rounded-lg border border-destructive/20 bg-destructive/5 p-6 text-center"><div><p className="text-sm font-semibold text-destructive">Não foi possível carregar esta avaliação.</p><Button className="mt-3" variant="outline" onClick={() => { setLoadError(false); setIsLoading(true); setLoadAttempt((value) => value + 1); }}>Tentar novamente</Button></div></div> : showResult ? <EvaluationResult onEdit={() => setShowResult(false)} previews={savedPreviews} /> : (<>
@@ -516,9 +551,13 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   );
 }
 
-function AssessmentForm({ assessment, error, validationAttempt, onChange }: { assessment: ClinicalAssessment; error?: string; validationAttempt?: number; onChange: (field: keyof ClinicalAssessment, value: string) => void }) {
+function AssessmentForm({ assessment, errors = {}, validationAttempt = 0, onChange }: { assessment: ClinicalAssessment; errors?: Partial<Record<RequiredAssessmentField, string>>; validationAttempt?: number; onChange: (field: keyof ClinicalAssessment, value: string) => void }) {
   const textareaClass = "w-full resize-y rounded-[5px] border border-[#dfe1ea] bg-white px-2.5 py-2 text-sm font-normal text-[#25263a] outline-none placeholder:text-[#8c8d9c] focus:border-[#5147dc] focus:ring-1 focus:ring-[#5147dc]/20";
   const controlClass = "h-8 w-full rounded-[5px] border border-[#dfe1ea] bg-white px-2 text-sm font-normal text-[#25263a] outline-none focus:border-[#5147dc] focus:ring-1 focus:ring-[#5147dc]/20";
+  const invalidClass = "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]";
+  const fieldProps = (field: RequiredAssessmentField) => ({ id: `assessment-field-${field}`, "aria-invalid": Boolean(errors[field]), "aria-describedby": errors[field] ? `assessment-error-${field}` : undefined });
+  const fieldError = (field: RequiredAssessmentField) => errors[field] ? <span id={`assessment-error-${field}`} role="alert" className="text-xs font-medium text-[#b42318]">{errors[field]}</span> : null;
+  const required = <span className="text-destructive"> *</span>;
   const anamnesisFields = [
     { key: "allergies" as const, label: "Alergias", icon: ShieldAlert },
     { key: "pregnancyStatus" as const, label: "Gestante", icon: Baby },
@@ -529,22 +568,23 @@ function AssessmentForm({ assessment, error, validationAttempt, onChange }: { as
   const renderAnamnesisField = (field: typeof anamnesisFields[number]) => {
     const Icon = field.icon;
     return <label className="min-w-0 rounded-[5px] border border-[#e5e6ee] bg-white p-2" key={field.key}>
-      <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[#6f7082]"><Icon className="h-3.5 w-3.5 shrink-0 text-[#5147dc]" aria-hidden="true" />{field.label}</span>
-      <select className={controlClass} value={assessment[field.key]} onChange={(event) => onChange(field.key, event.target.value)}><option value="">Não informado</option><option value="Não">Não</option><option value="Sim">Sim</option>{assessment[field.key] && !["Não", "Sim"].includes(assessment[field.key]) ? <option value={assessment[field.key]}>{assessment[field.key]}</option> : null}</select>
+      <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[#6f7082]"><Icon className="h-3.5 w-3.5 shrink-0 text-[#5147dc]" aria-hidden="true" />{field.label}{required}</span>
+      <select key={`${field.key}-${validationAttempt}`} {...fieldProps(field.key)} className={cn(controlClass, errors[field.key] && invalidClass)} value={assessment[field.key]} onChange={(event) => onChange(field.key, event.target.value)}><option value="">Selecione</option><option value="Não">Não</option><option value="Sim">Sim</option>{assessment[field.key] && !["Não", "Sim"].includes(assessment[field.key]) ? <option value={assessment[field.key]}>{assessment[field.key]}</option> : null}</select>
+      {fieldError(field.key)}
     </label>;
   };
 
-  return <Card id="evaluation-assessment-card" tabIndex={-1} className={cn("scroll-mt-24 p-3 sm:p-4", error && "border-destructive")}>
+  return <Card id="evaluation-assessment-card" tabIndex={-1} className={cn("scroll-mt-24 p-3 sm:p-4", Object.keys(errors).length > 0 && "border-destructive")}>
     <h3 className="flex items-center gap-2 text-sm font-bold"><ClipboardPenLine className="h-4 w-4 text-primary" />Avaliação clínica</h3>
     <div className="mt-3 grid gap-3 md:grid-cols-2">
-      <label className="grid min-w-0 gap-1 text-xs font-semibold"><span>Queixa principal <span className="text-destructive">*</span></span><textarea key={`chief-complaint-${validationAttempt ?? 0}`} aria-invalid={Boolean(error)} aria-describedby={error ? "chief-complaint-error" : undefined} className={cn(textareaClass, "min-h-[54px]", error && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} rows={2} maxLength={5000} placeholder="Descreva a queixa principal" value={assessment.chiefComplaint} onChange={(event) => onChange("chiefComplaint", event.target.value)} />{error ? <span id="chief-complaint-error" role="alert" className="text-xs font-medium text-[#b42318]">{error}</span> : null}</label>
-      <label className="grid min-w-0 gap-1 text-xs font-semibold"><span>Objetivo do paciente</span><textarea className={`text-sm ${textareaClass} min-h-[54px]`} rows={2} maxLength={5000} placeholder="Não informado" value={assessment.patientGoal} onChange={(event) => onChange("patientGoal", event.target.value)} /></label>
+      <label className="grid min-w-0 gap-1 text-xs font-semibold"><span>Queixa principal{required}</span><textarea key={`chief-complaint-${validationAttempt}`} {...fieldProps("chiefComplaint")} className={cn(textareaClass, "min-h-[54px]", errors.chiefComplaint && invalidClass)} rows={2} maxLength={5000} placeholder="Descreva a queixa principal" value={assessment.chiefComplaint} onChange={(event) => onChange("chiefComplaint", event.target.value)} />{fieldError("chiefComplaint")}</label>
+      <label className="grid min-w-0 gap-1 text-xs font-semibold"><span>Objetivo do paciente{required}</span><textarea key={`patient-goal-${validationAttempt}`} {...fieldProps("patientGoal")} className={cn("text-sm", textareaClass, "min-h-[54px]", errors.patientGoal && invalidClass)} rows={2} maxLength={5000} placeholder="Não informado" value={assessment.patientGoal} onChange={(event) => onChange("patientGoal", event.target.value)} />{fieldError("patientGoal")}</label>
       <section aria-labelledby="anamnesis-title" className="min-w-0">
         <h4 id="anamnesis-title" className="mb-2 text-xs font-bold">Anamnese rápida</h4>
         <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">{anamnesisFields.slice(0, 3).map(renderAnamnesisField)}</div>
         <div className="mt-1.5 grid grid-cols-1 gap-1.5 sm:grid-cols-2">{anamnesisFields.slice(3).map(renderAnamnesisField)}</div>
       </section>
-      <label className="grid min-w-0 content-start gap-1 text-xs font-semibold">Observações clínicas<textarea className={`text-sm ${textareaClass} min-h-[116px]`} rows={5} maxLength={5000} placeholder="Não informado" value={assessment.clinicalNotes} onChange={(event) => onChange("clinicalNotes", event.target.value)} /></label>
+      <label className="grid min-w-0 content-start gap-1 text-xs font-semibold"><span>Observações clínicas{required}</span><textarea key={`clinical-notes-${validationAttempt}`} {...fieldProps("clinicalNotes")} className={cn("text-sm", textareaClass, "min-h-[116px]", errors.clinicalNotes && invalidClass)} rows={5} maxLength={5000} placeholder="Não informado" value={assessment.clinicalNotes} onChange={(event) => onChange("clinicalNotes", event.target.value)} />{fieldError("clinicalNotes")}</label>
     </div>
   </Card>;
 }
