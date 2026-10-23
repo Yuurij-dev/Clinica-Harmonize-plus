@@ -25,7 +25,7 @@ import type { SectionId } from "@/types/clinic";
 import type { StockAlert } from "@/lib/stock-rules";
 import { CLIENT_CACHE_UNAUTHORIZED_EVENT, getCachedJson, setClientCacheScope } from "@/lib/client-cache";
 import { visibleSections } from "@/lib/permissions";
-import { CurrentRoleProvider } from "./current-user";
+import { CurrentRoleProvider, CurrentUserNameProvider } from "./current-user";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
 import { clientsHomeEvent } from "@/lib/section-events";
 import { agendaPeriodKey, agendaPeriodRange } from "@/lib/agenda-period-rules";
@@ -261,6 +261,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
 
   return (
     <CurrentRoleProvider value={currentUser?.role ?? null}>
+    <CurrentUserNameProvider value={currentUser?.name ?? null}>
     <div className="harmonize-app min-h-screen bg-background text-foreground">
       <Sidebar
         active={active}
@@ -297,6 +298,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       <AppToaster />
       {undoNotice ? <div className={`${undoNotice.leaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-6 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] border border-border bg-card px-4 py-3 text-xs font-bold text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.18)]`} role="status"><div className="flex items-center gap-3"><span className="min-w-0 flex-1">{undoNotice.message}</span><button className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-[11px] font-black text-foreground transition hover:bg-muted/80" onClick={() => { const undo = undoNotice.undo; setUndoNotice(null); undo(); }}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-success" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
     </div>
+    </CurrentUserNameProvider>
     </CurrentRoleProvider>
   );
 }

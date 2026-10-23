@@ -3186,7 +3186,7 @@ async function scheduleConflictGaps() {
         if (created.status === 201) members.push(created.data.member);
         const session = created.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
         if (session?.status !== 200) { check(`lacunas(h): usuário ${role} criado`, false, `team ${created.status} login ${session?.status}`); continue; }
-        const d = nd(), pro = `Papel ${role} ${run}`;
+        const d = nd(), pro = role === "PROFESSIONAL" ? `E2E ${role} ConfG` : `Papel ${role} ${run}`; // PROFESSIONAL só agenda para si mesmo
         const base = await post(await fresh(), pro, "10:00", d);
         const mineP = await fresh();
         const out = await withSession(session.cookie, async () => {
@@ -3712,6 +3712,128 @@ async function sessionMaterialsGaps() {
   }
 }
 
+async function scheduleOwnProfessional() {
+  const D = day(21);
+  const mkP = async (n) => (await api("POST", "/api/patients", { name: `E2E Propria Agenda ${n} ${run}`, phone: `1199999${String(7100 + n)}`, age: 30, cpf: randomCpf() })).data.patient;
+  const [Pa, Pb, Pc, Pd, Pe] = [await mkP(1), await mkP(2), await mkP(3), await mkP(4), await mkP(5)];
+  const profName = `E2E Dra Agenda ${run}`;
+  const other = `Outro Prof ${run}`;
+  const msg = "Você só pode agendar atendimentos para você mesmo.";
+  const body = (patient, professional, time) => ({ patientId: patient.id, procedure: "Retorno", professional, time, date: D });
+  const members = [];
+  let profCookie = null;
+  let staffCookie = null;
+  try {
+    for (const role of ["PROFESSIONAL", "STAFF"]) {
+      const login = `e2e-ag-${role.toLowerCase()}-${run}@example.com`;
+      const secret = `E2e-${run}-${role}7!`;
+      const created = await api("POST", "/api/team", { name: role === "PROFESSIONAL" ? profName : `E2E Staff Agenda ${run}`, email: login, password: secret, role });
+      if (created.status === 201) members.push(created.data.member);
+      const session = created.status === 201 ? await loginAs(login, secret) : null;
+      if (session?.status !== 200) { check(`agenda própria: usuário ${role} criado`, false, `${created.status} ${session?.status}`); continue; }
+      if (role === "PROFESSIONAL") profCookie = session.cookie; else staffCookie = session.cookie;
+      await withSession(session.cookie, async () => {
+        if (role === "STAFF") {
+          const r = await api("POST", "/api/appointments", body(Pd, other, "08:00"));
+          check("agenda própria: STAFF agenda para qualquer profissional (201)", r.status === 201, `${r.status} ${r.data.message}`);
+          return;
+        }
+        let r = await api("POST", "/api/appointments", body(Pa, other, "08:00"));
+        check("agenda própria: PROFESSIONAL agendando para outro => 403 com mensagem", r.status === 403 && r.data.message === msg, `${r.status} ${r.data.message}`);
+        check("agenda própria: nada foi gravado no 403", (await prisma.appointment.count({ where: { patientId: Pa.id } })) === 0);
+        r = await api("POST", "/api/appointments", body(Pa, `  ${profName.toUpperCase().replace(/ /g, "   ")} `, "08:00"));
+        check("agenda própria: próprio nome com caixa/espaços diferentes => 201 gravando o nome do cadastro", r.status === 201 && r.data.appointment?.professional === profName, `${r.status} ${r.data.message} ${r.data.appointment?.professional}`);
+        const own = await api("POST", "/api/appointments", body(Pb, profName, "10:00"));
+        check("agenda própria: próprio nome exato => 201", own.status === 201, `${own.status} ${own.data.message}`);
+        const id = own.data.appointment?.id;
+        if (!id) return;
+        const patch = (b) => api("PATCH", `/api/appointments/${id}`, b);
+        const prof = async () => (await prisma.appointment.findUnique({ where: { id }, select: { professional: true } })).professional;
+        r = await patch({ professional: other });
+        check("agenda própria: PATCH trocando para outro profissional => 403 e nada muda", r.status === 403 && r.data.message === msg && (await prof()) === profName, `${r.status} ${r.data.message}`);
+        r = await patch({ notes: "sem profissional" });
+        check("agenda própria: PATCH sem professional => 200", r.status === 200, `${r.status} ${r.data.message}`);
+        r = await patch({ professional: "", notes: "vazio" });
+        check("agenda própria: PATCH com professional vazio => 200", r.status === 200, `${r.status} ${r.data.message}`);
+        r = await patch({ professional: profName, notes: "igual" });
+        check("agenda própria: PATCH com o próprio nome/atual => 200", r.status === 200, `${r.status} ${r.data.message}`);
+        r = await patch({ professional: ` ${profName.toLowerCase()} `, notes: "caixa" });
+        check("agenda própria: PATCH com o próprio nome em outra caixa => 200 sem mudar a grafia gravada", r.status === 200 && (await prof()) === profName, `${r.status} ${r.data.message} ${await prof()}`);
+      });
+    }
+    // Agendamento de outro profissional (criado pelo ADMIN): PROFESSIONAL pode reenviar o atual, mas não trocar.
+    const adm = await api("POST", "/api/appointments", body(Pc, other, "12:00"));
+    check("agenda própria: ADMIN agenda para outro profissional (201)", adm.status === 201, `${adm.status} ${adm.data.message}`);
+    if (adm.data.appointment?.id && profCookie) {
+      await withSession(profCookie, async () => {
+        const id = adm.data.appointment.id;
+        let r = await api("PATCH", `/api/appointments/${id}`, { professional: other, notes: "mesmo atual" });
+        check("agenda própria: PROFESSIONAL reenviando o profissional atual do agendamento => 200", r.status === 200, `${r.status} ${r.data.message}`);
+        r = await api("PATCH", `/api/appointments/${id}`, { professional: ` ${other.toUpperCase()} `, notes: "atual em outra caixa" });
+        const kept = (await prisma.appointment.findUnique({ where: { id }, select: { professional: true } })).professional;
+        check("agenda própria: PROFESSIONAL reenviando o atual em outra caixa => 200 sem mudar a grafia gravada", r.status === 200 && kept === other, `${r.status} ${r.data.message} ${kept}`);
+        r = await api("PATCH", `/api/appointments/${id}`, { professional: `Terceiro ${run}` });
+        check("agenda própria: PROFESSIONAL trocando para terceiro => 403", r.status === 403, `${r.status} ${r.data.message}`);
+      });
+    }
+    // Interface: a Agenda no dia D, em visão Dia.
+    const openDay = async (page) => {
+      await page.goto(`${baseUrl}/agenda`);
+      await page.getByRole("button", { name: "Dia", exact: true }).click();
+      await page.getByRole("button", { name: "Selecionar data" }).click();
+      await page.locator("#schedule-date-picker").fill(D);
+      await page.getByRole("button", { name: "Ir para data" }).click();
+    };
+    const seen = (page, patient) => page.getByText(patient.name).count();
+    if (profCookie) {
+      await withSession(profCookie, () => withPage(async (page, pageErrors) => {
+        await openDay(page);
+        await page.getByText(Pb.name).first().waitFor({ state: "attached" });
+        await page.getByText(Pa.name).first().waitFor({ state: "attached" });
+        check("agenda própria (tela): PROFESSIONAL não vê o seletor Filtrar por profissional", (await page.locator('[aria-label="Filtrar por profissional"]').count()) === 0);
+        check("agenda própria (tela): PROFESSIONAL vê os próprios agendamentos, inclusive o gravado com outra caixa", (await seen(page, Pa)) > 0 && (await seen(page, Pb)) > 0);
+        check("agenda própria (tela): PROFESSIONAL não vê agendamentos de outro profissional", (await seen(page, Pc)) === 0 && (await seen(page, Pd)) === 0, `${await seen(page, Pc)} ${await seen(page, Pd)}`);
+        await page.getByRole("button", { name: "Novo agendamento" }).first().click();
+        const dialog = page.getByRole("dialog", { name: "Novo agendamento" });
+        await dialog.waitFor({ state: "visible" });
+        const select = dialog.locator('select[aria-label="Profissional"]');
+        check("agenda própria (tela): modal tem Profissional desabilitado com o nome dele", (await select.isDisabled()) && (await select.locator("option:checked").innerText()) === profName, await select.locator("option:checked").innerText());
+        await dialog.locator('input[name="patientSearch"]').fill(Pe.name);
+        await dialog.getByRole("button", { name: Pe.name }).click();
+        await dialog.getByRole("button", { name: "Selecione o horário" }).click();
+        await dialog.getByRole("listbox", { name: "Hora" }).getByRole("option", { name: "14", exact: true }).click();
+        await dialog.getByRole("listbox", { name: "Minuto" }).getByRole("option", { name: "00", exact: true }).click();
+        await dialog.locator('select[name="procedure"]').selectOption("Consulta / retorno");
+        await dialog.getByRole("button", { name: "Criar agendamento" }).click();
+        await dialog.waitFor({ state: "hidden" });
+        const saved = await prisma.appointment.findFirst({ where: { patientId: Pe.id }, select: { professional: true, time: true } });
+        check("agenda própria (tela): agendamento criado pela tela grava o nome do profissional", saved?.professional === profName && saved?.time === "14:00", JSON.stringify(saved));
+        check("agenda própria (tela): sem erro de JavaScript (PROFESSIONAL)", pageErrors.length === 0, pageErrors.join(" | "));
+      }));
+    }
+    if (staffCookie) {
+      await withSession(staffCookie, () => withPage(async (page, pageErrors) => {
+        await openDay(page);
+        await page.getByText(Pc.name).first().waitFor({ state: "attached" });
+        const filter = page.locator('[aria-label="Filtrar por profissional"]');
+        const options = await filter.locator("option").allInnerTexts();
+        check("agenda própria (tela): STAFF vê o seletor com os dois profissionais", (await filter.count()) === 1 && options.includes(profName) && options.includes(other), JSON.stringify(options));
+        check("agenda própria (tela): o profissional aparece uma única vez no filtro (sem variantes de grafia)", options.filter((o) => o.toLowerCase() === profName.toLowerCase()).length === 1, JSON.stringify(options));
+        await filter.selectOption({ label: other });
+        check("agenda própria (tela): STAFF filtrando por outro profissional vê só os dele", (await seen(page, Pc)) > 0 && (await seen(page, Pd)) > 0 && (await seen(page, Pb)) === 0 && (await seen(page, Pe)) === 0, `${await seen(page, Pc)} ${await seen(page, Pd)} ${await seen(page, Pb)} ${await seen(page, Pe)}`);
+        await filter.selectOption({ label: profName });
+        // Pa e Pb foram enviados com outra grafia, mas a API grava o nome do cadastro: todos ficam sob a mesma opção.
+        check("agenda própria (tela): STAFF filtrando pelo profissional vê todos os dele e nenhum de outro", (await seen(page, Pa)) > 0 && (await seen(page, Pb)) > 0 && (await seen(page, Pe)) > 0 && (await seen(page, Pc)) === 0 && (await seen(page, Pd)) === 0, `${await seen(page, Pa)} ${await seen(page, Pb)} ${await seen(page, Pe)} ${await seen(page, Pc)} ${await seen(page, Pd)}`);
+        check("agenda própria (tela): sem erro de JavaScript (STAFF)", pageErrors.length === 0, pageErrors.join(" | "));
+      }));
+    }
+    const r = await api("PATCH", `/api/appointments/${adm.data.appointment?.id}`, { professional: `Admin Troca ${run}` });
+    check("agenda própria: ADMIN troca de profissional livremente (200)", r.status === 200, `${r.status} ${r.data.message}`);
+  } finally {
+    for (const member of members) await api("DELETE", "/api/team", { membershipId: member.id });
+  }
+}
+
 const suites = {
   pacientes: { needs: [], run: async (state) => Object.assign(state, await patientsAndPayments()) },
   orcamentos: { needs: ["pacientes"], run: async (state) => { state.quote = await quotesAndProcedures(state.patient); } },
@@ -3729,6 +3851,7 @@ const suites = {
   inicio_move_agenda: { needs: [], run: () => startMovesAppointment() },
   paginacao: { needs: [], run: async () => { await paginationSuite(); await paginationGaps(); } },
   conflitos_agenda: { needs: [], run: async () => { await scheduleConflicts(); await scheduleConflictGaps(); } },
+  agenda_propria: { needs: [], run: () => scheduleOwnProfessional() },
   telas: { needs: ["orcamentos"], run: (state) => browser(state.homonym) },
   login: { needs: [], run: () => loginLockout() },
 };

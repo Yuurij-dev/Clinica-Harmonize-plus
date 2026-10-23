@@ -82,3 +82,20 @@ export function appointmentDeleteAllowed(role: string | null | undefined, curren
   if (can(role, "appointment:run")) return true;
   return role === "STAFF" && !(runningAppointmentStatuses as readonly string[]).includes(current);
 }
+
+export const OWN_APPOINTMENT_ONLY_MESSAGE = "Você só pode agendar atendimentos para você mesmo.";
+
+// Mesma normalização de `professionalKey` (appointment-conflict-rules.ts); repetida aqui porque este módulo não importa runtime.
+function normalizedProfessional(value: string | null | undefined) {
+  return (value ?? "").trim().replace(/\s+/g, " ").toLocaleLowerCase("pt-BR");
+}
+
+// PROFESSIONAL só agenda para si mesmo. Vazio/ausente (PATCH sem trocar o profissional) e manter o profissional
+// atual do agendamento (`currentProfessional`, só no PATCH) são permitidos; só trocar para outro é recusado.
+export function appointmentProfessionalAllowed(role: string | null | undefined, userName: string, professional: string | null | undefined, currentProfessional?: string | null) {
+  if (role !== "PROFESSIONAL") return true;
+  const next = normalizedProfessional(professional);
+  if (!next) return true;
+  if (next === normalizedProfessional(userName)) return true;
+  return currentProfessional !== undefined && next === normalizedProfessional(currentProfessional);
+}

@@ -16,7 +16,7 @@ export async function GET(request: Request) {
   const appointments = await prisma.appointment.findMany({
     where: { clinicId: user.clinicId, date: { gte: parsed.start, lt: parsed.endExclusive } },
     orderBy: [{ date: "asc" }, { time: "asc" }, { id: "asc" }],
-    select: { id: true, patientId: true, date: true, time: true, procedure: true, professional: true, status: true, patient: { select: { name: true } } },
+    select: { id: true, patientId: true, journeyId: true, date: true, time: true, procedure: true, professional: true, status: true, patient: { select: { name: true } } },
   });
   return NextResponse.json({ appointments, range: parsed.range, total: appointments.length });
 }

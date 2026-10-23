@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appointmentDeleteAllowed, appointmentStatusChangeAllowed, can, observationKindsFor, quoteChangeAllowed, quoteProfessional, visibleSections } from "../src/lib/permissions.ts";
+import { appointmentDeleteAllowed, appointmentProfessionalAllowed, appointmentStatusChangeAllowed, can, observationKindsFor, quoteChangeAllowed, quoteProfessional, visibleSections } from "../src/lib/permissions.ts";
 
 test("dados clínicos são só de administrador e profissional", () => {
   for (const permission of ["clinical:read", "clinical:write", "appointment:run", "quote:edit-closed"]) {
@@ -121,4 +121,16 @@ test("anamnese: conteúdo só para administrador e profissional; atendente não 
     assert.equal(can("STAFF", permission), false, `STAFF ${permission}`);
     assert.equal(can(undefined, permission), false);
   }
+});
+
+test("PROFESSIONAL só agenda para si mesmo, comparando o nome normalizado", () => {
+  assert.equal(appointmentProfessionalAllowed("PROFESSIONAL", "Dra. Ana", "dra.  ana "), true);
+  assert.equal(appointmentProfessionalAllowed("PROFESSIONAL", "Dra. Ana", "Dr. Bruno"), false);
+  assert.equal(appointmentProfessionalAllowed("PROFESSIONAL", "Dra. Ana", ""), true);
+  assert.equal(appointmentProfessionalAllowed("PROFESSIONAL", "Dra. Ana", "   "), true);
+  assert.equal(appointmentProfessionalAllowed("PROFESSIONAL", "Dra. Ana", undefined), true);
+  // PATCH: manter o profissional atual passa; trocar para outro que não ele não.
+  assert.equal(appointmentProfessionalAllowed("PROFESSIONAL", "Dra. Ana", "dr. bruno", "Dr.  Bruno"), true);
+  assert.equal(appointmentProfessionalAllowed("PROFESSIONAL", "Dra. Ana", "Dr. Carlos", "Dr. Bruno"), false);
+  for (const role of ["ADMIN", "STAFF"]) assert.equal(appointmentProfessionalAllowed(role, "Fulano", "Dr. Bruno"), true);
 });

@@ -55,7 +55,7 @@ import { PhotoEditor } from "./photo-editor/photo-editor";
 import { EmptyState, LoadingSkeleton } from "./shared";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { observationKindsFor, type ObservationKind } from "@/lib/permissions";
-import { useCan, useCurrentRole } from "./current-user";
+import { useCan, useCurrentRole, useOwnProfessionalName } from "./current-user";
 import { appointmentSlotError, appointmentWithinStartWindow, canRequestAppointmentStart, clinicNow, latestAppointmentStart, matchesProcedureAppointment } from "@/lib/clinic-time";
 import { appointmentMatchesProcedure, assignProcedureAppointmentsToCards,mergePatientAppointments, procedureCardScheduleAction } from "@/lib/patient-appointments";
 import { FormField, fieldClassName } from "@/components/ui/modal";
@@ -392,7 +392,7 @@ export function PatientDetail({
     if (tab === "Observações") { setRecordTab("Resumo clínico"); return; }
     if (tab === "Avaliação") { openPhotos({ view: "evaluations" }); return; }
     if (tab === "Procedimentos") { openPhotos({ view: "procedures" }); return; }
-    if (tab === "Arquivos e fotos") { openPhotos({}); return; }
+    if (tab === "Arquivos e fotos" || (tab === "Fotos" && !canReadClinicalPhotos)) { openPhotos({}); return; }
     if (tab === "Agendamentos" || tab === "Atendimentos" || tab === "Histórico") { primeAppointmentsHistory(); setRecordTab("Agendamentos"); return; }
     const [area, preset] = tab.split(":");
     if (area === "Documentos clínicos") setDocumentsPreset((current) => ({ category: isDocumentCategory(preset) ? preset : null, nonce: current.nonce + 1 }));
@@ -400,6 +400,8 @@ export function PatientDetail({
   }
 
   function openPhotos(filters: Partial<PhotoFilters>) {
+    // Fotos clínicas (avaliações, procedimentos, evoluções) são só da equipe clínica; a API também recusa.
+    if (!canReadClinicalPhotos) { toast.info("As fotos clínicas são acessíveis só à equipe clínica."); return; }
     setPhotosPreset((current) => ({ filters, nonce: current.nonce + 1 }));
     setActiveTab("Prontuário");
     setRecordTab("Fotos");
@@ -480,6 +482,16 @@ export function PatientDetail({
         setJourneyPastProcedure(journey.hasProcedure || Boolean(journey.latestCompletedSessionId));
 
         if (!journey.hasEvaluation || !evaluation || evaluation.status === "Rascunho") {
+          if (!canReadClinicalPhotos) {
+            // Atendente não abre a avaliação: fica na lista de tratamentos, sem a jornada na URL.
+            toast.info("Este tratamento está na etapa de avaliação, que só a equipe clínica pode abrir.");
+            setSelectedJourneyId(null);
+            setJourneyWorkflowLoading(false);
+            const params = new URLSearchParams(window.location.search);
+            params.delete("journey");
+            window.history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+            return;
+          }
           setEncounterMode(true);
         } else if (focusedQuote) {
           // Vindo do Financeiro: abre a etapa de orçamento (onde o pagamento é registrado) com esse orçamento selecionado.
@@ -508,7 +520,7 @@ export function PatientDetail({
       })
       .finally(() => { if (!cancelled) setJourneyWorkflowLoading(false); });
     return () => { cancelled = true; };
-  }, [journeyPage, selectedJourneyId, currentPatient.id, journeyWorkflowRetry]);
+  }, [journeyPage, selectedJourneyId, currentPatient.id, journeyWorkflowRetry, canReadClinicalPhotos]);
 
   useEffect(() => {
     if (!currentHistoryKey || !historyTab || !shouldLoadPatientHistory(historyTab)) return;
@@ -638,7 +650,7 @@ export function PatientDetail({
         {recordTab === "Agendamentos" && currentPatient.id ? <AppointmentsTab requestStart={startGate.requestStart} patientId={currentPatient.id} history={history} loading={historyLoading} error={historyError} onRetry={retryAppointmentsHistory} journeyNames={Object.fromEntries((journeysResource.data?.journeys ?? []).map((journey) => [journey.id, journey.name]))} onNew={openNewAppointment} onOpenJourney={(journeyId) => openJourney(journeyId)} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={() => setReturnAppointmentTarget(null)} /> : null}
         {recordTab === "Anamnese" ? currentPatient.id ? <PatientAnamnesis patientId={currentPatient.id} patientName={currentPatient.name} request={anamnesisRequest} onRequestHandled={() => setAnamnesisRequest(null)} /> : <EmptyState title="Cliente ainda não foi salvo" description="Salve o cliente antes de preencher a anamnese." /> : null}
         {recordTab === "Documentos clínicos" && currentPatient.id ? <PatientClinicalDocuments key={`documents-${documentsPreset.nonce}`} patientId={currentPatient.id} initialCategory={documentsPreset.category} onOpenAnamnesis={() => openAnamnesis("view")} onOpenEvaluation={(evaluationId) => setSummaryEvaluationId(evaluationId)} /> : null}
-        {recordTab === "Fotos" && currentPatient.id ? <PatientClinicalPhotos key={`photos-${photosPreset.nonce}`} patientId={currentPatient.id} initialFilters={photosPreset.filters} /> : null}
+        {recordTab === "Fotos" && canReadClinicalPhotos && currentPatient.id ? <PatientClinicalPhotos key={`photos-${photosPreset.nonce}`} patientId={currentPatient.id} initialFilters={photosPreset.filters} /> : null}
         </AnimatedPage>
         <EvaluationSummaryDialog patientId={currentPatient.id ?? ""} evaluationId={summaryEvaluationId} onClose={() => setSummaryEvaluationId(null)} onViewPhotos={(evaluationId) => { setSummaryEvaluationId(null); openPhotos({ encounterKey: photoRef("evaluation", evaluationId) }); }} />
       </div> : null}
@@ -1615,7 +1627,10 @@ function AppointmentsTab({ requestStart, patientId, history, loading, error, onR
   const [professionals, setProfessionals] = useState<Array<{ id: string; name: string }>>(() => readClientCache<{ professionals: Array<{ id: string; name: string }> }>("/api/team/professionals")?.professionals ?? []);
   const [professionalChoice, setProfessionalChoice] = useState<{ source: object; name: string } | null>(null);
   const professionalSource = editingAppointment ?? returnAppointmentTarget;
-  const returnProfessional = professionalChoice && professionalChoice.source === professionalSource ? professionalChoice.name : professionalSource?.professional ?? "";
+  // PROFESSIONAL só agenda para si mesmo ao criar; ao editar, o profissional original é mantido.
+  const ownProfessional = useOwnProfessionalName();
+  const lockedProfessional = editingAppointment ? null : ownProfessional;
+  const returnProfessional = lockedProfessional ?? (professionalChoice && professionalChoice.source === professionalSource ? professionalChoice.name : professionalSource?.professional ?? "");
 
   useEffect(() => {
     if (!returnAppointmentTarget && !editingAppointment) return;
@@ -1778,7 +1793,7 @@ function AppointmentsTab({ requestStart, patientId, history, loading, error, onR
       <Modal open={Boolean(returnAppointmentTarget || editingAppointment)} onClose={() => { if (!returnSaving) { setEditingAppointment(null); setProfessionalChoice(null); onReturnAppointmentClose(); } }} title={editingAppointment ? "Reagendar" : scheduleKind === "procedure" ? "Marcar procedimento" : "Marcar retorno"} description={editingAppointment ? "Atualize os dados do retorno agendado." : scheduleKind === "procedure" ? "O procedimento será incluído na lista de agendamentos da clínica." : "O retorno será incluído na lista de agendamentos da clínica."}>
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveReturnAppointment}>
           <div className="sm:col-span-2 rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3 text-xs text-[#555668]">Procedimento: <strong className="text-[#303144]">{editingAppointment?.procedure ?? returnAppointmentTarget?.name}</strong></div>
-          <div className="sm:col-span-2"><FormField label="Profissional"><select className={fieldClassName} value={returnProfessional} onChange={(event) => { if (professionalSource) setProfessionalChoice({ source: professionalSource, name: event.target.value }); }} required>
+          <div className="sm:col-span-2"><FormField label="Profissional"><select className={fieldClassName} value={returnProfessional} disabled={Boolean(lockedProfessional)} onChange={(event) => { if (professionalSource) setProfessionalChoice({ source: professionalSource, name: event.target.value }); }} required>
             {!returnProfessional ? <option value="" disabled>Selecione o profissional</option> : null}
             {returnProfessional && !professionals.some((professional) => professional.name === returnProfessional) ? <option value={returnProfessional}>{returnProfessional}</option> : null}
             {professionals.map((professional) => <option key={professional.id} value={professional.name}>{professional.name}</option>)}

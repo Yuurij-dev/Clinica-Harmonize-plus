@@ -5,6 +5,7 @@ import { cleanProfessionalName } from "@/lib/appointment-conflict-rules";
 import { appointmentDurations, appointmentTransactionOptions, lockAppointmentSlots, scheduleConflictError } from "@/lib/appointment-conflict";
 import { prisma } from "@/lib/prisma";
 import { ensurePatientJourney } from "@/lib/patient-journey";
+import { appointmentProfessionalAllowed, OWN_APPOINTMENT_ONLY_MESSAGE } from "@/lib/permissions";
 import { DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE, procedureAppointmentVariants } from "@/lib/procedure-session-rules";
 
 export async function POST(request: Request) {
@@ -26,6 +27,9 @@ export async function POST(request: Request) {
   }
   if (!body?.patientId || !body.procedure || !body.professional?.trim() || !body.time) {
     return NextResponse.json({ message: "Selecione um paciente, procedimento, profissional e horário." }, { status: 400 });
+  }
+  if (!appointmentProfessionalAllowed(user.role, user.name, body.professional)) {
+    return NextResponse.json({ message: OWN_APPOINTMENT_ONLY_MESSAGE }, { status: 403 });
   }
 
   const patient = await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId }, select: { id: true } });
@@ -56,7 +60,8 @@ export async function POST(request: Request) {
   // Evita marcar o mesmo procedimento (nome puro ou "Procedimento - X") duas vezes na jornada; a trava serializa cliques simultâneos.
   // Ordem das travas: jornada, profissional, paciente (ver appointment-conflict.ts). Depois delas, a checagem de sobreposição
   // enxerga qualquer agendamento já confirmado, então duas requisições para a mesma faixa não passam juntas.
-  const professional = cleanProfessionalName(body.professional);
+  // PROFESSIONAL agenda só para si (checado acima): grava o nome do cadastro, não a grafia enviada.
+  const professional = cleanProfessionalName(user.role === "PROFESSIONAL" ? user.name : body.professional);
   const result = await prisma.$transaction(async (tx) => {
     if (variants) {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${journey.id}))`;

@@ -37,7 +37,8 @@ import {
   SectionIntro,
   StatusBadge,
 } from "./shared";
-import { useCan } from "./current-user";
+import { professionalKey } from "@/lib/appointment-conflict-rules";
+import { useCan, useOwnProfessionalName } from "./current-user";
 import { PatientDetail } from "./patient-detail";
 import { useAnamnesisStartGate, type AnamnesisOpenMode } from "./anamnesis-start-gate";
 import { buildCustomerJourney } from "@/lib/customer-journey";
@@ -114,11 +115,12 @@ type ShownPeriod = { key: string; date: Date; view: CalendarView };
 type AgendaPeriodResponse = { appointments: ApiAppointment[]; range: AgendaRange; total: number };
 const agendaBootstrapKey = "/api/agenda/bootstrap";
 
-type AppointmentRow = Appointment & { id: string; patientId: string; date: string; durationMinutes: number; category: string };
+type AppointmentRow = Appointment & { id: string; patientId: string; journeyId: string | null; date: string; durationMinutes: number; category: string };
 type ApiProcedureOption = { name: string; category: string; durationMinutes: number };
 type ApiAppointment = {
   id: string;
   patientId: string;
+  journeyId?: string | null;
   date: string;
   time: string;
   procedure: string;
@@ -138,6 +140,7 @@ function mapApiAppointment(appointment: ApiAppointment, procedures: ApiProcedure
   return {
     id: appointment.id,
     patientId: appointment.patientId,
+    journeyId: appointment.journeyId ?? null,
     date: appointment.date,
     time: appointment.time,
     patient: appointment.patient.name,
@@ -491,10 +494,14 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   const autoMissedIds = useRef(new Set<string>());
   const autoCompletedIds = useRef(new Set<string>());
   const canRun = useCan("appointment:run");
+  // PROFESSIONAL vê e agenda só o que é dele (a restrição é da tela; a API também recusa agendar para outro).
+  const ownProfessional = useOwnProfessionalName();
   // Profissionais da equipe (estáveis ao navegar) mais os que aparecem nos agendamentos carregados.
   const professionalOptions = useMemo(() => ["Todos", ...new Set([...professionalChoices, ...appointmentRows.map((item) => item.professional)])], [professionalChoices, appointmentRows]);
-  const activeProfessional = professionalOptions.includes(professional) ? professional : "Todos";
-  const filteredAppointments = appointmentRows.filter((appointment) => activeProfessional === "Todos" || appointment.professional === activeProfessional);
+  const activeProfessional = ownProfessional ?? (professionalOptions.includes(professional) ? professional : "Todos");
+  const filteredAppointments = ownProfessional
+    ? appointmentRows.filter((appointment) => professionalKey(appointment.professional) === professionalKey(ownProfessional))
+    : appointmentRows.filter((appointment) => activeProfessional === "Todos" || appointment.professional === activeProfessional);
 
   // Dados estáticos da agenda (horário, procedimentos, profissionais): não dependem do período.
   useEffect(() => {
@@ -859,9 +866,9 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
               </form>
             ) : null}
           </div>
-          <select className={cn(fieldClassName, "min-w-0 flex-1 text-xs sm:min-w-[170px] sm:flex-none")} value={activeProfessional} onChange={(event) => setProfessional(event.target.value)} aria-label="Filtrar por profissional">
+          {ownProfessional ? null : <select className={cn(fieldClassName, "min-w-0 flex-1 text-xs sm:min-w-[170px] sm:flex-none")} value={activeProfessional} onChange={(event) => setProfessional(event.target.value)} aria-label="Filtrar por profissional">
             {professionalOptions.map((item) => <option key={item}>{item}</option>)}
-          </select>
+          </select>}
         </div>
       </div>
 
@@ -887,7 +894,8 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
 
       <Modal open={Boolean(selectedAppointment)} onClose={() => setSelectedAppointment(null)} title="Detalhes do agendamento" description="Informações completas do atendimento selecionado.">
         {selectedAppointment ? <div className="space-y-4">
-          <div className={cn("rounded-[8px] border-l-4 p-4", appointmentTone(selectedAppointment).card)}><p className="text-xs font-bold text-[#77788a]">{selectedAppointment.time} - {formatEndTime(selectedAppointment.time, selectedAppointment.durationMinutes)}</p><h3 className="mt-1 text-lg font-black text-[#303144]">{selectedAppointment.procedure}</h3><p className="mt-1 text-sm text-[#656678]">{selectedAppointment.patient}</p></div>
+          {/* Abre a jornada do agendamento na ficha do cliente; sem jornada vinculada, abre só a ficha. */}
+          <button type="button" title="Abrir na jornada do cliente" className={cn("block w-full rounded-[8px] border-l-4 p-4 text-left transition hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5147dc]/40", appointmentTone(selectedAppointment).card)} onClick={() => { const { patientId, journeyId } = selectedAppointment; setSelectedAppointment(null); agendaRouter.push(`/clientes?patient=${encodeURIComponent(patientId)}${journeyId ? `&journey=${encodeURIComponent(journeyId)}` : ""}`); }}><p className="text-xs font-bold text-[#77788a]">{selectedAppointment.time} - {formatEndTime(selectedAppointment.time, selectedAppointment.durationMinutes)}</p><h3 className="mt-1 text-lg font-black text-[#303144]">{selectedAppointment.procedure}</h3><p className="mt-1 text-sm text-[#656678]">{selectedAppointment.patient}</p></button>
           <div className="grid gap-3 sm:grid-cols-2">{[["Data", formatDayBR(selectedAppointment.date)], ["Profissional", selectedAppointment.professional], ["Tipo", selectedAppointment.category || "Atendimento"], ["Status", selectedAppointment.status]].map(([label, value]) => <div className="rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3" key={label}><p className="text-[9px] font-bold uppercase text-[#9697a7]">{label}</p><p className="mt-1 text-xs font-semibold text-[#4f5062]">{value}</p></div>)}</div>
           <div className="flex justify-end gap-2">{selectedAppointment.status === "Agendado" ? <Button type="button" variant="secondary" disabled title="Confirmação por WhatsApp em breve"><MessageCircle className="h-3.5 w-3.5" />Confirmar por WhatsApp</Button> : null}<Button type="button" onClick={() => setSelectedAppointment(null)}>Fechar</Button></div>
         </div> : null}
@@ -970,10 +978,10 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
           </div>
           <FormField label="Data"><input className={cn(fieldClassName, invalidAppointmentFields.has("date") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="date" type="date" defaultValue={calendarDateKey(calendarDate)} onChange={() => clearAppointmentField("date")} required /></FormField>
           <div className="relative"><FormField label="Horário"><ClinicTimePicker openingTime={openingTime} closingTime={closingTime} latestTime={latestAppointmentStart(closingTime)} value={appointmentTime} invalid={invalidAppointmentFields.has("time")} onChange={(value) => { setAppointmentTime(value); clearAppointmentField("time"); }} /></FormField><input name="time" type="hidden" value={appointmentTime} required /></div>
-          <FormField label="Profissional"><div className="relative"><select className={cn(fieldClassName, invalidAppointmentFields.has("professional") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="professional" required disabled={professionalLoading || !professionalChoices.length} onChange={() => clearAppointmentField("professional")}><option value="">{professionalLoading ? "..." : professionalChoices.length ? "Selecione o profissional" : "Nenhum profissional cadastrado"}</option>{professionalChoices.map((professional) => <option key={professional} value={professional}>{professional}</option>)}</select>{professionalLoading ? <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#5147dc]" /> : null}</div></FormField>
+          <FormField label="Profissional">{ownProfessional ? <><input type="hidden" name="professional" value={ownProfessional} /><select className={fieldClassName} value={ownProfessional} disabled aria-label="Profissional"><option value={ownProfessional}>{ownProfessional}</option></select></> : <div className="relative"><select className={cn(fieldClassName, invalidAppointmentFields.has("professional") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="professional" required disabled={professionalLoading || !professionalChoices.length} onChange={() => clearAppointmentField("professional")}><option value="">{professionalLoading ? "..." : professionalChoices.length ? "Selecione o profissional" : "Nenhum profissional cadastrado"}</option>{professionalChoices.map((professional) => <option key={professional} value={professional}>{professional}</option>)}</select>{professionalLoading ? <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#5147dc]" /> : null}</div>}</FormField>
           <div className="sm:col-span-2"><FormField label="Tipo de consulta"><div className="relative"><select className={cn(fieldClassName, invalidAppointmentFields.has("procedure") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="procedure" required onChange={() => clearAppointmentField("procedure")}><option value="">Selecione o tipo de consulta</option>{appointmentTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></div></FormField></div>
           {appointmentFormError ? <p role="alert" className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{appointmentFormError}</p> : null}
-          <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || professionalLoading || !professionalChoices.length || !selectedPatientId} type="submit">{isSaving || professionalLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : professionalLoading ? "Carregando dados..." : "Criar agendamento"}</Button></div>
+          <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || professionalLoading || (!ownProfessional && !professionalChoices.length) || !selectedPatientId} type="submit">{isSaving || professionalLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : professionalLoading ? "Carregando dados..." : "Criar agendamento"}</Button></div>
         </form>
       </Modal>
       <Modal open={Boolean(deleteTarget)} onClose={() => { if (!deleteSaving) setDeleteTarget(null); }} title="Excluir agendamento" description="Essa ação removerá o agendamento da agenda.">

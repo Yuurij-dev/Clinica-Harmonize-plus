@@ -5,7 +5,7 @@ import { appointmentTransactionOptions, lockAppointmentSlots, scheduleConflictEr
 import { appointmentNeedsConflictCheck, cleanProfessionalName, professionalKey } from "@/lib/appointment-conflict-rules";
 import { prisma } from "@/lib/prisma";
 import { DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE, procedureAppointmentVariants } from "@/lib/procedure-session-rules";
-import { appointmentDeleteAllowed, appointmentStatusChangeAllowed, can, runningAppointmentStatuses } from "@/lib/permissions";
+import { appointmentDeleteAllowed, appointmentProfessionalAllowed, appointmentStatusChangeAllowed, can, OWN_APPOINTMENT_ONLY_MESSAGE, runningAppointmentStatuses } from "@/lib/permissions";
 
 const appointmentStatuses = ["Agendado", "Em atendimento", "Atendido", "Finalizado", "Faltou", "Cancelado"];
 
@@ -30,6 +30,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (!appointmentStatusChangeAllowed(user.role, current.status, body.status)) {
     return NextResponse.json({ message: "O atendimento é conduzido pela equipe clínica." }, { status: 403 });
   }
+  if (!appointmentProfessionalAllowed(user.role, user.name, body.professional, current.professional)) {
+    return NextResponse.json({ message: OWN_APPOINTMENT_ONLY_MESSAGE }, { status: 403 });
+  }
   if ((day || body.time) && appointmentHasPassed({ date: appointmentInstant(day ?? appointmentDay(current.date)), time: body.time ?? current.time }, clinicNow())) {
     return NextResponse.json({ message: "Não é possível alterar para uma data ou horário que já passou." }, { status: 400 });
   }
@@ -41,7 +44,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const variants = becomesActive && current.journeyId ? procedureAppointmentVariants(nextProcedure) : null;
   const journeyId = current.journeyId;
   // Sobreposição: a decisão de conferir usa o estado relido dentro da transação, depois das travas (ver abaixo).
-  const lockedProfessional = cleanProfessionalName(body.professional) || current.professional;
+  // PROFESSIONAL: o próprio nome é gravado como no cadastro; outro nome só passa a permissão se for o atual, e aí nada muda.
+  const requestedProfessional = cleanProfessionalName(body.professional);
+  const professionalChange = user.role !== "PROFESSIONAL" || !requestedProfessional ? requestedProfessional
+    : professionalKey(requestedProfessional) === professionalKey(user.name) ? cleanProfessionalName(user.name) : "";
+  const lockedProfessional = professionalChange || current.professional;
   const result = await prisma.$transaction(async (tx) => {
     // Ordem das travas: jornada, profissional, paciente (ver appointment-conflict.ts).
     if (variants && journeyId) {
@@ -52,7 +59,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     await lockAppointmentSlots(tx, user.clinicId, lockedProfessional, current.patientId);
     const fresh = await tx.appointment.findFirst({ where: { id, clinicId: user.clinicId }, select: { status: true, date: true, time: true, procedure: true, professional: true } });
     if (!fresh) return "missing" as const;
-    const next = { status: body.status ?? fresh.status, day: day ?? appointmentDay(fresh.date), time: body.time ?? fresh.time, procedure: body.procedure?.trim() || fresh.procedure, professional: cleanProfessionalName(body.professional) || fresh.professional };
+    const next = { status: body.status ?? fresh.status, day: day ?? appointmentDay(fresh.date), time: body.time ?? fresh.time, procedure: body.procedure?.trim() || fresh.procedure, professional: professionalChange || fresh.professional };
     // O profissional travado precisa ser o do estado atual; se mudou entre a leitura e a trava, o cliente tenta de novo.
     if (professionalKey(next.professional) !== professionalKey(lockedProfessional)) return "stale" as const;
     if (appointmentNeedsConflictCheck({ status: fresh.status, day: appointmentDay(fresh.date), time: fresh.time, procedure: fresh.procedure, professional: fresh.professional }, next)) {
@@ -64,7 +71,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       ...(day ? { date: appointmentInstant(day) } : {}),
       ...(body.time ? { time: body.time } : {}),
       ...(body.procedure?.trim() ? { procedure: body.procedure.trim() } : {}),
-      ...(cleanProfessionalName(body.professional) ? { professional: cleanProfessionalName(body.professional) } : {}),
+      ...(professionalChange ? { professional: professionalChange } : {}),
       ...(body.notes !== undefined ? { notes: body.notes.trim() } : {}),
     } });
   }, appointmentTransactionOptions);
