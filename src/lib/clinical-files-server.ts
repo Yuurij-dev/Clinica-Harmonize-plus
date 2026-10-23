@@ -6,8 +6,8 @@ type Actor = { id: string; name: string; clinicId: string };
 type AuditDetails = { fileName?: string; category?: string; note?: string };
 
 // Linha de auditoria pronta para entrar na MESMA $transaction da mutação (upload, edição, arquivar, excluir).
-export function auditEntry(actor: Actor, patientId: string, fileKind: "DOCUMENT" | "PHOTO", fileId: string, action: FileAuditAction, details: AuditDetails = {}) {
-  return prisma.clinicalFileAudit.create({ data: { clinicId: actor.clinicId, patientId, fileKind, fileId, action, actorId: actor.id, actorName: actor.name, fileName: (details.fileName ?? "").slice(0, 200), category: details.category ?? "", note: (details.note ?? "").slice(0, 300) } });
+export function auditEntry(actor: Actor, patientId: string, fileKind: "DOCUMENT" | "PHOTO", fileId: string, action: FileAuditAction, details: AuditDetails = {}, db: Pick<typeof prisma, "clinicalFileAudit"> = prisma) {
+  return db.clinicalFileAudit.create({ data: { clinicId: actor.clinicId, patientId, fileKind, fileId, action, actorId: actor.id, actorName: actor.name, fileName: (details.fileName ?? "").slice(0, 200), category: details.category ?? "", note: (details.note ?? "").slice(0, 300) } });
 }
 
 // Só para leitura (VIEW/DOWNLOAD): a falha na trilha não derruba a resposta. Mutações usam auditEntry dentro da transação.
