@@ -81,6 +81,12 @@ export function stockAlertSection(alert: StockAlert): "estoque" | "compras" {
   return alert.kind === "pending" ? "compras" : "estoque";
 }
 
+// Borda amarela na aba que tem aviso, no mesmo tom do card de procedimento em andamento.
+export function warningTabClass(hasWarning: boolean, active: boolean) {
+  if (!hasWarning) return undefined;
+  return active ? "border border-amber-300" : "border-amber-300 bg-amber-50/70 hover:border-amber-400 hover:bg-amber-50";
+}
+
 // Indicador de aviso da seção; a lista continua aparecendo ao passar o mouse ou focar.
 // No menu lateral ele fica dentro do botão do item, então o trigger é um span.
 export function SectionWarning({ section, enabled, inMenu = false }: { section: "estoque" | "compras"; enabled: boolean; inMenu?: boolean }) {
