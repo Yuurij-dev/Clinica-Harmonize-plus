@@ -5,6 +5,7 @@ import { denyUnless } from "@/lib/api-guards";
 import { can } from "@/lib/permissions";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 import { assessmentCompletionError } from "@/lib/evaluation-rules";
+import { parseKnownPhotoIds, photosOverLimit, unknownStoredPhotos } from "@/lib/session-after-photo-rules";
 
 type EvaluationPhotoPayload = {
   id?: string;
@@ -53,11 +54,19 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     return NextResponse.json({ evaluation });
   }
 
+  // Checagem barata do editor (fotos enviadas pelo app): só os ids da avaliação pedida, sem base64.
+  if (searchParams.get("photoIds") === "1" && evaluationId) {
+    const found = await prisma.evaluation.findFirst({ where: { id: evaluationId, patientId, clinicId: user.clinicId }, select: { status: true, photos: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }], select: { id: true } } } });
+    return NextResponse.json({ evaluation: found ? { status: found.status, photoIds: found.photos.map((photo) => photo.id) } : null });
+  }
+  // `only=id1,id2` devolve a avaliação com apenas essas fotos (busca das novas, sem reenviar as já conhecidas).
+  const only = (searchParams.get("only") ?? "").split(",").filter(Boolean).slice(0, 20);
+
   // Sem avaliação informada, retorna a mais recente do paciente.
   const evaluation = await prisma.evaluation.findFirst({
     where: { patientId, clinicId: user.clinicId, ...(evaluationId ? { id: evaluationId } : {}), ...(journeyId ? { journeyId } : {}) },
     orderBy: { updatedAt: "desc" },
-    include: { photos: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] } },
+    include: { photos: { ...(only.length ? { where: { id: { in: only } } } : {}), orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] } },
   });
 
   return NextResponse.json({
@@ -100,7 +109,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const patient = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true } });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
 
-  const body = await request.json().catch(() => null) as ({ evaluationId?: string; journeyId?: string; photos?: EvaluationPhotoPayload[]; assessment?: AssessmentPayload; status?: string } | null);
+  const body = await request.json().catch(() => null) as ({ evaluationId?: string; journeyId?: string; photos?: EvaluationPhotoPayload[]; knownPhotoIds?: unknown; assessment?: AssessmentPayload; status?: string } | null);
   const photos = body?.photos;
   if (!Array.isArray(photos)) return NextResponse.json({ message: "Envie as fotos da avaliação." }, { status: 400 });
   const existingEvaluation = body?.evaluationId ? await prisma.evaluation.findFirst({ where: { id: body.evaluationId, patientId, clinicId: user.clinicId }, select: { id: true, journeyId: true, status: true, chiefComplaint: true, patientGoal: true, allergies: true, pregnancyStatus: true, anticoagulantUse: true, autoimmuneDiseases: true, previousProcedures: true, clinicalNotes: true } }) : null;
@@ -137,14 +146,24 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const journey = existingEvaluation ? null : await ensurePatientJourney(patientId, user.clinicId, body?.journeyId);
 
   const validPhotos = photos;
+  const known = parseKnownPhotoIds(body?.knownPhotoIds);
+  if (!known.ok) return NextResponse.json({ message: known.message }, { status: 400 });
+  const knownPhotoIds = known.ids;
 
-  const savedEvaluation = await prisma.$transaction(async (transaction) => {
+  const result = await prisma.$transaction(async (transaction) => {
+    // Ordem de travas: advisory lock (mesma chave do POST de evaluation/photos) PRIMEIRO, linhas depois; o inverso causaria deadlock.
+    // O PUT não cruza com uma foto sendo anexada. Com knownPhotoIds, foto gravada que o editor não conhecia e que não veio na lista
+    // (enviada pelo app depois do carregamento) é mantida; o que o editor conhecia e omitiu foi removido por ele.
+    await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`evaluation-photo:${patientId}`}, 0))`;
+    const keep = knownPhotoIds && body?.evaluationId ? unknownStoredPhotos(await transaction.evaluationPhoto.findMany({ where: { evaluationId: body.evaluationId }, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }], select: { id: true } }), validPhotos.map((photo) => photo.id ?? ""), knownPhotoIds).map((photo) => photo.id) : [];
+    if (photosOverLimit(validPhotos.length, keep.length, 20)) return { error: NextResponse.json({ message: "A avaliação já tem o máximo de 20 fotos." }, { status: 409 }) };
+
     // Sem evaluationId, cria uma nova avaliação em nome do usuário logado.
     const evaluation = body?.evaluationId
       ? await transaction.evaluation.update({ where: { id: body.evaluationId }, data: { ...assessment, ...(body?.status ? { status: body.status } : {}) } })
       : await transaction.evaluation.create({ data: { patientId, clinicId: user.clinicId, journeyId: journey?.id, professional: journey?.professional?.trim() || user.name, ...assessment, status: body?.status ?? "Rascunho" } });
 
-    await transaction.evaluationPhoto.deleteMany({ where: { evaluationId: evaluation.id } });
+    await transaction.evaluationPhoto.deleteMany({ where: { evaluationId: evaluation.id, ...(keep.length ? { id: { notIn: keep } } : {}) } });
     if (validPhotos.length) {
       await transaction.evaluationPhoto.createMany({
         data: validPhotos.map((photo, index) => ({
@@ -160,10 +179,15 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
         })),
       });
     }
-    return evaluation;
+    // Fotos mantidas vão depois das enviadas, renumeradas para não repetir sortOrder (ordem de gravação preservada entre elas).
+    const nextOrder = validPhotos.reduce((max, photo, index) => Math.max(max, (photo.sortOrder ?? index) + 1), 0);
+    for (const [index, id] of keep.entries()) await transaction.evaluationPhoto.update({ where: { id }, data: { sortOrder: nextOrder + index }, select: { id: true } });
+    return { evaluation, kept: keep.length };
   });
 
-  return NextResponse.json({ evaluation: { id: savedEvaluation.id, professional: savedEvaluation.professional, status: savedEvaluation.status, createdAt: savedEvaluation.createdAt, updatedAt: savedEvaluation.updatedAt, photoCount: validPhotos.length } });
+  if ("error" in result) return result.error;
+  const savedEvaluation = result.evaluation;
+  return NextResponse.json({ evaluation: { id: savedEvaluation.id, professional: savedEvaluation.professional, status: savedEvaluation.status, createdAt: savedEvaluation.createdAt, updatedAt: savedEvaluation.updatedAt, photoCount: validPhotos.length + result.kept } });
 }
 
 function parseAnnotations(value: string) {

@@ -42,7 +42,18 @@ async function followUpRows(clinicId: string, patientId: string): Promise<RawFol
   }
 }
 
-export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+async function galleryStamp(clinicId: string, patientId: string) {
+  const where = { clinicId, patientId };
+  const [evaluation, session, followUp, upload] = await Promise.all([
+    prisma.evaluation.aggregate({ where, _count: { _all: true }, _max: { updatedAt: true } }),
+    prisma.patientProcedureSession.aggregate({ where, _count: { _all: true }, _max: { updatedAt: true } }),
+    prisma.patientProcedureFollowUp.aggregate({ where, _count: { _all: true }, _max: { updatedAt: true } }),
+    prisma.clinicalPhoto.aggregate({ where, _count: { _all: true }, _max: { updatedAt: true } }),
+  ]);
+  return [evaluation, session, followUp, upload].map((row) => `${row._count._all}:${row._max.updatedAt?.getTime() ?? 0}`).join("|");
+}
+
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const denied = denyUnless(user.role, "clinical:read");
@@ -50,6 +61,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const patientId = (await params).id;
   const clinicId = user.clinicId;
   if (!await findPatientScoped(clinicId, patientId)) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
+
+  // `?stamp=1`: só a assinatura (4 agregados, sem fotos/base64). O índice completo também a devolve, calculada ANTES das consultas: assim o cliente
+  // compara com a assinatura da lista que carregou e uma foto enviada logo depois é detectada. Todo envio do app e todo PUT/PATCH/upload/arquivamento a altera.
+  const stamp = await galleryStamp(clinicId, patientId);
+  if (new URL(request.url).searchParams.get("stamp") === "1") return NextResponse.json({ stamp });
 
   const [evaluations, sessions, followUps, legacyRows, legacySessionRows, uploads, journeys] = await Promise.all([
     // EvaluationPhoto não tem clinicId: o escopo vem da avaliação.
@@ -76,6 +92,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     journeyNames: new Map(journeys.map((journey) => [journey.id, journey.name])),
   });
   return NextResponse.json({
+    stamp,
     photos,
     journeys: journeys.map((journey) => ({ id: journey.id, name: journey.name })),
     // Atendimentos que aceitam vínculo no upload (avaliações e sessões).
