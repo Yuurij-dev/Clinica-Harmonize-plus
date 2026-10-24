@@ -136,9 +136,10 @@ function CancelPurchaseModal({ purchase, saving, onClose, onConfirm }: { purchas
   );
 }
 
-function PurchaseFormModal({ materials, onClose, onSaved }: { materials: StockMaterial[]; onClose: () => void; onSaved: (message: string) => void }) {
+// `initialProduct` pré-seleciona o item (ex.: logo após cadastrá-lo no Estoque).
+export function PurchaseFormModal({ materials, initialProduct, onClose, onSaved }: { materials: StockMaterial[]; initialProduct?: StockMaterial; onClose: () => void; onSaved: (message: string) => void }) {
   const today = clinicToday();
-  const [rows, setRows] = useState<ItemRow[]>([{ key: 0, productId: "", lotCode: "", expiresOn: "", quantity: "", price: "" }]);
+  const [rows, setRows] = useState<ItemRow[]>([{ key: 0, productId: initialProduct?.id ?? "", lotCode: "", expiresOn: "", quantity: "", price: "" }]);
   const [nextKey, setNextKey] = useState(1);
   const [installments, setInstallments] = useState(1);
   const [paid, setPaid] = useState(false);
@@ -190,7 +191,7 @@ function PurchaseFormModal({ materials, onClose, onSaved }: { materials: StockMa
     <Modal open onClose={onClose} title="Nova compra" description="Cada item dá entrada no lote informado. A compra gera as despesas no Financeiro.">
       <form className="space-y-4" onSubmit={submit}>
         <div className="grid gap-4 sm:grid-cols-2">
-          <FormField label="Fornecedor"><input className={fieldClassName} name="supplier" required /></FormField>
+          <FormField label="Fornecedor"><input className={fieldClassName} name="supplier" defaultValue={initialProduct?.supplier ?? ""} required /></FormField>
           <FormField label="Número da nota (opcional)"><input className={fieldClassName} name="invoiceNumber" /></FormField>
           <FormField label="Data da compra"><input className={fieldClassName} name="purchasedOn" type="date" defaultValue={today} required /></FormField>
           <FormField label="Forma de pagamento"><select className={fieldClassName} name="paymentMethod" defaultValue="Pix">{paymentMethods.map((method) => <option key={method}>{method}</option>)}</select></FormField>
