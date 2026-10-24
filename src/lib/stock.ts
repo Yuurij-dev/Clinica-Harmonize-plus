@@ -80,10 +80,10 @@ export async function findOrCreateLot(tx: StockTransaction, input: { clinicId: s
 export class StockError extends Error {}
 
 export const technicalSheetSelect = {
-  technicalSheet: { orderBy: { product: { name: "asc" } }, select: { productId: true, quantity: true, product: { select: { name: true, unit: true, archivedAt: true } } } },
+  technicalSheet: { orderBy: { product: { name: "asc" } }, select: { productId: true, quantity: true, product: { select: { name: true, kind: true, unit: true, archivedAt: true } } } },
 } as const;
 
-type TechnicalSheetRow = { productId: string; quantity: number; product: { name: string; unit: string; archivedAt: Date | null } };
+type TechnicalSheetRow = { productId: string; quantity: number; product: { name: string; kind?: string; unit: string; archivedAt: Date | null } };
 
 export function serializeTechnicalSheet(rows: TechnicalSheetRow[]) {
   return rows.map((row) => ({ productId: row.productId, name: row.product.name, unit: row.product.unit, quantity: row.quantity, archived: Boolean(row.product.archivedAt) }));

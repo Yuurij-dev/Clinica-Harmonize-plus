@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from "react";
 import { ArrowRight, FileText, Filter, Plus, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -8,42 +7,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-
-export function CountUpValue({
-  value,
-  format = (currentValue) => String(Math.round(currentValue)),
-}: {
-  value: number;
-  format?: (value: number) => string;
-}) {
-  const [displayValue, setDisplayValue] = useState(0);
-  const previousValue = useRef(0);
-
-  useEffect(() => {
-    const from = previousValue.current;
-    const distance = Math.abs(value - from);
-    const duration = Math.min(760, Math.max(360, 360 + Math.log10(distance + 1) * 110));
-    const startedAt = performance.now();
-    let frame = 0;
-
-    const animate = (now: number) => {
-      const progress = Math.min(1, (now - startedAt) / duration);
-      const acceleratedProgress = progress * progress;
-      setDisplayValue(from + (value - from) * acceleratedProgress);
-
-      if (progress < 1) {
-        frame = requestAnimationFrame(animate);
-      } else {
-        previousValue.current = value;
-      }
-    };
-
-    frame = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(frame);
-  }, [value]);
-
-  return <>{format(displayValue)}</>;
-}
+import { staggerDelay } from "@/lib/count-up-rules";
 
 export function SectionIntro({
   title,
@@ -59,7 +23,7 @@ export function SectionIntro({
   onAction?: () => void;
 }) {
   return (
-    <div className="hp-page-enter mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+    <div data-hp-title className="hp-page-enter mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div>
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-bold text-primary">{title}</h2>
@@ -105,7 +69,7 @@ export function SearchFilterBar({
       <label className="group flex h-10 min-w-0 flex-1 items-center gap-3 rounded-[8px] border border-input bg-white px-4 text-xs text-muted-foreground transition-[border-color,box-shadow,background-color] duration-150 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
         <Search className="h-4 w-4 text-muted-foreground" />
         <Input
-          className="h-auto border-0 bg-transparent p-0 shadow-none focus-visible:border-0 focus-visible:ring-0"
+          className="h-auto text-sm border-0 bg-transparent p-0 shadow-none focus-visible:border-0 focus-visible:ring-0"
           placeholder={placeholder}
           value={value}
           onChange={(event) => onChange?.(event.target.value)}
@@ -181,7 +145,7 @@ export function MiniTable({
       <Table className="min-w-[720px]">
         <TableHeader>
           <TableRow className="bg-muted/60 hover:bg-muted/60">
-            {columns.map((column) => <TableHead className="h-11 px-4 text-[10px] font-semibold uppercase" key={column}>{column}</TableHead>)}
+            {columns.map((column) => <TableHead className="h-11 px-4 text-xs font-semibold uppercase" key={column}>{column}</TableHead>)}
           </TableRow>
         </TableHeader>
         <TableBody className="hp-list-stagger">
@@ -254,9 +218,12 @@ export function DetailCard({
 export function ProgressBar({
   value,
   tone = "blue",
+  index = 0,
 }: {
   value: number;
   tone?: "blue" | "green" | "purple" | "amber";
+  /** Posição na lista: barras em sequência preenchem em cascata (35ms por item, teto de 5). */
+  index?: number;
 }) {
   const color = {
     blue: "bg-primary",
@@ -265,16 +232,16 @@ export function ProgressBar({
     amber: "bg-warning",
   }[tone];
 
-  return <Progress value={value} indicatorClassName={color} aria-label="Progresso" />;
+  return <Progress value={value} indicatorClassName={color} revealDelay={staggerDelay(index, 35, 5)} aria-label="Progresso" />;
 }
 
 export function StatCard({ label, value, detail, icon: Icon }: { label: string; value: React.ReactNode; detail?: React.ReactNode; icon?: React.ComponentType<{ className?: string }> }) {
   return <Card className="p-4">
     <div className="flex items-center justify-between gap-2">
-      <p className="text-[10px] font-bold uppercase text-muted-foreground">{label}</p>
+      <p className="text-xs font-bold uppercase text-muted-foreground">{label}</p>
       {Icon ? <Icon className="h-3.5 w-3.5 text-primary" /> : null}
     </div>
     <p className="mt-3 text-xl font-bold text-foreground">{value}</p>
-    {detail ? <p className="mt-1 text-[10px] font-medium text-muted-foreground">{detail}</p> : null}
+    {detail ? <p className="mt-1 text-xs font-medium text-muted-foreground">{detail}</p> : null}
   </Card>;
 }

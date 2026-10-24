@@ -1,6 +1,6 @@
 "use client";
 
-import { ImagePlus, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ImagePlus, Replace, X } from "lucide-react";
 import Image from "next/image";
 import { cn } from "@/lib/utils";
 import type { EvaluationPhoto } from "./types";
@@ -11,32 +11,49 @@ export function PhotoGallery({
   onUpload,
   onSelect,
   onRemove,
+  onCategoryChange,
+  onMove,
+  onReplace,
 }: {
   photos: EvaluationPhoto[];
   activePhotoId: string | null;
   onUpload: (files: FileList | null) => void;
   onSelect: (photoId: string) => void;
   onRemove: (photoId: string) => void;
+  onCategoryChange: (photoId: string, category: EvaluationPhoto["category"]) => void;
+  onMove: (photoId: string, direction: -1 | 1) => void;
+  onReplace: (photoId: string, file: File | undefined) => void;
 }) {
   return (
     <div className="flex flex-wrap gap-3">
       {photos.map((photo) => (
         <div
           className={cn(
-            "group relative h-24 w-24 overflow-hidden rounded-[8px] border bg-[#f7f8fc]",
+            "group relative w-32 overflow-hidden rounded-[8px] border bg-[#f7f8fc]",
             activePhotoId === photo.id ? "border-[#5147dc] ring-2 ring-[#5147dc]/25" : "border-[#e0e2ed]",
           )}
           key={photo.id}
         >
-          <button className="absolute inset-0 h-full w-full" type="button" onClick={() => onSelect(photo.id)}>
-            <Image className="object-cover" src={photo.imageUrl} alt={photo.name} fill sizes="96px" unoptimized />
+          <button className="relative block aspect-square w-full" type="button" onClick={() => onSelect(photo.id)} aria-label={`Abrir foto ${photo.name}`}>
+            <Image className="object-cover" src={photo.imageUrl} alt={photo.name} fill sizes="128px" unoptimized />
           </button>
-          <span className="absolute bottom-0 left-0 right-0 truncate bg-[#25263a]/78 px-2 py-1 text-left text-[9px] font-semibold text-white">
-            {photo.name}
-          </span>
+          <div className="grid gap-1.5 p-1.5">
+            <select aria-label={`Categoria de ${photo.name}`} className="h-7 w-full rounded border border-[#dfe2ee] bg-white px-1 text-sm" value={photo.category} onChange={(event) => onCategoryChange(photo.id, event.target.value as EvaluationPhoto["category"])}>
+              {["Frontal", "Perfil direito", "Perfil esquerdo", "Sorriso", "Outra"].map((category) => <option key={category}>{category}</option>)}
+            </select>
+            <span className="truncate text-xs text-[#606176]" title={photo.name}>{photo.name}</span>
+          </div>
+          <div className="absolute right-1 top-1 flex gap-1">
+            <button aria-label={`Mover ${photo.name} para cima`} className="grid h-6 w-6 place-items-center rounded-full bg-white/95 text-[#555668] shadow-sm" type="button" onClick={() => onMove(photo.id, -1)}><ArrowUp className="h-3 w-3" /></button>
+            <button aria-label={`Mover ${photo.name} para baixo`} className="grid h-6 w-6 place-items-center rounded-full bg-white/95 text-[#555668] shadow-sm" type="button" onClick={() => onMove(photo.id, 1)}><ArrowDown className="h-3 w-3" /></button>
+          </div>
+          <label aria-label={`Substituir ${photo.name}`} className="absolute left-1 top-1 grid h-6 w-6 cursor-pointer place-items-center rounded-full bg-white/95 text-[#555668] shadow-sm" title="Substituir foto">
+            <Replace className="h-3 w-3" />
+            <input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { onReplace(photo.id, event.target.files?.[0]); event.target.value = ""; }} />
+          </label>
           <button
             aria-label={`Remover ${photo.name}`}
-            className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-white/90 text-[#555668] opacity-0 shadow-sm transition group-hover:opacity-100"
+            className="absolute bottom-10 right-1 grid h-6 w-6 place-items-center rounded-full bg-white/90 text-[#555668] opacity-0 shadow-sm transition group-hover:opacity-100 focus:opacity-100"
             type="button"
             onClick={(event) => {
               event.stopPropagation();
@@ -48,8 +65,8 @@ export function PhotoGallery({
         </div>
       ))}
 
-      <label className="grid h-24 w-24 cursor-pointer place-items-center rounded-[8px] border border-dashed border-[#cfd3e4] bg-[#fbfbfe] text-[#5147dc] transition hover:border-[#5147dc] hover:bg-[#f7f6ff]">
-        <span className="grid gap-1 text-center text-[10px] font-bold text-[#5147dc]">
+      <label className="grid h-[182px] w-32 cursor-pointer place-items-center rounded-[8px] border border-dashed border-[#cfd3e4] bg-[#fbfbfe] text-[#5147dc] transition hover:border-[#5147dc] hover:bg-[#f7f6ff]">
+        <span className="grid gap-1 text-center text-xs font-bold text-[#5147dc]">
           <ImagePlus className="mx-auto h-5 w-5" />
           Foto
         </span>

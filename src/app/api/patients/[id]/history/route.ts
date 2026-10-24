@@ -12,7 +12,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const requestedJourneyId = new URL(request.url).searchParams.get("journeyId");
   const patientId = (await params).id;
   const clinical = can(user.role, "clinical:read");
-  const journeyId = requestedTab === "Histórico" ? undefined : requestedJourneyId || undefined;
+  const journeyId = requestedJourneyId || undefined;
   const includeAppointments = ["Procedimentos", "Agendamentos", "Histórico"].includes(requestedTab ?? "");
   const includePayments = ["Pagamentos", "Histórico"].includes(requestedTab ?? "");
   const includeQuotes = ["Procedimentos", "Agendamentos", "Histórico"].includes(requestedTab ?? "");
@@ -33,14 +33,18 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     includeAppointments ? prisma.appointment.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: [{ date: "desc" }, { time: "desc" }] }) : Promise.resolve([]),
     includePayments ? prisma.payment.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { date: "desc" } }) : Promise.resolve([]),
     includeQuotes ? prisma.quote.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { createdAt: "desc" }, select: { id: true, items: true, status: true, createdAt: true } }) : Promise.resolve([]),
-    includeProcedureRecords ? prisma.patientProcedure.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { performedAt: "desc" }, select: { id: true, quoteId: true, name: true, professional: true, performedAt: true, ...(clinical ? { notes: true } : {}), beforePhoto: true, afterPhoto: true, photoSessions: { orderBy: { createdAt: "asc" }, select: { id: true, name: true, beforePhoto: true, afterPhoto: true, createdAt: true } } } }) : Promise.resolve([]),
+    includeProcedureRecords ? prisma.patientProcedure.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { performedAt: "desc" }, select: { id: true, quoteId: true, name: true, professional: true, performedAt: true, ...(clinical ? { notes: true, sessions: { orderBy: { performedAt: "desc" as const }, select: { id: true, evaluationId: true, procedureName: true, professional: true, performedAt: true, status: true, technique: true, treatedAreas: true, durationMinutes: true, photos: true } } } : {}), beforePhoto: true, afterPhoto: true, photoSessions: { orderBy: { createdAt: "asc" }, select: { id: true, name: true, beforePhoto: true, afterPhoto: true, createdAt: true } } } }) : Promise.resolve([]),
     prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { appointmentToleranceMinutes: true } }),
     // Materiais usados no paciente (rastreio): saídas de atendimento, sem custo.
-    includeProcedureRecords && clinical ? prisma.stockMovement.findMany({ where: { clinicId: user.clinicId, patientId, type: "attendance" }, orderBy: { attendanceDate: "desc" }, select: { id: true, appointmentId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, kind: true, unit: true } }, lot: { select: { code: true, expiresOn: true } }, reversedBy: { select: { id: true } } } }) : Promise.resolve([]),
-    includeProcedureRecords && clinical ? prisma.pendingStockOutput.findMany({ where: { clinicId: user.clinicId, patientId, status: "pending" }, select: { id: true, appointmentId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, kind: true, unit: true } } } }) : Promise.resolve([]),
+    includeProcedureRecords && clinical ? prisma.stockMovement.findMany({ where: { clinicId: user.clinicId, patientId, type: "attendance" }, orderBy: { attendanceDate: "desc" }, select: { id: true, appointmentId: true, procedureSessionId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, kind: true, unit: true } }, lot: { select: { code: true, expiresOn: true } }, reversedBy: { select: { id: true } } } }) : Promise.resolve([]),
+    includeProcedureRecords && clinical ? prisma.pendingStockOutput.findMany({ where: { clinicId: user.clinicId, patientId, status: "pending" }, select: { id: true, appointmentId: true, procedureSessionId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, kind: true, unit: true } } } }) : Promise.resolve([]),
     includeObservations ? prisma.patientObservation.findMany({ where: { patientId, clinicId: user.clinicId, kind: { in: observationKindsFor(user.role) } }, orderBy: { createdAt: "desc" }, select: { id: true, text: true, authorName: true, kind: true, createdAt: true } }) : Promise.resolve([]),
     includeAppointmentProcedureNames ? prisma.procedure.findMany({ where: { clinicId: user.clinicId }, select: { name: true } }) : Promise.resolve([]),
   ]);
+  const sessionEvaluationIds = clinical ? [...new Set(procedureRecords.flatMap((procedure) => "sessions" in procedure ? procedure.sessions.map((session) => session.evaluationId) : []))] : [];
+  const sessionEvaluationPhotos = sessionEvaluationIds.length && includeProcedurePhotos ? await prisma.evaluationPhoto.findMany({ where: { evaluationId: { in: sessionEvaluationIds } }, select: { evaluationId: true, id: true, name: true, imageUrl: true, width: true, height: true, category: true } }) : [];
+  const photosByEvaluation = new Map<string, typeof sessionEvaluationPhotos>();
+  for (const photo of sessionEvaluationPhotos) photosByEvaluation.set(photo.evaluationId, [...(photosByEvaluation.get(photo.evaluationId) ?? []), photo]);
   const now = clinicNow();
   const toleranceMinutes = clinic?.appointmentToleranceMinutes ?? 15;
   const overdue = appointments.filter((appointment) => appointment.status === "Agendado" && appointmentHasPassed(appointment, now, toleranceMinutes));
@@ -59,13 +63,24 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       beforePhoto: includeProcedurePhotos ? session.beforePhoto : session.beforePhoto ? "__photo__" : null,
       afterPhoto: includeProcedurePhotos ? session.afterPhoto : session.afterPhoto ? "__photo__" : null,
     })),
+    ...(clinical && "sessions" in procedure ? { sessions: procedure.sessions.map((session) => ({ ...session, photos: includeProcedurePhotos ? parseSessionPhotos(session.photos, photosByEvaluation.get(session.evaluationId) ?? []) : [] })) } : {}),
   }));
 
   const materialsUsed = [
-    ...materialMovements.map((movement) => ({ id: movement.id, appointmentId: movement.appointmentId, name: movement.product.name, productKind: movement.product.kind, unit: movement.product.unit, quantity: -movement.quantity, lotCode: movement.lot.code, lotExpiresOn: dateOnly(movement.lot.expiresOn), kind: movement.attendanceKind, attendanceName: movement.attendanceName, date: movement.attendanceDate, status: movement.reversedBy ? "reversed" : "used" })),
-    ...pendingMaterials.map((item) => ({ id: item.id, appointmentId: item.appointmentId, name: item.product.name, productKind: item.product.kind, unit: item.product.unit, quantity: item.quantity, lotCode: null, lotExpiresOn: null, kind: item.attendanceKind, attendanceName: item.attendanceName, date: item.attendanceDate, status: "pending" })),
+    ...materialMovements.map((movement) => ({ id: movement.id, appointmentId: movement.appointmentId, procedureSessionId: movement.procedureSessionId, name: movement.product.name, productKind: movement.product.kind, unit: movement.product.unit, quantity: -movement.quantity, lotCode: movement.lot.code, lotExpiresOn: dateOnly(movement.lot.expiresOn), kind: movement.attendanceKind, attendanceName: movement.attendanceName, date: movement.attendanceDate, status: movement.reversedBy ? "reversed" : "used" })),
+    ...pendingMaterials.map((item) => ({ id: item.id, appointmentId: item.appointmentId, procedureSessionId: item.procedureSessionId, name: item.product.name, productKind: item.product.kind, unit: item.product.unit, quantity: item.quantity, lotCode: null, lotExpiresOn: null, kind: item.attendanceKind, attendanceName: item.attendanceName, date: item.attendanceDate, status: "pending" })),
   ];
 
   return NextResponse.json({ patient: { id: patient.id, appointments: updatedAppointments, payments: payments.map(serializePayment), quotes, procedureRecords: responseProcedureRecords, materialsUsed, observations, appointmentToleranceMinutes: toleranceMinutes, ...(includeAppointmentProcedureNames ? { appointmentProcedureNames } : {}) } });
+}
+
+function parseSessionPhotos(value: string, evaluationPhotos: Array<{ id: string; name: string; imageUrl: string; width: number; height: number; category: string }>) {
+  let parsed: Array<Record<string, unknown>>;
+  try { parsed = JSON.parse(value) as Array<Record<string, unknown>>; } catch { return []; }
+  return parsed.flatMap((photo) => {
+    const source = typeof photo.sourceEvaluationPhotoId === "string" ? evaluationPhotos.find((item) => item.id === photo.sourceEvaluationPhotoId) : null;
+    if (photo.sourceEvaluationPhotoId && !source) return [];
+    return [{ ...photo, ...(source ? { name: source.name, imageUrl: source.imageUrl, width: source.width, height: source.height, category: source.category } : {}) }];
+  });
 }
 

@@ -5,11 +5,12 @@ import { usePathname, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { AppToaster } from "./app-toaster";
 import { Dashboard } from "./dashboard";
+import { AnimatedPage } from "./animated-page";
 import { Sidebar } from "./sidebar";
 import { StockSection } from "./stock-section";
 import { PurchasesSection, type PurchasesTab } from "./purchases-section";
 import { FinanceSection } from "./finance-section";
-import { stockAlertSection } from "./stock-alerts";
+import { StockSettingsCard, stockAlertSection } from "./stock-alerts";
 import { Topbar } from "./topbar";
 import {
   ClientsSection,
@@ -26,6 +27,11 @@ import { CLIENT_CACHE_UNAUTHORIZED_EVENT, getCachedJson, setClientCacheScope } f
 import { visibleSections } from "@/lib/permissions";
 import { CurrentRoleProvider } from "./current-user";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
+import { clientsHomeEvent } from "@/lib/section-events";
+import { agendaPeriodKey, agendaPeriodRange } from "@/lib/agenda-period-rules";
+import { clinicToday } from "@/lib/clinic-time";
+import { patientListKey } from "@/lib/patient-list-rules";
+import { guardDraftNavigation } from "./use-draft-autosave";
 
 type CurrentUser = { id: string; clinicId: string; name: string; role: string; isOwner?: boolean; trialExpired?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
 type AgendaFocus = { date: string; time: string };
@@ -38,10 +44,11 @@ type StartupState =
   | { status: "error"; sessionConfirmed: boolean; clinicName?: string; message: string }
   | { status: "ready"; sessionConfirmed: true; clinicName?: string; message?: string };
 
-const initialScreenResources: Partial<Record<SectionId, { key: string; message: string }>> = {
+const initialScreenResources: Partial<Record<SectionId, { key: string; extraKeys?: () => string[]; message: string }>> = {
   dashboard: { key: "/api/dashboard/bootstrap", message: "Carregando os indicadores da clínica..." },
-  agenda: { key: "/api/agenda/bootstrap", message: "Carregando os dados da agenda..." },
-  clientes: { key: "/api/patients", message: "Carregando a lista de pacientes..." },
+  // A agenda abre na semana de hoje; clientes, na primeira página da lista (as mesmas chaves que as telas leem do cache).
+  agenda: { key: "/api/agenda/bootstrap", extraKeys: () => [agendaPeriodKey(agendaPeriodRange(clinicToday(), "Semana"))], message: "Carregando os dados da agenda..." },
+  clientes: { key: patientListKey(), message: "Carregando a lista de pacientes..." },
   procedimentos: { key: "/api/procedures", message: "Carregando os procedimentos..." },
   estoque: { key: "/api/products", message: "Carregando o estoque..." },
   compras: { key: "/api/purchases", message: "Carregando as compras..." },
@@ -52,6 +59,19 @@ const initialScreenResources: Partial<Record<SectionId, { key: string; message: 
   calculadora: { key: "/api/clinic/cost-settings", message: "Carregando os custos da clínica..." },
   configuracoes: { key: "/api/clinic/cost-settings", message: "Carregando as configurações da clínica..." },
 };
+
+// Sessão inválida no cliente mas aceita pelo servidor (ex.: banco instável) faz /login e / se redirecionarem sem parar.
+// Na terceira volta em 30 s o cookie é descartado, o que encerra o ciclo.
+async function leaveToLogin(replace: (path: string) => void) {
+  try {
+    const now = Date.now();
+    const recent = (JSON.parse(window.sessionStorage.getItem("harmonize-login-redirects") ?? "[]") as number[]).filter((time) => now - time < 30_000);
+    recent.push(now);
+    window.sessionStorage.setItem("harmonize-login-redirects", JSON.stringify(recent));
+    if (recent.length >= 3) await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
+  } catch { /* sessionStorage indisponível: segue só com o redirecionamento */ }
+  replace("/login");
+}
 
 type SessionCheck = { status: number; user?: CurrentUser };
 let sessionCheck: Promise<SessionCheck> | null = null;
@@ -111,14 +131,17 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     return () => { window.clearTimeout(leaveTimer); window.clearTimeout(dismissTimer); };
   }, [activeUndoNoticeId]);
 
-  function selectSection(section: SectionId, focus?: AgendaFocus, tab: PurchasesTab = "purchases") {
+  async function selectSection(section: SectionId, focus?: AgendaFocus, tab: PurchasesTab = "purchases") {
     if (!allowedSections.includes(section)) {
       return;
     }
+    if (!await guardDraftNavigation()) return;
     setAgendaFocus(section === "agenda" ? focus ?? null : null);
     if (section === "compras") setPurchasesTab(tab);
     setMobileOpen(false);
     setCreateDialog(null);
+    // Já em Clientes: a tela está montada e guarda o paciente aberto; avisa para voltar à lista (a URL sozinha não limpa o estado).
+    if (section === "clientes" && active === "clientes") window.dispatchEvent(new Event(clientsHomeEvent));
     router.push(sectionPaths[section]);
   }
 
@@ -138,7 +161,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
         if (!active) return;
         if (session.status === 401) {
           setClientCacheScope(null);
-          router.replace("/login");
+          void leaveToLogin(router.replace);
           return;
         }
         if (session.status < 200 || session.status >= 300 || !session.user) {
@@ -158,7 +181,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
           clinicName,
           message: resource?.message ?? "Preparando seu ambiente de trabalho...",
         });
-        if (resource) await getCachedJson<unknown>(resource.key);
+        if (resource) await Promise.all([resource.key, ...(resource.extraKeys?.() ?? [])].map((key) => getCachedJson<unknown>(key)));
         if (active) setStartup({ status: "ready", sessionConfirmed: true, clinicName });
       } catch {
         if (!active) return;
@@ -180,7 +203,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   useEffect(() => {
     const handleUnauthorized = () => {
       setCurrentUser(null);
-      router.replace("/login");
+      void leaveToLogin(router.replace);
     };
     const handleSessionChange = (event: StorageEvent) => {
       if (event.key !== "harmonize-session-change") return;
@@ -196,11 +219,12 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     };
   }, [router]);
 
-  function openCreate(section: SectionId, dialog: NonNullable<typeof createDialog>) {
+  async function openCreate(section: SectionId, dialog: NonNullable<typeof createDialog>) {
     if (trialExpired) {
       showNotice("O teste grátis terminou. Ative um plano para continuar alterando os dados.", undefined, "warning");
       return;
     }
+    if (!await guardDraftNavigation()) return;
     setCreateDialog(dialog);
     setMobileOpen(false);
     router.push(`${sectionPaths[section]}?create=${dialog}`);
@@ -212,6 +236,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   }
 
   async function logout() {
+    if (!await guardDraftNavigation()) return;
     try {
       await fetch("/api/auth/logout", { method: "POST" });
     } finally {
@@ -262,10 +287,11 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       <div className="lg:pl-[220px]">
         <Topbar user={currentUser} onMenu={() => setMobileOpen(true)} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onOpenStockAlert={openStockAlert} onLogout={logout} />
         <main className={`mx-auto w-full ${active === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-10 pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
+          <AnimatedPage routeKey={active}>
           {currentUser && allowedSections.includes("dashboard") && active === "dashboard" ? <Dashboard userName={currentUser?.name} onAction={(action) => {
             const target = { client: ["clientes", "client"], appointment: ["agenda", "appointment"], quote: ["orcamentos", "quote"], payment: ["pagamentos", "payment"] }[action] as [SectionId, NonNullable<typeof createDialog>];
             openCreate(target[0], target[1]);
-          }} onNavigate={selectSection} onOpenStockAlert={openStockAlert} /> : null}
+          }} onNavigate={selectSection} /> : null}
           {currentUser && active === "agenda" ? <ScheduleSection focus={agendaFocus} openCreate={createDialog === "appointment"} onCreateOpen={() => openCreate("agenda", "appointment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && active === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => openCreate("clientes", "client")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && allowedSections.includes("procedimentos") && active === "procedimentos" ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => openCreate("procedimentos", "procedure")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
@@ -277,6 +303,8 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
           {currentUser && allowedSections.includes("relatorios") && active === "relatorios" ? <ReportsSection /> : null}
           {currentUser && allowedSections.includes("calculadora") && active === "calculadora" ? <SettingsSection mode="calculator" /> : null}
           {currentUser && allowedSections.includes("configuracoes") && active === "configuracoes" ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} onSaved={showNotice} /> : null}
+          {currentUser && allowedSections.includes("configuracoes") && active === "configuracoes" ? <StockSettingsCard onSaved={showNotice} /> : null}
+          </AnimatedPage>
         </main>
       </div>
       <AppToaster />

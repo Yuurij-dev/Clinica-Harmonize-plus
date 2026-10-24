@@ -78,9 +78,15 @@ html {
   box-sizing: border-box;
 }
 
-button,
-input {
+button {
   font: inherit;
+}
+
+/* Em @layer base os utilitários (text-sm etc.) vencem; sem classe de tamanho o input continua herdando do pai. */
+@layer base {
+  input {
+    font: inherit;
+  }
 }
 
 button:not(:disabled) {
@@ -338,6 +344,152 @@ button:not(:disabled).cursor-not-allowed {
   animation: none !important;
 }
 
+/* Entrada de página/aba (AnimatedPage): título primeiro, depois cards em cascata. Só opacity, transform e filter. */
+@keyframes hp-reveal-title {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+    filter: blur(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+@keyframes hp-reveal-card {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+.harmonize-app [data-hp-reveal-item="title"] {
+  animation: hp-reveal-title 220ms ease-out backwards !important;
+}
+
+.harmonize-app [data-hp-reveal-item="card"] {
+  animation: hp-reveal-card 260ms ease-out backwards !important;
+  animation-delay: calc(10ms + min(var(--hp-stagger-index, 1), 6) * 30ms) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .harmonize-app [data-hp-reveal-item] {
+    animation-delay: 0ms !important;
+    animation-duration: 150ms !important;
+  }
+}
+
+/* Indicador deslizante das abas e da sidebar: só transform; spring suave via cubic-bezier com leve overshoot. */
+.hp-sliding-indicator {
+  will-change: transform;
+}
+
+.hp-sliding-indicator[data-ready="true"] {
+  transition:
+    transform 260ms cubic-bezier(0.25, 1, 0.5, 1),
+    opacity 200ms ease;
+}
+
+/* Dados animados (gráficos): barras crescem de baixo para cima em cascata (30ms); só transform.
+   data-hp-chart="wait" até o gráfico entrar na viewport com os dados carregados; "play" dispara uma vez. */
+@keyframes hp-bar-grow {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+.hp-chart-bar {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+
+[data-hp-chart="wait"] .hp-chart-bar {
+  transform: scaleY(0);
+}
+
+[data-hp-chart="play"] .hp-chart-bar {
+  animation: hp-bar-grow 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: calc(min(var(--hp-bar-index, 0), 20) * 12ms);
+}
+
+/* Tooltip dos gráficos: fade + scale 0.96→1; o deslocamento segue o cursor pela transition de transform do Recharts. */
+@keyframes hp-tooltip-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.hp-chart-tooltip {
+  animation: hp-tooltip-in 120ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hp-chart-bar,
+  [data-hp-chart] .hp-chart-bar {
+    animation: none !important;
+    transform: none !important;
+  }
+}
+
+/* Troca de tema: círculo (View Transitions) cuja animação é feita em JS; aqui só neutralizamos o crossfade padrão. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  z-index: 1;
+}
+
+::view-transition-new(root) {
+  z-index: 2;
+}
+
+/* Fallback sem View Transitions: transição curta nas cores, ativa só durante a troca. */
+html.hp-theme-fading,
+html.hp-theme-fading *,
+html.hp-theme-fading *::before,
+html.hp-theme-fading *::after {
+  transition:
+    background-color 300ms ease,
+    color 300ms ease,
+    border-color 300ms ease,
+    fill 300ms ease,
+    stroke 300ms ease !important;
+}
+
+@keyframes hp-theme-icon-swap {
+  from {
+    opacity: 0;
+    transform: rotate(-90deg) scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(0deg) scale(1);
+  }
+}
+
+.hp-theme-icon {
+  animation: hp-theme-icon-swap 400ms cubic-bezier(0.34, 1.3, 0.64, 1) both;
+}
+
 .hp-floating {
   animation: hp-float 6.5s ease-in-out infinite;
 }
@@ -423,10 +575,154 @@ button:not(:disabled).cursor-not-allowed {
   background-color: #991b1b !important;
 }
 
+@keyframes hp-modal-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes hp-modal-stage-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes hp-modal-stage-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes hp-modal-panel-in {
+  0% {
+    opacity: 0;
+    transform: translateY(24px) scale(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes hp-modal-panel-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+}
+
+@keyframes hp-sheet-left-in {
+  from { opacity: 0; transform: translateX(-24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes hp-sheet-left-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(-18px); }
+}
+
+@keyframes hp-sheet-right-in {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes hp-sheet-right-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(18px); }
+}
+
+@keyframes hp-sheet-top-in {
+  from { opacity: 0; transform: translateY(-18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes hp-sheet-top-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-14px); }
+}
+
+@keyframes hp-sheet-bottom-in {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes hp-sheet-bottom-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(14px); }
+}
+
 .modal-overlay {
   background-color: rgb(32 33 54 / 48%);
   -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
+  animation: hp-modal-fade-in 180ms ease-out both;
+}
+
+.modal-overlay[data-state="closed"] {
+  animation: hp-modal-stage-out 220ms ease-in both;
+}
+
+.modal-overlay.modal-overlay-photo {
+  background-color: rgb(0 0 0 / 82%);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
+.modal-content[data-state="open"] {
+  animation: hp-modal-stage-in 420ms ease-out both;
+}
+
+.modal-content[data-state="closed"] {
+  animation: hp-modal-stage-out 280ms ease-in both;
+}
+
+.modal-content[data-state="open"] .modal-panel {
+  animation: hp-modal-panel-in 520ms cubic-bezier(0.2, 1.18, 0.35, 1) both;
+}
+
+.modal-content[data-state="closed"] .modal-panel {
+  animation: hp-modal-panel-out 200ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+.modal-overlay-sheet[data-state="open"] {
+  animation: hp-modal-fade-in 260ms ease-out both;
+}
+
+.modal-overlay-sheet[data-state="closed"] {
+  animation: hp-modal-stage-out 220ms ease-in both;
+}
+
+.modal-sheet[data-state="open"][data-side="left"] {
+  animation: hp-sheet-left-in 400ms cubic-bezier(0.2, 1.1, 0.35, 1) both;
+}
+
+.modal-sheet[data-state="closed"][data-side="left"] {
+  animation: hp-sheet-left-out 240ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+.modal-sheet[data-state="open"][data-side="right"] {
+  animation: hp-sheet-right-in 400ms cubic-bezier(0.2, 1.1, 0.35, 1) both;
+}
+
+.modal-sheet[data-state="closed"][data-side="right"] {
+  animation: hp-sheet-right-out 240ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+.modal-sheet[data-state="open"][data-side="top"] {
+  animation: hp-sheet-top-in 400ms cubic-bezier(0.2, 1.1, 0.35, 1) both;
+}
+
+.modal-sheet[data-state="closed"][data-side="top"] {
+  animation: hp-sheet-top-out 240ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+.modal-sheet[data-state="open"][data-side="bottom"] {
+  animation: hp-sheet-bottom-in 400ms cubic-bezier(0.2, 1.1, 0.35, 1) both;
+}
+
+.modal-sheet[data-state="closed"][data-side="bottom"] {
+  animation: hp-sheet-bottom-out 240ms cubic-bezier(0.4, 0, 1, 1) both;
 }
 
 html.dark .modal-overlay {
@@ -475,12 +771,12 @@ html.dark {
   --muted: #242838;
   --muted-foreground: #a0a5b8;
   --accent: #2c2950;
-  --accent-foreground: #c5c0ff;
+  --accent-foreground: #c8c6ff;
   --destructive: #ef6b65;
   --destructive-foreground: #ffffff;
   --border: #303447;
   --input: #34384c;
-  --ring: #8e86f7;
+  --ring: #8d86f5;
   --success: #57c995;
   --warning: #e4ad4f;
 }
@@ -765,4 +1061,30 @@ html.dark [class*="border-[#2f9b67]"],
 html.dark [class*="border-[#35ae78]"],
 html.dark [class*="border-[#3d9be9]"] {
   border-color: currentColor !important;
+}
+
+/* Bordas de erro de validação não podem virar cinza no tema escuro. */
+html.dark [class*="border-[#d92d20]"],
+html.dark [class*="border-[#b42318]"] {
+  border-color: #ff6b61 !important;
+}
+
+.hp-logo-dark {
+  display: none;
+}
+
+html.dark .hp-logo-light {
+  display: none;
+}
+
+html.dark .hp-logo-dark {
+  display: block;
+}
+
+.stock-alert-dot {
+  background-color: #f4b65c;
+}
+
+html.dark .stock-alert-dot {
+  background-color: #ffd166;
 }

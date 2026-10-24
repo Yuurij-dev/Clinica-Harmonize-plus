@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Konva from "konva";
 import {
   Arrow,
+  Circle,
   Ellipse,
   Image as KonvaImage,
   Layer,
@@ -28,6 +29,7 @@ export function EditorCanvas({
   photo,
   tool,
   color,
+  strokeWidth,
   scale,
   selectedId,
   onSelect,
@@ -37,6 +39,7 @@ export function EditorCanvas({
   photo: EvaluationPhoto;
   tool: EditorTool;
   color: string;
+  strokeWidth: number;
   scale: number;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
@@ -80,7 +83,7 @@ export function EditorCanvas({
   }, [onCommitAnnotations, onSelect, photo.annotations, selectedId]);
 
   function pointerInImage() {
-    const point = stageRef.current?.getPointerPosition();
+    const point = stageRef.current?.getRelativePointerPosition();
     if (!point) return null;
 
     return {
@@ -104,7 +107,12 @@ export function EditorCanvas({
       return;
     }
 
-    if (tool === "eraser") return;
+    if (tool === "point") {
+      onCommitAnnotations([...photo.annotations, { id: createAnnotationId(), type: "point", x: point.x, y: point.y, radius: 7 / scale, color, strokeWidth }], photo.annotations);
+      return;
+    }
+
+    if (tool === "eraser" || tool === "pan") return;
 
     previousSnapshotRef.current = photo.annotations;
     const id = createAnnotationId();
@@ -120,14 +128,14 @@ export function EditorCanvas({
           width: 1,
           height: 1,
           color,
-          strokeWidth: defaultStrokeWidth,
+          strokeWidth,
         }
       : {
           id,
-          type: tool === "pen" ? "freehand" : tool,
+          type: tool === "pen" ? "freehand" : tool === "curve" ? "curve" : tool === "arrow" ? "arrow" : "line",
           points: [point.x, point.y, point.x, point.y],
           color,
-          strokeWidth: defaultStrokeWidth,
+          strokeWidth,
         };
 
     onPreviewAnnotations([...photo.annotations, nextAnnotation]);
@@ -149,7 +157,7 @@ export function EditorCanvas({
         };
       }
 
-      if (annotation.type === "freehand") {
+      if (annotation.type === "freehand" || annotation.type === "curve") {
         return {
           ...annotation,
           points: [...annotation.points, point.x, point.y],
@@ -213,10 +221,11 @@ export function EditorCanvas({
   return (
     <div className="flex min-h-[360px] items-center justify-center overflow-auto rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-4">
       <Stage
-        className="shrink-0"
+        className="shrink-0 touch-none"
         height={height}
         ref={stageRef}
         width={width}
+        draggable={tool === "pan"}
         onMouseDown={(event) => {
           if (event.target !== event.target.getStage()) return;
           startDrawing();
@@ -378,6 +387,22 @@ function AnnotationNode({
     );
   }
 
+  if (annotation.type === "point") {
+    return (
+      <Circle
+        {...commonProps}
+        fill={annotation.color}
+        radius={annotation.radius * scale}
+        stroke="#ffffff"
+        strokeWidth={Math.max(1, annotation.strokeWidth * scale)}
+        x={annotation.x * scale}
+        y={annotation.y * scale}
+        onDragStart={() => { previousSnapshotRef.current = annotationsSnapshot; }}
+        onDragEnd={(event) => onMove({ ...annotation, x: event.target.x() / scale, y: event.target.y() / scale }, previousSnapshotRef.current ?? annotationsSnapshot)}
+      />
+    );
+  }
+
   if (annotation.type === "text") {
     return (
       <Text
@@ -435,7 +460,7 @@ function AnnotationNode({
       points={points}
       stroke={annotation.color}
       strokeWidth={annotation.strokeWidth}
-      tension={annotation.type === "freehand" ? 0.35 : 0}
+      tension={annotation.type === "freehand" || annotation.type === "curve" ? 0.35 : 0}
       onDragStart={() => {
         previousSnapshotRef.current = annotationsSnapshot;
       }}

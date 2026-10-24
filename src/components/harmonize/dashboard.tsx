@@ -1,28 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type MouseEvent } from "react";
 import { CalendarCheck, CalendarDays, ChevronRight, RotateCcw, TrendingUp, UserPlus, type LucideIcon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ProcedureImage } from "@/components/harmonize/procedure-image";
 import { inputVariants } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { CountUpValue, DetailCard, LoadingSkeleton, PageContainer, ProgressBar, StatCard, StatusBadge } from "./shared";
-import { StockAlertsCard } from "./stock-alerts";
+import { CountUp } from "@/components/ui/count-up";
+import { DetailCard, LoadingSkeleton, PageContainer, ProgressBar, StatCard, StatusBadge } from "./shared";
 import type { SectionId } from "@/types/clinic";
-import type { StockAlert } from "@/lib/stock-rules";
 import { getCachedJson, readClientCache } from "@/lib/client-cache";
-import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, CartesianGrid, ComposedChart, Line, Rectangle, ResponsiveContainer, Tooltip, XAxis, YAxis, type BarShapeProps } from "recharts";
+import { useRevealOnView } from "@/lib/use-reveal-on-view";
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+const percentFormat = (value: number) => `${Math.round(value)}%`;
 const patientNameLinkClassName = "origin-left transition-transform hover:scale-[1.03] focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]";
 
-export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "Usuário" }: { onAction: (action: "client" | "appointment" | "quote" | "payment") => void; onNavigate: (section: SectionId, focus?: { date: string; time: string }) => void; onOpenStockAlert: (alert: StockAlert) => void; userName?: string }) {
+export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onAction: (action: "client" | "appointment" | "quote" | "payment") => void; onNavigate: (section: SectionId, focus?: { date: string; time: string }) => void; userName?: string }) {
   type DashboardData = { appointmentCount: number; appointments: Array<{ id: string; date: string; time: string; procedure: string; status: string; patient?: { id: string; name: string } | null }>; patients: Array<{ id: string; name: string; status: string; lastVisit: string | null; createdAt: string }>; quotes: Array<{ id: string; items: string; total: number; status: string; patient?: { id: string; name: string } | null }>; payments: Array<{ value: number; status: string; date: string }> };
   const cachedDashboard = readClientCache<DashboardData>("/api/dashboard/bootstrap");
   const [data, setData] = useState<DashboardData | null>(cachedDashboard ?? null);
   const [now, setNow] = useState(() => clinicNow());
-  const [showAllPatients, setShowAllPatients] = useState(false);
-  const [showAllQuotes, setShowAllQuotes] = useState(false);
+  const [visiblePatients, setVisiblePatients] = useState(3);
+  const [visibleQuotes, setVisibleQuotes] = useState(3);
   useEffect(() => {
     getCachedJson<DashboardData>("/api/dashboard/bootstrap")
       .then((dashboardData) => setData({ appointmentCount: dashboardData.appointmentCount ?? 0, appointments: dashboardData.appointments ?? [], patients: dashboardData.patients ?? [], quotes: dashboardData.quotes ?? [], payments: dashboardData.payments ?? [] }))
@@ -86,7 +88,7 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
   }, [data]);
   return (
     <PageContainer>
-      <div className="hp-page-enter border-b border-border pb-5">
+      <div data-hp-title className="hp-page-enter border-b border-border pb-5">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h2 className="text-xl font-bold text-foreground">Olá, {userName}</h2>
@@ -98,10 +100,9 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
         </div>
       </div>
 
-      <StockAlertsCard onOpen={onOpenStockAlert} />
       <div className="hp-list-stagger grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         {stats.map((stat) => (
-          <StatCard key={stat.label} label={stat.label} value={<CountUpValue value={stat.value} format={stat.format} />} detail={stat.detail} icon={TrendingUp} />
+          <StatCard key={stat.label} label={stat.label} value={<CountUp value={stat.value} format={stat.format} />} detail={stat.detail} icon={TrendingUp} />
         ))}
       </div>
 
@@ -123,9 +124,9 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
             <div className="mb-5 grid auto-rows-fr gap-2 sm:grid-cols-3">
               <AttendanceMetric icon={CalendarCheck} label="Atendimentos realizados" value={attendance.currentTotal} change={percentageChange(attendance.currentTotal, attendance.previousTotal)} comparison={attendance.previousTotal ? attendance.previousTotal : null} />
               <AttendanceMetric icon={UserPlus} label="Novos clientes" value={attendance.currentNewClients} change={percentageChange(attendance.currentNewClients, attendance.previousNewClients)} comparison={attendance.previousNewClients ? attendance.previousNewClients : null} />
-              <AttendanceMetric icon={RotateCcw} label="Taxa de retorno" value={`${attendance.currentReturnRate}%`} change={attendance.previousTotal ? attendance.currentReturnRate - attendance.previousReturnRate : null} comparison={attendance.previousTotal ? `${attendance.previousReturnRate}%` : null} suffix="p.p." />
+              <AttendanceMetric icon={RotateCcw} label="Taxa de retorno" value={attendance.currentReturnRate} format={percentFormat} change={attendance.previousTotal ? attendance.currentReturnRate - attendance.previousReturnRate : null} comparison={attendance.previousTotal ? `${attendance.previousReturnRate}%` : null} suffix="p.p." />
             </div>
-            <AttendanceChart current={attendance.currentDaily} previous={attendance.previousDaily} month={now} />
+            <AttendanceChart current={attendance.currentDaily} previous={attendance.previousDaily} month={now} ready={Boolean(data)} />
           </CardContent>
         </Card>
 
@@ -153,9 +154,10 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
                       {appointment.patient.name}
                     </Link>
                   ) : <p className="truncate text-sm font-bold text-[#121733]">{appointment.patient?.name ?? "Paciente"}</p>}
-                  <p className="truncate text-xs text-[#65708b]">
-                    {formatAppointmentDate(appointment.date)} · {appointment.procedure}
-                  </p>
+                  <div className="flex min-w-0 items-center gap-1.5 text-xs text-[#65708b]">
+                    <ProcedureImage name={appointment.procedure} decorative className="h-5 w-5 rounded-sm" />
+                    <p className="truncate">{formatAppointmentDate(appointment.date)} · {appointment.procedure}</p>
+                  </div>
                 </div>
                 <ChevronRight className="h-4 w-4 text-[#bbbcc8]" />
               </div>
@@ -165,9 +167,9 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
       </div>
 
       <div className="hp-list-stagger grid gap-6 lg:grid-cols-3">
-        <DetailCard title="Clientes recentes" onAction={() => setShowAllPatients((expanded) => !expanded)} expanded={showAllPatients}>
+        <DetailCard title="Clientes recentes" onAction={() => setVisiblePatients((visible) => visible > 3 ? 3 : 6)} expanded={visiblePatients > 3}>
           <div className="space-y-4">
-            {(showAllPatients ? (data?.patients ?? []) : (data?.patients ?? []).slice(0, 3)).map((patient, index) => (
+            {(data?.patients ?? []).slice(0, visiblePatients).map((patient, index) => (
               <div className="flex items-center justify-between gap-3" key={`${patient.id || "patient"}-${index}`}>
                 <div className="flex min-w-0 items-center gap-3">
                   <PatientAvatarLink patientId={patient.id} patientName={patient.name} />
@@ -182,11 +184,17 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
               </div>
             ))}
           </div>
+          {visiblePatients > 3 ? <DashboardListActions
+            canShowMore={visiblePatients === 6 && (data?.patients.length ?? 0) > 6}
+            onShowMore={() => setVisiblePatients((visible) => visible + 3)}
+            onNavigate={() => onNavigate("clientes")}
+            destinationLabel="Ir para clientes"
+          /> : null}
         </DetailCard>
 
-        <DetailCard title="Orçamentos recentes" onAction={() => setShowAllQuotes((expanded) => !expanded)} expanded={showAllQuotes}>
+        <DetailCard title="Orçamentos recentes" onAction={() => setVisibleQuotes((visible) => visible > 3 ? 3 : 6)} expanded={visibleQuotes > 3}>
           <div className="space-y-4">
-            {(showAllQuotes ? (data?.quotes ?? []) : (data?.quotes ?? []).slice(0, 3)).map((quote) => (
+            {(data?.quotes ?? []).slice(0, visibleQuotes).map((quote) => (
               <div key={quote.id}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-3">
@@ -209,6 +217,12 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
               </div>
             ))}
           </div>
+          {visibleQuotes > 3 ? <DashboardListActions
+            canShowMore={visibleQuotes === 6 && (data?.quotes.length ?? 0) > 6}
+            onShowMore={() => setVisibleQuotes((visible) => visible + 3)}
+            onNavigate={() => onNavigate("orcamentos")}
+            destinationLabel="Ir para orçamentos"
+          /> : null}
         </DetailCard>
 
         <DetailCard title="Retornos próximos">
@@ -224,21 +238,30 @@ export function Dashboard({ onAction, onNavigate, onOpenStockAlert, userName = "
             <div>
               <div className="mb-2 flex justify-between text-sm">
                 <span className="font-bold text-[#121733]">Pagamentos recebidos</span>
-                <span className="text-[#65708b]">{paymentProgress.received}%</span>
+                <span className="text-[#65708b]"><CountUp value={paymentProgress.received} format={percentFormat} /></span>
               </div>
               <ProgressBar value={paymentProgress.received} tone="green" />
             </div>
             <div>
               <div className="mb-2 flex justify-between text-sm">
                 <span className="font-bold text-[#121733]">Pendências do mês</span>
-                <span className="text-[#65708b]">{paymentProgress.pending}%</span>
+                <span className="text-[#65708b]"><CountUp value={paymentProgress.pending} format={percentFormat} /></span>
               </div>
-              <ProgressBar value={paymentProgress.pending} tone="amber" />
+              <ProgressBar index={1} value={paymentProgress.pending} tone="amber" />
             </div>
           </div>
         </DetailCard>
       </div>
     </PageContainer>
+  );
+}
+
+function DashboardListActions({ canShowMore, onShowMore, onNavigate, destinationLabel }: { canShowMore: boolean; onShowMore: () => void; onNavigate: () => void; destinationLabel: string }) {
+  return (
+    <div className="mt-4 flex flex-col items-center gap-2 border-t border-[#f0f0f4] pt-3">
+      {canShowMore ? <button type="button" className="text-sm font-semibold text-[#5147dc] hover:text-[#3f35c4] focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]" onClick={onShowMore}>Exibir mais 3</button> : null}
+      {!canShowMore ? <button type="button" className="text-sm font-semibold text-[#5147dc] hover:text-[#3f35c4] focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]" onClick={onNavigate}>{destinationLabel}</button> : null}
+    </div>
   );
 }
 
@@ -267,14 +290,14 @@ function getInitials(name: string) {
   return parts.length === 1 ? parts[0].slice(0, 2).toUpperCase() : `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 }
 
-function AttendanceMetric({ icon: Icon, label, value, change, comparison, suffix = "%" }: { icon: LucideIcon; label: string; value: number | string; change: number | null; comparison: number | string | null; suffix?: string }) {
+function AttendanceMetric({ icon: Icon, label, value, format, change, comparison, suffix = "%" }: { icon: LucideIcon; label: string; value: number; format?: (value: number) => string; change: number | null; comparison: number | string | null; suffix?: string }) {
   return (
     <div className="flex min-h-[76px] h-full min-w-0 items-start gap-3 rounded-[7px] border border-[#e4e5ef] bg-[#fbfbfe] px-3 py-2.5">
       <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-[6px] bg-[#f0efff] text-[#5147dc]"><Icon className="h-4 w-4" /></span>
       <div className="flex min-w-0 flex-1 flex-col justify-center">
         <p className="truncate text-[10px] font-semibold text-[#65708b]">{label}</p>
         <div className="mt-1 flex min-w-0 items-baseline gap-2">
-          <span className="text-2xl font-black leading-none tracking-tight text-[#25263a]">{value}</span>
+          <span className="text-2xl font-black leading-none tracking-tight text-[#25263a]"><CountUp value={value} format={format} /></span>
           {change !== null ? <span className={change >= 0 ? "shrink-0 text-[10px] font-bold text-[#299b68]" : "shrink-0 text-[10px] font-bold text-[#c45d64]"}>
             {change >= 0 ? "↑" : "↓"} {Math.abs(change)}{suffix}
           </span> : null}
@@ -285,21 +308,30 @@ function AttendanceMetric({ icon: Icon, label, value, change, comparison, suffix
   );
 }
 
-function AttendanceChart({ current, previous, month }: { current: number[]; previous: number[]; month: Date }) {
+function GrowingBar(props: BarShapeProps) {
+  return <Rectangle {...props} className="hp-chart-bar" style={{ "--hp-bar-index": props.index } as CSSProperties} />;
+}
+
+function AttendanceChart({ current, previous, month, ready }: { current: number[]; previous: number[]; month: Date; ready: boolean }) {
   const hasPreviousData = previous.some((value) => value > 0);
   const max = Math.max(...current, ...(hasPreviousData ? previous : []), 1);
-  const chartData = current.map((value, index) => ({ day: index + 1, current: value, previous: previous[index] ?? null }));
+  // A entrada só dispara com os dados carregados e o gráfico visível; `now` renova os arrays a cada 30s, então o dado é estabilizado pelo conteúdo.
+  const [chartRef, inView] = useRevealOnView<HTMLDivElement>();
+  const play = ready && inView;
+  const contentKey = `${current.join(",")}|${previous.join(",")}`;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const chartData = useMemo(() => current.map((value, index) => ({ day: index + 1, current: value, previous: previous[index] ?? null })), [contentKey]);
   return (
     <div>
-      <div className="h-56 border-b border-[#e8e8ef] bg-[#fcfcfe] pt-2">
+      <div ref={chartRef} data-hp-chart={play ? "play" : "wait"} className="h-56 border-b border-[#e8e8ef] bg-[#fcfcfe] pt-2">
         <ResponsiveContainer height="100%" width="100%">
           <ComposedChart accessibilityLayer={false} data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid stroke="#e8e8ef" strokeDasharray="3 3" vertical={false} />
             <XAxis axisLine={false} dataKey="day" tick={{ fill: "#7c86a2", fontSize: 9, fontWeight: 600 }} tickLine={false} tickMargin={8} />
             <YAxis allowDecimals={false} axisLine={false} domain={[0, max]} tick={{ fill: "#7c86a2", fontSize: 9, fontWeight: 600 }} tickLine={false} width={28} />
-            <Tooltip content={<AttendanceTooltip month={month} />} cursor={{ fill: "rgba(90,80,223,0.06)" }} />
-            <Bar dataKey="current" fill="#5a50df" name="Atendimentos deste mês" radius={[3, 3, 0, 0]} />
-            {hasPreviousData ? <Line dataKey="previous" dot={false} name="Mês anterior" stroke="#858b9b" strokeDasharray="4 5" strokeWidth={2} type="monotone" /> : null}
+            <Tooltip animationDuration={120} animationEasing="ease-out" content={<AttendanceTooltip month={month} />} cursor={{ fill: "rgba(90,80,223,0.06)" }} />
+            <Bar dataKey="current" fill="#5a50df" isAnimationActive={false} name="Atendimentos deste mês" radius={[3, 3, 0, 0]} shape={GrowingBar} />
+            {hasPreviousData && play ? <Line animationBegin={60} animationDuration={450} animationEasing="ease-out" dataKey="previous" dot={false} name="Mês anterior" stroke="#858b9b" strokeDasharray="4 5" strokeWidth={2} type="monotone" /> : null}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
@@ -314,7 +346,7 @@ function AttendanceChart({ current, previous, month }: { current: number[]; prev
 function AttendanceTooltip({ active, label, month, payload }: { active?: boolean; label?: string | number; month: Date; payload?: Array<{ dataKey?: string; value?: number | string }> }) {
   if (!active || !payload?.length) return null;
   const current = payload.find((entry) => entry.dataKey === "current")?.value ?? 0;
-  return <div className="rounded-[6px] border border-[#343b59] bg-[#191c2b] px-3 py-2 text-[10px] font-semibold text-white shadow-[0_8px_22px_rgba(0,0,0,0.2)]"><p>{formatChartDate(month, Number(label))}</p><p className="mt-1 text-[#aaa3ff]">{current} {Number(current) === 1 ? "atendimento" : "atendimentos"}</p></div>;
+  return <div className="hp-chart-tooltip rounded-[6px] border border-[#343b59] bg-[#191c2b] px-3 py-2 text-[10px] font-semibold text-white shadow-[0_8px_22px_rgba(0,0,0,0.2)]"><p>{formatChartDate(month, Number(label))}</p><p className="mt-1 text-[#aaa3ff]">{current} {Number(current) === 1 ? "atendimento" : "atendimentos"}</p></div>;
 }
 
 function dailyAppointmentTotals(appointments: Array<{ date: string }>, month: Date, days: number) {

@@ -7,6 +7,7 @@ import {
   Eraser,
   MousePointer2,
   Pencil,
+  Move,
   Redo2,
   RotateCcw,
   Save,
@@ -24,8 +25,11 @@ import type { EditorTool } from "./types";
 
 const tools: { id: EditorTool; label: string; icon: LucideIcon }[] = [
   { id: "select", label: "Seleção", icon: MousePointer2 },
+  { id: "pan", label: "Mover foto", icon: Move },
   { id: "pen", label: "Desenho livre", icon: Pencil },
+  { id: "point", label: "Ponto", icon: Circle },
   { id: "line", label: "Linha", icon: Slash },
+  { id: "curve", label: "Curva", icon: Pencil },
   { id: "arrow", label: "Seta", icon: ArrowUpRight },
   { id: "ellipse", label: "Círculo/elipse", icon: Circle },
   { id: "text", label: "Texto", icon: Type },
@@ -43,11 +47,13 @@ const colors = [
 export function EditorToolbar({
   tool,
   color,
+  strokeWidth,
   canUndo,
   canRedo,
   hasSelection,
   onToolChange,
   onColorChange,
+  onStrokeWidthChange,
   onUndo,
   onRedo,
   onZoomIn,
@@ -61,11 +67,13 @@ export function EditorToolbar({
 }: {
   tool: EditorTool;
   color: string;
+  strokeWidth: number;
   canUndo: boolean;
   canRedo: boolean;
   hasSelection: boolean;
   onToolChange: (tool: EditorTool) => void;
   onColorChange: (color: string) => void;
+  onStrokeWidthChange: (width: number) => void;
   onUndo: () => void;
   onRedo: () => void;
   onZoomIn: () => void;
@@ -80,13 +88,13 @@ export function EditorToolbar({
   return (
     <div className="flex flex-col gap-4 rounded-[8px] border border-[#e3e5f0] bg-white p-3 text-[#303144] shadow-[0_8px_24px_rgba(38,39,58,0.05)] lg:w-[192px]">
       <div>
-        <p className="mb-2 text-[11px] font-black text-[#303144]">Ferramentas de desenho</p>
+        <p className="mb-2 text-xs font-black text-[#303144]">Ferramentas de desenho</p>
         <div className="grid grid-cols-2 gap-1.5">
         {tools.map(({ id, label, icon: Icon }) => (
           <button
             aria-label={label}
             className={cn(
-              "flex h-16 w-full flex-col items-center justify-center gap-1 rounded-[7px] border text-[9px] font-bold transition",
+              "flex h-16 w-full flex-col items-center justify-center gap-1 rounded-[7px] border text-xs font-bold transition",
               tool === id
                 ? "border-[#5147dc] bg-[#5147dc] text-white shadow-[0_0_0_3px_rgba(81,71,220,0.14)]"
                 : "border-[#e0e2ed] bg-white text-[#606176] hover:border-[#5147dc] hover:bg-[#f7f6ff] hover:text-[#5147dc]",
@@ -103,8 +111,13 @@ export function EditorToolbar({
         </div>
       </div>
 
+      <label className="grid gap-1.5 border-t border-[#ececf3] pt-3 text-xs font-black text-[#303144]">
+        Espessura: {strokeWidth}px
+        <input aria-label="Espessura da marcação" className="w-full accent-[#5147dc]" type="range" min="1" max="12" value={strokeWidth} onChange={(event) => onStrokeWidthChange(Number(event.target.value))} />
+      </label>
+
       <div className="border-t border-[#ececf3] pt-3">
-        <p className="mb-2 text-[11px] font-black text-[#303144]">Cores</p>
+        <p className="mb-2 text-xs font-black text-[#303144]">Cores</p>
         <div className="grid grid-cols-5 gap-1.5">
         {colors.map((item) => (
           <button
@@ -124,7 +137,7 @@ export function EditorToolbar({
       </div>
 
       <div className="border-t border-[#ececf3] pt-3">
-        <p className="mb-2 text-[11px] font-black text-[#303144]">Ações</p>
+        <p className="mb-2 text-xs font-black text-[#303144]">Ações</p>
         <div className="grid grid-cols-3 gap-1">
         <ToolbarIcon disabled={!canUndo} label="Desfazer" onClick={onUndo} icon={Undo2} />
         <ToolbarIcon disabled={!canRedo} label="Refazer" onClick={onRedo} icon={Redo2} />
@@ -174,7 +187,7 @@ function ToolbarIcon({
       onClick={onClick}
     >
       <Icon className="h-4 w-4" />
-      <span className="truncate text-[8px] font-bold">{label === "Excluir seleção" ? "Excluir" : label === "Resetar zoom" ? "Resetar" : label}</span>
+      <span className="truncate text-xs font-bold">{label === "Excluir seleção" ? "Excluir" : label === "Resetar zoom" ? "Resetar" : label}</span>
     </button>
   );
 }

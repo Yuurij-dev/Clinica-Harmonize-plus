@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 import { Button } from "./button";
 import { Label } from "./label";
 import { inputVariants } from "./input";
+import { cn } from "@/lib/utils";
 
 type ModalProps = {
   open: boolean;
@@ -14,30 +15,41 @@ type ModalProps = {
   onClose: () => void;
   overlayContent?: React.ReactNode;
   closeOnOverlayClick?: boolean;
+  panelClassName?: string;
+  bodyClassName?: string;
+  overlayClassName?: string;
+  hideHeader?: boolean;
 };
 
-export function Modal({ open, title, description, children, onClose, overlayContent, closeOnOverlayClick = true }: ModalProps) {
+export function Modal({ open, title, description, children, onClose, overlayContent, closeOnOverlayClick = true, panelClassName = "max-w-xl", bodyClassName, overlayClassName, hideHeader = false }: ModalProps) {
   return (
     <DialogPrimitive.Root open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="modal-overlay fixed inset-0 z-[1000] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+        <DialogPrimitive.Overlay className={cn("modal-overlay fixed inset-0 z-[1000]", overlayClassName)} />
         <DialogPrimitive.Content
-          className="pointer-events-none fixed inset-0 z-[1001] grid min-h-dvh place-items-center p-3 outline-none sm:p-4"
+          className="modal-content pointer-events-none fixed inset-0 z-[1001] grid min-h-dvh place-items-center p-3 outline-none sm:p-4"
           onInteractOutside={(event) => { if (!closeOnOverlayClick) event.preventDefault(); }}
           onEscapeKeyDown={(event) => { if (!open) event.preventDefault(); }}
         >
           {overlayContent}
-          <section className="hp-panel-enter pointer-events-auto my-3 max-h-[calc(100dvh-1.5rem)] w-full max-w-xl overflow-y-auto [scrollbar-gutter:stable] rounded-lg border border-border bg-card text-card-foreground shadow-[0_24px_80px_rgba(32,33,54,0.24)] sm:my-4 sm:max-h-[calc(100dvh-2rem)]">
-            <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-border bg-card px-5 py-4 sm:px-6 sm:py-5">
-              <div className="min-w-0">
-                <DialogPrimitive.Title className="text-base font-semibold text-foreground sm:text-lg">{title}</DialogPrimitive.Title>
-                {description ? <DialogPrimitive.Description className="mt-1 text-xs leading-5 text-muted-foreground">{description}</DialogPrimitive.Description> : <DialogPrimitive.Description className="sr-only">Detalhes e ações do diálogo</DialogPrimitive.Description>}
+          <section className={cn("modal-panel pointer-events-auto my-3 max-h-[calc(100dvh-1.5rem)] w-full overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden rounded-lg border border-border bg-card text-card-foreground shadow-[0_24px_80px_rgba(32,33,54,0.24)] sm:my-4 sm:max-h-[calc(100dvh-2rem)]", panelClassName)}>
+            {hideHeader ? (
+              <div className="sr-only">
+                <DialogPrimitive.Title>{title}</DialogPrimitive.Title>
+                <DialogPrimitive.Description>{description ?? "Detalhes e ações do diálogo"}</DialogPrimitive.Description>
               </div>
-              <DialogPrimitive.Close asChild>
-                <Button variant="ghost" size="icon" aria-label="Fechar"><X className="h-4 w-4" /></Button>
-              </DialogPrimitive.Close>
-            </header>
-            <div className="p-4 sm:p-6">{children}</div>
+            ) : (
+              <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-border bg-card px-5 py-4 sm:px-6 sm:py-5">
+                <div className="min-w-0">
+                  <DialogPrimitive.Title className="text-base font-semibold text-foreground sm:text-lg">{title}</DialogPrimitive.Title>
+                  {description ? <DialogPrimitive.Description className="mt-1 text-xs leading-5 text-muted-foreground">{description}</DialogPrimitive.Description> : <DialogPrimitive.Description className="sr-only">Detalhes e ações do diálogo</DialogPrimitive.Description>}
+                </div>
+                <DialogPrimitive.Close asChild>
+                  <Button variant="ghost" size="icon" aria-label="Fechar"><X className="h-4 w-4" /></Button>
+                </DialogPrimitive.Close>
+              </header>
+            )}
+            <div className={cn("p-4 sm:p-6", bodyClassName)}>{children}</div>
           </section>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

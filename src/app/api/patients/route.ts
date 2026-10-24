@@ -1,45 +1,50 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { rejectInvalidCpf } from "@/lib/patient-cpf";
+import { patientListSelect, searchPatientIds, withCurrentStage } from "@/lib/patient-list-server";
+import { cpfForRole, isMaskedCpf, patientsForRole } from "@/lib/patient-cpf-mask";
+import { paginationMeta, parsePatientListQuery, type PatientSort } from "@/lib/patient-list-rules";
 import { prisma } from "@/lib/prisma";
 
-export async function GET() {
+// Lista paginada no servidor. Sem parâmetros: página 1, 20 por página, ordem por nome. page/pageSize inválidos viram valores
+// seguros (pageSize máx. 100); página além do fim devolve lista vazia com o total correto. `summary` conta a clínica toda.
+export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
 
-  const patients = await prisma.patient.findMany({
-    where: { clinicId: user.clinicId },
-    orderBy: { name: "asc" },
-    select: {
-      id: true, name: true, cpf: true, phone: true, age: true, status: true,
-      lastVisit: true, nextReturn: true, totalValue: true,
-      procedureRecords: { orderBy: { performedAt: "desc" }, take: 1, select: { id: true } },
-    },
-  });
-  const procedureIds = patients.flatMap((patient) => patient.procedureRecords.map((record) => record.id));
-  const [withBefore, withAfter, approvedQuotes, anyQuotes, attended, evaluationsWithPhotos] = await Promise.all([
-    prisma.patientProcedure.findMany({ where: { id: { in: procedureIds }, clinicId: user.clinicId, AND: [{ beforePhoto: { not: null } }, { beforePhoto: { not: "" } }] }, select: { id: true } }),
-    prisma.patientProcedure.findMany({ where: { id: { in: procedureIds }, clinicId: user.clinicId, AND: [{ afterPhoto: { not: null } }, { afterPhoto: { not: "" } }] }, select: { id: true } }),
-    prisma.quote.findMany({ where: { clinicId: user.clinicId, status: { in: ["Aprovado", "Pago"] } }, select: { patientId: true }, distinct: ["patientId"] }),
-    prisma.quote.findMany({ where: { clinicId: user.clinicId }, select: { patientId: true }, distinct: ["patientId"] }),
-    prisma.appointment.findMany({ where: { clinicId: user.clinicId, status: { in: ["Atendido", "Finalizado"] } }, select: { patientId: true }, distinct: ["patientId"] }),
-    prisma.evaluation.findMany({ where: { clinicId: user.clinicId, photos: { some: {} } }, select: { patientId: true }, distinct: ["patientId"] }),
+  const { page, pageSize, q, status, sort } = parsePatientListQuery(new URL(request.url).searchParams);
+  const skip = (page - 1) * pageSize;
+  const clinicId = user.clinicId;
+
+  const [listed, statusGroups] = await Promise.all([
+    q ? listBySearch(clinicId, { q, status, sort, skip, take: pageSize }) : listPlain(clinicId, { status, sort, skip, take: pageSize }),
+    prisma.patient.groupBy({ by: ["status"], where: { clinicId }, _count: { _all: true } }),
   ]);
-  const beforeIds = new Set(withBefore.map((record) => record.id));
-  const afterIds = new Set(withAfter.map((record) => record.id));
-  const approvedPatientIds = new Set(approvedQuotes.map((quote) => quote.patientId));
-  const quotedPatientIds = new Set(anyQuotes.map((quote) => quote.patientId));
-  const attendedPatientIds = new Set(attended.map((appointment) => appointment.patientId));
-  const evaluatedPatientIds = new Set(evaluationsWithPhotos.map((evaluation) => evaluation.patientId));
-  return NextResponse.json({ patients: patients.map(({ procedureRecords, ...patient }) => {
-    const latestProcedureId = procedureRecords[0]?.id;
-    const currentStage = latestProcedureId && afterIds.has(latestProcedureId) ? "return"
-      : (latestProcedureId && beforeIds.has(latestProcedureId)) || approvedPatientIds.has(patient.id) ? "procedure"
-      : attendedPatientIds.has(patient.id) ? "return"
-      : quotedPatientIds.has(patient.id) || evaluatedPatientIds.has(patient.id) ? "quote"
-      : "evaluation";
-    return { ...patient, currentStage };
-  }) });
+  const byStatus = Object.fromEntries(statusGroups.map((group) => [group.status, group._count._all]));
+  const summary = { total: statusGroups.reduce((sum, group) => sum + group._count._all, 0), byStatus };
+  return NextResponse.json({ patients: patientsForRole(user.role, await withCurrentStage(clinicId, listed.patients)), pagination: paginationMeta(page, pageSize, listed.total), summary });
+}
+
+async function listPlain(clinicId: string, options: { status: string; sort: PatientSort; skip: number; take: number }) {
+  const where = { clinicId, ...(options.status ? { status: options.status } : {}) };
+  const [patients, total] = await Promise.all([
+    prisma.patient.findMany({
+      where,
+      orderBy: options.sort === "recent" ? [{ createdAt: "desc" }, { id: "asc" }] : [{ name: "asc" }, { id: "asc" }],
+      skip: options.skip,
+      take: options.take,
+      select: patientListSelect,
+    }),
+    prisma.patient.count({ where }),
+  ]);
+  return { patients, total };
+}
+
+async function listBySearch(clinicId: string, options: { q: string; status: string; sort: PatientSort; skip: number; take: number }) {
+  const found = await searchPatientIds(clinicId, { ...options, fields: "list" });
+  const rows = found.ids.length ? await prisma.patient.findMany({ where: { id: { in: found.ids }, clinicId }, select: patientListSelect }) : [];
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return { patients: found.ids.map((id) => byId.get(id)).filter((row): row is (typeof rows)[number] => Boolean(row)), total: found.total };
 }
 
 export async function POST(request: Request) {
@@ -64,6 +69,7 @@ export async function POST(request: Request) {
   if (!name || !phone || !Number.isInteger(age) || age < 0 || age > 130) {
     return NextResponse.json({ message: "Nome, telefone e idade válida são obrigatórios." }, { status: 400 });
   }
+  if (isMaskedCpf(cpf)) return NextResponse.json({ message: "Informe o CPF completo, sem asteriscos." }, { status: 400 });
   const cpfError = await rejectInvalidCpf(user.clinicId, cpf);
   if (cpfError) return cpfError;
 
@@ -80,7 +86,7 @@ export async function POST(request: Request) {
       clinicId: user.clinicId,
     },
   });
-  return NextResponse.json({ patient }, { status: 201 });
+  return NextResponse.json({ patient: cpfForRole(user.role, patient) }, { status: 201 });
 }
 
 function parseDate(value?: string) {

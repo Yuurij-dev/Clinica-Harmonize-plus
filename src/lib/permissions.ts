@@ -4,7 +4,11 @@ export type Role = "ADMIN" | "PROFESSIONAL" | "STAFF";
 export type Permission =
   | "clinical:read" // fotos, avaliação por id, notas, materiais usados, observações clínicas
   | "clinical:write" // gravar avaliação e procedimentos do paciente
+  | "anamnesis:read" // conteúdo da anamnese (o atendente só vê se existe)
+  | "anamnesis:write" // preencher, concluir e revisar a anamnese
   | "appointment:run" // iniciar/finalizar atendimento e conferir materiais
+  | "clinical:archive" // arquivar/desarquivar documentos e fotos clínicos
+  | "clinical:delete" // exclusão definitiva de documentos e fotos clínicos
   | "payments:access" // ver e registrar pagamentos
   | "payments:delete"
   | "quote:edit-closed"; // alterar orçamento já aprovado ou pago
@@ -13,7 +17,11 @@ export type ObservationKind = "clinical" | "administrative";
 const grants: Record<Permission, readonly Role[]> = {
   "clinical:read": ["ADMIN", "PROFESSIONAL"],
   "clinical:write": ["ADMIN", "PROFESSIONAL"],
+  "anamnesis:read": ["ADMIN", "PROFESSIONAL"],
+  "anamnesis:write": ["ADMIN", "PROFESSIONAL"],
   "appointment:run": ["ADMIN", "PROFESSIONAL"],
+  "clinical:archive": ["ADMIN", "PROFESSIONAL"],
+  "clinical:delete": ["ADMIN"],
   "payments:access": ["ADMIN", "STAFF"],
   "payments:delete": ["ADMIN"],
   "quote:edit-closed": ["ADMIN", "PROFESSIONAL"],

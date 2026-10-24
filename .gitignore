@@ -54,3 +54,10 @@ next-env.d.ts
 
 # backups do banco (dados de pacientes)
 /backups
+
+# editor and test-browser local files
+.vscode/
+.playwright-mcp/
+
+# graphify (skill): saída do grafo de conhecimento, gerada localmente
+graphify-out/

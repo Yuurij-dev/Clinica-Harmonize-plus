@@ -23,6 +23,9 @@ export async function POST(request: Request) {
   const patient = body?.patientId ? await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId } }) : null;
   const value = Number(body?.value);
   if (!patient || !Number.isFinite(value) || !body?.method || !body.installments) return NextResponse.json({ message: "Selecione um paciente e preencha o pagamento." }, { status: 400 });
+  if (body.journeyId && !await prisma.patientJourney.findFirst({ where: { id: body.journeyId, patientId: patient.id, clinicId: user.clinicId, archivedAt: null }, select: { id: true } })) {
+    return NextResponse.json({ message: "Tratamento não encontrado." }, { status: 404 });
+  }
   const journey = await ensurePatientJourney(patient.id, user.clinicId, body.journeyId);
   const payment = await prisma.payment.create({ data: { clinicId: user.clinicId, patientId: patient.id, journeyId: journey.id, valueCents: toCents(value), method: body.method, status: body.status || "Pago", installments: body.installments }, include: { patient: { select: { name: true } } } });
   return NextResponse.json({ payment: serializePayment(payment) }, { status: 201 });

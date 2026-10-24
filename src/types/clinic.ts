@@ -27,6 +27,7 @@ export type Patient = {
   phone: string;
   age: number;
   status: string;
+  createdAt?: string;
   lastVisit: string;
   lastVisitRaw?: string;
   nextReturn: string;
@@ -103,11 +104,10 @@ export type Product = {
 export type Procedure = {
   id?: string;
   name: string;
-  category: string;
+  category?: string;
   price: number;
   duration: string;
   materials: string;
-  margin: string;
 };
 
 export type Quote = {

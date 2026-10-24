@@ -18,10 +18,9 @@ export function ClinicEntryTransition({ sessionConfirmed, clinicName, message, e
       <section className="relative flex min-h-[220px] items-center justify-center overflow-hidden bg-[#4938f4] px-6 py-6 text-center text-white sm:min-h-[260px] lg:min-h-svh lg:px-12 lg:py-12">
         <div aria-hidden="true" className="absolute inset-0 bg-center bg-no-repeat" style={{ backgroundImage: "url('/login-brand-background.png')", backgroundSize: "100% 100%" }} />
         <div className="clinic-entry-brand relative z-10 flex w-full max-w-xl flex-col items-center">
-          <div className="relative mb-1 h-[64px] w-[64px] sm:h-[82px] sm:w-[82px] lg:mb-2 lg:h-[104px] lg:w-[104px]">
-            <Image alt="" className="object-contain" fill priority sizes="104px" src="/harmonize-mark.png" />
-          </div>
-          <h1 className="text-3xl font-black leading-[1.05] sm:text-4xl lg:text-5xl">Harmonize+</h1>
+          <h1 className="w-full max-w-[220px] sm:max-w-[280px] lg:max-w-[380px]">
+            <Image alt="Harmonize+" className="h-auto w-full" height={300} priority src="/brand/logo-horizontal-white.svg" unoptimized width={1200} />
+          </h1>
           <p className="mt-1 text-sm font-medium sm:text-base lg:mt-2 lg:text-xl">Gestão para clínicas</p>
           <p className="mt-3 hidden max-w-md text-sm leading-6 text-white/85 sm:block lg:mt-6 lg:text-base lg:leading-7">
             Mais organização, mais tempo para o que realmente importa: seus pacientes.
@@ -36,7 +35,7 @@ export function ClinicEntryTransition({ sessionConfirmed, clinicName, message, e
 
         <div className="clinic-entry-card relative z-10 w-full max-w-[560px] rounded-[16px] border border-[#e4e7f1] bg-white/95 px-6 py-8 text-center shadow-[0_22px_60px_rgba(39,46,105,0.13)] sm:px-10 sm:py-10 lg:px-12 lg:py-12">
           <div className="clinic-entry-logo relative mx-auto grid h-[72px] w-[72px] place-items-center overflow-hidden rounded-[18px] border border-[#ececf6] bg-white shadow-[0_10px_28px_rgba(81,71,220,0.13)] sm:h-[80px] sm:w-[80px]">
-            <Image alt="Logo Harmonize+" className="object-contain" fill priority sizes="80px" src="/harmonize-mark.png" />
+            <Image alt="Logo Harmonize+" className="object-contain p-3" fill priority sizes="80px" src="/brand/mark.svg" unoptimized />
           </div>
 
           <div className={`clinic-entry-check mx-auto mt-4 grid h-8 w-8 place-items-center rounded-full text-white ${error && !sessionConfirmed ? "bg-[#d04444]" : sessionConfirmed ? "bg-[#16b88b]" : "bg-[#5147dc]"}`} aria-hidden="true">
