@@ -15,6 +15,9 @@ import {
   beforeAfterPairs, countByView, defaultPhotoFilters, encounterKindLabels, filterPhotos, groupByEncounter, groupByProcedure, neighbors, photoPhaseLabels, visiblePhotos,
   type BeforeAfterPair, type GalleryPhase, type GalleryPhoto, type GalleryView, type PhotoFilters, type ProcedureGroup,
 } from "@/lib/photo-gallery-rules";
+import { pollOutcomeForStatus } from "@/lib/evaluation-photo-sync-rules";
+import { IncomingPhotoStatus } from "./incoming-photo-status";
+import { usePhotoSyncPoll } from "./use-photo-sync-poll";
 import { cn } from "@/lib/utils";
 import { PaginationBar } from "./clinical-pagination";
 import { postForm, prepareImage, sendJson, type UploadEntry } from "./clinical-upload";
@@ -22,7 +25,7 @@ import { formatDate, formatTime, useCachedResource } from "./patient-clinical-da
 import { EmptyState, LoadingSkeleton } from "./shared";
 
 type PhotosResponse = {
-  photos: GalleryPhoto[]; journeys: Array<{ id: string; name: string }>;
+  stamp?: string; photos: GalleryPhoto[]; journeys: Array<{ id: string; name: string }>;
   encounters: Array<{ type: "evaluation" | "session"; id: string; journeyId: string | null; title: string; date: string }>;
   access: { canWrite: boolean; canArchive: boolean; canDelete: boolean; maxUploadBytes: number };
 };
@@ -60,7 +63,44 @@ export function PatientClinicalPhotos({ patientId, initialFilters }: { patientId
   const counts = useMemo(() => countByView(pool), [pool]);
   const procedures = useMemo(() => groupByProcedure(filtered), [filtered]);
   const canWrite = data?.access.canWrite ?? false;
-  const refresh = useCallback(() => invalidateClientCache(key), [key]);
+  const ownRefreshAtRef = useRef(0);
+  const refresh = useCallback(() => { ownRefreshAtRef.current = Date.now(); invalidateClientCache(key); }, [key]);
+  // Fotos enviadas pelo app mobile não passam por este navegador. A cada ~5 s (aba visível, com backoff em falha) consulta só a assinatura da galeria
+  // (4 agregados, sem fotos); o índice completo só é refeito quando ela muda. O spinner dura até a lista chegar (mínimo ~600 ms).
+  const seenIdsRef = useRef<Set<string> | null>(null);
+  const stampRef = useRef<string | null>(null);
+  const [receiving, setReceiving] = useState(false);
+  const receivingRef = useRef(false);
+  const pendingRef = useRef(false);
+  useEffect(() => { seenIdsRef.current = null; stampRef.current = null; receivingRef.current = false; }, [key]);
+  usePhotoSyncPoll(true, async () => {
+    const response = await fetch(`${key}?stamp=1`, { cache: "no-store" });
+    const outcome = pollOutcomeForStatus(response.status);
+    if (outcome !== "ok") return outcome;
+    const stamp = (await response.json() as { stamp?: string }).stamp ?? null;
+    // A base de comparação é a assinatura da lista carregada (data.stamp), não o primeiro poll: envio logo após o carregamento é detectado.
+    // Enquanto a lista nova não chega (pendingRef) não refaz o pedido.
+    if (stampRef.current === null || stamp === null || stamp === stampRef.current || pendingRef.current) return "ok";
+    const own = Date.now() - ownRefreshAtRef.current < 10_000; // mudança causada por esta própria tela: atualiza sem anunciar
+    pendingRef.current = true;
+    window.setTimeout(() => { pendingRef.current = false; }, 10_000);
+    invalidateClientCache(key);
+    if (!own) { receivingRef.current = true; setReceiving(true); window.setTimeout(() => { receivingRef.current = false; setReceiving(false); }, 10_000); }
+    return "ok";
+  });
+  // Id nunca visto que chegou na lista = foto nova: encerra o spinner e avisa uma vez (só se a mudança veio da checagem, não de upload daqui).
+  useEffect(() => {
+    if (!data) return;
+    stampRef.current = data.stamp ?? null;
+    pendingRef.current = false;
+    const ids = data.photos.map((photo) => photo.id);
+    const seen = seenIdsRef.current;
+    seenIdsRef.current = new Set(ids);
+    if (!seen) return;
+    const fresh = ids.filter((id) => !seen.has(id));
+    if (receivingRef.current) { receivingRef.current = false; setReceiving(false); }
+    if (fresh.length && Date.now() - ownRefreshAtRef.current >= 10_000) toast.success(`${fresh.length} foto${fresh.length > 1 ? "s" : ""} recebida${fresh.length > 1 ? "s" : ""} do aplicativo.`);
+  }, [data]);
   // Paginação dos cards (um por procedimento). Mudar filtros, busca ou o tamanho da página volta à página 1.
   const pageSignature = JSON.stringify([effective, showArchived, pageSize]);
   const pagedTotal = procedures.length;
@@ -117,6 +157,7 @@ export function PatientClinicalPhotos({ patientId, initialFilters }: { patientId
       </div> : null}
 
       <div className="mt-4">
+        <IncomingPhotoStatus active={receiving} />
         {loading && !data ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{[0, 1, 2].map((item) => <LoadingSkeleton key={item} className="aspect-[4/3] w-full" />)}</div>
           : error && !data ? <EmptyState title="Não foi possível carregar as fotos" description="Verifique sua conexão e tente novamente." action={<Button size="sm" variant="outline" onClick={retry}>Tentar novamente</Button>} />
             : filtered.length === 0 ? <EmptyState title={pool.length ? "Nenhuma foto encontrada" : "Nenhuma foto registrada"} description={pool.length ? "Ajuste a busca ou os filtros." : "As fotos de avaliações, procedimentos e retornos aparecem aqui automaticamente. Você também pode adicionar fotos."} />

@@ -9,10 +9,13 @@ import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
+import { appendIncomingPhotos, idsToSkipAfterFailure, pollOutcomeForStatus, unseenPhotoIds } from "@/lib/evaluation-photo-sync-rules";
+import { usePhotoSyncPoll } from "../use-photo-sync-poll";
 import { evaluationFieldsFromAnamnesis, fillEmptyEvaluationFields } from "@/lib/anamnesis-rules";
 import { assessmentFieldErrors, type RequiredAssessmentField } from "@/lib/evaluation-rules";
 import { anamnesisKey, type AnamnesisOverview } from "../patient-clinical-data";
 import { LoadingSkeleton } from "../shared";
+import { IncomingPhotoStatus } from "../incoming-photo-status";
 import { EditorToolbar } from "./editor-toolbar";
 import { EvaluationResult } from "./evaluation-result";
 import { PhotoGallery } from "./photo-gallery";
@@ -78,6 +81,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   const [hydrated, setHydrated] = useState(!evaluationCacheKey);
   const [saveError, setSaveError] = useState("");
   const [photoUploadError, setPhotoUploadError] = useState("");
+  const [receivingPhoto, setReceivingPhoto] = useState(false);
   const [assessmentErrors, setAssessmentErrors] = useState<Partial<Record<RequiredAssessmentField, string>>>({});
   const prefillDoneRef = useRef("");
   // Valores gravados de uma avaliação já concluída: campo que já era vazio nela não bloqueia salvar fotos/marcações.
@@ -166,6 +170,56 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     // Se o efeito for refeito antes de a resposta chegar (ex.: Strict Mode), a próxima execução tenta de novo.
     return () => { active = false; if (!finished) prefillDoneRef.current = ""; };
   }, [hydrated, loadError, readOnly, evaluationStatus, encounter, evaluationId, patientId]);
+
+  // Ids que o editor já teve (inclui os removidos aqui): só id nunca visto é "foto nova enviada pelo app".
+  const seenPhotoIdsRef = useRef(new Set<string>());
+  const photosRef = useRef(photos);
+  // Outra avaliação: recomeça o conjunto só com o que está na tela (os ids de uma avaliação não valem para a outra).
+  useEffect(() => { seenPhotoIdsRef.current = new Set(photosRef.current.map((photo) => photo.id)); }, [evaluationId]);
+  useEffect(() => {
+    photosRef.current = photos;
+    for (const photo of photos) seenPhotoIdsRef.current.add(photo.id);
+  }, [photos]);
+
+  // Fotos da mesma avaliação enviadas pelo app: checa só os ids (select id, sem base64) a cada ~5 s com a aba visível (backoff em falha, para em 401/403/404)
+  // e ao voltar o foco; busca apenas as novas e as ANEXA ao estado. Nunca substitui, reordena nem remove nada; o autosave (PUT) as preserva.
+  const skippedPhotoIdsRef = useRef(new Set<string>()); // ids já tentados sem foto exibível (não religam o spinner a cada ciclo)
+  const fetchFailuresRef = useRef(new Map<string, number>());
+  useEffect(() => { skippedPhotoIdsRef.current = new Set(); fetchFailuresRef.current = new Map(); }, [evaluationId]);
+  usePhotoSyncPoll(isEncounterMode && hydrated && !loadError && evaluationStatus === "Rascunho", async () => {
+    const id = currentEvaluationIdRef.current;
+    if (!id) return "ok";
+    const base = `/api/patients/${patientId}/evaluation?evaluationId=${encodeURIComponent(id)}`;
+    const head = await fetch(`${base}&photoIds=1`, { cache: "no-store" });
+    const headOutcome = pollOutcomeForStatus(head.status);
+    if (headOutcome !== "ok") return headOutcome;
+    const headBody = await head.json() as { evaluation?: { status?: string; photoIds?: string[] } | null };
+    if (headBody.evaluation === null) return "stop"; // avaliação não encontrada (200 com null): não adianta repetir
+    const ids = headBody.evaluation?.photoIds ?? [];
+    const fresh = unseenPhotoIds(new Set([...seenPhotoIdsRef.current, ...skippedPhotoIdsRef.current]), ids, photosRef.current.length);
+    if (!fresh.length) return "ok";
+    setReceivingPhoto(true);
+    try {
+      const full = await fetch(`${base}&only=${fresh.join(",")}`, { cache: "no-store" });
+      const fullOutcome = pollOutcomeForStatus(full.status);
+      if (fullOutcome !== "ok") { for (const failed of idsToSkipAfterFailure(fetchFailuresRef.current, fresh)) skippedPhotoIdsRef.current.add(failed); return fullOutcome; }
+      const incoming = (await full.json() as { evaluation?: { photos?: EvaluationPhoto[] } | null }).evaluation?.photos ?? [];
+      if (currentEvaluationIdRef.current !== id) return "ok";
+      const got = new Set(incoming.map((photo) => photo.id));
+      for (const missing of fresh) if (!got.has(missing)) skippedPhotoIdsRef.current.add(missing);
+      if (!incoming.length) return "ok";
+      setPhotos((current) => appendIncomingPhotos(current, incoming));
+      // Marca como edição: o autosave regrava o estado atual e a foto não fica só aqui caso um PUT em andamento a tenha apagado.
+      if (!readOnly) markDirty();
+      setActivePhotoId((current) => current ?? incoming[0].id);
+      invalidateClientCache(`/api/patients/${patientId}/evaluation`);
+      showNotice(`${incoming.length} foto${incoming.length > 1 ? "s" : ""} recebida${incoming.length > 1 ? "s" : ""} do aplicativo.`);
+      return "ok";
+    } catch (error) {
+      for (const failed of idsToSkipAfterFailure(fetchFailuresRef.current, fresh)) skippedPhotoIdsRef.current.add(failed);
+      throw error;
+    } finally { setReceivingPhoto(false); }
+  });
 
   useEffect(() => {
     if (!notice) return;
@@ -419,7 +473,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
       const response = await fetch(`/api/patients/${patientId}/evaluation`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ evaluationId: currentEvaluationIdRef.current, journeyId, photos, assessment, status }),
+        body: JSON.stringify({ evaluationId: currentEvaluationIdRef.current, journeyId, photos, knownPhotoIds: [...seenPhotoIdsRef.current], assessment, status }),
       });
       const data = await response.json().catch(() => ({})) as { evaluation?: SavedEvaluation; message?: string };
       if (!response.ok || !data.evaluation) throw new Error(data.message ?? "Não foi possível salvar a avaliação.");
@@ -490,6 +544,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
         <div inert={readOnly} className={cn("grid gap-4 p-4", encounter && "grid-cols-1 p-0 lg:grid-cols-[minmax(0,1fr)_290px]")}>
           <div className="min-w-0">
             {encounter || evaluationId ? <AssessmentForm assessment={assessment} errors={assessmentErrors} validationAttempt={assessmentValidationAttempt} onChange={changeAssessment} /> : null}
+            <IncomingPhotoStatus active={receivingPhoto} />
             <section id="evaluation-photo-card" tabIndex={-1} className={cn("mt-4 grid scroll-mt-24 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)]", encounter && "rounded-md border border-[#e3e5f0] bg-white p-3 sm:p-4", saveError && "border-destructive")} aria-label="Registro fotográfico e marcação">
               {encounter ? <div className="flex items-center gap-2 lg:col-span-2"><Camera className="h-4 w-4 text-primary" /><h3 className="text-sm font-bold">Registro fotográfico e marcação</h3></div> : null}
               {isLoading ? <div className="grid min-h-[420px] gap-4 rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-5 lg:col-span-2"><LoadingSkeleton className="h-7 w-52" /><LoadingSkeleton className="h-3 w-80" /><div className="grid min-h-[300px] place-items-center rounded-[7px] border border-[#e4e6ef] bg-white"><div className="w-full max-w-md space-y-3 px-8"><LoadingSkeleton className="h-56 w-full" /><LoadingSkeleton className="mx-auto h-3 w-40" /><LoadingSkeleton className="mx-auto h-2.5 w-56" /></div></div></div> : loadError ? <div className="grid min-h-[360px] place-items-center rounded-lg border border-destructive/20 bg-destructive/5 p-6 text-center"><div><p className="text-sm font-semibold text-destructive">Não foi possível carregar esta avaliação.</p><Button className="mt-3" variant="outline" onClick={() => { setLoadError(false); setIsLoading(true); setLoadAttempt((value) => value + 1); }}>Tentar novamente</Button></div></div> : showResult ? <EvaluationResult onEdit={() => setShowResult(false)} previews={savedPreviews} /> : (<>
