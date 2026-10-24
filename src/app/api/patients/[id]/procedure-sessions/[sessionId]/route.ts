@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { denyUnless } from "@/lib/api-guards";
@@ -9,11 +10,45 @@ import { consentCounts } from "@/lib/clinical-files-server";
 import { prisma } from "@/lib/prisma";
 import { lockLots, lotBalances } from "@/lib/stock";
 import { validateQuantity } from "@/lib/stock-rules";
+import { parseKnownPhotoIds, unknownStoredPhotos } from "@/lib/session-after-photo-rules";
+import { sessionUnchanged } from "@/lib/evaluation-photo-sync-rules";
 import { validateSessionPayload } from "../route";
 
 class ConsentRequiredError extends Error {}
 type Material = { productId: string; quantity: number; allocations?: Array<{ lotId: string; quantity: number }> };
 type Photo = { id: string; phase: string; sourceEvaluationPhotoId?: string; imageUrl?: string; name?: string; category?: string; width?: number; height?: number };
+
+// Leitura leve para o workspace (fotos enviadas pelo app): `?photoIds=1` devolve só os ids (extraídos no banco, sem base64) e `?only=a,b`
+// devolve apenas essas fotos com imageUrl. Escopo clínica/paciente/sessão como o PATCH; não devolve nada fora dele.
+export async function GET(request: Request, { params }: { params: Promise<{ id: string; sessionId: string }> }) {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user.role, "clinical:read");
+  if (denied) return denied;
+  const { id: patientId, sessionId } = await params;
+  const search = new URL(request.url).searchParams;
+  if (search.get("photoIds") === "1") {
+    // Custo: 1) select só de status/updatedAt (sem a coluna de fotos); se o cliente já tem este updatedAt (`since`), responde changed:false e para.
+    // 2) só quando mudou, extrai os ids no banco (lê o JSON uma vez, sem devolver base64). Todo envio do app e todo PATCH mudam o updatedAt.
+    const head = await prisma.patientProcedureSession.findFirst({ where: { id: sessionId, patientId, clinicId: user.clinicId }, select: { status: true, updatedAt: true } });
+    if (!head) return NextResponse.json({ message: "Sessão não encontrada." }, { status: 404 });
+    if (sessionUnchanged(search.get("since"), head.updatedAt)) return NextResponse.json({ changed: false, status: head.status, updatedAt: head.updatedAt });
+    const rows = await prisma.$queryRaw<Array<{ status: string; ids: unknown }>>(Prisma.sql`SELECT s."status", COALESCE((SELECT jsonb_agg(e.value->>'id' ORDER BY e.n) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(s."photos"::jsonb) = 'array' THEN s."photos"::jsonb ELSE '[]'::jsonb END) WITH ORDINALITY AS e(value, n) WHERE jsonb_typeof(e.value) = 'object' AND e.value->>'id' IS NOT NULL), '[]'::jsonb) AS ids FROM "PatientProcedureSession" s WHERE s."id" = ${sessionId} AND s."patientId" = ${patientId} AND s."clinicId" = ${user.clinicId}`).catch(() => null);
+    if (rows) {
+      if (!rows[0]) return NextResponse.json({ message: "Sessão não encontrada." }, { status: 404 });
+      return NextResponse.json({ changed: true, status: rows[0].status, updatedAt: head.updatedAt, photoIds: Array.isArray(rows[0].ids) ? rows[0].ids.filter((id): id is string => typeof id === "string") : [] });
+    }
+  }
+  const only = (search.get("only") ?? "").split(",").filter(Boolean).slice(0, 20);
+  if (search.get("photoIds") !== "1" && !only.length) return NextResponse.json({ message: "Consulta inválida." }, { status: 400 });
+  const session = await prisma.patientProcedureSession.findFirst({ where: { id: sessionId, patientId, clinicId: user.clinicId }, select: { status: true, updatedAt: true, photos: true } });
+  if (!session) return NextResponse.json({ message: "Sessão não encontrada." }, { status: 404 });
+  const list = parseJson<Photo[]>(session.photos, []).filter((photo) => photo && typeof photo.id === "string");
+  // Fallback do modo ids quando o JSON gravado não permitiu a extração no banco.
+  if (search.get("photoIds") === "1") return NextResponse.json({ changed: true, status: session.status, updatedAt: session.updatedAt, photoIds: list.map((photo) => photo.id) });
+  // Referências a fotos da avaliação não entram: o cliente as monta pela própria avaliação.
+  return NextResponse.json({ status: session.status, photos: list.filter((photo) => only.includes(photo.id) && !photo.sourceEvaluationPhotoId).map((photo) => ({ id: photo.id, name: photo.name ?? "Foto", phase: photo.phase, category: photo.category ?? "Outra", imageUrl: photo.imageUrl ?? "", width: photo.width ?? 0, height: photo.height ?? 0 })) });
+}
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string; sessionId: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
@@ -56,7 +91,13 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const technique = typeof body?.technique === "string" ? body.technique.trim() : undefined;
   const treatedAreas = typeof body?.treatedAreas === "string" ? body.treatedAreas.trim() : undefined;
   const professional = typeof body?.professional === "string" ? body.professional.trim() : current.professional;
-  const nextPhotos = photos ?? undefined;
+  // Foto gravada que o cliente não conhecia (ex.: enviada pelo app depois que ele abriu a sessão) e não veio na lista é mantida; sem knownPhotoIds, a lista enviada manda.
+  const known = parseKnownPhotoIds(body?.knownPhotoIds);
+  if (!known.ok) return NextResponse.json({ message: known.message }, { status: 400 });
+  const knownPhotoIds = known.ids;
+  const preservedPhotos = photos ? unknownStoredPhotos(parseJson<Photo[]>(current.photos, []), photos.map((photo) => photo.id), knownPhotoIds) : [];
+  const nextPhotos = photos ? [...photos, ...preservedPhotos] : undefined;
+  if (nextPhotos && nextPhotos.length > 20) return NextResponse.json({ message: "A sessão recebeu novas fotos do aplicativo e passaria de 20. Recarregue a sessão e revise as fotos." }, { status: 409 });
   const materials = Array.isArray(body?.materials) ? body.materials as Material[] : undefined;
   if (nextStatus === "Em execução" && current.status === "Rascunho" && !nextPhotos?.some((photo) => photo.phase === "Antes")) return NextResponse.json({ message: "Registre uma foto de antes antes de iniciar o procedimento." }, { status: 400 });
   const startingWithBody = nextStatus === "Em execução" && current.status === "Rascunho";

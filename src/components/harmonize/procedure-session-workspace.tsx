@@ -8,6 +8,9 @@ import { Modal } from "@/components/ui/modal";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { appointmentSlotError, clinicToday, latestAppointmentStart } from "@/lib/clinic-time";
 import { combinedProcedureName, procedureAppointmentName, shouldRefreshDraftName } from "@/lib/procedure-session-rules";
+import { appendUnseenById, applyPhotoEdit, idsToSkipAfterFailure, knownIdsForSave, pollOutcomeForStatus, reconcileAfterSave, unseenPhotoIds } from "@/lib/evaluation-photo-sync-rules";
+import { usePhotoSyncPoll } from "./use-photo-sync-poll";
+import { IncomingPhotoStatus } from "./incoming-photo-status";
 import { adjustLotAllocations, uncoveredQuantity } from "@/lib/session-materials-rules";
 import { groupByKind, stockKindLabels, type StockKind } from "@/lib/stock-rules";
 import { cn } from "@/lib/utils";
@@ -84,6 +87,8 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
   const afterInputRef = useRef<HTMLInputElement>(null);
   const photoCategoryRef = useRef("Frontal");
   const creatingRef = useRef(false);
+  // Fotos que o usuário removeu nesta tela: junto com as exibidas, formam o knownPhotoIds do PATCH (o servidor mantém só as gravadas que não estão nem aqui nem lá).
+  const removedPhotoIdsRef = useRef(new Set<string>());
 
   function stopCamera() {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -112,7 +117,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
       setData(payload);
       setError("");
       const latest = payload.sessions[0];
-      if (latest) { setSessionId(latest.id); setDraft(toDraft(latest)); }
+      if (latest) { setSessionId(latest.id); setDraft(toDraft(latest)); removedPhotoIdsRef.current = new Set(); }
     }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Não foi possível carregar a sessão."); }).finally(() => { if (active) { setLoading(false); setHydrated(true); } });
     return () => { active = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- requestSession/readOnly dependem só de props já cobertas por key
@@ -125,6 +130,58 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
   }, [draft?.status, draft?.startedAt, draft?.endedAt]);
 
   useEffect(() => () => stopCamera(), []);
+
+  // Fotos "Depois" enviadas pelo app: só com a sessão "Em execução" (a que aceita foto), checa os ids a cada ~5 s com a aba visível (backoff em falha, para em
+  // 401/403/404 ou se a resposta indicar Concluída). Manda o último updatedAt conhecido: se nada mudou o servidor nem lê as fotos. Só com id nunca visto busca
+  // as novas e as ANEXA ao rascunho, sem reordenar, remover nem sobrescrever e sem marcar edição (não dispara autosave/PATCH). O teto de 20 e o "exibido"
+  // vêm do draftRef, atualizado no mesmo tick; foto removida aqui (removedPhotoIdsRef) não volta.
+  const draftRef = useRef(draft);
+  useEffect(() => { draftRef.current = draft; });
+  const skippedPhotoIdsRef = useRef(new Set<string>());
+  const fetchFailuresRef = useRef(new Map<string, number>());
+  const sinceRef = useRef<string | null>(null);
+  const [receivingPhoto, setReceivingPhoto] = useState(false);
+  const draftStatus = draft?.status;
+  useEffect(() => { skippedPhotoIdsRef.current = new Set(); fetchFailuresRef.current = new Map(); sinceRef.current = null; }, [sessionId]);
+  usePhotoSyncPoll(Boolean(sessionId && hydrated && draftStatus === "Em execução"), async () => {
+    const base = `/api/patients/${encodeURIComponent(patientId)}/procedure-sessions/${encodeURIComponent(sessionId)}`;
+    const since = sinceRef.current;
+    const head = await fetch(`${base}?photoIds=1${since ? `&since=${encodeURIComponent(since)}` : ""}`, { cache: "no-store" });
+    const headOutcome = pollOutcomeForStatus(head.status);
+    if (headOutcome !== "ok") return headOutcome;
+    const body = await head.json() as { changed?: boolean; status?: string; updatedAt?: string; photoIds?: string[] };
+    if (body.status === "Concluída") return "stop";
+    if (body.changed === false) return "ok";
+    // updatedAt só avança quando o ciclo termina bem: numa falha, o próximo ciclo lista os ids de novo.
+    const done = () => { sinceRef.current = body.updatedAt ?? null; return "ok" as const; };
+    const current = draftRef.current;
+    if (!current || current.id !== sessionId) return "ok";
+    const seen = new Set([...current.photos.map((photo) => photo.id), ...removedPhotoIdsRef.current, ...skippedPhotoIdsRef.current]);
+    const fresh = unseenPhotoIds(seen, body.photoIds ?? [], current.photos.length);
+    if (!fresh.length) return done();
+    setReceivingPhoto(true);
+    try {
+      const full = await fetch(`${base}?only=${fresh.join(",")}`, { cache: "no-store" });
+      const fullOutcome = pollOutcomeForStatus(full.status);
+      if (fullOutcome !== "ok") { for (const failed of idsToSkipAfterFailure(fetchFailuresRef.current, fresh)) skippedPhotoIdsRef.current.add(failed); return fullOutcome; }
+      const incoming = ((await full.json() as { photos?: SessionPhoto[] }).photos ?? []).filter((photo) => photo.imageUrl);
+      const got = new Set(incoming.map((photo) => photo.id));
+      for (const id of fresh) if (!got.has(id)) skippedPhotoIdsRef.current.add(id); // id que não gerou foto exibível: não refaz a busca
+      const latest = draftRef.current;
+      if (!latest || latest.id !== sessionId) return "ok";
+      const photos = appendUnseenById(latest.photos, incoming); // o teto de 20 é aplicado aqui, sobre o estado exibido
+      if (photos.length === latest.photos.length) return done();
+      draftRef.current = { ...latest, photos };
+      setDraft(draftRef.current);
+      invalidateClientCache(key);
+      const added = photos.length - latest.photos.length;
+      showNotice(`${added} foto${added > 1 ? "s" : ""} recebida${added > 1 ? "s" : ""} do aplicativo.`);
+      return done();
+    } catch (error) {
+      for (const failed of idsToSkipAfterFailure(fetchFailuresRef.current, fresh)) skippedPhotoIdsRef.current.add(failed);
+      throw error;
+    } finally { setReceivingPhoto(false); }
+  });
   useEffect(() => {
     if (!cameraOpen) { stopCamera(); return; }
     let active = true;
@@ -232,7 +289,15 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
   }
 
   function patchDraft(changes: Partial<Session>) {
-    setDraft((current) => current ? { ...current, ...changes } : current);
+    // Removidas e fotos anexadas pelo poll saem do estado MAIS RECENTE (updater), não do render anterior: foto que chegou nessa janela não vira "removida" nem se perde.
+    const rendered = photos;
+    setDraft((current) => {
+      if (!current) return current;
+      if (!changes.photos) return { ...current, ...changes };
+      const edit = applyPhotoEdit(rendered, changes.photos, current.photos);
+      for (const id of edit.removed) removedPhotoIdsRef.current.add(id);
+      return { ...current, ...changes, photos: edit.photos };
+    });
     editRevisionRef.current += 1;
     setEditRevision(editRevisionRef.current);
     if (changes.materials) setMaterialsEdited(true);
@@ -275,7 +340,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
     setBusy("new"); setNotice(null);
     try {
       const created = await requestSession();
-      setSessionId(created.id); setDraft(toDraft(created));
+      setSessionId(created.id); setDraft(toDraft(created)); removedPhotoIdsRef.current = new Set();
       setData((current) => current ? { ...current, sessions: [created, ...current.sessions.filter((item) => item.id !== created.id)] } : current);
       invalidateClientCache(key);
     } catch (reason) { showNotice(reason instanceof Error ? reason.message : "Não foi possível abrir a sessão.", true); }
@@ -321,7 +386,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
     const startedRevision = editRevisionRef.current;
     const savedPhotos = draft.photos.map((photo) => photo.sourceEvaluationPhotoId ? { id: photo.id, name: photo.name, phase: photo.phase, category: photo.category, sourceEvaluationPhotoId: photo.sourceEvaluationPhotoId } : photo);
     try {
-      const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/procedure-sessions/${encodeURIComponent(sessionId)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...draft, ...(status === "Concluída" ? { durationMinutes: undefined } : {}), status, materials: changedMaterials, photos: savedPhotos, ...(status === "Em execução" && !automatic && activeSchedule ? { scheduledAppointmentId: activeSchedule.id } : {}), ...(status === "Em execução" && !draft.startedAt ? { startedAt: new Date().toISOString() } : {}) }) });
+      const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/procedure-sessions/${encodeURIComponent(sessionId)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...draft, ...(status === "Concluída" ? { durationMinutes: undefined } : {}), status, materials: changedMaterials, photos: savedPhotos, knownPhotoIds: knownIdsForSave(draft.photos, removedPhotoIdsRef.current), ...(status === "Em execução" && !automatic && activeSchedule ? { scheduledAppointmentId: activeSchedule.id } : {}), ...(status === "Em execução" && !draft.startedAt ? { startedAt: new Date().toISOString() } : {}) }) });
       const result = await response.json().catch(() => ({})) as { session?: Session; pending?: unknown[]; appointment?: { id: string; date: string; time: string } | null; message?: string; code?: string };
       if (response.status === 409 && result.code === "CONSENT_REQUIRED") {
         // Estado defasado: o servidor não encontrou termo assinado. Atualiza o resumo e leva ao card de termos.
@@ -332,7 +397,8 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
       }
       if (!response.ok || !result.session) throw new Error(result.message ?? "Não foi possível salvar a sessão.");
       const updated = { ...result.session, materials: result.session.materials ?? materials, photos: result.session.photos ?? savedPhotos };
-      if (startedRevision === editRevisionRef.current) setDraft(toDraft(updated));
+      // Só o que passa a ser exibido vira "conhecido": foto nova do app que não entrou na tela continua preservada pelo servidor.
+      if (startedRevision === editRevisionRef.current) { const sentIds = savedPhotos.map((photo) => photo.id); setDraft((current) => toDraft({ ...updated, photos: reconcileAfterSave(updated.photos ?? [], current?.photos ?? [], sentIds) })); }
       setData((current) => current ? { ...current, sessions: [updated, ...current.sessions.filter((item) => item.id !== updated.id)] } : current);
       invalidateClientCache(key, `/api/patients/${encodeURIComponent(patientId)}/history`, `/api/patients/${encodeURIComponent(patientId)}/journeys`, `/api/patients/${encodeURIComponent(patientId)}/profile`, "/api/dashboard/bootstrap");
       if (status === "Em execução" && !result.appointment) setData((current) => current ? { ...current, scheduledProcedure: null } : current);
@@ -502,7 +568,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
       {notice && !noticeIsMaterial ? <p id={notice.error ? "procedure-error-notice" : undefined} tabIndex={notice.error ? -1 : undefined} key={noticeAnimation} role={notice.error ? "alert" : "status"} className={cn("scroll-mt-24 rounded-[5px] px-3 py-2 text-xs font-semibold", notice.error ? "bg-[#fff1f0] text-[#b42318]" : "bg-[#eef8f2] text-[#287a50]")}>{notice.text}</p> : null}
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
         <div className="space-y-4">
-          {data.sessions.length ? <Card className="flex flex-wrap items-center gap-2 p-3">{data.sessions.length > 1 ? <label className="text-xs font-semibold">Sessões desta jornada<select className="ml-2 h-9 max-w-full rounded-[5px] border border-[#dddde6] bg-white px-2 text-sm" value={sessionId} onChange={(event) => { const next = data.sessions.find((item) => item.id === event.target.value); if (next) void autosave.leave(() => { setSessionId(next.id); setDraft(toDraft(next)); }); }}>{data.sessions.map((item, index) => <option key={item.id} value={item.id}>Sessão {data.sessions.length - index} · {new Date(item.performedAt).toLocaleDateString("pt-BR")} · {item.status}</option>)}</select></label> : <span className="text-xs font-semibold">Sessão · {new Date(draft.performedAt).toLocaleDateString("pt-BR")} · {draft.status}</span>}<Button type="button" variant="outline" size="sm" disabled={readOnly || Boolean(busy) || draft.status !== "Concluída"} onClick={() => void createSession()}><Plus className="h-4 w-4" />Nova sessão</Button></Card> : null}
+          {data.sessions.length ? <Card className="flex flex-wrap items-center gap-2 p-3">{data.sessions.length > 1 ? <label className="text-xs font-semibold">Sessões desta jornada<select className="ml-2 h-9 max-w-full rounded-[5px] border border-[#dddde6] bg-white px-2 text-sm" value={sessionId} onChange={(event) => { const next = data.sessions.find((item) => item.id === event.target.value); if (next) void autosave.leave(() => { setSessionId(next.id); setDraft(toDraft(next)); removedPhotoIdsRef.current = new Set(); }); }}>{data.sessions.map((item, index) => <option key={item.id} value={item.id}>Sessão {data.sessions.length - index} · {new Date(item.performedAt).toLocaleDateString("pt-BR")} · {item.status}</option>)}</select></label> : <span className="text-xs font-semibold">Sessão · {new Date(draft.performedAt).toLocaleDateString("pt-BR")} · {draft.status}</span>}<Button type="button" variant="outline" size="sm" disabled={readOnly || Boolean(busy) || draft.status !== "Concluída"} onClick={() => void createSession()}><Plus className="h-4 w-4" />Nova sessão</Button></Card> : null}
           <Card id="procedure-record-card" tabIndex={-1} className={cn("scroll-mt-24 p-4", (invalidFields.has("technique") || invalidFields.has("treatedAreas")) && "border-[#d92d20]")}>
             <h3 className="flex items-center gap-2 text-sm font-bold"><Syringe className="h-4 w-4 text-[#5147dc]" />Registro do procedimento</h3>
             <div className="mt-3 grid gap-3 rounded-[5px] bg-[#f7f7fb] p-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -526,6 +592,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
           <Card className="overflow-hidden p-4"><div className="flex flex-wrap items-center justify-between gap-3"><h3 className="flex items-center gap-2 text-sm font-bold"><Syringe className="h-4 w-4 text-[#5147dc]" />Produtos e materiais utilizados</h3><Button type="button" size="sm" variant="outline" disabled={!canWrite || !data.materials.length} onClick={() => { setMaterialSearch(""); setMaterialPickerOpen(true); }}><Plus className="h-4 w-4" />Adicionar produto</Button></div>{draft.materialsSeededAt && !materialsEdited && materials.length > 0 && draft.status !== "Concluída" ? <p role="note" className="mt-3 rounded-[5px] bg-[#f1f0ff] px-3 py-2 text-xs text-[#4a40c9]">Preenchido a partir da ficha técnica dos procedimentos do orçamento. Ajuste as quantidades conforme o uso real.</p> : null}{notice && noticeIsMaterial ? <p id={notice.error ? "procedure-error-notice" : undefined} tabIndex={notice.error ? -1 : undefined} key={noticeAnimation} role={notice.error ? "alert" : "status"} className={cn("mt-3 scroll-mt-24 rounded-[5px] px-3 py-2 text-xs font-semibold", notice.error ? "bg-[#fff1f0] text-[#b42318]" : "bg-[#eef8f2] text-[#287a50]")}>{notice.text}</p> : null}<div className="mt-3 overflow-x-auto"><table className="w-full min-w-[680px] border-collapse text-left text-xs"><thead><tr className="bg-[#f7f7fb] text-[#737486]"><th className="px-3 py-2">Produto</th><th className="px-3 py-2">Quantidade</th><th className="px-3 py-2">Lote e validade</th><th className="px-3 py-2">Saldo</th><th className="w-10" /></tr></thead><tbody>{materials.map((item, index) => { const productData = data.materials.find((product) => product.id === item.productId); const allocation = item.allocations[0]; const lot = productData?.lots.find((candidate) => candidate.id === allocation?.lotId); return <tr key={item.productId} className="border-b border-[#ececf2]"><td className="px-3 py-2.5 font-semibold">{productData?.name ?? item.name ?? "Produto indisponível"}<span className="block text-xs font-normal text-[#898a9a]">{productData?.kind && productData.kind in stockKindLabels ? `${stockKindLabels[productData.kind as StockKind].singular} · ` : ""}{productData?.unit ?? item.unit ?? "unidade"}</span></td><td className="px-3 py-2.5"><input className="text-sm h-8 w-24 rounded-[5px] border border-[#dddde6] px-2" type="number" min="0.001" step="0.001" disabled={!canWrite} value={item.quantity} onChange={(event) => setMaterialQuantity(index, Number(event.target.value))} /></td><td className="px-3 py-2.5"><select className="text-sm h-8 min-w-40 rounded-[5px] border border-[#dddde6] bg-white px-2" disabled={!canWrite} value={allocation?.lotId ?? ""} onChange={(event) => { const selectedLot = productData?.lots.find((candidate) => candidate.id === event.target.value); setMaterial(index, { allocations: selectedLot ? [{ lotId: selectedLot.id, quantity: Math.min(item.quantity, selectedLot.balance), code: selectedLot.code, expiresOn: selectedLot.expiresOn }] : [] }); }}><option value="">Selecionar lote</option>{productData?.lots.map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.code} · vence {candidate.expiresOn.split("-").reverse().join("/")}</option>)}</select>{allocation && lot ? <span className="ml-2 text-xs text-[#6f7082]">Válido até {lot.expiresOn.split("-").reverse().join("/")}</span> : allocation ? <span className="ml-2 text-xs text-[#6f7082]">{allocation.code} · validade {allocation.expiresOn?.split("-").reverse().join("/")}</span> : null}{item.allocations.length > 1 ? <span className="mt-1 block text-xs text-[#6f7082]">Lotes: {item.allocations.map((part) => `${part.code ?? "lote"} (${formatStockBalance(part.quantity)})`).join(" · ")}</span> : null}{draft.status !== "Concluída" && uncoveredQuantity(item.quantity, item.allocations) > 0 ? <span role="status" className="mt-1 block text-xs font-medium text-[#a36a00]">Sem saldo suficiente em estoque: o restante ({formatStockBalance(uncoveredQuantity(item.quantity, item.allocations))} {productData?.unit ?? item.unit ?? "un"}) vira saída pendente ao finalizar.</span> : null}</td><td className="px-3 py-2.5">{lot ? `${lot.balance} ${productData?.unit ?? "un"}` : allocation ? "Saldo indisponível" : "Sem lote selecionado"}</td><td className="px-3 py-2.5"><button type="button" className="rounded p-1 text-[#b42318]" disabled={!canWrite} aria-label={`Remover ${item.name ?? "produto"}`} onClick={() => patchDraft({ materials: materials.filter((_, itemIndex) => itemIndex !== index) })}><Trash2 className="h-4 w-4" /></button></td></tr>; })}{materials.length === 0 ? <tr><td colSpan={5} className="py-6 text-center text-[#858696]">Nenhum material registrado para esta sessão.</td></tr> : null}</tbody></table></div><p className="mt-2 text-xs text-[#77788a]">O estoque é movimentado somente ao finalizar a sessão. O uso sem saldo disponível gera uma saída pendente conforme as regras do estoque.</p></Card>
 
           <Card id="procedure-photos-card" tabIndex={-1} aria-invalid={invalidFields.has("beforePhoto") || invalidFields.has("afterPhoto")} className={cn("scroll-mt-24 p-4", (invalidFields.has("beforePhoto") || invalidFields.has("afterPhoto")) && "border !border-destructive animate-[hp-shake_0.42s_ease-in-out]")}>
+            <IncomingPhotoStatus active={receivingPhoto} />
             <div><h3 className="flex items-center gap-2 text-sm font-bold"><Camera className="h-4 w-4 text-[#5147dc]" />Fotografias da sessão</h3><p className="mt-1 text-xs text-[#77788a]">As imagens originais da avaliação permanecem preservadas.</p></div>
             {invalidFields.has("beforePhoto") || invalidFields.has("afterPhoto") ? <p key={`session-photos-${validationAttempt}`} role="alert" className="mt-2 text-xs font-medium text-[#b42318] animate-[hp-shake_0.42s_ease-in-out]">{invalidFields.has("beforePhoto") && invalidFields.has("afterPhoto") ? "Adicione uma foto de antes e outra imediatamente após a sessão." : invalidFields.has("beforePhoto") ? "Adicione ou selecione uma foto de antes." : "Adicione uma foto do resultado imediatamente após a sessão."}</p> : null}
             {cameraOpen ? <div className="mt-3 space-y-2 rounded-[5px] bg-[#15151d] p-3"><video ref={videoRef} autoPlay playsInline className="mx-auto max-h-[360px] w-full rounded object-contain" /><div className="flex justify-center gap-2"><Button onClick={captureCamera}><Camera className="h-4 w-4" />Capturar</Button><Button variant="outline" onClick={() => setCameraOpen(false)}><X className="h-4 w-4" />Cancelar</Button></div></div> : null}

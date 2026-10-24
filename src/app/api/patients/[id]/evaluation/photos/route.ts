@@ -9,8 +9,9 @@ import { ensurePatientJourney } from "@/lib/patient-journey";
 import { readImageSize } from "@/lib/thumb";
 
 // Anexa UMA foto à avaliação (app mobile). Só acrescenta: nunca apaga nem recria as outras fotos, ao contrário do PUT da avaliação.
-// Limitação: o editor web mantém as fotos em memória e o autosave dele (PUT) recria a lista; uma foto enviada pelo app com o editor
-// aberto pode ser descartada no próximo autosave. O PUT não tem como distinguir "removida pelo usuário" de "adicionada depois do GET".
+// O PUT (deleteMany + createMany, mesmo lock deste POST) mantém a foto gravada que o editor não conhecia (knownPhotoIds) e não enviou; o editor
+// também busca sozinho (~5 s) as fotos novas e as anexa ao estado. Limitação residual: cliente antigo, sem knownPhotoIds, ainda recria a lista inteira
+// e descarta fotos enviadas pelo app depois do seu carregamento. Com knownPhotoIds, o PUT cruzando com este POST não perde foto.
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
