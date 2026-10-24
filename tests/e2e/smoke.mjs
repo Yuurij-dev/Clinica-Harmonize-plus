@@ -115,8 +115,13 @@ async function journeys(patient, quote) {
   r = await api("DELETE", `/api/patients/${patient.id}/journeys/${first.id}`);
   check("jornada com orçamento aprovado não pode ser excluída", r.status === 409, r.status);
   await api("PATCH", `/api/quotes/${quote.id}`, { status: "Pendente" });
+  const evaluation = await api("PUT", `/api/patients/${patient.id}/evaluation`, { journeyId: first.id, photos: [], assessment: { chiefComplaint: "Queixa vinculada à jornada" }, status: "Rascunho" });
+  const evaluationList = await api("GET", `/api/patients/${patient.id}/evaluation?list=1&journeyId=${first.id}`);
+  check("avaliação de teste é vinculada à jornada", evaluation.status === 200 && evaluationList.data.evaluations?.length === 1, evaluation.status);
   r = await api("DELETE", `/api/patients/${patient.id}/journeys/${first.id}`);
   check("jornada sem orçamento aprovado é excluída", r.status === 200, r.status);
+  r = await api("GET", `/api/patients/${patient.id}/evaluation?list=1&journeyId=${first.id}`);
+  check("excluir jornada também remove sua avaliação", r.status === 200 && r.data.evaluations?.length === 0, JSON.stringify(r.data.evaluations));
   const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
   r = await api("PUT", `/api/patients/${patient.id}/evaluation`, { photos: [{ name: "frente", imageUrl: png, width: 1, height: 1, annotations: [] }] });
   check("avaliação é salva", r.status === 200, r.status);

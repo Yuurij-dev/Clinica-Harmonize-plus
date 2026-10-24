@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { denyUnless } from "@/lib/api-guards";
+import { auditEntry } from "@/lib/clinical-files-server";
+import { removeStoredBytes, type StoredRef } from "@/lib/clinical-storage";
 import { prisma } from "@/lib/prisma";
 
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string; journeyId: string }> }) {
@@ -13,11 +15,50 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
     const journey = await transaction.patientJourney.findFirst({ where: { id: journeyId, patientId, clinicId: user.clinicId }, select: { id: true, name: true, quotes: { select: { status: true } } } });
     if (!journey) return { error: "Jornada não encontrada.", status: 404 as const };
     if (journey.quotes.some((quote) => ["Pago", "Aprovado"].includes(quote.status))) return { error: "Não é possível excluir uma jornada vinculada a orçamento aprovado ou pago.", status: 409 as const };
+
+    const [appointments, evaluations, followUps, sessions] = await Promise.all([
+      transaction.appointment.findMany({ where: { patientId, clinicId: user.clinicId, journeyId }, select: { id: true } }),
+      transaction.evaluation.findMany({ where: { patientId, clinicId: user.clinicId, journeyId }, select: { id: true } }),
+      transaction.patientProcedureFollowUp.findMany({ where: { patientId, clinicId: user.clinicId, journeyId }, select: { id: true, appointmentId: true } }),
+      transaction.patientProcedureSession.findMany({ where: { patientId, clinicId: user.clinicId, journeyId }, select: { id: true } }),
+    ]);
+    const followUpAppointmentIds = followUps.flatMap(({ appointmentId }) => appointmentId ? [appointmentId] : []);
+    const followUpAppointments = followUpAppointmentIds.length ? await transaction.appointment.findMany({ where: { id: { in: followUpAppointmentIds }, patientId, clinicId: user.clinicId }, select: { id: true } }) : [];
+    const appointmentIds = [...new Set([...appointments.map(({ id }) => id), ...followUpAppointments.map(({ id }) => id)])];
+    const encounterLinks = [
+      ...(evaluations.length ? [{ encounterType: "evaluation", encounterId: { in: evaluations.map(({ id }) => id) } }] : []),
+      ...(sessions.length ? [{ encounterType: "session", encounterId: { in: sessions.map(({ id }) => id) } }] : []),
+      ...(followUps.length ? [{ encounterType: "followup", encounterId: { in: followUps.map(({ id }) => id) } }] : []),
+    ];
+    const [documents, photos] = await Promise.all([
+      transaction.clinicalDocument.findMany({ where: { clinicId: user.clinicId, patientId, OR: [{ journeyId }, ...encounterLinks] }, select: { id: true, name: true, category: true, storageDriver: true, storageKey: true } }),
+      transaction.clinicalPhoto.findMany({ where: { clinicId: user.clinicId, patientId, OR: [{ journeyId }, ...encounterLinks] }, select: { id: true, name: true, category: true, storageDriver: true, storageKey: true } }),
+    ]);
+
+    await Promise.all([
+      ...documents.map((document) => auditEntry(user, patientId, "DOCUMENT", document.id, "DELETE", { fileName: document.name, category: document.category, note: `Excluído junto com a jornada "${journey.name}".` }, transaction)),
+      ...photos.map((photo) => auditEntry(user, patientId, "PHOTO", photo.id, "DELETE", { fileName: photo.name, category: photo.category, note: `Excluído junto com a jornada "${journey.name}".` }, transaction)),
+    ]);
+
+    const pendingOutputLinks = [
+      ...(appointmentIds.length ? [{ appointmentId: { in: appointmentIds } }] : []),
+      ...(sessions.length ? [{ procedureSessionId: { in: sessions.map(({ id }) => id) } }] : []),
+    ];
+    if (pendingOutputLinks.length) await transaction.pendingStockOutput.deleteMany({ where: { clinicId: user.clinicId, OR: pendingOutputLinks } });
+    await transaction.patientProcedureFollowUp.deleteMany({ where: { patientId, clinicId: user.clinicId, journeyId } });
+    if (appointmentIds.length) await transaction.appointment.deleteMany({ where: { id: { in: appointmentIds }, patientId, clinicId: user.clinicId } });
+    await transaction.patientProcedureSession.deleteMany({ where: { patientId, clinicId: user.clinicId, journeyId } });
+    await transaction.patientProcedure.deleteMany({ where: { patientId, clinicId: user.clinicId, journeyId } });
+    await transaction.evaluation.deleteMany({ where: { patientId, clinicId: user.clinicId, journeyId } });
     await transaction.quote.deleteMany({ where: { patientId, clinicId: user.clinicId, journeyId } });
+    await transaction.payment.deleteMany({ where: { patientId, clinicId: user.clinicId, journeyId } });
+    await transaction.clinicalDocument.deleteMany({ where: { clinicId: user.clinicId, patientId, OR: [{ journeyId }, ...encounterLinks] } });
+    await transaction.clinicalPhoto.deleteMany({ where: { clinicId: user.clinicId, patientId, OR: [{ journeyId }, ...encounterLinks] } });
     await transaction.patientJourney.delete({ where: { id: journey.id } });
-    return { journey: { id: journey.id, name: journey.name } };
+    return { journey: { id: journey.id, name: journey.name }, storedFiles: [...documents, ...photos] satisfies StoredRef[] };
   });
   if ("error" in result) return NextResponse.json({ message: result.error }, { status: result.status });
+  await Promise.all(result.storedFiles.map(removeStoredBytes));
   return NextResponse.json({ journey: result.journey });
 }
 
