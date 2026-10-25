@@ -129,6 +129,305 @@ async function journeys(patient, quote) {
   check("avaliação nova cai na jornada ativa", r.data.journeys?.length === 1 && r.data.journeys[0].id === second?.id && r.data.journeys[0].hasEvaluation, JSON.stringify(r.data.journeys));
 }
 
+// Exclusão de jornada em cascata: o papel não apaga pagamentos, documentos e fotos que não poderia apagar isoladamente.
+async function journeyDeletePermissions() {
+  const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
+  const clinicId = (await prisma.clinicMembership.findFirst({ where: { user: { email: email.toLowerCase() }, clinic: { name: testClinicName } }, select: { clinicId: true } }))?.clinicId;
+  const staffEmail = `e2e-jd-staff-${run}@example.com`, staffPassword = `E2e-${run}-Staff9!`;
+  const proEmail = `e2e-jd-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
+  const otherEmail = `e2e-jd-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E JornadaDel Externa ${run}`;
+  const members = [];
+  const mkPatient = async (label) => (await api("POST", "/api/patients", { name: `JD ${label} ${run}`, phone: "11999990077", age: 30, cpf: randomCpf() })).data.patient;
+  const mkJourney = async (pid, label) => (await api("POST", `/api/patients/${pid}/journeys`, { name: `JD ${label} ${run}`, professionalId: professional?.id })).data.journey;
+  const file = { mimeType: "application/pdf", sizeBytes: 3, sha256: "x", uploadedBy: "e2e", uploadedByName: "E2E" };
+  const addPayment = (pid, jid) => prisma.payment.create({ data: { clinicId, patientId: pid, journeyId: jid, valueCents: 1000, method: "Pix", installments: "A vista" } });
+  const addDocument = (pid, jid) => prisma.clinicalDocument.create({ data: { clinicId, patientId: pid, journeyId: jid, name: "Termo", originalName: "termo.pdf", signatureStatus: "ASSINADO", ...file, blob: { create: { data: Buffer.from("pdf") } } } });
+  const addPhoto = (pid, jid) => prisma.clinicalPhoto.create({ data: { clinicId, patientId: pid, journeyId: jid, name: "Foto", width: 1, height: 1, ...file, mimeType: "image/png", blob: { create: { data: Buffer.from("png") } } } });
+  const counts = async (pid, jid) => ({
+    journey: await prisma.patientJourney.count({ where: { id: jid } }),
+    payments: await prisma.payment.count({ where: { patientId: pid, journeyId: jid } }),
+    documents: await prisma.clinicalDocument.count({ where: { patientId: pid, journeyId: jid } }),
+    photos: await prisma.clinicalPhoto.count({ where: { patientId: pid, journeyId: jid } }),
+    documentBlobs: await prisma.clinicalDocumentBlob.count({ where: { document: { patientId: pid } } }),
+    photoBlobs: await prisma.clinicalPhotoBlob.count({ where: { photo: { patientId: pid } } }),
+  });
+  const del = (pid, jid) => api("DELETE", `/api/patients/${pid}/journeys/${jid}`);
+  try {
+    if (!clinicId) { check("clínica de teste encontrada para o gate de exclusão de jornada", false); return; }
+    const sessions = {};
+    for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
+      const r = await api("POST", "/api/team", { name: `E2E ${role} JD`, email: memberEmail, password: memberPassword, role });
+      if (r.status === 201) members.push(r.data.member);
+      sessions[role] = r.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
+      if (sessions[role]?.status !== 200) check(`usuário ${role} criado para o gate de exclusão de jornada`, false, `team ${r.status}`);
+    }
+    const asPro = (fn) => withSession(sessions.PROFESSIONAL.cookie, fn);
+    const patient = await mkPatient("A");
+    const other = await mkPatient("B");
+
+    if (sessions.PROFESSIONAL?.status === 200) {
+      // Só clínica/agenda: o profissional exclui.
+      const jClinical = await mkJourney(patient.id, "clinica");
+      await api("PUT", `/api/patients/${patient.id}/evaluation`, { journeyId: jClinical.id, photos: [], assessment: { chiefComplaint: "Q" }, status: "Rascunho" });
+      let r = await asPro(() => del(patient.id, jClinical.id));
+      check("jornada excluída: PROFESSIONAL exclui jornada só clínica (200)", r.status === 200 && (await counts(patient.id, jClinical.id)).journey === 0, `${r.status} ${JSON.stringify(r.data)}`);
+      r = await asPro(() => del(patient.id, jClinical.id));
+      check("jornada excluída: repetir a exclusão devolve 404", r.status === 404, r.status);
+
+      // Com pagamento: 403 e nada apagado (inclui registros clínicos da jornada).
+      const jPay = await mkJourney(patient.id, "pagamento");
+      await api("PUT", `/api/patients/${patient.id}/evaluation`, { journeyId: jPay.id, photos: [], assessment: { chiefComplaint: "Q" }, status: "Rascunho" });
+      await addPayment(patient.id, jPay.id);
+      r = await asPro(() => del(patient.id, jPay.id));
+      const evalCount = await prisma.evaluation.count({ where: { patientId: patient.id, journeyId: jPay.id } });
+      const c1 = await counts(patient.id, jPay.id);
+      check("jornada excluída: PROFESSIONAL com pagamento recebe 403 e nada é apagado", r.status === 403 && /pagamentos/.test(r.data.message) && c1.journey === 1 && c1.payments === 1 && evalCount === 1, `${r.status} ${JSON.stringify(c1)} eval ${evalCount}`);
+
+      // Com documento assinado: 403, nada apagado.
+      const jDoc = await mkJourney(patient.id, "documento");
+      await addDocument(patient.id, jDoc.id);
+      r = await asPro(() => del(patient.id, jDoc.id));
+      const c2 = await counts(patient.id, jDoc.id);
+      check("jornada excluída: PROFESSIONAL com documento recebe 403 e nada é apagado", r.status === 403 && c2.journey === 1 && c2.documents === 1 && c2.documentBlobs === 1, `${r.status} ${JSON.stringify(c2)}`);
+
+      // Documento ligado só por encontro (encounterLinks) também conta.
+      const jEnc = await mkJourney(patient.id, "encontro");
+      const evalR = await api("PUT", `/api/patients/${patient.id}/evaluation`, { journeyId: jEnc.id, photos: [], assessment: { chiefComplaint: "Q" }, status: "Rascunho" });
+      const encEval = await prisma.evaluation.findFirst({ where: { patientId: patient.id, journeyId: jEnc.id }, select: { id: true } });
+      const encPhoto = await prisma.clinicalPhoto.create({ data: { clinicId, patientId: patient.id, encounterType: "evaluation", encounterId: encEval?.id ?? "x", name: "Foto enc", width: 1, height: 1, ...file, mimeType: "image/png", blob: { create: { data: Buffer.from("png") } } } });
+      r = await asPro(() => del(patient.id, jEnc.id));
+      check("jornada excluída: PROFESSIONAL com foto ligada só pelo encontro recebe 403 e nada é apagado", evalR.status === 200 && r.status === 403 && await prisma.clinicalPhoto.count({ where: { id: encPhoto.id } }) === 1 && await prisma.patientJourney.count({ where: { id: jEnc.id } }) === 1, `${evalR.status} ${r.status}`);
+
+      // Com foto: 403.
+      const jPhoto = await mkJourney(patient.id, "foto");
+      await addPhoto(patient.id, jPhoto.id);
+      r = await asPro(() => del(patient.id, jPhoto.id));
+      const c3 = await counts(patient.id, jPhoto.id);
+      check("jornada excluída: PROFESSIONAL com foto clínica recebe 403 e nada é apagado", r.status === 403 && c3.journey === 1 && c3.photos === 1 && c3.photoBlobs >= 1, `${r.status} ${JSON.stringify(c3)}`);
+
+      // Jornada de outro paciente: 404.
+      r = await asPro(() => del(other.id, jPay.id));
+      check("jornada excluída: jornada de outro paciente devolve 404 e continua", r.status === 404 && (await counts(patient.id, jPay.id)).journey === 1, r.status);
+
+      // ADMIN exclui tudo.
+      r = await del(patient.id, jPay.id);
+      check("jornada excluída: ADMIN exclui jornada com pagamento (200) e o pagamento some", r.status === 200 && (await counts(patient.id, jPay.id)).payments === 0, r.status);
+      r = await del(patient.id, jDoc.id);
+      check("jornada excluída: ADMIN exclui jornada com documento assinado e bytes", r.status === 200 && (await prisma.clinicalDocument.count({ where: { patientId: patient.id, journeyId: jDoc.id } })) === 0, r.status);
+      r = await del(patient.id, jEnc.id);
+      check("jornada excluída: ADMIN exclui jornada com foto ligada pelo encontro", r.status === 200 && await prisma.clinicalPhoto.count({ where: { id: encPhoto.id } }) === 0, r.status);
+      const jAll = await mkJourney(patient.id, "tudo");
+      await addPayment(patient.id, jAll.id); await addDocument(patient.id, jAll.id); await addPhoto(patient.id, jAll.id);
+      r = await del(patient.id, jAll.id);
+      const c4 = await counts(patient.id, jAll.id);
+      check("jornada excluída: ADMIN exclui pagamentos, documentos, fotos e bytes juntos", r.status === 200 && c4.journey === 0 && c4.payments === 0 && c4.documents === 0 && c4.photos === 0, `${r.status} ${JSON.stringify(c4)}`);
+      r = await del(patient.id, jPhoto.id);
+      check("jornada excluída: ADMIN exclui jornada com foto clínica", r.status === 200 && (await counts(patient.id, jPhoto.id)).photos === 0, r.status);
+    }
+
+    if (sessions.STAFF?.status === 200) {
+      const jStaff = await mkJourney(patient.id, "staff");
+      const r = await withSession(sessions.STAFF.cookie, () => del(patient.id, jStaff.id));
+      check("jornada excluída: STAFF recebe 403 e a jornada continua", r.status === 403 && await prisma.patientJourney.count({ where: { id: jStaff.id } }) === 1, r.status);
+    }
+
+    // Outra clínica: 404 e a jornada continua.
+    const jOther = await mkJourney(patient.id, "outra-clinica");
+    let r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990022", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const outsider = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    if (outsider?.status === 200) {
+      r = await withSession(outsider.cookie, () => del(patient.id, jOther.id));
+      check("jornada excluída: outra clínica recebe 404 e a jornada continua", r.status === 404 && await prisma.patientJourney.count({ where: { id: jOther.id } }) === 1, r.status);
+    } else check("segunda clínica criada para o gate de exclusão de jornada", false, `registro ${r.status}`);
+  } finally {
+    for (const member of members) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [otherEmail, staffEmail, proEmail] } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: [otherEmail, staffEmail, proEmail] } } });
+  }
+}
+
+// Lacunas da exclusão de jornada: efeitos colaterais, arquivados, corrida, Bearer, trial, ids malformados e auditoria.
+async function journeyDeleteGaps() {
+  const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
+  const clinicId = (await prisma.clinicMembership.findFirst({ where: { user: { email: email.toLowerCase() }, clinic: { name: testClinicName } }, select: { clinicId: true } }))?.clinicId;
+  const proEmail = `e2e-jdg-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
+  const trialEmail = `e2e-jdg-trial-${run}@example.com`, trialPassword = `E2e-${run}-Trial9!`, trialClinic = `E2E JornadaDel Trial ${run}`;
+  const members = [];
+  const file = { mimeType: "application/pdf", sizeBytes: 3, sha256: "x", uploadedBy: "e2e", uploadedByName: "E2E" };
+  const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+  const mkPatient = async (label) => (await api("POST", "/api/patients", { name: `JDG ${label} ${run}`, phone: "11999990078", age: 30, cpf: randomCpf() })).data.patient;
+  const mkJourney = async (pid, label) => (await api("POST", `/api/patients/${pid}/journeys`, { name: `JDG ${label} ${run}`, professionalId: professional?.id })).data.journey;
+  const del = (pid, jid) => api("DELETE", `/api/patients/${pid}/journeys/${jid}`);
+  const addPayment = (pid, jid) => prisma.payment.create({ data: { clinicId, patientId: pid, journeyId: jid, valueCents: 1000, method: "Pix", installments: "A vista" } });
+  const addDocument = (pid, jid, extra = {}) => prisma.clinicalDocument.create({ data: { clinicId, patientId: pid, journeyId: jid, name: "Doc", originalName: "doc.pdf", ...file, blob: { create: { data: Buffer.from("pdf") } }, ...extra } });
+  const addPhoto = (pid, jid, extra = {}) => prisma.clinicalPhoto.create({ data: { clinicId, patientId: pid, journeyId: jid, name: "Foto", width: 1, height: 1, ...file, mimeType: "image/png", blob: { create: { data: Buffer.from("png") } }, ...extra } });
+  const exists = async (jid) => (await prisma.patientJourney.count({ where: { id: jid } })) === 1;
+  const audits = (pid) => prisma.clinicalFileAudit.count({ where: { clinicId, patientId: pid, action: "DELETE" } });
+  const raw = (token, method, path) => fetch(`${baseUrl}${path}`, { method, headers: token ? { Authorization: `Bearer ${token}` } : {}, redirect: "manual" }).then(async (response) => ({ status: response.status, data: await response.json().catch(() => null) }));
+  try {
+    if (!clinicId) { check("jornada excluída (lacunas): clínica de teste encontrada", false); return; }
+    const created = await api("POST", "/api/team", { name: "E2E PRO JDG", email: proEmail, password: proPassword, role: "PROFESSIONAL" });
+    if (created.status === 201) members.push(created.data.member);
+    const pro = created.status === 201 ? await loginAs(proEmail, proPassword) : null;
+    if (pro?.status !== 200) { check("jornada excluída (lacunas): PROFESSIONAL criado", false, `team ${created.status}`); return; }
+    const asPro = (fn) => withSession(pro.cookie, fn);
+    const adminCookie = cookie;
+    // Chamadas simultâneas com cookie explícito (withSession troca o cookie global e não serve para requisições em paralelo).
+    const withCookie = (ck, method, path, body) => fetch(`${baseUrl}${path}`, { method, headers: { ...(body ? { "Content-Type": "application/json" } : {}), cookie: ck }, body: body ? JSON.stringify(body) : undefined, redirect: "manual" }).then(async (response) => ({ status: response.status, data: await response.json().catch(() => null) }));
+    const patient = await mkPatient("A");
+    const other = await mkPatient("B");
+
+    // --- PROFESSIONAL com agenda, orçamento, avaliação com foto, sessão, pendência e estoque: 200 sem tocar no que é de fora ---
+    const product = await prisma.product.create({ data: { clinicId, name: `JDG Produto ${run}`, kind: "material", unit: "un", costCents: 100, supplier: "F", minStock: 0 } });
+    const lot = await prisma.stockLot.create({ data: { clinicId, productId: product.id, code: `JDG${run}`, expiresOn: new Date(Date.now() + 200 * 86_400_000) } });
+    await api("POST", "/api/procedures", { name: `JDG Proc ${run}`, category: "Facial", price: 100, durationMinutes: 10, margin: 30 });
+    const proc = (await api("GET", "/api/quotes/options")).data.procedures?.find((item) => item.name === `JDG Proc ${run}`);
+    const jFull = await mkJourney(patient.id, "completa");
+    const jKeep = await mkJourney(patient.id, "mantida");
+    const evPayload = (journeyId, name) => ({ journeyId, photos: [{ name, imageUrl: png, width: 1, height: 1, annotations: [] }], assessment: fullAssessment, status: "Concluída" });
+    const ev = (await api("PUT", `/api/patients/${patient.id}/evaluation`, evPayload(jFull.id, "f"))).data.evaluation;
+    const evKeep = (await api("PUT", `/api/patients/${patient.id}/evaluation`, evPayload(jKeep.id, "k"))).data.evaluation;
+    const quote = (await api("POST", "/api/quotes", { patientId: patient.id, journeyId: jFull.id, evaluationId: ev?.id, details: [{ procedureId: proc?.id, quantity: 1, discountCents: 0 }], paymentMethod: "Pix", installments: 1, notes: "" })).data.quote;
+    for (const status of ["Enviado", "Aprovado"]) await api("PATCH", `/api/quotes/${quote?.id}`, { status, evaluationId: ev?.id });
+    const session = (await api("POST", `/api/patients/${patient.id}/procedure-sessions`, { journeyId: jFull.id, quoteId: quote?.id, procedureId: proc?.id })).data.session;
+    await prisma.quote.update({ where: { id: quote.id }, data: { status: "Enviado" } });
+    const mkAppt = (pid, jid, hour) => prisma.appointment.create({ data: { clinicId, patientId: pid, journeyId: jid, date: new Date(), time: hour, procedure: "P", professional: "T", status: "Atendido" } });
+    const apptFull = await mkAppt(patient.id, jFull.id, "09:00");
+    const apptKeep = await mkAppt(patient.id, jKeep.id, "10:00");
+    const apptOther = await mkAppt(other.id, null, "11:00");
+    const mkPending = (appointmentId, patientId, procedureSessionId) => prisma.pendingStockOutput.create({ data: { clinicId, productId: product.id, appointmentId, procedureSessionId, patientId, quantity: 1, attendanceKind: "appointment", attendanceName: "P", attendanceDate: new Date() } });
+    const pendFull = await mkPending(apptFull.id, patient.id, session?.id);
+    const pendKeep = await mkPending(apptKeep.id, patient.id);
+    const pendOther = await mkPending(apptOther.id, other.id);
+    await prisma.stockMovement.create({ data: { clinicId, productId: product.id, lotId: lot.id, type: "entry", quantity: 5 } });
+    const movement = await prisma.stockMovement.create({ data: { clinicId, productId: product.id, lotId: lot.id, type: "attendance", quantity: -1, appointmentId: apptFull.id, patientId: patient.id } });
+    const balance = async () => (await prisma.stockMovement.aggregate({ where: { lotId: lot.id }, _sum: { quantity: true } }))._sum.quantity;
+    const payKeep = await addPayment(patient.id, jKeep.id);
+    const docKeep = await addDocument(patient.id, jKeep.id);
+    const balanceBefore = await balance();
+    const auditsBefore = await audits(patient.id);
+    let r = await asPro(() => del(patient.id, jFull.id));
+    check("jornada excluída (lacunas): PROFESSIONAL apaga agenda, orçamento, avaliação e sessão (200)", r.status === 200 && Boolean(session?.id) && !await exists(jFull.id) && await prisma.appointment.count({ where: { id: apptFull.id } }) === 0 && await prisma.quote.count({ where: { id: quote.id } }) === 0 && await prisma.evaluation.count({ where: { id: ev.id } }) === 0 && await prisma.patientProcedureSession.count({ where: { journeyId: jFull.id } }) === 0, `${r.status} sessão=${session?.id}`);
+    console.log(`NOTA (comportamento real): PROFESSIONAL exclui jornada com EvaluationPhoto (foto da avaliação, dado clínico) e a lista JSON de fotos da sessão sem 403 e sem ClinicalFileAudit; EvaluationPhoto restantes da avaliação apagada=${await prisma.evaluationPhoto.count({ where: { evaluationId: ev.id } })}.`);
+    check("jornada excluída (lacunas): pendência de saída da jornada some; a de outra jornada e a de outro paciente continuam", await prisma.pendingStockOutput.count({ where: { id: pendFull.id } }) === 0 && await prisma.pendingStockOutput.count({ where: { id: { in: [pendKeep.id, pendOther.id] } } }) === 2);
+    check("jornada excluída (lacunas): saldo do lote não muda e a movimentação fica sem vínculo com o atendimento", await balance() === balanceBefore && (await prisma.stockMovement.findUnique({ where: { id: movement.id } }))?.appointmentId === null, `${balanceBefore} -> ${await balance()}`);
+    check("jornada excluída (lacunas): outra jornada do mesmo paciente (avaliação com foto, atendimento, pagamento, documento) e o outro paciente ficam intactos", await exists(jKeep.id) && await prisma.evaluation.count({ where: { id: evKeep.id } }) === 1 && await prisma.evaluationPhoto.count({ where: { evaluationId: evKeep.id } }) === 1 && await prisma.appointment.count({ where: { id: { in: [apptKeep.id, apptOther.id] } } }) === 2 && await prisma.payment.count({ where: { id: payKeep.id, journeyId: jKeep.id } }) === 1 && await prisma.clinicalDocument.count({ where: { id: docKeep.id } }) === 1 && await prisma.patient.count({ where: { id: { in: [patient.id, other.id] } } }) === 2);
+    check("jornada excluída (lacunas): 200 do PROFESSIONAL não cria auditoria de arquivo", await audits(patient.id) === auditsBefore);
+
+    // --- Pagamento só de OUTRA jornada do mesmo paciente não bloqueia nem é apagado ---
+    const jNoPay = await mkJourney(patient.id, "sem-pagamento");
+    r = await asPro(() => del(patient.id, jNoPay.id));
+    check("jornada excluída (lacunas): pagamento de outra jornada do paciente não bloqueia (200) e continua", r.status === 200 && await prisma.payment.count({ where: { id: payKeep.id } }) === 1, r.status);
+
+    // --- Arquivados e termo assinado: contam como vínculo ---
+    const cases = [
+      ["documento arquivado", (pid, jid) => addDocument(pid, jid, { archivedAt: new Date(), archivedBy: "e2e", archiveReason: "teste" }), "clinicalDocument"],
+      ["foto arquivada", (pid, jid) => addPhoto(pid, jid, { archivedAt: new Date(), archivedBy: "e2e" }), "clinicalPhoto"],
+      ["termo de consentimento assinado", (pid, jid) => addDocument(pid, jid, { category: "TERMO_CONSENTIMENTO", signatureStatus: "ASSINADO" }), "clinicalDocument"],
+    ];
+    for (const [label, make, model] of cases) {
+      const j = await mkJourney(patient.id, label);
+      const row = await make(patient.id, j.id);
+      const a0 = await audits(patient.id);
+      r = await asPro(() => del(patient.id, j.id));
+      check(`jornada excluída (lacunas): PROFESSIONAL com ${label} recebe 403, nada apagado e sem auditoria`, r.status === 403 && await exists(j.id) && await prisma[model].count({ where: { id: row.id } }) === 1 && await audits(patient.id) === a0, `${r.status}`);
+      r = await del(patient.id, j.id);
+      const blobs = await prisma.clinicalDocumentBlob.count({ where: { documentId: row.id } }) + await prisma.clinicalPhotoBlob.count({ where: { photoId: row.id } });
+      check(`jornada excluída (lacunas): ADMIN exclui jornada com ${label}; bytes somem e a auditoria DELETE é criada`, r.status === 200 && await prisma[model].count({ where: { id: row.id } }) === 0 && blobs === 0 && await audits(patient.id) === a0 + 1 && await prisma.clinicalFileAudit.count({ where: { fileId: row.id, action: "DELETE" } }) === 1, `${r.status} blobs=${blobs}`);
+    }
+
+    // --- Jornada arquivada ---
+    const jArch = await mkJourney(patient.id, "arquivada");
+    await prisma.patientJourney.update({ where: { id: jArch.id }, data: { archivedAt: new Date(), status: "Cancelado" } });
+    await addPayment(patient.id, jArch.id);
+    r = await asPro(() => del(patient.id, jArch.id));
+    check("jornada excluída (lacunas): jornada arquivada com pagamento também dá 403 ao PROFESSIONAL", r.status === 403 && await exists(jArch.id), r.status);
+    r = await del(patient.id, jArch.id);
+    check("jornada excluída (lacunas): ADMIN exclui jornada arquivada", r.status === 200 && !await exists(jArch.id), r.status);
+
+    // --- Corrida: dois DELETE iguais ---
+    for (const label of ["ADMIN", "PROFESSIONAL"]) {
+      const j = await mkJourney(patient.id, `dupla-${label}`);
+      await api("PUT", `/api/patients/${patient.id}/evaluation`, { journeyId: j.id, photos: [], assessment: { chiefComplaint: "Q" }, status: "Rascunho" });
+      const ck = label === "ADMIN" ? adminCookie : pro.cookie;
+      const pair = await Promise.all([withCookie(ck, "DELETE", `/api/patients/${patient.id}/journeys/${j.id}`), withCookie(ck, "DELETE", `/api/patients/${patient.id}/journeys/${j.id}`)]);
+      check(`jornada excluída (lacunas): dois DELETE simultâneos (${label}) dão 200 e 404, sem 500`, pair.map((item) => item.status).sort().join() === "200,404" && !await exists(j.id), pair.map((item) => item.status).join());
+    }
+
+    // --- Corrida: PROFESSIONAL apaga enquanto outra requisição cria pagamento / documento ---
+    const outcomes = [];
+    for (let round = 0; round < 24; round += 1) {
+      const j = await mkJourney(patient.id, `corrida-${round}`);
+      const kind = round % 2 === 0 ? "payment" : "document";
+      const create = kind === "payment" ? () => withCookie(adminCookie, "POST", "/api/payments", { patientId: patient.id, journeyId: j.id, value: 10, method: "Pix", status: "Pago", installments: "A vista" }) : () => addDocument(patient.id, j.id).then((row) => ({ status: 201, row }));
+      const wait = Math.floor(round / 2) * 3; // varre o instante da criação em relação ao DELETE (já em andamento)
+      const [d, c] = await Promise.all([withCookie(pro.cookie, "DELETE", `/api/patients/${patient.id}/journeys/${j.id}`), new Promise((resolve) => setTimeout(resolve, wait)).then(create)]);
+      const made = c.status === 201;
+      const lost = d.status === 200 && made && (kind === "payment" ? await prisma.payment.count({ where: { id: c.data?.payment?.id } }) === 0 : await prisma.clinicalDocument.count({ where: { id: c.row.id } }) === 0);
+      const dangling = kind === "document" && made && d.status === 200 && await prisma.clinicalDocument.count({ where: { journeyId: j.id } }) === 1;
+      outcomes.push(`${kind}:del${d.status}/criar${c.status}${lost ? " PERDIDO" : ""}${dangling ? " documento-com-jornada-inexistente" : ""}${d.status >= 500 ? " 5xx" : ""}${c.status >= 500 ? " criacao-5xx" : ""}`);
+      await prisma.clinicalDocument.deleteMany({ where: { journeyId: j.id } });
+      if (await exists(j.id)) await del(patient.id, j.id);
+    }
+    console.log(`NOTA corrida: ${outcomes.join(" | ")}`);
+    check("jornada excluída (lacunas): corrida com criação de pagamento/documento nunca apaga o registro novo nem devolve 5xx", outcomes.every((item) => !/PERDIDO| 5xx/.test(item)), outcomes.join(" | "));
+    // Limitação conhecida (sem perda de dado): ClinicalDocument.journeyId não tem FK, então um documento criado no meio da exclusão pode ficar apontando para a jornada removida.
+    console.log(`NOTA documento órfão de jornada na corrida: ${outcomes.some((item) => /jornada-inexistente/.test(item)) ? "ocorreu" : "não ocorreu"}`);
+    // Limitação conhecida, fora desta correção: POST /api/payments sem tratamento de FK pode dar 5xx/404 se a jornada some no meio (rota de pagamentos).
+    console.log(`NOTA POST /api/payments na corrida: ${outcomes.some((item) => /criacao-5xx/.test(item)) ? "5xx observado" : "sem 5xx"}`);
+
+    // --- Ids malformados, outro paciente e inexistentes ---
+    const probes = [[patient.id, "inexistente"], [patient.id, "a".repeat(300)], [patient.id, "'; DROP TABLE x;--"], ["inexistente", jKeep.id], [other.id, jKeep.id], [patient.id, "..%2F..%2Fx"]];
+    const statuses = [];
+    for (const [pid, jid] of probes) statuses.push((await asPro(() => api("DELETE", `/api/patients/${pid}/journeys/${jid}`))).status);
+    check("jornada excluída (lacunas): ids malformados, de outro paciente ou inexistentes dão 404 (nunca 500) e a jornada continua", statuses.every((status) => status === 404) && await exists(jKeep.id), statuses.join());
+
+    r = await asPro(() => api("DELETE", `/api/patients/${patient.id}/journeys/%00`));
+    check("jornada excluída (lacunas): id com byte nulo (%00) dá 404, não 500", r.status === 404 && await exists(jKeep.id), r.status);
+
+    // --- Sem sessão e Bearer ---
+    r = await withSession("", () => del(patient.id, jKeep.id));
+    check("jornada excluída (lacunas): sem sessão devolve 401 e a jornada continua", r.status === 401 && await exists(jKeep.id), r.status);
+    const bearerToken = (await fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ login: proEmail, password: `${proPassword}-nova` }) }).then((response) => response.json().catch(() => null)))?.token;
+    if (bearerToken) {
+      const jB = await mkJourney(patient.id, "bearer");
+      await addPayment(patient.id, jB.id);
+      let b = await raw(bearerToken, "DELETE", `/api/patients/${patient.id}/journeys/${jB.id}`);
+      check("jornada excluída (lacunas): Bearer PROFESSIONAL com pagamento recebe 403 e nada é apagado", b.status === 403 && await exists(jB.id) && await prisma.payment.count({ where: { journeyId: jB.id } }) === 1, b.status);
+      await prisma.payment.deleteMany({ where: { journeyId: jB.id } });
+      b = await raw(bearerToken, "DELETE", `/api/patients/${patient.id}/journeys/${jB.id}`);
+      check("jornada excluída (lacunas): Bearer PROFESSIONAL exclui jornada sem pagamento (200)", b.status === 200 && !await exists(jB.id), b.status);
+    } else check("jornada excluída (lacunas): login mobile do PROFESSIONAL", false);
+
+    // --- PATCH segue funcionando ---
+    const jPatch = await mkJourney(patient.id, "patch");
+    r = await asPro(() => api("PATCH", `/api/patients/${patient.id}/journeys/${jPatch.id}`, { status: "Cancelado" }));
+    const archived = await prisma.patientJourney.findUnique({ where: { id: jPatch.id }, select: { status: true, archivedAt: true } });
+    check("jornada excluída (lacunas): PATCH Cancelado continua arquivando", r.status === 200 && archived?.status === "Cancelado" && archived.archivedAt !== null, r.status);
+    r = await asPro(() => api("PATCH", `/api/patients/${patient.id}/journeys/${jPatch.id}`, { status: "Em andamento" }));
+    check("jornada excluída (lacunas): PATCH restaura jornada arquivada", r.status === 200 && r.data.restored === true, `${r.status}`);
+
+    // --- Trial vencido ---
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: trialClinic, name: "E2E Trial JDG", phone: "11999990079", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: trialEmail, password: trialPassword }));
+    if (reg.status === 201) {
+      const tClinic = (await prisma.clinicMembership.findFirst({ where: { user: { email: trialEmail } }, select: { clinicId: true } })).clinicId;
+      const tPatient = await prisma.patient.create({ data: { clinicId: tClinic, name: `Trial JDG ${run}`, phone: "11999990080", age: 30 } });
+      const tJourney = await prisma.patientJourney.create({ data: { clinicId: tClinic, patientId: tPatient.id, name: "J" } });
+      await prisma.clinic.update({ where: { id: tClinic }, data: { trialEndsAt: new Date(Date.now() - 86_400_000) } });
+      const tSession = await loginAs(trialEmail, trialPassword);
+      r = await withSession(tSession.cookie, () => del(tPatient.id, tJourney.id));
+      check("jornada excluída (lacunas): trial vencido devolve 401 e a jornada continua", r.status === 401 && await exists(tJourney.id), `${tSession.status}/${r.status}`);
+      await prisma.patient.deleteMany({ where: { clinicId: tClinic } });
+    } else check("jornada excluída (lacunas): clínica de trial vencido criada", false, `registro ${reg.status}`);
+  } finally {
+    for (const member of members) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [proEmail, trialEmail] } } } });
+    await prisma.clinic.deleteMany({ where: { name: trialClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: [proEmail, trialEmail] } } });
+  }
+}
+
 async function settings() {
   let r = await api("GET", "/api/clinic/cost-settings");
   const current = r.data.settings;
@@ -4805,7 +5104,7 @@ const suites = {
   pacientes: { needs: [], run: async (state) => { Object.assign(state, await patientsAndPayments()); await patientCpfMask(); } },
   orcamentos: { needs: ["pacientes"], run: async (state) => { state.quote = await quotesAndProcedures(state.patient); await quoteCents(); } },
   agenda: { needs: ["pacientes"], run: (state) => appointments(state.patient) },
-  jornadas: { needs: ["orcamentos"], run: (state) => journeys(state.patient, state.quote) },
+  jornadas: { needs: ["orcamentos"], run: async (state) => { await journeys(state.patient, state.quote); await journeyDeletePermissions(); await journeyDeleteGaps(); } },
   configuracoes: { needs: [], run: () => settings() },
   estoque: { needs: ["pacientes"], run: (state) => stock(state.patient) },
   avaliacao: { needs: [], run: async () => { await evaluationRequired(); await evaluationRequiredGaps(); } },
