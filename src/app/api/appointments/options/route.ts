@@ -8,8 +8,8 @@ export async function GET() {
 
   const clinic = await prisma.clinic.findUnique({
     where: { id: user.clinicId },
-    select: { openingTime: true, closingTime: true },
+    select: { openingTime: true, closingTime: true, allowAppointmentsOutsideHours: true },
   });
 
-  return NextResponse.json({ openingTime: clinic?.openingTime ?? "08:00", closingTime: clinic?.closingTime ?? "19:00" });
+  return NextResponse.json({ openingTime: clinic?.openingTime ?? "08:00", closingTime: clinic?.closingTime ?? "19:00", allowAppointmentsOutsideHours: clinic?.allowAppointmentsOutsideHours ?? false });
 }

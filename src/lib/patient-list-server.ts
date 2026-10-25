@@ -29,7 +29,7 @@ export async function searchPatientIds(clinicId: string, options: { q: string; f
   return { ids: rows.map((row) => row.id), total: Number(totals[0]?.total ?? 0) };
 }
 
-type StagePatient = { id: string; procedureRecords: Array<{ id: string }> };
+type StagePatient = { id: string; procedureRecords: Array<{ id: string }>; manualJourneyStage?: string | null };
 
 // Etapa atual da jornada só para os pacientes informados (a página), nunca para a clínica inteira.
 export async function currentStagesFor(clinicId: string, patients: StagePatient[]) {
@@ -63,12 +63,17 @@ export async function currentStagesFor(clinicId: string, patients: StagePatient[
 }
 
 export const patientListSelect = {
-  id: true, name: true, cpf: true, phone: true, age: true, status: true,
+  id: true, name: true, cpf: true, phone: true, age: true, status: true, manualJourneyStage: true,
   lastVisit: true, nextReturn: true, totalValue: true, createdAt: true,
   procedureRecords: { orderBy: { performedAt: "desc" }, take: 1, select: { id: true } },
 } satisfies Prisma.PatientSelect;
 
-export async function withCurrentStage<T extends StagePatient>(clinicId: string, patients: T[]) {
+export async function withCurrentStage<T extends StagePatient>(clinicId: string, patients: T[], automatic = true) {
+  if (!automatic) return patients.map((patient) => {
+    const { procedureRecords: ignoredRecords, ...summary } = patient;
+    void ignoredRecords;
+    return { ...summary, currentStage: patient.manualJourneyStage ?? "evaluation" };
+  });
   const stages = await currentStagesFor(clinicId, patients);
   return patients.map(({ procedureRecords, ...patient }) => {
     void procedureRecords;

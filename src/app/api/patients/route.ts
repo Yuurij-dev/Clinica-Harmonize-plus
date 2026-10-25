@@ -16,13 +16,14 @@ export async function GET(request: Request) {
   const skip = (page - 1) * pageSize;
   const clinicId = user.clinicId;
 
-  const [listed, statusGroups] = await Promise.all([
+  const [listed, statusGroups, clinic] = await Promise.all([
     q ? listBySearch(clinicId, { q, status, sort, skip, take: pageSize }) : listPlain(clinicId, { status, sort, skip, take: pageSize }),
     prisma.patient.groupBy({ by: ["status"], where: { clinicId }, _count: { _all: true } }),
+    prisma.clinic.findUnique({ where: { id: clinicId }, select: { autoAdvancePatientJourneyEnabled: true } }),
   ]);
   const byStatus = Object.fromEntries(statusGroups.map((group) => [group.status, group._count._all]));
   const summary = { total: statusGroups.reduce((sum, group) => sum + group._count._all, 0), byStatus };
-  return NextResponse.json({ patients: patientsForRole(user.role, await withCurrentStage(clinicId, listed.patients)), pagination: paginationMeta(page, pageSize, listed.total), summary });
+  return NextResponse.json({ patients: patientsForRole(user.role, await withCurrentStage(clinicId, listed.patients, clinic?.autoAdvancePatientJourneyEnabled ?? true)), pagination: paginationMeta(page, pageSize, listed.total), summary });
 }
 
 async function listPlain(clinicId: string, options: { status: string; sort: PatientSort; skip: number; take: number }) {

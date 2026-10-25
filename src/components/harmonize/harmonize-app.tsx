@@ -10,7 +10,7 @@ import { Sidebar } from "./sidebar";
 import { StockSection } from "./stock-section";
 import { PurchasesSection, type PurchasesTab } from "./purchases-section";
 import { FinanceSection } from "./finance-section";
-import { StockSettingsCard, stockAlertSection } from "./stock-alerts";
+import { stockAlertSection } from "./stock-alerts";
 import { Topbar } from "./topbar";
 import {
   ClientsSection,
@@ -302,8 +302,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
           {currentUser && allowedSections.includes("financeiro") && active === "financeiro" ? <FinanceSection /> : null}
           {currentUser && allowedSections.includes("relatorios") && active === "relatorios" ? <ReportsSection /> : null}
           {currentUser && allowedSections.includes("calculadora") && active === "calculadora" ? <SettingsSection mode="calculator" /> : null}
-          {currentUser && allowedSections.includes("configuracoes") && active === "configuracoes" ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} onSaved={showNotice} /> : null}
-          {currentUser && allowedSections.includes("configuracoes") && active === "configuracoes" ? <StockSettingsCard onSaved={showNotice} /> : null}
+          {currentUser && allowedSections.includes("configuracoes") && active === "configuracoes" ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
           </AnimatedPage>
         </main>
       </div>

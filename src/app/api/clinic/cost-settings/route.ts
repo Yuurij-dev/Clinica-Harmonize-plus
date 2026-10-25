@@ -3,7 +3,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { parseClockMinutes } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
 
-const settingsSelect = { name: true, cnpj: true, phone: true, email: true, address: true, appointmentNotificationsEnabled: true, appointmentNotificationSoundEnabled: true, stockNotificationsEnabled: true, requireCancellationReason: true, laborCost: true, facilityCost: true, medicationCost: true, appointmentToleranceMinutes: true, openingTime: true, closingTime: true, professionalOpeningTime: true, professionalClosingTime: true, professionalHourlyCost: true } as const;
+const settingsSelect = { name: true, cnpj: true, phone: true, email: true, address: true, appointmentNotificationsEnabled: true, appointmentNotificationSoundEnabled: true, stockNotificationsEnabled: true, requireCancellationReason: true, autoMarkMissedAppointmentsEnabled: true, autoCompleteAppointmentsEnabled: true, autoAdvancePatientJourneyEnabled: true, allowAppointmentsOutsideHours: true, laborCost: true, facilityCost: true, medicationCost: true, appointmentToleranceMinutes: true, openingTime: true, closingTime: true, professionalOpeningTime: true, professionalClosingTime: true, professionalHourlyCost: true } as const;
 
 export async function GET() {
   const user = await getCurrentUser();

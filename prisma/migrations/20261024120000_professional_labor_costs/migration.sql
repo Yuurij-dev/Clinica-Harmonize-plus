@@ -1,0 +1,2 @@
+ALTER TABLE "ClinicMembership"
+ADD COLUMN "laborCostCents" INTEGER NOT NULL DEFAULT 0;

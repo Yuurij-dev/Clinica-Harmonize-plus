@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { appointmentDay, appointmentHasPassed, appointmentInstant, clinicNow, parseAppointmentDay, parseClockMinutes } from "@/lib/clinic-time";
-import { appointmentTransactionOptions, lockAppointmentSlots, scheduleConflictError } from "@/lib/appointment-conflict";
+import { appointmentDay, appointmentHasPassed, appointmentInstant, appointmentSlotError, clinicNow, parseAppointmentDay, parseClockMinutes } from "@/lib/clinic-time";
+import { appointmentDurations, appointmentTransactionOptions, lockAppointmentSlots, scheduleConflictError } from "@/lib/appointment-conflict";
 import { appointmentNeedsConflictCheck, cleanProfessionalName, professionalKey } from "@/lib/appointment-conflict-rules";
 import { prisma } from "@/lib/prisma";
 import { DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE, procedureAppointmentVariants } from "@/lib/procedure-session-rules";
@@ -38,6 +38,14 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
   if ((day || body.time) && appointmentHasPassed({ date: appointmentInstant(day ?? appointmentDay(current.date)), time: body.time ?? current.time }, clinicNow())) {
     return NextResponse.json({ message: "Não é possível alterar para uma data ou horário que já passou." }, { status: 400 });
+  }
+  if (day || body.time || body.procedure) {
+    const [clinic, durationOf] = await Promise.all([
+      prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { openingTime: true, closingTime: true, allowAppointmentsOutsideHours: true } }),
+      appointmentDurations(prisma, user.clinicId, [body.procedure?.trim() || current.procedure]),
+    ]);
+    const slotError = appointmentSlotError(day ?? appointmentDay(current.date), body.time ?? current.time, clinic?.openingTime ?? "08:00", clinic?.closingTime ?? "19:00", clinicNow(), durationOf(body.procedure?.trim() || current.procedure), clinic?.allowAppointmentsOutsideHours ?? false);
+    if (slotError) return NextResponse.json({ message: slotError }, { status: 400 });
   }
   // Status resultante ativo + procedimento (renomeado ou reaberto) não pode duplicar outro agendamento ativo da jornada.
   const activeStatuses = ["Agendado", "Em atendimento"];

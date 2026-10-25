@@ -34,7 +34,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     includePayments ? prisma.payment.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { date: "desc" } }) : Promise.resolve([]),
     includeQuotes ? prisma.quote.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { createdAt: "desc" }, select: { id: true, items: true, status: true, createdAt: true } }) : Promise.resolve([]),
     includeProcedureRecords ? prisma.patientProcedure.findMany({ where: { patientId, clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) }, orderBy: { performedAt: "desc" }, select: { id: true, quoteId: true, name: true, professional: true, performedAt: true, ...(clinical ? { notes: true, sessions: { orderBy: { performedAt: "desc" as const }, select: { id: true, evaluationId: true, procedureName: true, professional: true, performedAt: true, status: true, technique: true, treatedAreas: true, durationMinutes: true, photos: true } } } : {}), beforePhoto: true, afterPhoto: true, photoSessions: { orderBy: { createdAt: "asc" }, select: { id: true, name: true, beforePhoto: true, afterPhoto: true, createdAt: true } } } }) : Promise.resolve([]),
-    prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { appointmentToleranceMinutes: true } }),
+    prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { appointmentToleranceMinutes: true, autoMarkMissedAppointmentsEnabled: true } }),
     // Materiais usados no paciente (rastreio): saídas de atendimento, sem custo.
     includeProcedureRecords && clinical ? prisma.stockMovement.findMany({ where: { clinicId: user.clinicId, patientId, type: "attendance" }, orderBy: { attendanceDate: "desc" }, select: { id: true, appointmentId: true, procedureSessionId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, kind: true, unit: true } }, lot: { select: { code: true, expiresOn: true } }, reversedBy: { select: { id: true } } } }) : Promise.resolve([]),
     includeProcedureRecords && clinical ? prisma.pendingStockOutput.findMany({ where: { clinicId: user.clinicId, patientId, status: "pending" }, select: { id: true, appointmentId: true, procedureSessionId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, kind: true, unit: true } } } }) : Promise.resolve([]),
@@ -47,7 +47,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   for (const photo of sessionEvaluationPhotos) photosByEvaluation.set(photo.evaluationId, [...(photosByEvaluation.get(photo.evaluationId) ?? []), photo]);
   const now = clinicNow();
   const toleranceMinutes = clinic?.appointmentToleranceMinutes ?? 15;
-  const overdue = appointments.filter((appointment) => appointment.status === "Agendado" && appointmentHasPassed(appointment, now, toleranceMinutes));
+  const overdue = clinic?.autoMarkMissedAppointmentsEnabled === false ? [] : appointments.filter((appointment) => appointment.status === "Agendado" && appointmentHasPassed(appointment, now, toleranceMinutes));
   if (overdue.length) {
     await prisma.appointment.updateMany({ where: { clinicId: user.clinicId, id: { in: overdue.map((appointment) => appointment.id) }, ...(journeyId ? { journeyId } : {}) }, data: { status: "Faltou" } });
   }

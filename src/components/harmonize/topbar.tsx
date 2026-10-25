@@ -7,6 +7,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Input } from "@/components/ui/input";
 import type { SectionId } from "@/types/clinic";
 import type { StockAlert } from "@/lib/stock-rules";
+import { invalidateClientCache } from "@/lib/client-cache";
 import { StockAlertGroups, useStockAlerts } from "./stock-alerts";
 
 type TopbarProps = {
@@ -147,6 +148,16 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
     let active = true;
 
     async function loadAppointmentAlerts() {
+      if (document.visibilityState === "visible") {
+        const automationResponse = await fetch("/api/appointments/auto-process", { method: "POST", cache: "no-store" }).catch(() => null);
+        if (automationResponse?.ok) {
+          const automation = await automationResponse.json().catch(() => null) as { updated?: Array<{ id: string; patientId: string; date: string }> } | null;
+          if (active && automation?.updated?.length) {
+            invalidateClientCache("/api/agenda", "/api/dashboard/bootstrap", "/api/patients", ...automation.updated.map(({ patientId }) => `/api/patients/${patientId}/history`));
+            window.dispatchEvent(new Event("harmonize-auto-appointments-updated"));
+          }
+        }
+      }
       const response = await fetch("/api/agenda/alerts", { cache: "no-store" }).catch(() => null);
       if (!response?.ok) return;
       const data = await response.json() as { appointments?: Array<{ id: string; date: string; time: string; status: string; patient?: { name?: string } }>; settings?: { appointmentNotificationsEnabled?: boolean; appointmentNotificationSoundEnabled?: boolean; stockNotificationsEnabled?: boolean } };

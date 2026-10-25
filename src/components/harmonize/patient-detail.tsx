@@ -1609,7 +1609,7 @@ function AppointmentsTab({ requestStart, patientId, history, loading, error, onR
   const canRun = useCan("appointment:run");
   const [returnDate, setReturnDate] = useState(() => clinicDateAfterDays(0));
   const [returnTime, setReturnTime] = useState("09:00");
-  const [clinicHours, setClinicHours] = useState<{ openingTime: string; closingTime: string } | null>(() => readClientCache<{ openingTime: string; closingTime: string }>("/api/appointments/options") ?? null);
+  const [clinicHours, setClinicHours] = useState<{ openingTime: string; closingTime: string; allowAppointmentsOutsideHours: boolean } | null>(() => readClientCache<{ openingTime: string; closingTime: string; allowAppointmentsOutsideHours: boolean }>("/api/appointments/options") ?? null);
   const [returnReason, setReturnReason] = useState(() => returnAppointmentTarget ? returnAppointmentTarget.kind === "procedure" ? returnAppointmentTarget.name : `Retorno - ${returnAppointmentTarget.name}` : "");
   const [returnNotes, setReturnNotes] = useState("");
   const [returnSaving, setReturnSaving] = useState(false);
@@ -1624,7 +1624,7 @@ function AppointmentsTab({ requestStart, patientId, history, loading, error, onR
   useEffect(() => {
     if (!returnAppointmentTarget && !editingAppointment) return;
     let active = true;
-    getCachedJson<{ openingTime: string; closingTime: string }>("/api/appointments/options")
+    getCachedJson<{ openingTime: string; closingTime: string; allowAppointmentsOutsideHours: boolean }>("/api/appointments/options")
       .then((data) => {
         if (!active) return;
         setClinicHours(data);
@@ -1702,7 +1702,7 @@ function AppointmentsTab({ requestStart, patientId, history, loading, error, onR
       setReturnError("Escolha o profissional.");
       return;
     }
-    const slotError = appointmentSlotError(returnDate, returnTime, clinicHours.openingTime, clinicHours.closingTime, clinicNow());
+    const slotError = appointmentSlotError(returnDate, returnTime, clinicHours.openingTime, clinicHours.closingTime, clinicNow(), 60, clinicHours.allowAppointmentsOutsideHours);
     if (slotError) {
       setInvalidReturnFields(new Set([/data|passou/i.test(slotError) ? "date" : "time"]));
       setReturnError(slotError);
@@ -1788,7 +1788,7 @@ function AppointmentsTab({ requestStart, patientId, history, loading, error, onR
             {professionals.map((professional) => <option key={professional.id} value={professional.name}>{professional.name}</option>)}
           </select></FormField></div>
           <FormField label="Data"><input className={cn(fieldClassName, invalidReturnFields.has("date") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} type="date" value={returnDate} required onChange={(event) => { setReturnDate(event.target.value); setInvalidReturnFields((current) => { const next = new Set(current); next.delete("date"); return next; }); setReturnError(""); }} /></FormField>
-          <FormField label="Horário">{clinicHours ? <ClinicTimePicker openingTime={clinicHours.openingTime} closingTime={clinicHours.closingTime} latestTime={latestAppointmentStart(clinicHours.closingTime)} value={returnTime} invalid={invalidReturnFields.has("time")} className={fieldClassName} onChange={(value) => { setReturnTime(value); setInvalidReturnFields((current) => { const next = new Set(current); next.delete("time"); return next; }); setReturnError(""); }} /> : <button type="button" disabled className={cn(fieldClassName, "text-left opacity-60")}>Carregando horários...</button>}</FormField>
+          <FormField label="Horário">{clinicHours ? <ClinicTimePicker openingTime={clinicHours.openingTime} closingTime={clinicHours.closingTime} latestTime={clinicHours.allowAppointmentsOutsideHours ? undefined : latestAppointmentStart(clinicHours.closingTime)} allowOutsideHours={clinicHours.allowAppointmentsOutsideHours} value={returnTime} invalid={invalidReturnFields.has("time")} className={fieldClassName} onChange={(value) => { setReturnTime(value); setInvalidReturnFields((current) => { const next = new Set(current); next.delete("time"); return next; }); setReturnError(""); }} /> : <button type="button" disabled className={cn(fieldClassName, "text-left opacity-60")}>Carregando horários...</button>}</FormField>
           <div className="sm:col-span-2"><FormField label={editingAppointment || scheduleKind === "procedure" ? "Procedimento" : "Motivo do retorno"}><input className={fieldClassName} value={returnReason} required placeholder={scheduleKind === "procedure" ? "Ex.: Botox" : "Ex.: avaliação do resultado"} onChange={(event) => setReturnReason(event.target.value)} /></FormField></div>
           <div className="sm:col-span-2"><FormField label="Observações"><textarea className={`${fieldClassName} h-24 resize-none py-2`} value={returnNotes} placeholder="Adicione informações importantes para o atendimento" onChange={(event) => setReturnNotes(event.target.value)} /></FormField></div>
           {returnError ? <p className="rounded-[7px] bg-[#fff1f0] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{returnError}</p> : null}

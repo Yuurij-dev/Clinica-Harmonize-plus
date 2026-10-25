@@ -1,24 +1,33 @@
 "use client";
 
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
+  Bell,
+  Building2,
   CalendarDays,
   CalendarPlus,
+  CalendarClock,
   Camera,
   CheckCircle2,
   Check,
+  Clock3,
   CircleDollarSign,
   ChevronLeft,
+  ChevronDown,
   ChevronRight,
   Loader2,
   MessageCircle,
   MoreVertical,
   PencilLine,
   Plus,
+  Search,
   Sparkles,
+  ShieldCheck,
   Trash2,
+  PlugZap,
+  UsersRound,
   UserPlus,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -51,9 +60,9 @@ import {
   parseInteger,
 } from "@/lib/input-masks";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
-import { CLIENT_CACHE_SCOPE_CHANGED_EVENT, CLIENT_CACHE_UNAUTHORIZED_EVENT, getCachedJson, invalidateClientCache, readClientCache, setClientCacheScope } from "@/lib/client-cache";
+import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { cleanSearchQuery, defaultPatientPageSize, patientListKey, patientPageSizes } from "@/lib/patient-list-rules";
-import { capitalizeFirst, formatDayBR, agendaDayInvalidationKey, agendaNeighborRanges, agendaPeriodKey, agendaPeriodRange, dayInRange, shiftAgendaDay, type AgendaRange } from "@/lib/agenda-period-rules";
+import { capitalizeFirst, formatDayBR, agendaDayInvalidationKey, agendaPeriodKey, agendaPeriodRange, dayInRange, shiftAgendaDay, type AgendaRange } from "@/lib/agenda-period-rules";
 import { PaginationBar } from "./clinical-pagination";
 import { usePatientLookup, type LookupPatient } from "./use-patient-lookup";
 import { runningAppointmentStatuses } from "@/lib/permissions";
@@ -109,12 +118,12 @@ type PatientListResponse = {
 const patientSearchDebounceMs = 300;
 
 // Dados estáticos e leves da agenda; os agendamentos vêm por período (GET /api/agenda?from&to).
-type AgendaBootstrap = { procedures: ApiProcedureOption[]; members: Array<{ role: string; user: { name: string } }>; settings?: { appointmentToleranceMinutes: number; openingTime: string; closingTime: string; requireCancellationReason: boolean } };
+type AgendaBootstrap = { procedures: ApiProcedureOption[]; members: Array<{ role: string; user: { name: string } }>; settings?: { appointmentToleranceMinutes: number; openingTime: string; closingTime: string; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoCompleteAppointmentsEnabled: boolean; allowAppointmentsOutsideHours: boolean } };
 type ShownPeriod = { key: string; date: Date; view: CalendarView };
 type AgendaPeriodResponse = { appointments: ApiAppointment[]; range: AgendaRange; total: number };
 const agendaBootstrapKey = "/api/agenda/bootstrap";
 
-type AppointmentRow = Appointment & { id: string; patientId: string; date: string; durationMinutes: number; category: string };
+type AppointmentRow = Appointment & { id: string; patientId: string; date: string; durationMinutes: number; category: string; notes: string };
 type ApiProcedureOption = { name: string; category: string; durationMinutes: number };
 type ApiAppointment = {
   id: string;
@@ -124,8 +133,111 @@ type ApiAppointment = {
   procedure: string;
   professional: string;
   status: string;
+  notes?: string;
   patient: { name: string };
 };
+
+function appointmentCancellationReason(notes?: string) {
+  const marker = "Motivo do cancelamento:";
+  const markerIndex = notes?.lastIndexOf(marker) ?? -1;
+  return markerIndex < 0 ? "" : notes!.slice(markerIndex + marker.length).trim();
+}
+
+function formatDateInputPtBR(value: string) {
+  const digits = value.replace(/\D/g, "").slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
+function parseDateInputPtBR(value: string) {
+  const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value.trim());
+  if (!match) return "";
+  const [, dayText, monthText, yearText] = match;
+  const day = Number(dayText);
+  const month = Number(monthText);
+  const year = Number(yearText);
+  const parsed = new Date(year, month - 1, day);
+  if (parsed.getFullYear() !== year || parsed.getMonth() !== month - 1 || parsed.getDate() !== day) return "";
+  return `${yearText}-${monthText}-${dayText}`;
+}
+
+function calendarDateToPtBR(value: string) {
+  const [year, month, day] = value.split("-");
+  return year && month && day ? `${day}/${month}/${year}` : "";
+}
+
+function AnimatedOptionSelect({ name, options, placeholder, disabled = false, invalid = false, onChange }: { name: string; options: string[]; placeholder: string; disabled?: boolean; invalid?: boolean; onChange: () => void }) {
+  const [value, setValue] = useState("");
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const menuId = `${name}-options`;
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !containerRef.current?.contains(event.target)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <input type="hidden" name={name} value={value} />
+      <button type="button" role="combobox" aria-expanded={open} aria-controls={menuId} aria-haspopup="listbox" disabled={disabled} className={cn(fieldClassName, "flex w-full items-center justify-between gap-2 text-left", invalid && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} onClick={() => setOpen((current) => !current)}>
+        <span className={cn("truncate", value ? "text-foreground" : "text-muted-foreground")}>{value || placeholder}</span>
+        <ChevronDown className={cn("h-4 w-4 shrink-0 text-[#626477] transition-transform duration-200", open && "rotate-180")} />
+      </button>
+      {open ? <div id={menuId} role="listbox" aria-label={placeholder} className="hp-option-menu-enter absolute left-0 right-0 top-[calc(100%+5px)] z-50 max-h-52 overflow-auto rounded-[7px] border border-[#dcddea] bg-card p-1 shadow-[0_12px_28px_rgba(24,25,40,0.2)]">
+        {options.map((option) => <button key={option} type="button" role="option" aria-selected={value === option} className={cn("flex w-full items-center rounded-[5px] px-3 py-2 text-left text-xs font-medium transition-colors hover:bg-[#f0efff] hover:text-[#5147dc]", value === option && "bg-[#f0efff] text-[#5147dc]")} onClick={() => { setValue(option); setOpen(false); onChange(); }}>{option}</button>)}
+      </div> : null}
+    </div>
+  );
+}
+
+function AppointmentDatePicker({ value, onSelect }: { value: string; onSelect: (date: string) => void }) {
+  const selectedDate = parseDateInputPtBR(value);
+  const [visibleMonth, setVisibleMonth] = useState(() => {
+    const initial = selectedDate || calendarDateKey(clinicNow());
+    const [year, month] = initial.split("-").map(Number);
+    return new Date(year, month - 1, 1);
+  });
+  const year = visibleMonth.getFullYear();
+  const month = visibleMonth.getMonth();
+  const firstWeekday = (new Date(year, month, 1).getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const weekCount = Math.ceil((firstWeekday + daysInMonth) / 7);
+  const dates = Array.from({ length: weekCount * 7 }, (_, index) => new Date(year, month, index - firstWeekday + 1));
+  const today = calendarDateKey(clinicNow());
+
+  return <div className="hp-option-menu-enter absolute left-0 top-[calc(100%+6px)] z-[80] w-[min(19rem,calc(100vw-3rem))] rounded-lg border border-border bg-card p-3 text-card-foreground shadow-[0_14px_36px_rgba(18,19,35,0.28)]">
+    <div className="mb-2 flex items-center justify-between">
+      <p className="text-sm font-semibold capitalize">{new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(visibleMonth)}</p>
+      <div className="flex gap-1">
+        <button type="button" aria-label="Mês anterior" className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" onClick={() => setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() - 1, 1))}><ChevronLeft className="h-4 w-4" /></button>
+        <button type="button" aria-label="Próximo mês" className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" onClick={() => setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + 1, 1))}><ChevronRight className="h-4 w-4" /></button>
+      </div>
+    </div>
+    <div className="grid grid-cols-7 text-center text-[10px] font-semibold text-muted-foreground">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((day) => <span className="py-1" key={day}>{day}</span>)}</div>
+    <div className="grid grid-cols-7 gap-y-1">
+      {dates.map((day) => {
+        const key = calendarDateKey(day);
+        const inMonth = day.getMonth() === month;
+        const selected = key === selectedDate;
+        return <button key={key} type="button" aria-label={new Intl.DateTimeFormat("pt-BR", { dateStyle: "full" }).format(day)} aria-pressed={selected} className={cn("mx-auto grid h-8 w-8 place-items-center rounded-full text-xs transition-colors hover:bg-primary/10 hover:text-primary", !inMonth && "text-muted-foreground/50", key === today && !selected && "border border-primary/50 font-bold", selected && "bg-primary font-bold text-primary-foreground hover:bg-primary hover:text-primary-foreground")} onClick={() => onSelect(key)}>{day.getDate()}</button>;
+      })}
+    </div>
+    <div className="mt-2 flex justify-end border-t border-border pt-2"><button type="button" className="text-xs font-semibold text-primary transition-opacity hover:opacity-75" onClick={() => onSelect(today)}>Hoje</button></div>
+  </div>;
+}
 
 // Mensagem de erro devolvida pelo servidor (ex.: conflito de horário) ou o texto padrão.
 async function responseMessage(response: Response, fallback: string) {
@@ -144,6 +256,7 @@ function mapApiAppointment(appointment: ApiAppointment, procedures: ApiProcedure
     procedure: appointment.procedure,
     professional: appointment.professional,
     status: appointment.status,
+    notes: appointment.notes ?? "",
     // Mesma resolução do servidor: "Procedimento - X" / "Retorno - X" usam a duração de X.
     durationMinutes: appointmentProcedureDuration(procedures, appointment.procedure) ?? 60,
     category: procedure?.category ?? appointment.procedure,
@@ -455,9 +568,6 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   const [isLoading, setIsLoading] = useState(!initial.period);
   const [loadError, setLoadError] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
-  // "Agendado" já vencido em qualquer período (GET /api/agenda/overdue), para o "Faltou" automático além do período exibido.
-  const [overdueRows, setOverdueRows] = useState<AppointmentRow[]>([]);
-  const [overdueToken, setOverdueToken] = useState(0);
   const hasShownPeriod = useRef(Boolean(initial.period));
   const procedureCatalogRef = useRef<ApiProcedureOption[]>(cachedAgenda?.procedures ?? []);
   const shownPeriodRef = useRef<ShownPeriod>({ key: "", date: initial.date, view: initial.view });
@@ -476,6 +586,8 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   const [calendarDate, setCalendarDate] = useState(initial.date);
   const [calendarDatePickerOpen, setCalendarDatePickerOpen] = useState(false);
   const [calendarDateDraft, setCalendarDateDraft] = useState(() => calendarDateKey(initial.date));
+  const appointmentDateInputRef = useRef<HTMLInputElement>(null);
+  const [appointmentDatePickerOpen, setAppointmentDatePickerOpen] = useState(false);
   const calendarDayKey = calendarDateKey(calendarDate);
   // Navegou para um período cujos dados ainda não chegaram: o anterior continua na tela com o aviso "Carregando período...".
   const periodLoading = shownPeriod.key !== agendaPeriodKey(agendaPeriodRange(calendarDayKey, activeView)) && !loadError;
@@ -486,11 +598,13 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   const [openingTime, setOpeningTime] = useState(cachedAgenda?.settings?.openingTime ?? "08:00");
   const [closingTime, setClosingTime] = useState(cachedAgenda?.settings?.closingTime ?? "19:00");
   const [requireCancellationReason, setRequireCancellationReason] = useState(cachedAgenda?.settings?.requireCancellationReason ?? false);
+  const [allowAppointmentsOutsideHours, setAllowAppointmentsOutsideHours] = useState(cachedAgenda?.settings?.allowAppointmentsOutsideHours ?? false);
   const [deleteTarget, setDeleteTarget] = useState<AppointmentRow | null>(null);
   const [selectedAppointment, setSelectedAppointment] = useState<AppointmentRow | null>(null);
+  const [cancellationTarget, setCancellationTarget] = useState<AppointmentRow | null>(null);
+  const [cancellationReasonInput, setCancellationReasonInput] = useState("");
+  const [cancellationReasonError, setCancellationReasonError] = useState("");
   const [deleteSaving, setDeleteSaving] = useState(false);
-  const autoMissedIds = useRef(new Set<string>());
-  const autoCompletedIds = useRef(new Set<string>());
   const canRun = useCan("appointment:run");
   // Profissionais da equipe (estáveis ao navegar) mais os que aparecem nos agendamentos carregados.
   const professionalOptions = useMemo(() => ["Todos", ...new Set([...professionalChoices, ...appointmentRows.map((item) => item.professional)])], [professionalChoices, appointmentRows]);
@@ -500,7 +614,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   // Dados estáticos da agenda (horário, procedimentos, profissionais): não dependem do período.
   useEffect(() => {
     let active = true;
-    getCachedJson<AgendaBootstrap>(agendaBootstrapKey)
+    const refreshSettings = () => getCachedJson<AgendaBootstrap>(agendaBootstrapKey)
       .then((data) => {
         if (!active) return;
         setProcedureCatalog(data.procedures);
@@ -509,15 +623,17 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         setOpeningTime(data.settings?.openingTime ?? "08:00");
         setClosingTime(data.settings?.closingTime ?? "19:00");
         setRequireCancellationReason(data.settings?.requireCancellationReason ?? false);
+        setAllowAppointmentsOutsideHours(data.settings?.allowAppointmentsOutsideHours ?? false);
         setProfessionalChoices(data.members.map((member) => member.user.name));
       })
       .catch(() => undefined)
       .finally(() => { if (active) setProfessionalLoading(false); });
-    return () => { active = false; };
+    void refreshSettings();
+    window.addEventListener("harmonize-notification-settings-updated", refreshSettings);
+    return () => { active = false; window.removeEventListener("harmonize-notification-settings-updated", refreshSettings); };
   }, []);
 
-  // Agendamentos do período visível (dia/semana/mês). Ao navegar, o período anterior continua na tela até o novo chegar;
-  // depois de carregar, os períodos vizinhos são pré-carregados no cache.
+  // Agendamentos do período visível (dia/semana/mês). Ao navegar, o período anterior continua na tela até o novo chegar.
   useEffect(() => {
     let active = true;
     const range = agendaPeriodRange(calendarDayKey, activeView);
@@ -535,7 +651,6 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
       .then(([bootstrap, period]) => {
         if (!active) return;
         show(period, bootstrap);
-        for (const neighbor of agendaNeighborRanges(calendarDayKey, activeView)) void getCachedJson(agendaPeriodKey(neighbor)).catch(() => undefined);
       })
       .catch(() => {
         if (!active) return;
@@ -552,73 +667,11 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [calendarDayKey, activeView, reloadToken]);
 
-  // Lido uma vez ao montar e de novo depois de mutações que mudam status. Sem cache: é leitura de decisão (marcar falta).
   useEffect(() => {
-    let active = true;
-    fetch("/api/agenda/overdue", { cache: "no-store" })
-      .then((response) => {
-        if (response.status === 401) {
-          // Mesmo tratamento do cache: sessão expirada limpa o escopo e avisa o app.
-          setClientCacheScope(null);
-          window.dispatchEvent(new Event(CLIENT_CACHE_UNAUTHORIZED_EVENT));
-        }
-        return response.ok ? response.json() as Promise<{ appointments: ApiAppointment[] }> : null;
-      })
-      .then((data) => { if (active && data) setOverdueRows(data.appointments.map((item) => mapApiAppointment(item, procedureCatalogRef.current))); })
-      .catch(() => undefined);
-    return () => { active = false; };
-  }, [overdueToken]);
-
-  // Troca de conta/clínica ou sessão expirada: nada do escopo anterior pode alimentar o timer nem o PATCH.
-  useEffect(() => {
-    const reset = () => { setOverdueRows([]); autoMissedIds.current.clear(); autoCompletedIds.current.clear(); };
-    window.addEventListener(CLIENT_CACHE_SCOPE_CHANGED_EVENT, reset);
-    window.addEventListener(CLIENT_CACHE_UNAUTHORIZED_EVENT, reset);
-    return () => { window.removeEventListener(CLIENT_CACHE_SCOPE_CHANGED_EVENT, reset); window.removeEventListener(CLIENT_CACHE_UNAUTHORIZED_EVENT, reset); };
+    const refresh = () => { setReloadToken((token) => token + 1); };
+    window.addEventListener("harmonize-auto-appointments-updated", refresh);
+    return () => window.removeEventListener("harmonize-auto-appointments-updated", refresh);
   }, []);
-
-  useEffect(() => {
-    if (isLoading) return;
-
-    async function markExpiredAppointments() {
-      const now = clinicNow();
-      // Para o "Faltou" vale o que a tela já sabe (appointmentRows) sobre o mesmo id; os vencidos de outros períodos entram só se ainda "Agendado".
-      const loadedIds = new Set(appointmentRows.map((appointment) => appointment.id));
-      const missedSource = [...appointmentRows, ...overdueRows.filter((appointment) => !loadedIds.has(appointment.id))];
-      const missed = missedSource.filter((appointment) => (
-        appointment.status === "Agendado"
-        && appointmentHasPassed(appointment, now, appointmentToleranceMinutes)
-        && !autoMissedIds.current.has(appointment.id)
-      ));
-      const completed = canRun ? appointmentRows.filter((appointment) => (
-        appointment.status === "Em atendimento"
-        && appointmentHasPassed(appointment, now, appointment.durationMinutes)
-        && !autoCompletedIds.current.has(appointment.id)
-      )) : [];
-      const transitions = [...missed.map((appointment) => ({ appointment, status: "Faltou" })), ...completed.map((appointment) => ({ appointment, status: "Atendido" }))];
-      if (!transitions.length) return;
-
-      missed.forEach((appointment) => autoMissedIds.current.add(appointment.id));
-      completed.forEach((appointment) => autoCompletedIds.current.add(appointment.id));
-      const results = await Promise.all(transitions.map(async ({ appointment, status }) => {
-        const response = await fetch(`/api/appointments/${appointment.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status }),
-        });
-        return response.ok ? { id: appointment.id, status } : null;
-      }));
-      const updated = new Map(results.filter((result): result is { id: string; status: string } => Boolean(result)).map((result) => [result.id, result.status]));
-      if (!updated.size) return;
-      setAppointmentRows((current) => current.map((appointment) => updated.has(appointment.id) ? { ...appointment, status: updated.get(appointment.id) ?? appointment.status } : appointment));
-      setOverdueRows((current) => current.filter((appointment) => !updated.has(appointment.id)));
-      invalidateClientCache(...new Set(transitions.map(({ appointment }) => agendaDayInvalidationKey(appointment.date))), "/api/dashboard/bootstrap", ...transitions.map(({ appointment }) => `/api/patients/${appointment.patientId}/history`));
-    }
-
-    void markExpiredAppointments();
-    const timer = window.setInterval(() => { void markExpiredAppointments(); }, 30_000);
-    return () => window.clearInterval(timer);
-  }, [appointmentRows, overdueRows, appointmentToleranceMinutes, isLoading, canRun]);
 
   // Seletor de paciente: busca sob demanda no servidor (nome ou CPF), com debounce, só enquanto o usuário digita.
   const patientLookup = usePatientLookup(patientQuery, !selectedPatientId);
@@ -647,7 +700,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     const form = new FormData(event.currentTarget);
     const patient = selectedPatient?.name ?? "";
     const selectedTime = appointmentTime;
-    const selectedDate = String(form.get("date"));
+    const selectedDate = parseDateInputPtBR(String(form.get("date") ?? ""));
     const now = clinicNow();
     const today = calendarDateKey(now);
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
@@ -656,13 +709,13 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     if (!selectedDate || selectedDate < today) invalidFields.add("date");
     if (!selectedTime) invalidFields.add("time");
     const latestTime = latestAppointmentStart(closingTime);
-    if (selectedTime && (selectedTime < openingTime || !latestTime || selectedTime > latestTime)) invalidFields.add("time");
+    if (selectedTime && !allowAppointmentsOutsideHours && (selectedTime < openingTime || !latestTime || selectedTime > latestTime)) invalidFields.add("time");
     if (selectedDate === today && selectedTime && appointmentMinutes(selectedTime) <= currentMinutes) invalidFields.add("time");
     if (!String(form.get("professional"))) invalidFields.add("professional");
     if (!String(form.get("procedure"))) invalidFields.add("procedure");
     if (invalidFields.size) {
       setInvalidAppointmentFields(invalidFields);
-      setAppointmentFormError((selectedDate && selectedDate < today) || (selectedDate === today && selectedTime && appointmentMinutes(selectedTime) <= currentMinutes) ? "Não é possível agendar em um horário ou data que já passou." : !selectedTime ? "Selecione um horário para o atendimento." : invalidFields.has("time") ? `O horário deve estar dentro do período permitido: ${openingTime} às ${latestTime ?? "indisponível"}.` : "Revise os campos destacados antes de continuar.");
+      setAppointmentFormError(!selectedDate ? "Informe uma data válida no formato DD/MM/AAAA." : selectedDate < today || (selectedDate === today && selectedTime && appointmentMinutes(selectedTime) <= currentMinutes) ? "Não é possível agendar em um horário ou data que já passou." : !selectedTime ? "Selecione um horário para o atendimento." : invalidFields.has("time") ? `O horário deve estar dentro do período permitido: ${openingTime} às ${latestTime ?? "indisponível"}.` : "Revise os campos destacados antes de continuar.");
       window.setTimeout(() => setInvalidAppointmentFields(new Set()), 450);
       setIsSaving(false);
       return;
@@ -678,7 +731,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
           time: selectedTime,
           procedure: String(form.get("procedure")),
           professional: String(form.get("professional")),
-          date: `${String(form.get("date"))}T00:00:00`,
+          date: `${selectedDate}T00:00:00`,
         }),
       });
       const data = await response.json().catch(() => null) as { appointment?: ApiAppointment; message?: string } | null;
@@ -718,7 +771,6 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: nextStatus }) });
     if (!response.ok) { setUpdatingId(null); toast.error(await responseMessage(response, "Não foi possível atualizar o atendimento.")); return; }
     setAppointmentRows((current) => current.map((item) => item.id === target.id ? { ...item, status: nextStatus } : item));
-    setOverdueToken((token) => token + 1);
     invalidateClientCache(agendaDayInvalidationKey(target.date), "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`, ...(nextStatus === "Atendido" ? ["/api/patients"] : []));
     setUpdatingId(null);
     onSaved?.(`${target.patient}: ${nextStatus}.`);
@@ -732,24 +784,41 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Faltou" }) });
     if (!response.ok) { setUpdatingId(null); toast.error(await responseMessage(response, "Não foi possível marcar a falta.")); return; }
     setAppointmentRows((current) => current.map((item) => item.id === target.id ? { ...item, status: "Faltou" } : item));
-    setOverdueRows((current) => current.filter((item) => item.id !== target.id));
     invalidateClientCache(agendaDayInvalidationKey(target.date), "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
     setUpdatingId(null);
     onSaved?.(`${target.patient} foi marcado como faltou.`, () => {
       setAppointmentRows((current) => current.map((item) => item.id === target.id ? { ...item, status: previousStatus } : item));
-      setOverdueToken((token) => token + 1);
       invalidateClientCache(agendaDayInvalidationKey(target.date), "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
     });
   }
 
-  async function cancelAppointment(target: AppointmentRow) {
-    const cancellationReason = requireCancellationReason ? window.prompt("Informe o motivo do cancelamento:")?.trim() : undefined;
-    if (requireCancellationReason && !cancellationReason) return;
+  function requestCancelAppointment(target: AppointmentRow) {
+    if (!requireCancellationReason) {
+      void cancelAppointment(target);
+      return;
+    }
+    setCancellationTarget(target);
+    setCancellationReasonInput("");
+    setCancellationReasonError("");
+  }
+
+  async function cancelAppointment(target: AppointmentRow, reason?: string) {
+    const cancellationReason = reason?.trim();
+    if (requireCancellationReason && !cancellationReason) {
+      setCancellationReasonError("Informe o motivo do cancelamento para continuar.");
+      return;
+    }
     setUpdatingId(target.id);
     const response = await fetch(`/api/appointments/${target.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Cancelado", ...(cancellationReason ? { cancellationReason } : {}) }) });
-    if (!response.ok) { setUpdatingId(null); toast.error(await responseMessage(response, "Não foi possível cancelar o agendamento.")); return; }
-    setAppointmentRows((current) => current.map((item) => item.id === target.id ? { ...item, status: "Cancelado" } : item));
-    setOverdueRows((current) => current.filter((item) => item.id !== target.id));
+    const result = await response.json().catch(() => null) as { message?: string; appointment?: { notes?: string } } | null;
+    if (!response.ok) { setUpdatingId(null); toast.error(result?.message ?? "Não foi possível cancelar o agendamento."); return; }
+    const updatedNotes = result?.appointment?.notes ?? (cancellationReason ? [target.notes?.trim() ?? "", `Motivo do cancelamento: ${cancellationReason}`].filter(Boolean).join("\n\n") : target.notes ?? "");
+    setAppointmentRows((current) => current.map((item) => item.id === target.id ? { ...item, status: "Cancelado", notes: updatedNotes } : item));
+    setSelectedAppointment((current) => current?.id === target.id ? { ...current, status: "Cancelado", notes: updatedNotes } : current);
+    if (cancellationTarget?.id === target.id) {
+      setCancellationTarget(null);
+      setSelectedAppointment(null);
+    }
     invalidateClientCache(agendaDayInvalidationKey(target.date), "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
     setUpdatingId(null);
     onSaved?.(`${target.patient}: agendamento cancelado.`);
@@ -762,7 +831,6 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     const response = await fetch(`/api/appointments/${target.id}`, { method: "DELETE" });
     if (!response.ok) { setDeleteSaving(false); toast.error(await responseMessage(response, "Não foi possível excluir o agendamento.")); return; }
     setAppointmentRows((current) => current.filter((item) => item.id !== target.id));
-    setOverdueRows((current) => current.filter((item) => item.id !== target.id));
     setDeleteTarget(null);
     setDeleteSaving(false);
     invalidateClientCache(agendaDayInvalidationKey(target.date), "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`);
@@ -810,7 +878,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
           <div className="flex w-full min-w-0 basis-full flex-1 flex-wrap items-center gap-2 sm:w-auto sm:basis-auto sm:flex-none">
             {["Semana", "Dia", "Mês"].map((view) => (
               <Button
-                className="min-w-0 flex-1 sm:flex-none"
+                className="min-w-0 flex-1 transition-all duration-200 ease-out active:scale-[0.98] sm:flex-none"
                 key={view}
                 onClick={() => setActiveView(view as "Dia" | "Semana" | "Mês")}
                 size="sm"
@@ -871,30 +939,57 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
 
       {loadError ? <div role="alert" className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-[7px] border border-[#ffd7d7] bg-[#fff7f7] px-3 py-2 text-xs font-semibold text-[#b42318]"><span>{loadError}</span><Button size="sm" variant="secondary" onClick={() => { setLoadError(""); setIsLoading(true); setReloadToken((token) => token + 1); }}>Tentar novamente</Button></div> : null}
       <ScheduleCalendar
+        key={activeView}
         appointments={filteredAppointments}
         date={shownPeriod.date}
         view={shownPeriod.view}
         focusTime={focusTime}
         openingTime={openingTime}
         closingTime={closingTime}
+        allowOutsideHours={allowAppointmentsOutsideHours}
         loading={isLoading}
         openMenuId={openMenuId}
         onMenuToggle={(id) => setOpenMenuId((current) => current === id ? null : id)}
         onAdvance={advanceAppointment}
         onMissed={markAppointmentAsMissed}
-        onCancel={cancelAppointment}
+        onCancel={requestCancelAppointment}
         onDelete={(appointment) => setDeleteTarget(appointment)}
         onSelect={(appointment) => setSelectedAppointment(appointment)}
         appointmentToleranceMinutes={appointmentToleranceMinutes}
         updatingId={updatingId}
       />
 
-      <Modal open={Boolean(selectedAppointment)} onClose={() => setSelectedAppointment(null)} title="Detalhes do agendamento" description="Informações completas do atendimento selecionado.">
+      <Modal open={Boolean(selectedAppointment) && !cancellationTarget} onClose={() => setSelectedAppointment(null)} title="Detalhes do agendamento" description="Informações completas do atendimento selecionado.">
         {selectedAppointment ? <div className="space-y-4">
           <div className={cn("rounded-[8px] border-l-4 p-4", appointmentTone(selectedAppointment).card)}><p className="text-xs font-bold text-[#77788a]">{selectedAppointment.time} - {formatEndTime(selectedAppointment.time, selectedAppointment.durationMinutes)}</p><h3 className="mt-1 text-lg font-black text-[#303144]">{selectedAppointment.procedure}</h3><p className="mt-1 text-sm text-[#656678]">{selectedAppointment.patient}</p></div>
-          <div className="grid gap-3 sm:grid-cols-2">{[["Data", formatDayBR(selectedAppointment.date)], ["Profissional", selectedAppointment.professional], ["Tipo", selectedAppointment.category || "Atendimento"], ["Status", selectedAppointment.status]].map(([label, value]) => <div className="rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3" key={label}><p className="text-[9px] font-bold uppercase text-[#9697a7]">{label}</p><p className="mt-1 text-xs font-semibold text-[#4f5062]">{value}</p></div>)}</div>
-          <div className="flex justify-end gap-2">{selectedAppointment.status === "Agendado" ? <Button type="button" variant="secondary" disabled title="Confirmação por WhatsApp em breve"><MessageCircle className="h-3.5 w-3.5" />Confirmar por WhatsApp</Button> : null}<Button type="button" onClick={() => setSelectedAppointment(null)}>Fechar</Button></div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {[{ label: "Data", value: formatDayBR(selectedAppointment.date) }, { label: "Profissional", value: selectedAppointment.professional }, { label: "Tipo", value: selectedAppointment.category || "Atendimento" }].map(({ label, value }) => <div className="rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3" key={label}><p className="text-[9px] font-bold uppercase text-[#9697a7]">{label}</p><p className="mt-1 text-xs font-semibold text-[#4f5062]">{value}</p></div>)}
+            <div className="rounded-[7px] border border-[#e8e8ef] bg-[#fafafd] p-3"><p className="text-[9px] font-bold uppercase text-[#9697a7]">Status</p><p className="mt-1 text-xs font-semibold text-[#4f5062]">{selectedAppointment.status}</p>
+              {requireCancellationReason && selectedAppointment.status === "Cancelado" ? <div className="mt-2 border-t border-[#e8e8ef] pt-2"><p className="text-[9px] font-bold uppercase text-[#9697a7]">Motivo do cancelamento</p><p className="mt-1 whitespace-pre-wrap break-words text-xs font-medium text-[#4f5062]">{appointmentCancellationReason(selectedAppointment.notes) || "Motivo não registrado."}</p></div> : null}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            {selectedAppointment.status === "Agendado" ? <Button type="button" variant="destructive" disabled={updatingId === selectedAppointment.id} onClick={() => requestCancelAppointment(selectedAppointment)}>{updatingId === selectedAppointment.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{updatingId === selectedAppointment.id ? "Cancelando..." : "Cancelar consulta"}</Button> : <span />}
+            <div className="flex justify-end gap-2">{selectedAppointment.status === "Agendado" ? <Button type="button" variant="secondary" disabled title="Confirmação por WhatsApp em breve"><MessageCircle className="h-3.5 w-3.5" />Confirmar por WhatsApp</Button> : null}<Button type="button" onClick={() => setSelectedAppointment(null)}>Fechar</Button></div>
+          </div>
         </div> : null}
+      </Modal>
+
+      <Modal open={Boolean(cancellationTarget)} onClose={() => { if (updatingId !== cancellationTarget?.id) setCancellationTarget(null); }} title="Cancelar consulta" description="Informe o motivo para registrar o cancelamento no histórico do paciente." panelClassName="max-w-md">
+        {cancellationTarget ? <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void cancelAppointment(cancellationTarget, cancellationReasonInput); }}>
+          <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2.5 text-sm text-foreground">
+            <p className="font-semibold">{cancellationTarget.patient}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">{cancellationTarget.procedure} · {formatDayBR(cancellationTarget.date)} às {cancellationTarget.time}</p>
+          </div>
+          <FormField label="Motivo do cancelamento">
+            <textarea autoFocus className={cn(fieldClassName, "min-h-24 resize-y py-2")} maxLength={500} value={cancellationReasonInput} onChange={(event) => { setCancellationReasonInput(event.target.value); setCancellationReasonError(""); }} placeholder="Descreva o motivo..." required />
+          </FormField>
+          {cancellationReasonError ? <p className="text-xs font-medium text-destructive" role="alert">{cancellationReasonError}</p> : null}
+          <div className="flex justify-end gap-2 border-t border-border pt-3">
+            <Button type="button" variant="secondary" disabled={updatingId === cancellationTarget.id} onClick={() => setCancellationTarget(null)}>Voltar</Button>
+            <Button type="submit" variant="destructive" disabled={updatingId === cancellationTarget.id}>{updatingId === cancellationTarget.id ? <Loader2 className="h-4 w-4 animate-spin" /> : null}{updatingId === cancellationTarget.id ? "Cancelando..." : "Confirmar cancelamento"}</Button>
+          </div>
+        </form> : null}
       </Modal>
 
       <div className="hidden hp-panel-enter overflow-x-auto rounded-[7px] bg-white px-3 shadow-[0_8px_28px_rgba(38,39,58,0.035)] sm:px-5">
@@ -972,10 +1067,20 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
             ) : null}
             {selectedPatientId ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {selectedPatient?.name}</p> : null}
           </div>
-          <FormField label="Data"><input className={cn(fieldClassName, invalidAppointmentFields.has("date") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="date" type="date" defaultValue={calendarDateKey(calendarDate)} onChange={() => clearAppointmentField("date")} required /></FormField>
-          <div className="relative"><FormField label="Horário"><ClinicTimePicker openingTime={openingTime} closingTime={closingTime} latestTime={latestAppointmentStart(closingTime)} value={appointmentTime} invalid={invalidAppointmentFields.has("time")} onChange={(value) => { setAppointmentTime(value); clearAppointmentField("time"); }} /></FormField><input name="time" type="hidden" value={appointmentTime} required /></div>
-          <FormField label="Profissional"><div className="relative"><select className={cn(fieldClassName, invalidAppointmentFields.has("professional") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="professional" required disabled={professionalLoading || !professionalChoices.length} onChange={() => clearAppointmentField("professional")}><option value="">{professionalLoading ? "..." : professionalChoices.length ? "Selecione o profissional" : "Nenhum profissional cadastrado"}</option>{professionalChoices.map((professional) => <option key={professional} value={professional}>{professional}</option>)}</select>{professionalLoading ? <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-[#5147dc]" /> : null}</div></FormField>
-          <div className="sm:col-span-2"><FormField label="Tipo de consulta"><div className="relative"><select className={cn(fieldClassName, invalidAppointmentFields.has("procedure") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="procedure" required onChange={() => clearAppointmentField("procedure")}><option value="">Selecione o tipo de consulta</option>{appointmentTypeOptions.map((item) => <option key={item}>{item}</option>)}</select></div></FormField></div>
+          <FormField label="Data">
+            <div className="relative">
+              <input ref={appointmentDateInputRef} className={cn(fieldClassName, "pr-10", invalidAppointmentFields.has("date") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="date" type="text" inputMode="numeric" autoComplete="off" placeholder="dd/mm/aaaa" maxLength={10} defaultValue={calendarDateToPtBR(calendarDateKey(calendarDate))} onChange={(event) => { event.currentTarget.value = formatDateInputPtBR(event.currentTarget.value); clearAppointmentField("date"); }} required />
+              <button type="button" aria-label="Abrir calendário" title="Abrir calendário" aria-expanded={appointmentDatePickerOpen} className="absolute inset-y-0 right-2 grid place-items-center text-[#858696] transition-colors hover:text-[#5147dc]" onClick={() => setAppointmentDatePickerOpen((current) => !current)}><CalendarDays className="h-4 w-4" /></button>
+              {appointmentDatePickerOpen ? <AppointmentDatePicker value={appointmentDateInputRef.current?.value ?? calendarDateToPtBR(calendarDateKey(calendarDate))} onSelect={(date) => {
+                if (appointmentDateInputRef.current) appointmentDateInputRef.current.value = calendarDateToPtBR(date);
+                clearAppointmentField("date");
+                setAppointmentDatePickerOpen(false);
+              }} /> : null}
+            </div>
+          </FormField>
+          <div className="relative"><FormField label="Horário"><ClinicTimePicker openingTime={openingTime} closingTime={closingTime} latestTime={allowAppointmentsOutsideHours ? undefined : latestAppointmentStart(closingTime)} allowOutsideHours={allowAppointmentsOutsideHours} value={appointmentTime} invalid={invalidAppointmentFields.has("time")} onChange={(value) => { setAppointmentTime(value); clearAppointmentField("time"); }} /></FormField><input name="time" type="hidden" value={appointmentTime} required /></div>
+          <FormField label="Profissional"><AnimatedOptionSelect name="professional" options={professionalChoices} placeholder={professionalLoading ? "Carregando profissionais..." : professionalChoices.length ? "Selecione o profissional" : "Nenhum profissional cadastrado"} disabled={professionalLoading || !professionalChoices.length} invalid={invalidAppointmentFields.has("professional")} onChange={() => clearAppointmentField("professional")} /></FormField>
+          <div className="sm:col-span-2"><FormField label="Tipo de consulta"><AnimatedOptionSelect name="procedure" options={appointmentTypeOptions} placeholder="Selecione o tipo de consulta" invalid={invalidAppointmentFields.has("procedure")} onChange={() => clearAppointmentField("procedure")} /></FormField></div>
           {appointmentFormError ? <p role="alert" className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{appointmentFormError}</p> : null}
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || professionalLoading || !professionalChoices.length || !selectedPatientId} type="submit">{isSaving || professionalLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : professionalLoading ? "Carregando dados..." : "Criar agendamento"}</Button></div>
         </form>
@@ -991,7 +1096,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
 
 type CalendarView = "Dia" | "Semana" | "Mês";
 
-function ScheduleCalendar({ appointments, date, view, focusTime, openingTime, closingTime, loading, openMenuId, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, appointmentToleranceMinutes, updatingId }: { appointments: AppointmentRow[]; date: Date; view: CalendarView; focusTime?: string; openingTime: string; closingTime: string; loading: boolean; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; appointmentToleranceMinutes: number; updatingId: string | null }) {
+function ScheduleCalendar({ appointments, date, view, focusTime, openingTime, closingTime, allowOutsideHours, loading, openMenuId, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, appointmentToleranceMinutes, updatingId }: { appointments: AppointmentRow[]; date: Date; view: CalendarView; focusTime?: string; openingTime: string; closingTime: string; allowOutsideHours: boolean; loading: boolean; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; appointmentToleranceMinutes: number; updatingId: string | null }) {
   const [now, setNow] = useState(() => clinicNow());
 
   useEffect(() => {
@@ -999,9 +1104,8 @@ function ScheduleCalendar({ appointments, date, view, focusTime, openingTime, cl
     return () => window.clearInterval(timer);
   }, []);
 
-  const days = view === "Dia" ? [date] : getWeekDays(date);
-  const firstHour = Math.floor(appointmentMinutes(openingTime) / 60);
-  const lastHour = Math.max(firstHour + 1, Math.ceil(appointmentMinutes(closingTime) / 60));
+  const firstHour = allowOutsideHours ? 0 : Math.floor(appointmentMinutes(openingTime) / 60);
+  const lastHour = allowOutsideHours ? 23 : Math.max(firstHour + 1, Math.ceil(appointmentMinutes(closingTime) / 60));
   const hours = Array.from({ length: lastHour - firstHour + 1 }, (_, index) => index + firstHour);
   const hourHeight = 72;
   const calendarHeight = hours.length * hourHeight;
@@ -1019,15 +1123,16 @@ function ScheduleCalendar({ appointments, date, view, focusTime, openingTime, cl
   if (loading) return <CalendarSkeleton />;
   if (view === "Mês") return <MonthCalendar date={date} appointments={appointments} onSelect={onSelect} />;
 
+  const days = view === "Dia" ? [date] : getWeekDays(date);
   return (
-    <div ref={calendarRef} className="max-h-[720px] overflow-auto rounded-[8px] border border-[#e7e9f2] bg-white shadow-[0_8px_28px_rgba(38,39,58,0.035)]">
+    <div ref={calendarRef} className="hp-calendar-tab-enter max-h-[720px] overflow-auto rounded-[8px] border border-[#e7e9f2] bg-white shadow-[0_8px_28px_rgba(38,39,58,0.035)]">
       <div className="min-w-[760px]">
-        <div className={cn("grid border-b border-[#ececf3] bg-[#fbfbfe]", view === "Dia" ? "grid-cols-[64px_minmax(300px,1fr)]" : "grid-cols-[64px_repeat(6,minmax(130px,1fr))]")}>
+        <div className={cn("grid border-b border-[#ececf3] bg-[#fbfbfe]", view === "Dia" ? "grid-cols-[64px_minmax(300px,1fr)]" : "grid-cols-[64px_repeat(7,minmax(130px,1fr))]")}>
           <div className="border-r border-[#ececf3]" />
           {days.map((day) => <CalendarDayHeader key={calendarDateKey(day)} date={day} />)}
           {view === "Dia" ? <div className="hidden" /> : null}
         </div>
-        <div className={cn("grid", view === "Dia" ? "grid-cols-[64px_minmax(300px,1fr)]" : "grid-cols-[64px_repeat(6,minmax(130px,1fr))]")}>
+        <div className={cn("grid", view === "Dia" ? "grid-cols-[64px_minmax(300px,1fr)]" : "grid-cols-[64px_repeat(7,minmax(130px,1fr))]")}>
           <div className="relative border-r border-[#ececf3] bg-[#fcfcfe]" style={{ height: calendarHeight }}>
             {hours.map((hour) => <span className="absolute right-2 -translate-y-1/2 text-[10px] font-semibold text-[#9a9baa]" style={{ top: (hour - firstHour) * hourHeight }} key={hour}>{String(hour).padStart(2, "0")}:00</span>)}
           </div>
@@ -1150,7 +1255,7 @@ function focusDate(date: string) {
 
 function getWeekDays(date: Date) {
   const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate() - ((date.getDay() + 6) % 7));
-  return Array.from({ length: 6 }, (_, index) => new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + index));
+  return Array.from({ length: 7 }, (_, index) => new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + index));
 }
 
 function calendarDateKey(date: Date | string) {
@@ -1642,9 +1747,112 @@ export function ReportsSection() {
   );
 }
 
-type TeamMember = { id: string; role: string; isOwner: boolean; user: { id: string; name: string; email: string; createdAt: string } };
+type TeamMember = { id: string; role: string; isOwner: boolean; laborCostCents: number | null; user: { id: string; name: string; email: string; createdAt: string } };
 
-export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, onClinicNameChange, onSaved, mode = "settings" }: { isAdmin?: boolean; isOwner?: boolean; clinicName?: string; onClinicNameChange?: (name: string) => void; onSaved?: (message: string) => void; mode?: "settings" | "calculator" }) {
+function SettingsToggle({ label, description, checked, onChange, disabled = false, saving = false, hidden = false }: { label: string; description: string; checked: boolean; onChange?: (checked: boolean) => void; disabled?: boolean; saving?: boolean; hidden?: boolean }) {
+  if (hidden) return null;
+  return (
+    <div className={cn("my-1 flex items-center justify-between gap-4 rounded-md border-b border-border/70 bg-muted/30 px-3 py-3 last:border-b-0", disabled && "opacity-70")}>
+      <div className="group relative min-w-0">
+        <p tabIndex={0} className="w-fit cursor-help text-sm font-semibold text-foreground outline-none focus-visible:underline">{label}<span aria-hidden="true" className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-64 rounded-lg border border-border bg-popover px-3 py-2 text-xs font-normal leading-5 text-popover-foreground opacity-0 shadow-xl transition duration-200 group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100 -translate-y-1">{description}</span></p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <span className={cn("min-w-14 text-right text-[11px] font-semibold", checked ? "text-primary" : "text-muted-foreground")}>{saving ? "Salvando" : checked ? "Ativado" : "Desativado"}</span>
+        <button className={cn("relative h-7 w-12 shrink-0 rounded-full transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2", checked ? "bg-primary" : "bg-muted-foreground/35", (disabled || saving) && "cursor-not-allowed opacity-60")} type="button" role="switch" aria-checked={checked} aria-label={label} disabled={disabled || saving} onClick={() => onChange?.(!checked)}>
+        <span className={cn("absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200 ease-out", checked ? "translate-x-5" : "translate-x-0")} />
+      </button>
+      </div>
+    </div>
+  );
+}
+
+function Time24Input({ name, label, value, onChange }: { name: string; label: string; value: string; onChange: (value: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const current = /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value) ? value.split(":") : ["08", "00"];
+  const [draftHour, setDraftHour] = useState(current[0]);
+  const [draftMinute, setDraftMinute] = useState(current[1]);
+  const hours = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
+  const minutes = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
+
+  useEffect(() => {
+    if (!open) return;
+    function closeOnOutside(event: PointerEvent) {
+      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false);
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("pointerdown", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  function updateValue(rawValue: string) {
+    const digits = rawValue.replace(/\D/g, "").slice(0, 4);
+    onChange(digits.length > 2 ? `${digits.slice(0, 2)}:${digits.slice(2)}` : digits);
+  }
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <input
+        aria-label={`${label} (formato 24 horas)`}
+        autoComplete="off"
+        className={cn(fieldClassName, "pr-10")}
+        inputMode="numeric"
+        maxLength={5}
+        name={name}
+        onChange={(event) => updateValue(event.target.value)}
+        pattern="([01][0-9]|2[0-3]):[0-5][0-9]"
+        placeholder="HH:MM"
+        required
+        type="text"
+        value={value}
+      />
+      <button
+        aria-label={`Escolher horário de ${label}`}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        className="absolute right-2 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        onClick={() => {
+          const selected = /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value) ? value.split(":") : ["08", "00"];
+          setDraftHour(selected[0]);
+          setDraftMinute(selected[1]);
+          setOpen((currentOpen) => !currentOpen);
+        }}
+        type="button"
+      >
+        <Clock3 aria-hidden="true" className="h-4 w-4" />
+      </button>
+      {open ? (
+        <div className="hp-clock-popover-enter absolute right-0 top-full z-50 mt-2 w-[min(20rem,calc(100vw-2.5rem))] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-[0_16px_40px_rgba(20,20,40,0.2)]" role="dialog" aria-label={`Selecionar horário de ${label}`}>
+          <div className="flex items-center justify-between border-b border-border/70 bg-muted/30 px-4 py-3">
+            <div><p className="text-sm font-bold text-foreground">Escolher horário</p><p className="mt-0.5 text-[11px] text-muted-foreground">Formato de 24 horas</p></div>
+            <span className="rounded-lg bg-primary/10 px-3 py-1.5 font-mono text-base font-bold tabular-nums text-primary">{draftHour}:{draftMinute}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 p-3">
+            {[{ title: "Hora", values: hours, selected: draftHour, onSelect: setDraftHour }, { title: "Minuto", values: minutes, selected: draftMinute, onSelect: setDraftMinute }].map((column) => (
+              <div className="min-w-0" key={column.title}>
+                <p className="mb-1 px-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{column.title}</p>
+                <div className="max-h-44 overflow-y-auto rounded-lg bg-muted/30 p-1 [scrollbar-width:thin]" role="listbox" aria-label={column.title}>
+                  {column.values.map((option) => <button aria-selected={column.selected === option} className={cn("mb-0.5 block w-full rounded-md px-3 py-1.5 text-left font-mono text-sm tabular-nums transition last:mb-0", column.selected === option ? "bg-primary font-bold text-primary-foreground shadow-sm" : "text-foreground hover:bg-accent")} key={option} onClick={() => column.onSelect(option)} role="option" type="button">{option}</button>)}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end border-t border-border/70 bg-muted/20 px-3 py-2">
+            <button className="rounded-md bg-primary px-4 py-2 text-xs font-bold text-primary-foreground transition hover:bg-primary/90" onClick={() => { onChange(`${draftHour}:${draftMinute}`); setOpen(false); }} type="button">Usar horário</button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, onClinicNameChange, mode = "settings" }: { isAdmin?: boolean; isOwner?: boolean; clinicName?: string; onClinicNameChange?: (name: string) => void; mode?: "settings" | "calculator" }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [settingsSearch, setSettingsSearch] = useState("");
   const [activeSettingsSection, setActiveSettingsSection] = useState("Dados da clínica");
@@ -1652,11 +1860,18 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
   const [members, setMembers] = useState<TeamMember[]>(cachedTeam?.members ?? []);
   const [teamLoading, setTeamLoading] = useState(!cachedTeam);
   const [teamSaving, setTeamSaving] = useState(false);
+  const [laborCostSavingId, setLaborCostSavingId] = useState<string | null>(null);
+  const [editingLaborCostId, setEditingLaborCostId] = useState<string | null>(null);
+  const [laborCostFeedback, setLaborCostFeedback] = useState<{ message: string; success: boolean } | null>(null);
   const [teamError, setTeamError] = useState("");
+  const [memberToChangeRole, setMemberToChangeRole] = useState<TeamMember | null>(null);
+  const [roleToChange, setRoleToChange] = useState("PROFESSIONAL");
+  const [roleSaving, setRoleSaving] = useState(false);
+  const [roleChangeError, setRoleChangeError] = useState("");
   const [memberToRemove, setMemberToRemove] = useState<TeamMember | null>(null);
   const [memberRemoving, setMemberRemoving] = useState(false);
   const [memberRemoveError, setMemberRemoveError] = useState("");
-  const cachedCostSettings = readClientCache<{ settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; requireCancellationReason: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings");
+  const cachedCostSettings = readClientCache<{ settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoCompleteAppointmentsEnabled: boolean; autoAdvancePatientJourneyEnabled: boolean; allowAppointmentsOutsideHours: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings");
   const [costSettings, setCostSettings] = useState(() => ({
     laborCost: cachedCostSettings?.settings?.laborCost ?? 0,
     facilityCost: cachedCostSettings?.settings?.facilityCost ?? 0,
@@ -1687,6 +1902,53 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
   const [appointmentNotificationSoundEnabled, setAppointmentNotificationSoundEnabled] = useState(cachedCostSettings?.settings?.appointmentNotificationSoundEnabled ?? true);
   const [stockNotificationsEnabled, setStockNotificationsEnabled] = useState(cachedCostSettings?.settings?.stockNotificationsEnabled ?? true);
   const [requireCancellationReason, setRequireCancellationReason] = useState(cachedCostSettings?.settings?.requireCancellationReason ?? false);
+  const [autoMarkMissedAppointmentsEnabled, setAutoMarkMissedAppointmentsEnabled] = useState(cachedCostSettings?.settings?.autoMarkMissedAppointmentsEnabled ?? true);
+  const [autoCompleteAppointmentsEnabled, setAutoCompleteAppointmentsEnabled] = useState(cachedCostSettings?.settings?.autoCompleteAppointmentsEnabled ?? true);
+  const [autoAdvancePatientJourneyEnabled, setAutoAdvancePatientJourneyEnabled] = useState(cachedCostSettings?.settings?.autoAdvancePatientJourneyEnabled ?? true);
+  const [allowAppointmentsOutsideHours, setAllowAppointmentsOutsideHours] = useState(cachedCostSettings?.settings?.allowAppointmentsOutsideHours ?? false);
+  const [savingPreference, setSavingPreference] = useState("");
+  const [clinicProfileStatus, setClinicProfileStatus] = useState("");
+  const [clinicProfileError, setClinicProfileError] = useState("");
+  const [clinicProfileReady, setClinicProfileReady] = useState(Boolean(cachedCostSettings?.settings));
+  const savedClinicProfile = useRef(cachedCostSettings?.settings ? JSON.stringify({ name: cachedCostSettings.settings.name?.trim() ?? "", cnpj: cachedCostSettings.settings.cnpj?.trim() ?? "", phone: cachedCostSettings.settings.phone?.trim() ?? "", email: cachedCostSettings.settings.email?.trim() ?? "", address: cachedCostSettings.settings.address?.trim() ?? "", openingTime: cachedCostSettings.settings.openingTime, closingTime: cachedCostSettings.settings.closingTime }) : "");
+  const clinicProfile = JSON.stringify({ name: clinicNameInput.trim(), cnpj: clinicCnpjInput.trim(), phone: clinicPhoneInput.trim(), email: clinicEmailInput.trim(), address: clinicAddressInput.trim(), openingTime: openingTimeInput, closingTime: closingTimeInput });
+
+  const persistClinicProfile = useCallback(async (payload: string) => {
+    setClinicProfileStatus("Salvando...");
+    setClinicProfileError("");
+    try {
+      const response = await fetch("/api/clinic/profile", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: payload });
+      const data = await response.json().catch(() => ({})) as { message?: string };
+      if (!response.ok) throw new Error(data.message ?? "Não foi possível salvar os dados da clínica.");
+      savedClinicProfile.current = payload;
+      onClinicNameChange?.((JSON.parse(payload) as { name: string }).name);
+      invalidateClientCache("/api/clinic/cost-settings", "/api/agenda/bootstrap", "/api/appointments/options");
+      window.dispatchEvent(new Event("harmonize-notification-settings-updated"));
+      setClinicProfileStatus("Dados da clínica salvos automaticamente.");
+    } catch (error) {
+      setClinicProfileStatus("");
+      setClinicProfileError(error instanceof Error ? error.message : "Não foi possível salvar os dados da clínica.");
+    }
+  }, [onClinicNameChange]);
+
+  async function persistClinicPreference(key: string, enabled: boolean) {
+    setSavingPreference(key);
+    setCostSettingsError("");
+    try {
+      const response = await fetch("/api/clinic/preferences", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key, enabled }) });
+      const data = await response.json().catch(() => ({})) as { message?: string };
+      if (!response.ok) throw new Error(data.message ?? "Não foi possível salvar esta preferência.");
+      invalidateClientCache("/api/clinic/cost-settings", "/api/agenda/bootstrap", "/api/agenda/overdue", "/api/appointments/options", "/api/patients");
+      window.dispatchEvent(new Event("harmonize-notification-settings-updated"));
+      setCostSettingsSuccess("Preferência atualizada para toda a clínica.");
+      return true;
+    } catch (error) {
+      setCostSettingsError(error instanceof Error ? error.message : "Não foi possível salvar esta preferência.");
+      return false;
+    } finally {
+      setSavingPreference("");
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -1699,7 +1961,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
 
   useEffect(() => {
     let active = true;
-    getCachedJson<{ settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; requireCancellationReason: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings")
+    getCachedJson<{ settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoCompleteAppointmentsEnabled: boolean; autoAdvancePatientJourneyEnabled: boolean; allowAppointmentsOutsideHours: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings")
       .then((data) => {
         if (!active) return;
         const settings = data.settings ?? {
@@ -1708,6 +1970,10 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
           appointmentNotificationSoundEnabled: true,
           stockNotificationsEnabled: true,
           requireCancellationReason: false,
+          autoMarkMissedAppointmentsEnabled: true,
+          autoCompleteAppointmentsEnabled: true,
+          autoAdvancePatientJourneyEnabled: true,
+          allowAppointmentsOutsideHours: false,
           laborCost: 0,
           facilityCost: 0,
           medicationCost: 0,
@@ -1730,15 +1996,27 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
         setClinicPhoneInput(settings.phone ?? "");
         setClinicEmailInput(settings.email ?? "");
         setClinicAddressInput(settings.address ?? "");
+        savedClinicProfile.current = JSON.stringify({ name: settings.name?.trim() ?? "", cnpj: settings.cnpj?.trim() ?? "", phone: settings.phone?.trim() ?? "", email: settings.email?.trim() ?? "", address: settings.address?.trim() ?? "", openingTime: settings.openingTime ?? "08:00", closingTime: settings.closingTime ?? "19:00" });
+        setClinicProfileReady(true);
         setAppointmentNotificationsEnabled(settings.appointmentNotificationsEnabled ?? true);
         setAppointmentNotificationSoundEnabled(settings.appointmentNotificationSoundEnabled ?? true);
         setStockNotificationsEnabled(settings.stockNotificationsEnabled ?? true);
         setRequireCancellationReason(settings.requireCancellationReason ?? false);
+        setAutoMarkMissedAppointmentsEnabled(settings.autoMarkMissedAppointmentsEnabled ?? true);
+        setAutoCompleteAppointmentsEnabled(settings.autoCompleteAppointmentsEnabled ?? true);
+        setAutoAdvancePatientJourneyEnabled(settings.autoAdvancePatientJourneyEnabled ?? true);
+        setAllowAppointmentsOutsideHours(settings.allowAppointmentsOutsideHours ?? false);
       })
       .catch(() => { if (active) setCostSettingsError("Não foi possível carregar as configurações da clínica."); })
       .finally(() => { if (active) setCostSettingsLoading(false); });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!clinicProfileReady || clinicProfile === savedClinicProfile.current) return;
+    const timeout = window.setTimeout(() => { void persistClinicProfile(clinicProfile); }, 700);
+    return () => window.clearTimeout(timeout);
+  }, [clinicProfile, clinicProfileReady, persistClinicProfile]);
 
   async function saveCostSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1820,6 +2098,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
 
   const professionalShiftMinutes = Math.max(0, (Number(professionalClosingTimeInput.slice(0, 2)) * 60 + Number(professionalClosingTimeInput.slice(3, 5))) - (Number(professionalOpeningTimeInput.slice(0, 2)) * 60 + Number(professionalOpeningTimeInput.slice(3, 5))));
   const professionalShiftCost = (professionalShiftMinutes / 60) * (Number(professionalHourlyCostInput) || 0);
+  const professionalLaborCostMembers = members.filter((member) => member.role === "PROFESSIONAL");
   async function saveCollaborator(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setTeamSaving(true);
@@ -1852,6 +2131,51 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
     } catch {
       setTeamSaving(false);
       setTeamError("Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente.");
+    }
+  }
+
+  async function saveProfessionalLaborCost(event: FormEvent<HTMLFormElement>, member: TeamMember) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const laborCostCents = Math.round(parseCurrency(form.get("laborCost")) * 100);
+    setLaborCostSavingId(member.id);
+    setLaborCostFeedback(null);
+    try {
+      const response = await fetch("/api/team", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ membershipId: member.id, laborCostCents }) });
+      const data = await response.json().catch(() => null) as { member?: TeamMember; message?: string } | null;
+      if (!response.ok || !data?.member) throw new Error(data?.message ?? "Não foi possível salvar o valor de mão de obra.");
+      setMembers((current) => current.map((item) => item.id === member.id ? data.member! : item));
+      setEditingLaborCostId(null);
+      invalidateClientCache("/api/team");
+      setLaborCostFeedback({ message: `Valor de mão de obra de ${member.user.name} salvo.`, success: true });
+    } catch (error) {
+      setLaborCostFeedback({ message: error instanceof Error ? error.message : "Não foi possível salvar o valor de mão de obra.", success: false });
+    } finally {
+      setLaborCostSavingId(null);
+    }
+  }
+
+  async function saveMemberRole(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!memberToChangeRole) return;
+    setRoleSaving(true);
+    setRoleChangeError("");
+    try {
+      const response = await fetch("/api/team", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ membershipId: memberToChangeRole.id, role: roleToChange }),
+      });
+      const data = await response.json().catch(() => null) as { member?: TeamMember; message?: string } | null;
+      if (!response.ok || !data?.member) throw new Error(data?.message ?? "Não foi possível alterar o cargo.");
+      setMembers((current) => current.map((member) => member.id === data.member!.id ? data.member! : member));
+      invalidateClientCache("/api/team", "/api/team/professionals", "/api/agenda/bootstrap", "/api/appointments/options");
+      setMemberToChangeRole(null);
+      toast.success("Cargo atualizado com sucesso.");
+    } catch (error) {
+      setRoleChangeError(error instanceof Error ? error.message : "Não foi possível conectar ao servidor. Tente novamente.");
+    } finally {
+      setRoleSaving(false);
     }
   }
 
@@ -1892,8 +2216,8 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
             </CardHeader>
             <CardContent className="mx-auto w-full max-w-3xl space-y-4 pt-4">
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <FormField label="Início do expediente"><input className={fieldClassName} name="professionalOpeningTime" type="time" value={professionalOpeningTimeInput} onChange={(event) => setProfessionalOpeningTimeInput(event.target.value)} required /></FormField>
-                <FormField label="Fim do expediente"><input className={fieldClassName} name="professionalClosingTime" type="time" value={professionalClosingTimeInput} onChange={(event) => setProfessionalClosingTimeInput(event.target.value)} required /></FormField>
+                <FormField label="Início do expediente"><Time24Input name="professionalOpeningTime" label="Início do expediente" value={professionalOpeningTimeInput} onChange={setProfessionalOpeningTimeInput} /></FormField>
+                <FormField label="Fim do expediente"><Time24Input name="professionalClosingTime" label="Fim do expediente" value={professionalClosingTimeInput} onChange={setProfessionalClosingTimeInput} /></FormField>
                 <FormField label="Custo por hora (R$)"><input className={fieldClassName} name="professionalHourlyCost" type="number" min="0" step="0.01" value={professionalHourlyCostInput} onChange={(event) => setProfessionalHourlyCostInput(event.target.value)} placeholder="0,00" /></FormField>
               </div>
               <div className="flex flex-col gap-1 rounded-md bg-muted/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1943,7 +2267,28 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
     { label: "Segurança e permissões", icon: ShieldCheck },
     { label: "Integrações", icon: PlugZap },
   ];
-  const visibleSettingsNavigation = settingsNavigation.filter((item) => item.label.toLocaleLowerCase("pt-BR").includes(settingsSearch.trim().toLocaleLowerCase("pt-BR")));
+  const normalizeSettingsSearch = (value: string) => value.toLocaleLowerCase("pt-BR").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const normalizedSettingsSearch = normalizeSettingsSearch(settingsSearch.trim());
+  const isSearchingClinicPreferences = activeSettingsSection === "Dados da clínica" && Boolean(normalizedSettingsSearch);
+  const matchesClinicPreference = (text: string) => !isSearchingClinicPreferences || normalizeSettingsSearch(text).includes(normalizedSettingsSearch);
+  const clinicPreferenceLabels = ["Alertas de agendamentos", "Alertas de estoque", "Exigir motivo ao cancelar", "Marcar faltas automaticamente", "Finalizar atendimentos automaticamente", "Avançar etapas do paciente automaticamente", "Permitir agendamentos fora do funcionamento"];
+  const matchingClinicPreferenceCount = clinicPreferenceLabels.filter(matchesClinicPreference).length;
+  const isSearchingTeam = activeSettingsSection === "Profissionais e equipe" && Boolean(normalizedSettingsSearch);
+  const filteredTeamMembers = members.filter((member) => {
+    const role = member.isOwner ? "Administrador principal" : member.role === "PROFESSIONAL" ? "Profissional" : member.role === "STAFF" ? "Equipe Atendente" : "Administrador";
+    return normalizeSettingsSearch(`${member.user.name} ${member.user.email} ${member.role} ${role}`).includes(normalizedSettingsSearch);
+  });
+  const visibleSettingsNavigation = settingsNavigation.filter((item) => normalizeSettingsSearch(item.label).includes(normalizedSettingsSearch) || (isSearchingClinicPreferences && matchingClinicPreferenceCount > 0 && item.label === "Dados da clínica") || (isSearchingTeam && item.label === "Profissionais e equipe"));
+  const settingsSearchPlaceholder: Record<string, string> = {
+    "Dados da clínica": "Buscar dados da clínica",
+    "Profissionais e equipe": "Buscar profissional ou equipe",
+    "Agenda e horários": "Buscar agenda e horários",
+    "Custos e orçamento": "Buscar custos e orçamento",
+    Notificações: "Buscar notificações",
+    "Segurança e permissões": "Buscar segurança e permissões",
+    Integrações: "Buscar integrações",
+  };
+  const searchLabel = settingsSearchPlaceholder[activeSettingsSection] ?? "Buscar nas configurações";
 
   return (
     <div className="mx-auto w-full max-w-[1440px] space-y-5">
@@ -1954,7 +2299,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
         </div>
         <label className="relative block w-full lg:max-w-xs">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input className={cn(fieldClassName, "pl-9")} type="search" aria-label="Buscar nas configurações" placeholder="Buscar nas configurações" value={settingsSearch} onChange={(event) => setSettingsSearch(event.target.value)} />
+          <input className={cn(fieldClassName, "pl-9")} type="search" aria-label={searchLabel} placeholder={searchLabel} value={settingsSearch} onChange={(event) => setSettingsSearch(event.target.value)} />
         </label>
       </header>
 
@@ -1973,9 +2318,9 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
         <div className="min-w-0 space-y-4">
           {activeSettingsSection === "Dados da clínica" ? (
             <Card className="border-border/70">
-              <CardHeader className="border-b border-border/70"><CardTitle>Dados da clínica</CardTitle><p className="text-sm text-muted-foreground">Informações básicas e dados de contato da sua clínica.</p></CardHeader>
+              <CardHeader className="border-b border-border/70"><CardTitle>Dados da clínica</CardTitle><p className="text-sm text-muted-foreground">{isSearchingClinicPreferences ? "Preferências gerais filtradas pela busca." : "Informações básicas e dados de contato da sua clínica."}</p></CardHeader>
               <CardContent className="pt-5">
-                <form className="space-y-5" onSubmit={saveCostSettings}>
+                {!isSearchingClinicPreferences ? <div className="space-y-5">
                   <div className="grid gap-4 md:grid-cols-2">
                     <FormField label="Nome da clínica"><input className={fieldClassName} autoComplete="organization" maxLength={120} name="name" required value={clinicNameInput} onChange={(event) => setClinicNameInput(event.target.value)} /></FormField>
                     <FormField label="CNPJ"><input className={fieldClassName} autoComplete="off" inputMode="numeric" maxLength={24} name="cnpj" value={clinicCnpjInput} onChange={(event) => setClinicCnpjInput(event.target.value)} placeholder="00.000.000/0000-00" /></FormField>
@@ -1983,18 +2328,31 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
                     <FormField label="E-mail"><input className={fieldClassName} autoComplete="email" maxLength={254} name="email" type="email" value={clinicEmailInput} onChange={(event) => setClinicEmailInput(event.target.value)} placeholder="contato@clinica.com.br" /></FormField>
                   </div>
                   <FormField label="Endereço"><input className={fieldClassName} autoComplete="street-address" maxLength={240} name="address" value={clinicAddressInput} onChange={(event) => setClinicAddressInput(event.target.value)} placeholder="Rua, número, bairro, cidade e CEP" /></FormField>
-                  <div className="rounded-lg border border-border/70 px-4 py-2">
-                    <h3 className="pt-2 text-sm font-bold text-foreground">Preferências gerais</h3>
-                    <SettingsToggle label="Exibir alertas de agendamentos" description="Mostra no menu de notificações os atendimentos que já estão no horário." checked={appointmentNotificationsEnabled} onChange={() => setAppointmentNotificationsEnabled((value) => !value)} />
-                    <SettingsToggle label="Confirmar agendamentos automaticamente" description="Disponível quando o agendamento online estiver integrado." checked={false} disabled />
-                    <SettingsToggle label="Permitir reagendamentos online" description="Disponível quando a área do cliente estiver integrada." checked={false} disabled />
-                    <SettingsToggle label="Exigir motivo para cancelamentos" description="A equipe deverá informar o motivo antes de cancelar um agendamento." checked={requireCancellationReason} onChange={() => setRequireCancellationReason((value) => !value)} />
-                    <SettingsToggle label="Bloquear horários passados" description="O sistema já impede criar ou editar agendamentos em horários que passaram." checked disabled />
+                  <div className="rounded-lg border border-border/70 bg-muted/20 p-4">
+                    <div className="mb-4">
+                      <h3 className="text-sm font-bold text-foreground">Horário diário de funcionamento</h3>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">Defina a abertura e o fechamento. A agenda usa esse período como limite para novos atendimentos.</p>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <FormField label="Abre às"><Time24Input name="openingTime" label="Abre às" value={openingTimeInput} onChange={setOpeningTimeInput} /></FormField>
+                      <FormField label="Fecha às"><Time24Input name="closingTime" label="Fecha às" value={closingTimeInput} onChange={setClosingTimeInput} /></FormField>
+                    </div>
                   </div>
-                  {costSettingsError ? <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{costSettingsError}</p> : null}
-                  {costSettingsSuccess ? <p className="text-sm font-medium text-success" role="status">{costSettingsSuccess}</p> : null}
-                  <div className="flex justify-end border-t border-border pt-4"><Button className="min-w-36" disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar alterações"}</Button></div>
-                </form>
+                  {clinicProfileError ? <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{clinicProfileError}</p> : null}
+                  {clinicProfileStatus ? <p className="text-xs font-medium text-muted-foreground" role="status">{clinicProfileStatus}</p> : null}
+                </div> : null}
+                  <div className={cn("rounded-lg border border-border/70 px-4 py-2", !isSearchingClinicPreferences && "mt-7")}>
+                    <h3 className="pt-2 text-sm font-bold text-foreground">Preferências gerais</h3>
+                    <p className="mb-2 mt-1 text-xs text-muted-foreground">Configuração para toda a clínica</p>
+                    <SettingsToggle hidden={!matchesClinicPreference("Alertas de agendamentos")} label="Alertas de agendamentos" description="Exibe no menu superior os atendimentos que precisam de atenção. A equipe acompanha a agenda sem procurar cada horário manualmente." checked={appointmentNotificationsEnabled} saving={savingPreference === "appointmentNotificationsEnabled"} onChange={(next) => { setAppointmentNotificationsEnabled(next); void persistClinicPreference("appointmentNotificationsEnabled", next).then((ok) => { if (!ok) setAppointmentNotificationsEnabled(!next); }); }} />
+                    <SettingsToggle hidden={!matchesClinicPreference("Alertas de estoque")} label="Alertas de estoque" description="Mostra avisos de estoque baixo, vencimentos e pendências para a equipe agir antes que falte material." checked={stockNotificationsEnabled} saving={savingPreference === "stockNotificationsEnabled"} onChange={(next) => { setStockNotificationsEnabled(next); void persistClinicPreference("stockNotificationsEnabled", next).then((ok) => { if (!ok) setStockNotificationsEnabled(!next); }); }} />
+                    <SettingsToggle hidden={!matchesClinicPreference("Exigir motivo ao cancelar")} label="Exigir motivo ao cancelar" description="Antes de cancelar um agendamento, a equipe precisa registrar o motivo, ajudando a clínica a entender cancelamentos e manter o histórico completo." checked={requireCancellationReason} saving={savingPreference === "requireCancellationReason"} onChange={(next) => { setRequireCancellationReason(next); void persistClinicPreference("requireCancellationReason", next).then((ok) => { if (!ok) setRequireCancellationReason(!next); }); }} />
+                    <SettingsToggle hidden={!matchesClinicPreference("Marcar faltas automaticamente")} label="Marcar faltas automaticamente" description="Após o horário e a tolerância definidos, agendamentos que continuam marcados são atualizados para Faltou." checked={autoMarkMissedAppointmentsEnabled} saving={savingPreference === "autoMarkMissedAppointmentsEnabled"} onChange={(next) => { setAutoMarkMissedAppointmentsEnabled(next); void persistClinicPreference("autoMarkMissedAppointmentsEnabled", next).then((ok) => { if (!ok) setAutoMarkMissedAppointmentsEnabled(!next); }); }} />
+                    <SettingsToggle hidden={!matchesClinicPreference("Finalizar atendimentos automaticamente")} label="Finalizar atendimentos automaticamente" description="Quando o horário previsto do atendimento termina, a agenda altera Em atendimento para Atendido." checked={autoCompleteAppointmentsEnabled} saving={savingPreference === "autoCompleteAppointmentsEnabled"} onChange={(next) => { setAutoCompleteAppointmentsEnabled(next); void persistClinicPreference("autoCompleteAppointmentsEnabled", next).then((ok) => { if (!ok) setAutoCompleteAppointmentsEnabled(!next); }); }} />
+                    <SettingsToggle hidden={!matchesClinicPreference("Avançar etapas do paciente automaticamente")} label="Avançar etapas do paciente automaticamente" description="A etapa exibida na lista de pacientes acompanha avaliações, orçamentos, procedimentos e retornos registrados no sistema." checked={autoAdvancePatientJourneyEnabled} saving={savingPreference === "autoAdvancePatientJourneyEnabled"} onChange={(next) => { setAutoAdvancePatientJourneyEnabled(next); void persistClinicPreference("autoAdvancePatientJourneyEnabled", next).then((ok) => { if (!ok) setAutoAdvancePatientJourneyEnabled(!next); }); }} />
+                    <SettingsToggle hidden={!matchesClinicPreference("Permitir agendamentos fora do funcionamento")} label="Permitir agendamentos fora do funcionamento" description="Libera horários fora da abertura e fechamento configurados, mantendo as validações de data, conflitos e duração do atendimento." checked={allowAppointmentsOutsideHours} saving={savingPreference === "allowAppointmentsOutsideHours"} onChange={(next) => { setAllowAppointmentsOutsideHours(next); void persistClinicPreference("allowAppointmentsOutsideHours", next).then((ok) => { if (!ok) setAllowAppointmentsOutsideHours(!next); }); }} />
+                    {isSearchingClinicPreferences && matchingClinicPreferenceCount === 0 ? <p className="py-4 text-sm text-muted-foreground">Nenhuma preferência geral encontrada.</p> : null}
+                  </div>
               </CardContent>
             </Card>
           ) : null}
@@ -2007,35 +2365,37 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
               </CardHeader>
               <CardContent className="divide-y divide-border/70 pt-1">
                 {teamError && !editing ? <p className="my-4 rounded-md bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{teamError}</p> : null}
-                {teamLoading ? <div className="space-y-3 py-4">{[0, 1, 2].map((item) => <div className="flex items-center justify-between gap-4" key={item}><div className="flex-1 space-y-2"><LoadingSkeleton className="h-3 w-40" /><LoadingSkeleton className="h-2.5 w-56" /></div><LoadingSkeleton className="h-6 w-20 rounded-full" /></div>)}</div> : members.length ? members.map((member) => (
+                {teamLoading ? <div className="space-y-3 py-4">{[0, 1, 2].map((item) => <div className="flex items-center justify-between gap-4" key={item}><div className="flex-1 space-y-2"><LoadingSkeleton className="h-3 w-40" /><LoadingSkeleton className="h-2.5 w-56" /></div><LoadingSkeleton className="h-6 w-20 rounded-full" /></div>)}</div> : filteredTeamMembers.length ? filteredTeamMembers.map((member) => (
                   <div className="flex flex-col gap-2 py-4 sm:flex-row sm:items-center sm:justify-between" key={member.id}>
-                    <div><p className="text-sm font-bold text-foreground">{member.user.name}</p><p className="text-xs text-muted-foreground">{member.user.email}</p></div>
-                    <div className="flex items-center gap-2">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-bold text-foreground">{member.user.name}</p>
+                      </div>
+                      <p className="text-xs text-muted-foreground">{member.user.email}</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
                       <Badge variant={member.isOwner || member.role === "ADMIN" ? "purple" : "green"}>{member.isOwner ? "Administrador principal" : member.role === "PROFESSIONAL" ? "Profissional" : member.role === "STAFF" ? "Equipe" : "Administrador"}</Badge>
+                      {isAdmin && !member.isOwner ? <Button type="button" variant="secondary" size="sm" className="h-7 px-2.5 text-xs" onClick={() => { setRoleToChange(member.role); setRoleChangeError(""); setMemberToChangeRole(member); }}>Alterar cargo</Button> : null}
                       {isOwner && !member.isOwner ? <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-destructive" aria-label={"Remover " + member.user.name} title="Remover colaborador" onClick={() => { setMemberRemoveError(""); setMemberToRemove(member); }}><Trash2 className="h-3.5 w-3.5" /></Button> : null}
                     </div>
                   </div>
-                )) : <p className="py-6 text-sm text-muted-foreground">Nenhum colaborador cadastrado.</p>}
+                )) : <p className="py-6 text-sm text-muted-foreground">{isSearchingTeam ? "Nenhum profissional ou membro da equipe corresponde à busca." : "Nenhum colaborador cadastrado."}</p>}
               </CardContent>
             </Card>
           ) : null}
 
           {activeSettingsSection === "Agenda e horários" ? (
             <Card className="border-border/70">
-              <CardHeader className="border-b border-border/70"><CardTitle>Agenda e horários</CardTitle><p className="text-sm text-muted-foreground">O horário de funcionamento limita os horários disponíveis para novos agendamentos.</p></CardHeader>
+              <CardHeader className="border-b border-border/70"><CardTitle>Agenda e horários</CardTitle><p className="text-sm text-muted-foreground">Ajuste a tolerância usada para identificar atrasos e faltas.</p></CardHeader>
               <CardContent className="pt-5">
                 <form className="space-y-5" onSubmit={saveCostSettings}>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <FormField label="Início do funcionamento"><input className={fieldClassName} name="openingTime" type="time" value={openingTimeInput} onChange={(event) => setOpeningTimeInput(event.target.value)} required /></FormField>
-                    <FormField label="Fim do funcionamento"><input className={fieldClassName} name="closingTime" type="time" value={closingTimeInput} onChange={(event) => setClosingTimeInput(event.target.value)} required /></FormField>
-                  </div>
                   <div className="max-w-sm">
                     <FormField label="Tolerância para marcar falta (minutos)"><input className={fieldClassName} name="appointmentToleranceMinutes" type="number" min="0" max="180" value={appointmentToleranceInput} onChange={(event) => setAppointmentToleranceInput(event.target.value)} required /></FormField>
                     <p className="mt-1 text-xs text-muted-foreground">A agenda e o histórico do paciente usam este limite para identificar atrasos e faltas.</p>
                   </div>
                   {costSettingsError ? <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{costSettingsError}</p> : null}
                   {costSettingsSuccess ? <p className="text-sm font-medium text-success" role="status">{costSettingsSuccess}</p> : null}
-                  <div className="flex justify-end border-t border-border pt-4"><Button className="min-w-36" disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar horários"}</Button></div>
+                  <div className="flex justify-end border-t border-border pt-4"><Button className="min-w-36" disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar agenda"}</Button></div>
                 </form>
               </CardContent>
             </Card>
@@ -2043,52 +2403,46 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
 
           {activeSettingsSection === "Custos e orçamento" ? (
             <Card className="border-border/70">
-              <CardHeader className="border-b border-border/70"><CardTitle>Custos e orçamento</CardTitle><p className="text-sm text-muted-foreground">Os custos padrão são aplicados na calculadora e nos novos orçamentos.</p></CardHeader>
+              <CardHeader className="border-b border-border/70"><CardTitle>Custos e orçamento</CardTitle><p className="text-sm text-muted-foreground">Defina os valores de mão de obra de cada profissional da clínica.</p></CardHeader>
               <CardContent className="pt-5">
-                <form className="space-y-5" onSubmit={saveCostSettings}>
-                  <div>
-                    <h3 className="mb-3 text-sm font-bold text-foreground">Custo do profissional</h3>
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                      <FormField label="Início do expediente"><input className={fieldClassName} name="professionalOpeningTime" type="time" value={professionalOpeningTimeInput} onChange={(event) => setProfessionalOpeningTimeInput(event.target.value)} required /></FormField>
-                      <FormField label="Fim do expediente"><input className={fieldClassName} name="professionalClosingTime" type="time" value={professionalClosingTimeInput} onChange={(event) => setProfessionalClosingTimeInput(event.target.value)} required /></FormField>
-                      <FormField label="Custo por hora (R$)"><input className={fieldClassName} name="professionalHourlyCost" type="number" min="0" step="0.01" value={professionalHourlyCostInput} onChange={(event) => setProfessionalHourlyCostInput(event.target.value)} placeholder="0,00" /></FormField>
-                    </div>
-                    <div className="mt-4 flex flex-col gap-1 rounded-md bg-muted/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold text-foreground">Custo estimado por expediente</p><p className="text-xs text-muted-foreground">Horas trabalhadas × custo por hora</p></div><strong className="text-lg font-bold text-primary">{currency.format(professionalShiftCost)}</strong></div>
+                <section className="mb-6 rounded-lg border border-border/70 px-4 py-4">
+                  <div className="mb-3">
+                    <h3 className="text-sm font-bold text-foreground">Mão de obra por profissional</h3>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">Defina o valor em reais para cada profissional da clínica.</p>
                   </div>
-                  <div className="border-t border-border pt-5">
-                    <h3 className="mb-3 text-sm font-bold text-foreground">Custos padrão por atendimento</h3>
-                    <p className="mb-4 text-xs text-muted-foreground">Entram automaticamente nos novos orçamentos.</p>
-                    {costSettingsLoading ? <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                      <FormField label="Mão de obra / honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField>
-                      <FormField label="Sala / estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField>
-                      <FormField label="Anestésico / medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField>
-                    </div>}
-                  </div>
-                  {costSettingsError ? <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{costSettingsError}</p> : null}
-                  {costSettingsSuccess ? <p className="text-sm font-medium text-success" role="status">{costSettingsSuccess}</p> : null}
-                  <div className="flex justify-end border-t border-border pt-4"><Button className="min-w-36" disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button></div>
-                </form>
+                  {teamLoading ? <div className="space-y-3 py-2">{[0, 1].map((item) => <LoadingSkeleton className="h-12 w-full" key={item} />)}</div> : professionalLaborCostMembers.length ? <div className="divide-y divide-border/70">
+                    {professionalLaborCostMembers.map((member) => {
+                      const isEditing = member.laborCostCents === null || editingLaborCostId === member.id;
+                      return <div key={member.id} className="grid gap-3 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,240px)_auto] sm:items-end">
+                        <div className="min-w-0 pb-2 sm:pb-2"><p className="truncate text-sm font-semibold text-foreground">{member.user.name}</p><p className="text-xs text-muted-foreground">Profissional</p></div>
+                        {isEditing ? <form className="contents" onSubmit={(event) => void saveProfessionalLaborCost(event, member)}>
+                          <FormField label="Mão de obra (R$)"><MaskedInput key={`${member.id}-${member.laborCostCents}`} className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format((member.laborCostCents ?? 0) / 100)} inputMode="decimal" /></FormField>
+                          <Button className="sm:mb-0.5" type="submit" variant="secondary" disabled={laborCostSavingId === member.id}>{laborCostSavingId === member.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{laborCostSavingId === member.id ? "Salvando..." : "Salvar valor"}</Button>
+                        </form> : <>
+                          <div className="pb-2"><p className="text-[10px] font-semibold text-muted-foreground">Mão de obra (R$)</p><p className="mt-1 text-sm font-bold text-emerald-500">{currency.format((member.laborCostCents ?? 0) / 100)}</p></div>
+                          <Button className="sm:mb-0.5 border-destructive text-destructive hover:bg-destructive/10 hover:text-destructive" type="button" variant="secondary" onClick={() => { setEditingLaborCostId(member.id); setLaborCostFeedback(null); }}>Alterar valor</Button>
+                        </>}
+                      </div>;
+                    })}
+                  </div> : <p className="py-3 text-sm text-muted-foreground">Cadastre alguém com o cargo Profissional na equipe para definir a mão de obra.</p>}
+                  {laborCostFeedback ? <p className={cn("mt-3 text-xs font-medium", laborCostFeedback.success ? "text-success" : "text-destructive")} role={laborCostFeedback.success ? "status" : "alert"}>{laborCostFeedback.message}</p> : null}
+                </section>
               </CardContent>
             </Card>
           ) : null}
 
           {activeSettingsSection === "Notificações" ? (
-            <>
               <Card className="border-border/70">
                 <CardHeader className="border-b border-border/70"><CardTitle>Notificações</CardTitle><p className="text-sm text-muted-foreground">Escolha quais avisos aparecem no menu superior da aplicação.</p></CardHeader>
                 <CardContent className="pt-4">
                   <form onSubmit={saveCostSettings}>
-                    <SettingsToggle label="Alertas de agendamentos" description="Mostra no menu superior os atendimentos que já estão no horário." checked={appointmentNotificationsEnabled} onChange={() => setAppointmentNotificationsEnabled((value) => !value)} />
                     <SettingsToggle label="Som dos alertas" description="Toca um aviso quando surge um novo alerta de atendimento." checked={appointmentNotificationSoundEnabled} onChange={() => setAppointmentNotificationSoundEnabled((value) => !value)} />
-                    <SettingsToggle label="Alertas de estoque" description="Mostra alertas de vencimento, saldo mínimo e pendências de estoque." checked={stockNotificationsEnabled} onChange={() => setStockNotificationsEnabled((value) => !value)} />
                     {costSettingsError ? <p className="mt-4 rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{costSettingsError}</p> : null}
                     {costSettingsSuccess ? <p className="mt-4 text-sm font-medium text-success" role="status">{costSettingsSuccess}</p> : null}
                     <div className="mt-4 flex justify-end border-t border-border pt-4"><Button className="min-w-36" disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar preferências"}</Button></div>
                   </form>
                 </CardContent>
               </Card>
-              <StockSettingsCard onSaved={onSaved} />
-            </>
           ) : null}
 
           {activeSettingsSection === "Segurança e permissões" ? (
@@ -2127,6 +2481,21 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
           <FormField label="Perfil"><select className={fieldClassName} name="role"><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Atendente</option><option value="ADMIN">Administrador</option></select></FormField>
           {teamError ? <p className="sm:col-span-2 rounded-md bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{teamError}</p> : null}
           <div className="flex justify-end gap-2 sm:col-span-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div>
+        </form>
+      </Modal>
+
+      <Modal open={Boolean(memberToChangeRole)} onClose={() => { if (!roleSaving) setMemberToChangeRole(null); }} title="Alterar cargo" description="Escolha o nível de acesso deste colaborador na clínica.">
+        <form className="space-y-4" onSubmit={saveMemberRole}>
+          <p className="text-sm text-muted-foreground">Colaborador: <strong className="text-foreground">{memberToChangeRole?.user.name}</strong></p>
+          <FormField label="Cargo">
+            <select className={fieldClassName} value={roleToChange} onChange={(event) => setRoleToChange(event.target.value)}>
+              <option value="PROFESSIONAL">Profissional</option>
+              <option value="STAFF">Atendente</option>
+              <option value="ADMIN">Administrador</option>
+            </select>
+          </FormField>
+          {roleChangeError ? <p className="rounded-md bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{roleChangeError}</p> : null}
+          <div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={roleSaving} onClick={() => setMemberToChangeRole(null)}>Cancelar</Button><Button type="submit" disabled={roleSaving}>{roleSaving ? "Salvando..." : "Salvar cargo"}</Button></div>
         </form>
       </Modal>
 
