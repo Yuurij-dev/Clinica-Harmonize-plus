@@ -55,12 +55,12 @@ export function ClinicTimePicker({ openingTime, closingTime, latestTime, value, 
       <span className={value ? "text-foreground" : "text-muted-foreground"}>{value || "Selecione o horário"}</span>
       <Clock3 className="h-4 w-4 text-muted-foreground" />
     </button>
-    {open ? <div className="absolute left-0 top-full z-40 mt-1 grid w-[156px] grid-cols-2 overflow-hidden rounded-md border border-border bg-popover text-sm text-popover-foreground shadow-lg" role="group" aria-label="Horários disponíveis">
-      <div className="max-h-60 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden border-r border-border p-1" role="listbox" aria-label="Hora">
-        {hours.map((hour) => <button type="button" role="option" aria-selected={hour === activeHour} className={cn("block w-full rounded-sm px-3 py-1.5 text-left", hour === activeHour ? "bg-primary text-primary-foreground" : "hover:bg-accent")} key={hour} onClick={() => setDraftHour(hour)}>{String(hour).padStart(2, "0")}</button>)}
+    {open ? <div className="absolute left-0 top-full z-40 mt-1 max-lg:bottom-full max-lg:top-auto max-lg:mb-1 max-lg:mt-0 grid w-[156px] grid-cols-2 overflow-hidden rounded-md border border-border bg-popover text-sm text-popover-foreground shadow-lg" role="group" aria-label="Horários disponíveis">
+      <div className="max-h-60 max-lg:max-h-44 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden border-r border-border p-1" role="listbox" aria-label="Hora">
+        {hours.map((hour) => <button type="button" role="option" aria-selected={hour === activeHour} className={cn("block w-full rounded-sm px-3 py-1.5 text-left max-lg:py-3", hour === activeHour ? "bg-primary text-primary-foreground" : "hover:bg-accent")} key={hour} onClick={() => setDraftHour(hour)}>{String(hour).padStart(2, "0")}</button>)}
       </div>
-      <div className="max-h-60 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden p-1" role="listbox" aria-label="Minuto">
-        {minutes.map((minute) => <button type="button" role="option" aria-selected={selectedHour === activeHour && selectedMinute === minute} className={cn("block w-full rounded-sm px-3 py-1.5 text-left", selectedHour === activeHour && selectedMinute === minute ? "bg-primary text-primary-foreground" : "hover:bg-accent")} key={minute} onClick={() => { onChange(`${String(activeHour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`); setOpen(false); }}>{String(minute).padStart(2, "0")}</button>)}
+      <div className="max-h-60 max-lg:max-h-44 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden p-1" role="listbox" aria-label="Minuto">
+        {minutes.map((minute) => <button type="button" role="option" aria-selected={selectedHour === activeHour && selectedMinute === minute} className={cn("block w-full rounded-sm px-3 py-1.5 text-left max-lg:py-3", selectedHour === activeHour && selectedMinute === minute ? "bg-primary text-primary-foreground" : "hover:bg-accent")} key={minute} onClick={() => { onChange(`${String(activeHour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`); setOpen(false); }}>{String(minute).padStart(2, "0")}</button>)}
       </div>
     </div> : null}
   </div>;

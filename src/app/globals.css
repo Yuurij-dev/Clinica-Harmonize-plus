@@ -1088,3 +1088,67 @@ html.dark .hp-logo-dark {
 html.dark .stock-alert-dot {
   background-color: #ffd166;
 }
+
+/* Mobile (abaixo de lg): folha inferior nos modais, rodapé fixo, piso de 12px e FAB. */
+@keyframes hp-modal-sheet-in {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@keyframes hp-modal-sheet-out {
+  from { transform: translateY(0); }
+  to { transform: translateY(100%); }
+}
+
+@media (max-width: 1023.98px) {
+  .modal-content[data-state="open"] .modal-panel.modal-panel-sheet {
+    animation: hp-modal-sheet-in 320ms cubic-bezier(0.2, 0.9, 0.3, 1) both;
+  }
+
+  .modal-content[data-state="closed"] .modal-panel.modal-panel-sheet {
+    animation: hp-modal-sheet-out 220ms cubic-bezier(0.4, 0, 1, 1) both;
+  }
+
+  /*
+   * Convenção do rodapé de ações dos modais: a ÚLTIMA linha `.justify-end` com botões, filha direta do corpo
+   * (.modal-body) ou do último bloco filho direto dele (um <form> ou o <div> que embrulha o conteúdo). Fica fixa na base enquanto o conteúdo rola.
+   * Blocos aninhados mais fundo (cartões, itens de lista) nunca casam. --modal-pad acompanha o padding do corpo.
+   */
+  .modal-panel-sheet .modal-body > .justify-end:last-child:has(> button),
+  .modal-panel-sheet .modal-body > :last-child > .justify-end:last-child:has(> button) {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    margin: 1rem calc(var(--modal-pad, 1rem) * -1) 0;
+    padding: 0.75rem var(--modal-pad, 1rem) calc(0.75rem + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border);
+    background-color: var(--card);
+  }
+
+  .modal-panel-sheet .modal-body:has(> .justify-end:last-child > button),
+  .modal-panel-sheet .modal-body:has(> :last-child > .justify-end:last-child > button) {
+    padding-bottom: 0;
+  }
+
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="hidden"], [type="color"]) {
+    min-height: 2.75rem;
+  }
+
+  [class~="text-[9px]"],
+  [class~="text-[10px]"],
+  [class~="text-[11px]"] {
+    font-size: 0.75rem !important;
+  }
+}
+
+/* Botão "+" some com modal/folha aberta, teclado (campo de texto focado) e telas densas (data-hide-fab). */
+body[data-scroll-locked] .hp-fab,
+body:has(input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="file"]):focus, textarea:focus, select:focus, [contenteditable="true"]:focus, [data-hide-fab]) .hp-fab {
+  display: none;
+}
+
+@media (max-width: 1023.98px) {
+  select {
+    min-height: 2.75rem;
+  }
+}

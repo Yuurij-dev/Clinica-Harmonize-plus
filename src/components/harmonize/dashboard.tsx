@@ -16,7 +16,7 @@ import { useRevealOnView } from "@/lib/use-reveal-on-view";
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 const percentFormat = (value: number) => `${Math.round(value)}%`;
-const patientNameLinkClassName = "origin-left transition-transform hover:scale-[1.03] focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]";
+const patientNameLinkClassName = "origin-left max-lg:-my-3 max-lg:py-3 transition-transform hover:scale-[1.03] focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]";
 
 export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onAction: (action: "client" | "appointment" | "quote" | "payment") => void; onNavigate: (section: SectionId, focus?: { date: string; time: string }) => void; userName?: string }) {
   type DashboardData = { appointmentCount: number; appointments: Array<{ id: string; date: string; time: string; procedure: string; status: string; patient?: { id: string; name: string } | null }>; patients: Array<{ id: string; name: string; status: string; lastVisit: string | null; createdAt: string }>; quotes: Array<{ id: string; items: string; total: number; status: string; patient?: { id: string; name: string } | null }>; payments: Array<{ value: number; status: string; date: string }> };
@@ -100,7 +100,7 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
         </div>
       </div>
 
-      <div className="hp-list-stagger grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <div className="hp-list-stagger grid grid-cols-2 gap-3 xl:grid-cols-6">
         {stats.map((stat) => (
           <StatCard key={stat.label} label={stat.label} value={<CountUp value={stat.value} format={stat.format} />} detail={stat.detail} icon={TrendingUp} />
         ))}
@@ -108,8 +108,8 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
 
       <div className="hp-list-stagger grid gap-6 xl:grid-cols-3">
         <Card className="xl:col-span-2">
-          <CardHeader className="gap-4">
-            <div>
+          <CardHeader className="gap-4 max-sm:flex-col">
+            <div className="min-w-0">
               <CardTitle>Atendimentos no mês</CardTitle>
               <p className="mt-1 text-sm text-[#65708b]">Evolução diária de atendimentos com comparação ao mês anterior.</p>
             </div>
@@ -121,7 +121,7 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
             </div>
           </CardHeader>
           <CardContent>
-            <div className="mb-5 grid auto-rows-fr gap-2 sm:grid-cols-3">
+            <div className="mb-5 grid auto-rows-fr gap-2 md:grid-cols-3">
               <AttendanceMetric icon={CalendarCheck} label="Atendimentos realizados" value={attendance.currentTotal} change={percentageChange(attendance.currentTotal, attendance.previousTotal)} comparison={attendance.previousTotal ? attendance.previousTotal : null} />
               <AttendanceMetric icon={UserPlus} label="Novos clientes" value={attendance.currentNewClients} change={percentageChange(attendance.currentNewClients, attendance.previousNewClients)} comparison={attendance.previousNewClients ? attendance.previousNewClients : null} />
               <AttendanceMetric icon={RotateCcw} label="Taxa de retorno" value={attendance.currentReturnRate} format={percentFormat} change={attendance.previousTotal ? attendance.currentReturnRate - attendance.previousReturnRate : null} comparison={attendance.previousTotal ? `${attendance.previousReturnRate}%` : null} suffix="p.p." />
@@ -130,7 +130,7 @@ export function Dashboard({ onAction, onNavigate, userName = "Usuário" }: { onA
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="max-xl:order-first">
           <CardHeader>
             <CardTitle>Próximos atendimentos</CardTitle>
             <CalendarCheck className="h-5 w-5 text-[#1438ff]" />
@@ -275,7 +275,7 @@ function PatientAvatarLink({ patientId, patientName, onClick }: { patientId: str
   return (
     <Link
       aria-label={`Abrir cliente ${patientName}`}
-      className="grid h-8 w-8 shrink-0 place-items-center rounded-full transition-transform hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]"
+      className="grid h-8 w-8 shrink-0 place-items-center rounded-full transition-transform max-lg:h-11 max-lg:w-11 hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]"
       href={`/clientes?patient=${encodeURIComponent(patientId)}`}
       onClick={onClick}
     >

@@ -1,4 +1,5 @@
-import { Bell, ChevronDown, Clock3, Loader2, LogOut, Menu, Moon, Search, Settings2, Sparkles, Sun } from "lucide-react";
+import Image from "next/image";
+import { Bell, ChevronDown, Loader2, LogOut, Moon, Search, Settings2, Sparkles, Sun } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { THEME_CHANGE_EVENT, isDarkTheme, resolveStoredDark, toggleThemeWithReveal } from "@/lib/theme-transition";
@@ -8,9 +9,9 @@ import { Input } from "@/components/ui/input";
 import type { SectionId } from "@/types/clinic";
 import type { StockAlert } from "@/lib/stock-rules";
 import { StockAlertGroups, useStockAlerts } from "./stock-alerts";
+import { TrialStatus } from "./trial-status";
 
 type TopbarProps = {
-  onMenu: () => void;
   onDashboard: () => void;
   onSettings: () => void;
   onNavigate: (section: SectionId) => void;
@@ -35,21 +36,11 @@ function appointmentMinutesFromTime(time: string) {
   return (hours || 0) * 60 + (minutes || 0);
 }
 
-function formatTrialRemaining(milliseconds: number) {
-  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
-  const days = Math.floor(totalSeconds / 86_400);
-  const hours = Math.floor((totalSeconds % 86_400) / 3_600);
-  const minutes = Math.floor((totalSeconds % 3_600) / 60);
-  const seconds = totalSeconds % 60;
-  return `${days}d ${String(hours).padStart(2, "0")}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
-}
-
-export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStockAlert, onLogout, user }: TopbarProps) {
+export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, onLogout, user }: TopbarProps) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
-  const [trialRemaining, setTrialRemaining] = useState<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const previousAlertIdsRef = useRef<string[] | null>(null);
   const stockAlerts = useStockAlerts(user?.role === "ADMIN");
@@ -94,9 +85,6 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
   const userName = user?.name ?? "Usuário";
   const initials = userName.split(" ").map((part) => part[0]).slice(0, 2).join("").toUpperCase();
   const roleLabel = user?.role === "ADMIN" ? "Administradora" : user?.role === "PROFESSIONAL" ? "Profissional" : user?.role === "STAFF" ? "Atendente" : "";
-  const trialEndsAt = user?.clinic?.trialEndsAt;
-  const trialExpired = trialRemaining !== null && trialRemaining <= 0;
-  const trialUrgent = trialRemaining !== null && trialRemaining > 0 && trialRemaining <= 24 * 60 * 60 * 1000;
 
   useEffect(() => {
     // Após o login (navegação SPA) o script do layout não rodou: aplica o tema salvo/preferido do sistema.
@@ -114,25 +102,6 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
       window.removeEventListener(THEME_CHANGE_EVENT, syncFromDocument);
     };
   }, []);
-
-  useEffect(() => {
-    if (!trialEndsAt) {
-      const clearRemaining = window.setTimeout(() => setTrialRemaining(null), 0);
-      return () => window.clearTimeout(clearRemaining);
-    }
-    const endsAt = Date.parse(trialEndsAt);
-    if (Number.isNaN(endsAt)) {
-      const clearRemaining = window.setTimeout(() => setTrialRemaining(null), 0);
-      return () => window.clearTimeout(clearRemaining);
-    }
-    const updateRemaining = () => setTrialRemaining(endsAt - Date.now());
-    const initialUpdate = window.setTimeout(updateRemaining, 0);
-    const timer = window.setInterval(updateRemaining, 1000);
-    return () => {
-      window.clearTimeout(initialUpdate);
-      window.clearInterval(timer);
-    };
-  }, [trialEndsAt]);
 
   useEffect(() => {
     const primeOnInteraction = () => primeNotificationAudio();
@@ -183,15 +152,10 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-background/95 px-4 py-3 text-foreground backdrop-blur-xl sm:px-7 lg:px-9">
       <div className="flex items-center gap-3">
-        <Button
-          className="lg:hidden"
-          variant="secondary"
-          size="icon"
-          onClick={onMenu}
-          aria-label="Abrir menu"
-        >
-          <Menu className="h-5 w-5" />
-        </Button>
+        <div className="lg:hidden">
+          <Image alt="Harmonize+" className="hp-logo-light h-auto w-[120px]" height={300} src="/brand/logo-horizontal.svg" unoptimized width={1200} />
+          <Image alt="" aria-hidden="true" className="hp-logo-dark h-auto w-[120px]" height={300} src="/brand/logo-horizontal-white.svg" unoptimized width={1200} />
+        </div>
         <div className="min-w-0 flex-1" />
 
         <label className="hidden h-9 min-w-[230px] items-center gap-2 rounded-full border border-border bg-muted px-4 text-xs text-muted-foreground transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-ring focus-within:bg-background focus-within:shadow-[0_0_0_4px_color-mix(in_srgb,var(--ring)_12%,transparent)] xl:flex">
@@ -209,10 +173,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
           Resumo do dia
         </Button> : null}
 
-        {trialRemaining !== null ? <div className={`hidden items-center gap-2 rounded-full border px-3 py-2 text-xs font-bold md:flex ${trialExpired || trialUrgent ? "border-[#f2d59c] bg-[#fff8e7] text-[#a56400]" : "border-[#bfe7ce] bg-[#eaf8ef] text-[#247750]"}`} role="status" aria-live="polite">
-          <Clock3 className="h-3.5 w-3.5" />
-          <span>{trialExpired ? "Teste grátis encerrado" : <>Teste grátis: <strong>{formatTrialRemaining(trialRemaining)}</strong></>}</span>
-        </div> : null}
+        <TrialStatus className="max-md:hidden" trialEndsAt={user?.clinic?.trialEndsAt} />
 
         <DropdownMenu open={notificationsOpen} onOpenChange={setNotificationsOpen}>
           <DropdownMenuTrigger asChild>
@@ -221,7 +182,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
               {notificationCount ? <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#e0647d] px-1 text-xs font-black text-white ring-2 ring-background">{notificationCount}</span> : null}
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="max-h-[70vh] w-80 overflow-y-auto p-4">
+          <DropdownMenuContent align="end" className="max-h-[70vh] w-[min(20rem,calc(100vw-2rem))] overflow-y-auto p-4">
             <p className="text-xs font-semibold">Notificações</p>
             {appointmentAlerts.length ? appointmentAlerts.map((alert) => <p className="mt-3 rounded-md bg-accent p-3 text-xs leading-5 text-accent-foreground" key={alert.id}>{alert.message}</p>) : <><p className="mt-3 rounded-md bg-muted p-3 text-xs leading-5 text-muted-foreground">Nenhum atendimento no horário neste momento.</p><p className="mt-2 rounded-md bg-muted p-3 text-xs leading-5 text-muted-foreground">As notificações dos próximos atendimentos aparecerão aqui.</p></>}
             {stockAlerts.length ? <>
@@ -231,7 +192,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
           </DropdownMenuContent>
         </DropdownMenu>
         {user?.role === "ADMIN" ? <Button
-          className="hidden sm:inline-flex"
+          className="hidden lg:inline-flex"
           variant="secondary"
           size="icon"
           aria-label="Preferências"
@@ -246,7 +207,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="hp-pressable hidden items-center gap-2 border-l border-border pl-4 sm:flex" disabled={isLoggingOut}>
+            <button className="hp-pressable hidden items-center gap-2 border-l border-border pl-4 lg:flex" disabled={isLoggingOut}>
               <span className="grid h-8 w-8 place-items-center rounded-full bg-accent text-xs font-black text-accent-foreground">{initials}</span>
               <span className="text-left leading-tight">
                 <span className="block text-xs font-bold text-foreground">{userName}</span>

@@ -7,6 +7,7 @@ import { BadgeCheck, CalendarDays, Camera, Check, ChevronDown, ChevronLeft, Chev
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ScrollFade } from "@/components/ui/scroll-fade";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import type { Patient } from "@/types/clinic";
 import { EmptyState, LoadingSkeleton } from "./shared";
@@ -114,22 +115,22 @@ export function PatientOverview({ patient, onOpen, onOpenJourney, onNewAppointme
     {loading && !summary ? <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]"><Card className="space-y-4 p-5"><LoadingSkeleton className="h-5 w-48" /><LoadingSkeleton className="h-20 w-full" /><LoadingSkeleton className="h-10 w-full" /></Card><Card className="space-y-4 p-5"><LoadingSkeleton className="h-5 w-40" /><LoadingSkeleton className="h-36 w-full" /></Card></div> : null}
     {error && !summary ? <Card className="p-6"><EmptyState title="Não foi possível carregar o resumo" description="Tente novamente ao abrir outra área do prontuário." /></Card> : null}
     {summary ? <div className="grid gap-4 lg:grid-cols-[minmax(0,1.65fr)_minmax(300px,0.9fr)]">
-      <div className="space-y-4">
+      <div className="min-w-0 space-y-4">
         <Card className="p-5">
           <div className="flex flex-wrap items-start justify-between gap-3"><IconHeading icon={Layers3} title="Tratamento em andamento" />{journey ? <Badge variant={statusTone(journey.status)}>{journey.status}</Badge> : null}</div>
           <h3 className="mt-3 text-lg font-bold text-foreground">{journey?.name ?? "Nenhum tratamento ativo"}</h3>
           {journey ? <>
-            <div className="mt-5 grid grid-cols-6 gap-1" aria-label={`Progresso do tratamento: ${progress}%`}>
+            <ScrollFade className="mt-5 snap-x" aria-label={`Progresso do tratamento: ${progress}%`}><div className="grid grid-cols-6 gap-1 max-sm:min-w-[32rem]">
               {["Avaliação", "Orçamento", "Procedimento", "Pós", "Retorno", "Concluído"].map((step, index) => {
                 const done = steps[index];
                 const current = !done && index < 5 && (index === 0 || steps[index - 1]);
-                return <div className="relative min-w-0 text-center" key={step}>
+                return <div className="relative min-w-0 snap-start text-center" key={step}>
                   {index < 5 ? <span aria-hidden="true" className={`absolute left-1/2 top-3.5 h-0.5 w-full ${done ? "bg-primary" : "bg-border"}`} /> : null}
                   <span className={`relative mx-auto grid h-7 w-7 place-items-center rounded-full border text-xs font-bold ${done ? "border-primary bg-primary text-primary-foreground" : current ? "border-primary bg-background text-primary ring-4 ring-primary/10" : "border-border bg-background text-muted-foreground"}`}>{done ? <Check className="h-3.5 w-3.5" /> : index + 1}</span>
                   <span className={`relative mt-2 block truncate text-xs font-medium ${current || done ? "text-foreground" : "text-muted-foreground"}`}>{step}</span>
                 </div>;
               })}
-            </div>
+            </div></ScrollFade>
             <div className="mt-4 grid gap-3 rounded-md bg-muted/50 p-3 text-xs sm:grid-cols-2"><p className="flex items-center gap-2 text-muted-foreground"><UserRound className="h-4 w-4 shrink-0 text-primary" /><span>Responsável: <strong className="text-foreground">{journey.professional || "Não informado"}</strong></span></p><p className="flex items-center gap-2 text-muted-foreground"><CalendarDays className="h-4 w-4 shrink-0 text-primary" /><span>Iniciado em <strong className="text-foreground">{dateLabel(journey.createdAt)}</strong></span></p></div>
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3"><p className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">{journey.nextAppointment ? <><CalendarDays className="h-4 w-4 shrink-0 text-primary" /><span className="truncate">Próximo retorno: {dateLabel(journey.nextAppointment.date)} · {journey.nextAppointment.time}</span></> : <><Clock3 className="h-4 w-4 shrink-0 text-muted-foreground" /><span>Sem retorno agendado</span></>}{journey.scheduledProcedure ? <span className="ml-2 truncate rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">Procedimento agendado: {dateLabel(journey.scheduledProcedure.date)} às {journey.scheduledProcedure.time}</span> : null}</p><div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => onOpenJourney(journey.id)}>Abrir jornada <ChevronRight className="h-3.5 w-3.5" /></Button>{journey.nextAppointment && journey.latestCompletedSessionId ? <Button size="sm" onClick={() => onOpenFollowUp(journey, journey.latestCompletedSessionId!)}><CalendarDays className="h-4 w-4" />Registrar retorno</Button> : null}</div></div>
           </> : <Button className="mt-4" variant="outline" onClick={() => onOpen("Tratamentos")}><Plus className="h-4 w-4" />Ver tratamentos</Button>}
@@ -152,7 +153,7 @@ export function PatientOverview({ patient, onOpen, onOpenJourney, onNewAppointme
           })}</ol> : <p className="mt-4 text-xs text-muted-foreground">Nenhuma atividade clínica registrada.</p>}
         </Card>
       </div>
-      <div className="space-y-4">
+      <div className="min-w-0 space-y-4">
         <Card className="p-5"><div className="flex items-center justify-between"><IconHeading icon={UserRound} title="Resumo do paciente" /><Button variant="ghost" size="icon" aria-label="Editar dados do paciente" title="Editar dados do paciente" onClick={() => onOpen("Prontuário", "Dados")}><Pencil className="h-4 w-4" /></Button></div><div className="mt-4 space-y-3 text-xs"><InfoRow icon={CalendarDays} label="Último atendimento" value={lastVisit ? dateLabel(lastVisit.date) : patient.lastVisit === "Primeiro contato" ? "Não informado" : patient.lastVisit} /><InfoRow icon={UserRound} label="Idade" value={`${patient.age} anos`} /><InfoRow icon={HeartPulse} label="Status" value={patient.status} /><InfoRow icon={Syringe} label="Tratamento ativo" value={journey?.name ?? "Não informado"} /><InfoRow icon={CalendarDays} label="Próximo retorno" value={journey?.nextAppointment ? dateLabel(journey.nextAppointment.date) : "Não informado"} /></div><div className="mt-4 border-t border-border pt-3"><p className="text-xs text-muted-foreground">Paciente desde {dateLabel(patient.createdAt)}</p></div></Card>
         <Card className="p-5"><IconHeading icon={ShieldAlert} title="Alertas clínicos" /><div className="mt-4 space-y-2">{clinicalAlerts.length ? clinicalAlerts.map((observation) => <button className="flex w-full items-start gap-3 rounded-md border border-border bg-muted/40 p-3 text-left transition hover:bg-muted/70" key={observation.id} type="button" onClick={() => onOpen("Prontuário", "Observações")}><span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary/10 text-primary"><CircleAlert className="h-4 w-4" /></span><span className="min-w-0 flex-1"><span className="block text-xs font-semibold text-foreground">Observação clínica registrada</span><span className="mt-1 line-clamp-2 block text-xs text-muted-foreground">{observation.text}</span></span><ChevronRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" /></button>) : <div className="flex items-center gap-3 rounded-md bg-muted/50 p-3"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"><BadgeCheck className="h-4 w-4" /></span><p className="text-xs text-muted-foreground">Nenhum alerta clínico registrado no resumo.</p></div>}</div></Card>
         <Card className="p-5"><IconHeading icon={FileText} title="Anexos rápidos" /><div className="mt-4 grid grid-cols-3 gap-2"><QuickAccess icon={Camera} label={`${summary.counts.photos} fotos`} onClick={() => onOpen("Prontuário", "Fotos")} /><QuickAccess icon={FileImage} label="Documentos" onClick={() => onOpen("Prontuário", "Documentos clínicos")} /><QuickAccess icon={FileText} label="Termos" onClick={() => onOpen("Prontuário", "Documentos clínicos:TERMOS")} /></div></Card>

@@ -400,7 +400,7 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
           const currentStage = journey.find((stage) => stage.status === "current");
 
           return [
-          <button className="text-left font-bold text-[#303144] hover:text-[#5147dc]" key={patient.name} onClick={() => openPatient(patient)}>{patient.name}</button>,
+          <button className="text-left font-bold text-[#303144] hover:text-[#5147dc] max-lg:-my-3 max-lg:py-3" key={patient.name} onClick={() => openPatient(patient)}>{patient.name}</button>,
           patient.phone,
           <StatusBadge key={patient.status} status={patient.status} />,
           <span className="font-bold text-[#5147dc]" key={currentStage?.id}>{currentStage?.label ?? "Concluída"}</span>,
