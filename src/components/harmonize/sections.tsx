@@ -1424,7 +1424,8 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
 
   async function sendQuote(quote: QuoteRow) {
     if (!quote.id) return;
-    await fetch(`/api/quotes/${quote.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Enviado" }) });
+    const response = await fetch(`/api/quotes/${quote.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Enviado" }) });
+    if (!response.ok) { toast.error(await responseMessage(response, "Não foi possível marcar o orçamento como enviado.")); return; }
     setQuoteRows((current) => current.map((item) => item.id === quote.id ? { ...item, status: "Enviado" } : item));
     invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
     onSaved?.("Orçamento marcado como enviado.");
