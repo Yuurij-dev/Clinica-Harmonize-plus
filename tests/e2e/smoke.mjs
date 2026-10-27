@@ -78,6 +78,15 @@ async function patientsAndPayments() {
   check("resumo financeiro soma o pagamento em centavos", after - before === 15_050, `${before} → ${after}`);
   r = await api("GET", "/api/dashboard/bootstrap");
   check("dashboard traz total de atendimentos e valores em reais", typeof r.data.appointmentCount === "number" && r.data.payments?.some((payment) => payment.value === 150.5), r.status);
+  // Paciente sem jornada recebendo registros ao mesmo tempo: uma só "Jornada 1".
+  const fresh = (await api("POST", "/api/patients", { name: `Sem Jornada ${run}`, phone: "11999990003", age: 28 })).data.patient;
+  const burst = await Promise.all([
+    api("POST", "/api/payments", { patientId: fresh?.id, value: 5, method: "Pix", status: "Pago", installments: "A vista" }),
+    api("POST", "/api/payments", { patientId: fresh?.id, value: 6, method: "Pix", status: "Pago", installments: "A vista" }),
+    api("POST", "/api/quotes", { patientId: fresh?.id, items: "Avulso (1x)", total: 7 }),
+  ]);
+  const journeyCount = await prisma.patientJourney.count({ where: { patientId: fresh?.id ?? "" } });
+  check("registros simultâneos de paciente sem jornada criam uma só jornada", burst.every((res) => res.status === 201) && journeyCount === 1, `${burst.map((res) => res.status).join("/")} jornadas=${journeyCount}`);
   return { patient, homonym };
 }
 
