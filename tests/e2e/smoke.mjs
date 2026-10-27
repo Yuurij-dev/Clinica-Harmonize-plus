@@ -61,6 +61,12 @@ async function patientsAndPayments() {
   const before = (await api("GET", "/api/finance/summary?period=month")).data.totals?.receivedCents ?? 0;
   r = await api("POST", "/api/payments", { patient: `Paciente ${run}`, value: 10, method: "Pix", installments: "A vista" });
   check("pagamento só com nome é recusado", r.status === 400, r.status);
+  for (const [label, extra] of [["valor negativo", { value: -50 }], ["status fora da lista", { status: "pago" }]]) {
+    r = await api("POST", "/api/payments", { patientId: homonym.id, value: 10, method: "Pix", status: "Pago", installments: "A vista", ...extra });
+    check(`pagamento com ${label} é recusado (400)`, r.status === 400, r.status);
+  }
+  r = await api("POST", "/api/payments", { patientId: homonym.id, value: 0, method: "Pix", status: "Pago", installments: "A vista" });
+  check("pagamento de R$ 0 (orçamento de cortesia) é aceito", r.status === 201 && r.data.payment?.value === 0, r.status);
   r = await api("POST", "/api/payments", { patientId: homonym.id, value: 150.5, method: "Pix", status: "Pago", installments: "A vista" });
   check("pagamento guarda centavos (R$ 150,50)", r.status === 201 && r.data.payment?.value === 150.5, JSON.stringify(r.data.payment?.value));
   check("pagamento fica no paciente escolhido, não no homônimo", r.data.payment?.patientId === homonym.id);
