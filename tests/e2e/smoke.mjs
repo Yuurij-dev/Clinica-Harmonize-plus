@@ -79,7 +79,11 @@ async function patientsAndPayments() {
   r = await api("GET", "/api/payments");
   check("lista de pagamentos devolve reais", r.data.payments?.some((payment) => payment.id && payment.value === 150.5));
   const listedPayment = r.data.payments?.find((payment) => payment.value === 150.5);
-  check("lista de pagamentos é enxuta e limitada a 200", listedPayment && !("clinicId" in listedPayment) && !("journeyId" in listedPayment) && listedPayment.patient?.name && r.data.payments.length <= 200, JSON.stringify(Object.keys(listedPayment ?? {})));
+  const paymentsIn = async (query) => api("GET", `/api/payments?${query}`);
+  const today = day(0);
+  const [inToday, inPast, badPeriod] = await Promise.all([paymentsIn(`from=${today}&to=${today}`), paymentsIn("from=2000-01-01&to=2000-01-31"), paymentsIn("from=31/12/2000")]);
+  check("lista de pagamentos filtra o período no servidor (hoje traz, 2000 não, data inválida 400)", inToday.data.payments?.some((payment) => payment.value === 150.5) && inToday.data.hasMore === false && inPast.status === 200 && inPast.data.payments?.length === 0 && badPeriod.status === 400, `${inToday.data.payments?.length}/${inPast.data.payments?.length}/${badPeriod.status}`);
+  check("lista de pagamentos é enxuta e limitada a 200",listedPayment && !("clinicId" in listedPayment) && !("journeyId" in listedPayment) && listedPayment.patient?.name && r.data.payments.length <= 200, JSON.stringify(Object.keys(listedPayment ?? {})));
   const after = (await api("GET", "/api/finance/summary?period=month")).data.totals?.receivedCents ?? 0;
   check("resumo financeiro soma o pagamento em centavos", after - before === 15_050, `${before} → ${after}`);
   r = await api("GET", "/api/dashboard/bootstrap");
@@ -102,7 +106,9 @@ async function quotesAndProcedures(patient) {
   check("orçamento guarda centavos (R$ 99,40)", quote?.total === 99.4, JSON.stringify(quote?.total));
   const list = await api("GET", "/api/quotes");
   const listed = list.data.quotes?.find((item) => item.id === quote?.id);
-  check("lista de orçamentos é enxuta (sem details/notes) e limitada a 200", listed && listed.total === 99.4 && listed.patient?.name && !("details" in listed) && !("notes" in listed) && list.data.quotes.length <= 200, JSON.stringify(Object.keys(listed ?? {})));
+  const [quotesToday, quotesPast, quotesBad] = await Promise.all([api("GET", `/api/quotes?from=${day(0)}&to=${day(0)}`), api("GET", "/api/quotes?to=2000-01-31"), api("GET", "/api/quotes?to=2000-13-01")]);
+  check("lista de orçamentos filtra o período no servidor (hoje traz, até 2000 não, data inválida 400)", quotesToday.data.quotes?.some((item) => item.id === quote?.id) && quotesToday.data.hasMore === false && quotesPast.data.quotes?.length === 0 && quotesBad.status === 400, `${quotesToday.data.quotes?.length}/${quotesPast.data.quotes?.length}/${quotesBad.status}`);
+  check("lista de orçamentos é enxuta (sem details/notes) e limitada a 200",listed && listed.total === 99.4 && listed.patient?.name && !("details" in listed) && !("notes" in listed) && list.data.quotes.length <= 200, JSON.stringify(Object.keys(listed ?? {})));
   const [a, b] = await Promise.all([api("PATCH", `/api/quotes/${quote.id}`, { status: "Aprovado" }), api("PATCH", `/api/quotes/${quote.id}`, { status: "Aprovado" })]);
   r = await api("GET", `/api/patients/${patient.id}/history?tab=Procedimentos`);
   const fromQuote = r.data.patient?.procedureRecords?.filter((procedure) => procedure.quoteId === quote.id) ?? [];
@@ -566,6 +572,14 @@ async function browser(homonym) {
     await page.goto(`${baseUrl}/pagamentos`);
     await page.getByRole("cell", { name: "R$ 150,50" }).first().waitFor();
     check("tela de Pagamentos mostra R$ 150,50", true);
+    const periodRequest = page.waitForRequest((request) => request.url().includes("/api/payments?from=2000-01-01&to=2000-01-31"));
+    await page.getByLabel("Data inicial").fill("2000-01-01");
+    await page.getByLabel("Data final").fill("2000-01-31");
+    await periodRequest;
+    await page.getByRole("cell", { name: "R$ 150,50" }).first().waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "Limpar datas" }).click();
+    await page.getByRole("cell", { name: "R$ 150,50" }).first().waitFor();
+    check("filtro de datas da tela de Pagamentos busca o período no servidor e volta ao limpar", true);
     await page.getByRole("button", { name: "Registrar pagamento" }).first().click();
     // Busca de paciente: o homônimo é o que não tem CPF.
     await page.locator(`input[name="patientSearch"]`).fill(homonym.name);

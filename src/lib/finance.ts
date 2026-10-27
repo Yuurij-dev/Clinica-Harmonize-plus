@@ -1,7 +1,19 @@
 import type { Expense } from "@prisma/client";
-import { clinicToday, dateOnly } from "./clinic-time";
-import { expenseCategories, isFinancePeriod, periodRange, recurringFrequencies, recurringOccurrences, type FinancePeriod } from "./finance-rules";
+import { clinicToday, dateOnly, parseDateOnly } from "./clinic-time";
+import { addDays, expenseCategories, isFinancePeriod, periodRange, recurringFrequencies, recurringOccurrences, type FinancePeriod } from "./finance-rules";
 import { prisma } from "./prisma";
+
+// Listas de orçamentos e pagamentos: no máximo listLimit linhas por consulta; a tela avisa quando há mais (hasMore)
+// e o filtro de datas (?from&to) vai ao servidor, então registros antigos continuam alcançáveis.
+export const listLimit = 200;
+
+// Período opcional ?from=AAAA-MM-DD&to=AAAA-MM-DD em dias da clínica (São Paulo); {} sem filtro, null se a data for inválida.
+export function listPeriodFilter(searchParams: URLSearchParams) {
+  const from = searchParams.get("from");
+  const to = searchParams.get("to");
+  if ((from && !parseDateOnly(from)) || (to && !parseDateOnly(to))) return null;
+  return { ...(from ? { gte: new Date(`${from}T00:00:00-03:00`) } : {}), ...(to ? { lt: new Date(`${addDays(to, 1)}T00:00:00-03:00`) } : {}) };
+}
 
 export function requestedPeriod(request: Request): FinancePeriod {
   const value = new URL(request.url).searchParams.get("period");

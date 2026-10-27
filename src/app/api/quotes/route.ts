@@ -1,15 +1,12 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { serializeQuote, toCents } from "@/lib/finance";
+import { listLimit, listPeriodFilter, serializeQuote, toCents } from "@/lib/finance";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 import type { QuoteLineInput } from "@/lib/quote-rules";
 import { quoteDetails, quotePaymentMethods } from "@/lib/quote-server";
 import { cpfForRole } from "@/lib/patient-cpf-mask";
 import { matchPaymentQuotes } from "@/lib/patient-finance-rules";
-
-// shortcut: a tela de Orçamentos filtra no navegador só os mais recentes; paginar no servidor se clínicas passarem disso.
-const listLimit = 200;
 
 export async function GET(request: Request) {
   const user = await getCurrentUser();
@@ -18,14 +15,16 @@ export async function GET(request: Request) {
   const patientId = searchParams.get("patientId");
   const journeyId = searchParams.get("journeyId");
   if (!patientId) {
-    // Lista da tela de Orçamentos: só as colunas da tabela e os mais recentes (sem details/notes, que crescem com o histórico).
+    // Lista da tela de Orçamentos: só as colunas da tabela, os mais recentes do período (sem details/notes, que crescem com o histórico).
+    const createdAt = listPeriodFilter(searchParams);
+    if (!createdAt) return NextResponse.json({ message: "Período inválido." }, { status: 400 });
     const recent = await prisma.quote.findMany({
-      where: { clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) },
-      orderBy: { createdAt: "desc" },
-      take: listLimit,
+      where: { clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}), createdAt },
+      orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+      take: listLimit + 1,
       select: { id: true, items: true, totalCents: true, status: true, expires: true, createdAt: true, patient: { select: { name: true } } },
     });
-    return NextResponse.json({ quotes: recent.map(serializeQuote) });
+    return NextResponse.json({ quotes: recent.slice(0, listLimit).map(serializeQuote), hasMore: recent.length > listLimit });
   }
   const quotes = await prisma.quote.findMany({
     where: { clinicId: user.clinicId, patientId, ...(journeyId ? { journeyId } : {}) },

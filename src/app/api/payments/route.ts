@@ -2,25 +2,26 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
-import { serializePayment, toCents } from "@/lib/finance";
+import { listLimit, listPeriodFilter, serializePayment, toCents } from "@/lib/finance";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 
 // Os mesmos status do formulário de Pagamentos; o resumo financeiro só conta "Pago" como recebido.
 const paymentStatuses = ["Pago", "Parcial", "Pendente"];
 
-export async function GET() {
+export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const denied = denyUnless(user.role, "payments:access");
   if (denied) return denied;
-  // shortcut: a tela de Pagamentos filtra no navegador só os 200 mais recentes; paginar no servidor se clínicas passarem disso.
+  const date = listPeriodFilter(new URL(request.url).searchParams);
+  if (!date) return NextResponse.json({ message: "Período inválido." }, { status: 400 });
   const payments = await prisma.payment.findMany({
-    where: { clinicId: user.clinicId },
-    orderBy: { date: "desc" },
-    take: 200,
+    where: { clinicId: user.clinicId, date },
+    orderBy: [{ date: "desc" }, { id: "asc" }],
+    take: listLimit + 1,
     select: { id: true, valueCents: true, method: true, date: true, status: true, installments: true, patientId: true, patient: { select: { name: true } } },
   });
-  return NextResponse.json({ payments: payments.map(serializePayment) });
+  return NextResponse.json({ payments: payments.slice(0, listLimit).map(serializePayment), hasMore: payments.length > listLimit });
 }
 
 export async function POST(request: Request) {
