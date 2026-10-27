@@ -7,22 +7,35 @@ import { calculateQuote, type QuoteLineInput } from "@/lib/quote-rules";
 import { cpfForRole } from "@/lib/patient-cpf-mask";
 import { matchPaymentQuotes } from "@/lib/patient-finance-rules";
 
+// shortcut: a tela de Orçamentos filtra no navegador só os mais recentes; paginar no servidor se clínicas passarem disso.
+const listLimit = 200;
+
 export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const searchParams = new URL(request.url).searchParams;
   const patientId = searchParams.get("patientId");
   const journeyId = searchParams.get("journeyId");
+  if (!patientId) {
+    // Lista da tela de Orçamentos: só as colunas da tabela e os mais recentes (sem details/notes, que crescem com o histórico).
+    const recent = await prisma.quote.findMany({
+      where: { clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}) },
+      orderBy: { createdAt: "desc" },
+      take: listLimit,
+      select: { id: true, items: true, totalCents: true, status: true, expires: true, createdAt: true, patient: { select: { name: true } } },
+    });
+    return NextResponse.json({ quotes: recent.map(serializeQuote) });
+  }
   const quotes = await prisma.quote.findMany({
-    where: { clinicId: user.clinicId, ...(patientId ? { patientId } : {}), ...(journeyId ? { journeyId } : {}) },
+    where: { clinicId: user.clinicId, patientId, ...(journeyId ? { journeyId } : {}) },
     orderBy: { createdAt: "desc" },
     include: {
-      patient: { select: { name: true, ...(patientId ? { cpf: true } : {}) } },
-      ...(patientId ? { evaluation: { select: { professional: true } }, clinic: { select: { name: true } } } : {}),
+      patient: { select: { name: true, cpf: true } },
+      evaluation: { select: { professional: true } },
+      clinic: { select: { name: true } },
     },
   });
   const serialized = quotes.map((quote) => serializeQuote({ ...quote, patient: cpfForRole(user.role, quote.patient) }));
-  if (!patientId) return NextResponse.json({ quotes: serialized });
 
   const payments = await prisma.payment.findMany({
     where: { clinicId: user.clinicId, patientId, status: "Pago", ...(journeyId ? { journeyId } : {}) },

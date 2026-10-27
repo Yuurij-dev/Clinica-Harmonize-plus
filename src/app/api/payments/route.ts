@@ -10,7 +10,13 @@ export async function GET() {
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const denied = denyUnless(user.role, "payments:access");
   if (denied) return denied;
-  const payments = await prisma.payment.findMany({ where: { clinicId: user.clinicId }, orderBy: { date: "desc" }, include: { patient: { select: { name: true } } } });
+  // shortcut: a tela de Pagamentos filtra no navegador só os 200 mais recentes; paginar no servidor se clínicas passarem disso.
+  const payments = await prisma.payment.findMany({
+    where: { clinicId: user.clinicId },
+    orderBy: { date: "desc" },
+    take: 200,
+    select: { id: true, valueCents: true, method: true, date: true, status: true, installments: true, patientId: true, patient: { select: { name: true } } },
+  });
   return NextResponse.json({ payments: payments.map(serializePayment) });
 }
 

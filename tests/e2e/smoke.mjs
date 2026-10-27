@@ -66,6 +66,8 @@ async function patientsAndPayments() {
   check("pagamento fica no paciente escolhido, não no homônimo", r.data.payment?.patientId === homonym.id);
   r = await api("GET", "/api/payments");
   check("lista de pagamentos devolve reais", r.data.payments?.some((payment) => payment.id && payment.value === 150.5));
+  const listedPayment = r.data.payments?.find((payment) => payment.value === 150.5);
+  check("lista de pagamentos é enxuta e limitada a 200", listedPayment && !("clinicId" in listedPayment) && !("journeyId" in listedPayment) && listedPayment.patient?.name && r.data.payments.length <= 200, JSON.stringify(Object.keys(listedPayment ?? {})));
   const after = (await api("GET", "/api/finance/summary?period=month")).data.totals?.receivedCents ?? 0;
   check("resumo financeiro soma o pagamento em centavos", after - before === 15_050, `${before} → ${after}`);
   r = await api("GET", "/api/dashboard/bootstrap");
@@ -77,6 +79,9 @@ async function quotesAndProcedures(patient) {
   let r = await api("POST", "/api/quotes", { patientId: patient.id, items: "Botox (1x)", total: 99.4, expires: "30/12/2030" });
   const quote = r.data.quote;
   check("orçamento guarda centavos (R$ 99,40)", quote?.total === 99.4, JSON.stringify(quote?.total));
+  const list = await api("GET", "/api/quotes");
+  const listed = list.data.quotes?.find((item) => item.id === quote?.id);
+  check("lista de orçamentos é enxuta (sem details/notes) e limitada a 200", listed && listed.total === 99.4 && listed.patient?.name && !("details" in listed) && !("notes" in listed) && list.data.quotes.length <= 200, JSON.stringify(Object.keys(listed ?? {})));
   const [a, b] = await Promise.all([api("PATCH", `/api/quotes/${quote.id}`, { status: "Aprovado" }), api("PATCH", `/api/quotes/${quote.id}`, { status: "Aprovado" })]);
   r = await api("GET", `/api/patients/${patient.id}/history?tab=Procedimentos`);
   const fromQuote = r.data.patient?.procedureRecords?.filter((procedure) => procedure.quoteId === quote.id) ?? [];
