@@ -126,6 +126,10 @@ async function appointments(patient) {
   const appointment = r.data.appointment;
   check("agendamento para amanhã é criado", r.status === 201, JSON.stringify(r.data).slice(0, 120));
   check("dia do agendamento gravado ao meio-dia de São Paulo", appointment?.date === `${day(1)}T15:00:00.000Z`, appointment?.date);
+  const far = (await api("POST", "/api/appointments", { patientId: patient.id, procedure: "Retorno", professional: "Teste Distante", time: "09:00", date: day(100) })).data.appointment;
+  const dashboard = (await api("GET", "/api/dashboard/bootstrap")).data;
+  check("dashboard traz o agendamento de amanhã mas não o de daqui a 100 dias", Boolean(far) && dashboard.appointments?.some((item) => item.id === appointment?.id) && !dashboard.appointments?.some((item) => item.id === far?.id), `${far?.id} ${dashboard.appointments?.length}`);
+  if (far) await api("DELETE", `/api/appointments/${far.id}`);
   r = await api("POST", "/api/appointments", { patient: `Paciente ${run}`, procedure: "Retorno", professional: "Teste", time: "10:00", date: day(1) });
   check("agendamento só com nome é recusado", r.status === 400, r.status);
   r = await api("GET", `/api/patients/${patient.id}/history?tab=Agendamentos`);
