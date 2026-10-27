@@ -55,6 +55,9 @@ async function patientsAndPayments() {
   check("cadastro de paciente", r.status === 201, r.status);
   r = await api("POST", "/api/patients", { name: `Outro ${run}`, phone: "11999990001", age: 31, cpf });
   check("CPF repetido devolve 409", r.status === 409, r.status);
+  const sameCpf = randomCpf();
+  const pair = await Promise.all([1, 2].map((n) => api("POST", "/api/patients", { name: `CPF Simultâneo ${n} ${run}`, phone: "11999990004", age: 30, cpf: sameCpf })));
+  check("dois cadastros simultâneos com o mesmo CPF: um 201 e um 409, nunca 500", pair.map((res) => res.status).sort().join() === "201,409", pair.map((res) => res.status).join("/"));
   r = await api("POST", "/api/patients", { name: `Paciente ${run}`, phone: "11999990002", age: 40 });
   const homonym = r.data.patient;
 
