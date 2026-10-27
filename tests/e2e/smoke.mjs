@@ -17,6 +17,8 @@ const prisma = new PrismaClient();
 // Avaliação completa: para CONCLUIR, a API exige queixa, objetivo, os 5 campos da anamnese rápida e observações.
 const fullAssessment = { chiefComplaint: "Queixa", patientGoal: "Obj", allergies: "Não", pregnancyStatus: "Não", anticoagulantUse: "Não", autoimmuneDiseases: "Não", previousProcedures: "Não", clinicalNotes: "Obs" };
 let cookie = "";
+// Nome da conta de teste (autor gravado em anamnese, auditoria etc.); vem do login.
+let accountName = "";
 
 async function api(method, path, body) {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -44,6 +46,7 @@ async function login() {
   const response = await api("POST", "/api/auth/login", { login: email, password });
   if (response.status !== 200) throw new Error(`Login da conta de teste falhou (${response.status}): ${JSON.stringify(response.data)}`);
   if (response.data.user?.clinic?.name !== testClinicName) throw new Error(`A conta de teste não está na "${testClinicName}". Abortado para não mexer em clínica real.`);
+  accountName = response.data.user.name;
 }
 
 async function patientsAndPayments() {
@@ -133,7 +136,8 @@ async function journeys(patient, quote) {
   let r = await api("GET", `/api/patients/${patient.id}/journeys`);
   const first = r.data.journeys?.[0];
   check("jornadas trazem marcações de progresso", first?.hasPaidQuote === true && first?.hasProcedure === true, JSON.stringify(first));
-  r = await api("POST", `/api/patients/${patient.id}/journeys`, { name: "Jornada 2" });
+  const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
+  r = await api("POST", `/api/patients/${patient.id}/journeys`, { name: "Jornada 2", professionalId: professional?.id });
   const second = r.data.journey;
   r = await api("DELETE", `/api/patients/${patient.id}/journeys/${first.id}`);
   check("jornada com orçamento aprovado não pode ser excluída", r.status === 409, r.status);
@@ -573,6 +577,8 @@ async function browser(homonym) {
     const saved = (await api("GET", "/api/payments")).data.payments?.find((payment) => payment.value === 12.34);
     check("pagamento pela tela grava 12.34 no paciente escolhido", saved?.patientId === homonym.id, JSON.stringify(saved && { value: saved.value, patientId: saved.patientId }));
 
+    // Orçamento próprio: o da parte "orcamentos" pode ter sido apagado pela parte "jornadas" (exclusão da jornada).
+    await api("POST", "/api/quotes", { patientId: homonym.id, items: "Botox (1x)", total: 99.4, expires: "30/12/2030" });
     await page.goto(`${baseUrl}/orcamentos`);
     await page.getByRole("cell", { name: "R$ 99,40" }).first().waitFor();
     check("tela de Orçamentos mostra R$ 99,40", true);
@@ -1060,9 +1066,9 @@ async function anamnesis() {
   const done = await Promise.all([1, 2].map(() => api("POST", `${base(A)}/anamnesis/${draft.id}`, { action: "complete", expectedUpdatedAt: revision })));
   check("conclusão dupla simultânea: uma conclui, a outra recebe 409", sortedStatuses(done) === "200,409", done.map((item) => item.status).join(","));
   const v1 = (await api("GET", `${base(A)}/anamnesis/${draft.id}`)).data.version;
-  check("versão concluída: status, autor e data", v1.status === "CONCLUIDA" && v1.completedBy === "E2E Admin" && Boolean(v1.completedAt), `${v1.status} ${v1.completedBy}`);
+  check("versão concluída: status, autor e data", v1.status === "CONCLUIDA" && v1.completedBy === accountName && Boolean(v1.completedAt), `${v1.status} ${v1.completedBy}`);
   check("conclusão descarta a linha de medicamento vazia", v1.content.medications.items.length === 1 && v1.content.medications.items[0].name === "Losartana");
-  check("auditoria registra criação e conclusão", ["draft-created", "completed"].every((action) => v1.audit.some((entry) => entry.action === action && entry.by === "E2E Admin")), JSON.stringify(v1.audit.map((entry) => entry.action)));
+  check("auditoria registra criação e conclusão", ["draft-created", "completed"].every((action) => v1.audit.some((entry) => entry.action === action && entry.by === accountName)), JSON.stringify(v1.audit.map((entry) => entry.action)));
   check("alertas só para Sim, com nível e sem apto/inapto", v1.alerts.some((alert) => alert.id === "allergy-latex" && alert.level === "important") && v1.alerts.some((alert) => alert.id === "health-hypertension") && !v1.alerts.some((alert) => alert.id === "health-diabetes") && !/\binapto|\bapto\b|liberad/i.test(JSON.stringify(v1.alerts)), JSON.stringify(v1.alerts.map((alert) => alert.id)));
 
   // Imutabilidade.
@@ -1084,11 +1090,11 @@ async function anamnesis() {
   o = await overview(A);
   check("visão geral após concluir: revisada, versão atual e alertas", o.state === "REVISADA" && o.exists === true && o.current?.id === draft.id && o.alerts.some((alert) => alert.id === "allergy-latex"), `${o.state}`);
   r = await api("POST", `${base(A)}/anamnesis/${draft.id}`, { action: "confirm-review", note: "Conferido com a paciente" });
-  check("confirmar revisão registra autor e data", r.status === 200 && r.data.version.reviewConfirmedBy === "E2E Admin" && Boolean(r.data.version.reviewConfirmedAt) && r.data.version.status === "CONCLUIDA", `${r.status}`);
+  check("confirmar revisão registra autor e data", r.status === 200 && r.data.version.reviewConfirmedBy === accountName && Boolean(r.data.version.reviewConfirmedAt) && r.data.version.status === "CONCLUIDA", `${r.status}`);
   r = await api("POST", `${base(A)}/anamnesis/${draft.id}`, { action: "request-review", note: "" });
   check("pedir revisão sem motivo é recusado (400)", r.status === 400, r.status);
   r = await api("POST", `${base(A)}/anamnesis/${draft.id}`, { action: "request-review", note: "Paciente engravidou" });
-  check("pedir revisão marca pendente com motivo e autor", r.status === 200 && r.data.version.status === "PENDENTE_REVISAO" && r.data.version.reviewReason === "Paciente engravidou" && r.data.version.reviewRequestedBy === "E2E Admin", `${r.status}`);
+  check("pedir revisão marca pendente com motivo e autor", r.status === 200 && r.data.version.status === "PENDENTE_REVISAO" && r.data.version.reviewReason === "Paciente engravidou" && r.data.version.reviewRequestedBy === accountName, `${r.status}`);
   r = await api("POST", `${base(A)}/anamnesis/${draft.id}`, { action: "request-review", note: "de novo" });
   check("pedir revisão duas vezes devolve 409", r.status === 409, r.status);
   o = await overview(A);
@@ -5038,7 +5044,7 @@ async function mobilePhotosGaps() {
     const entry = (idx.data.photos ?? []).find((z) => z.id === `evaluation:${first.data.photo.id}`);
     check("photos index: foto do app aparece com source \"evaluation\", sem base64", idx.status === 200 && entry?.source === "evaluation" && !JSON.stringify(idx.data).includes("base64"), `${idx.status} ${JSON.stringify(entry)?.slice(0, 160)}`);
     const upAudit = await prisma.clinicalFileAudit.findFirst({ where: { patientId: pRace.id, action: "UPLOAD", fileId: `evaluation:${first.data.photo.id}` } });
-    check("auditoria UPLOAD: clínica, paciente, ator (id/nome), categoria e nome preenchidos", upAudit?.clinicId === clinicId && upAudit.actorId === adminId && upAudit.actorName === "E2E Admin" && upAudit.fileKind === "PHOTO" && upAudit.category === "Outra" && upAudit.fileName.length > 0, JSON.stringify(upAudit));
+    check("auditoria UPLOAD: clínica, paciente, ator (id/nome), categoria e nome preenchidos", upAudit?.clinicId === clinicId && upAudit.actorId === adminId && upAudit.actorName === accountName && upAudit.fileKind === "PHOTO" && upAudit.category === "Outra" && upAudit.fileName.length > 0, JSON.stringify(upAudit));
     const proId = (await prisma.user.findUnique({ where: { email: proEmail }, select: { id: true } })).id;
     const v1 = await fetch(`${baseUrl}${imgUrl(pRace.id, first.data.photo.id, "?size=thumb")}`, { headers: bearer(proToken) });
     await v1.arrayBuffer();
