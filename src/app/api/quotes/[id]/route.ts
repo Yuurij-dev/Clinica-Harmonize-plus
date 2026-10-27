@@ -74,8 +74,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       create: { clinicId: user.clinicId, patientId: quote.patientId, journeyId: quote.journeyId, quoteId: quote.id, name: quote.items, professional: quoteProfessional(user.role, user.name), performedAt: new Date() },
     });
   } else if (quote && body?.status && quote.patientId) {
-    // Pagamento desfeito: remove o procedimento gerado pelo orçamento, desde que ainda não tenha fotos.
-    await prisma.patientProcedure.deleteMany({ where: { clinicId: user.clinicId, quoteId: quote.id, beforePhoto: null, afterPhoto: null, photoSessions: { none: {} } } });
+    // Pagamento desfeito: remove o procedimento gerado pelo orçamento, desde que ainda não tenha fotos nem sessões
+    // (a sessão é apagada em cascata com o procedimento; orçamento de avaliação sempre cai aqui ao mudar de status).
+    await prisma.patientProcedure.deleteMany({ where: { clinicId: user.clinicId, quoteId: quote.id, beforePhoto: null, afterPhoto: null, photoSessions: { none: {} }, sessions: { none: {} } } });
   }
   return NextResponse.json({ quote: quote ? serializeQuote(quote) : null });
 }

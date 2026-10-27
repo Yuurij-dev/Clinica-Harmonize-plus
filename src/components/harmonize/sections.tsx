@@ -1449,7 +1449,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
           <span className="font-black text-[#1438ff]" key={quote.total}>{quote.total}</span>,
           <StatusBadge key={quote.status} status={quote.status} />,
           quote.expires,
-          <Button key="send" size="sm" variant="secondary" disabled={quote.status === "Enviado"} onClick={() => sendQuote(quote)}>{quote.status === "Enviado" ? "Enviado" : "Enviar"}</Button>,
+          <Button key="send" size="sm" variant="secondary" disabled={!["Rascunho", "Pendente"].includes(quote.status)} onClick={() => sendQuote(quote)}>{quote.status === "Enviado" ? "Enviado" : "Enviar"}</Button>,
         ])}
       /> : <EmptyState title="Nenhum orçamento encontrado" description="Ajuste os filtros ou a pesquisa para encontrar orçamentos." />}
       <Modal open={openCreate} onClose={onCreateClose} title="Novo orçamento" description="Crie uma proposta comercial para o cliente.">

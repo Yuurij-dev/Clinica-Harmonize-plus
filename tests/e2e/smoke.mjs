@@ -1717,6 +1717,35 @@ async function sessionPerQuote() {
   check("sessão única: outro orçamento aprovado tem a própria sessão (nome simples, 10 min)", r.status === 201 && r.data.session?.procedureName === nameC && r.data.session.estimatedMinutes === 10 && r.data.session.id !== S.id, `${r.status} ${r.data.session?.procedureName} ${r.data.session?.estimatedMinutes}`);
 }
 
+// Mudar o status de um orçamento com sessão nunca apaga a sessão (o procedimento pai some em cascata com ela).
+async function quoteStatusKeepsSessions() {
+  const name = `E2E Status Orc ${run}`;
+  const created = await api("POST", "/api/procedures", { name, category: "Facial", price: 300, durationMinutes: 15, margin: 30 });
+  const proc = (await api("GET", "/api/quotes/options")).data.procedures?.find((item) => item.name === name);
+  if (!proc) { check("status do orçamento: procedimento de teste criado", false, `${created.status} ${JSON.stringify(created.data).slice(0, 150)}`); return; }
+  const P = (await api("POST", "/api/patients", { name: `E2E Status Orc ${run}`, phone: "11999990060", age: 35, cpf: randomCpf() })).data.patient?.id;
+  const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
+  const J = (await api("POST", `/api/patients/${P}/journeys`, { name: `E2E Status J ${run}`, professionalId: professional?.id })).data.journey;
+  const ev = (await api("PUT", `/api/patients/${P}/evaluation`, { journeyId: J?.id, photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
+  const Q = (await api("POST", "/api/quotes", { patientId: P, journeyId: J?.id, evaluationId: ev?.id, details: [{ procedureId: proc?.id, quantity: 1, discountCents: 0 }], paymentMethod: "Pix", installments: 1, notes: "" })).data.quote?.id;
+  for (const status of ["Enviado", "Aprovado"]) await api("PATCH", `/api/quotes/${Q}`, { status, evaluationId: ev?.id });
+  const S = (await api("POST", `/api/patients/${P}/procedure-sessions`, { journeyId: J?.id, quoteId: Q })).data.session?.id;
+  const sessions = () => prisma.patientProcedureSession.count({ where: { id: S ?? "" } });
+  check("status do orçamento: sessão criada no orçamento aprovado", Boolean(S) && await sessions() === 1, JSON.stringify({ proc: proc?.id, journey: J?.id, ev: ev?.id, Q, S }));
+  let r = await api("PATCH", `/api/quotes/${Q}`, { status: "Pago", evaluationId: ev?.id });
+  check("status do orçamento: pagar depois de criar a sessão mantém a sessão", r.status === 200 && await sessions() === 1, `${r.status} n=${await sessions()}`);
+  r = await api("PATCH", `/api/quotes/${Q}`, { status: "Enviado" });
+  check("status do orçamento: voltar para Enviado mantém a sessão", r.status === 200 && await sessions() === 1, `${r.status} n=${await sessions()}`);
+
+  // Orçamento sem avaliação e sem sessão: desfazer a aprovação continua removendo o procedimento gerado.
+  const plain = (await api("POST", "/api/quotes", { patientId: P, journeyId: J?.id, items: "Avulso (1x)", total: 50 })).data.quote?.id;
+  await api("PATCH", `/api/quotes/${plain}`, { status: "Aprovado" });
+  const generated = () => prisma.patientProcedure.count({ where: { quoteId: plain ?? "" } });
+  const afterApprove = await generated();
+  await api("PATCH", `/api/quotes/${plain}`, { status: "Pendente" });
+  check("status do orçamento: sem sessão, desfazer a aprovação remove o procedimento gerado", afterApprove === 1 && await generated() === 0, `${afterApprove} → ${await generated()}`);
+}
+
 async function scheduledProcedure() {
   const name = `E2E Agendado ${run}`;
   await api("POST", "/api/procedures", { name, category: "Facial", price: 300, durationMinutes: 30, margin: 30 });
@@ -5114,6 +5143,7 @@ const suites = {
   catalogo: { needs: [], run: async () => { await procedureCatalog(); await procedureCatalogGaps(); } },
   consentimento: { needs: [], run: () => consentGate() },
   sessao_unica: { needs: [], run: () => sessionPerQuote() },
+  status_orcamento: { needs: [], run: () => quoteStatusKeepsSessions() },
   materiais_sessao: { needs: [], run: async () => { await sessionMaterials(); await sessionMaterialsGaps(); } },
   agendar_procedimento: { needs: [], run: () => scheduledProcedure() },
   inicio_move_agenda: { needs: [], run: () => startMovesAppointment() },
