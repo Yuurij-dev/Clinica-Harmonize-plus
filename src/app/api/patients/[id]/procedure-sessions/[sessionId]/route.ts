@@ -4,7 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { denyUnless } from "@/lib/api-guards";
 import { appointmentInstant, clinicNow, dateOnly } from "@/lib/clinic-time";
 import { registerAttendanceOutputs, AttendanceMaterialsError } from "@/lib/attendance-materials";
-import { appointmentStartNow, approvedProcedureNames, combinedProcedureName, isMovableStartAppointment, PROCEDURE_APPOINTMENT_PREFIX, procedureAppointmentName, scheduledAppointmentOrder } from "@/lib/procedure-session-rules";
+import { appointmentStartNow, approvedProcedureNames, combinedProcedureName, isMovableStartAppointment, PROCEDURE_APPOINTMENT_PREFIX, procedureAppointmentName, scheduledAppointmentOrder, parseJson, validateSessionPayload } from "@/lib/procedure-session-rules";
 import { consentGate, consentRequiredCode } from "@/lib/consent-rules";
 import { consentCounts } from "@/lib/clinical-files-server";
 import { prisma } from "@/lib/prisma";
@@ -12,7 +12,6 @@ import { lockLots, lotBalances } from "@/lib/stock";
 import { validateQuantity } from "@/lib/stock-rules";
 import { parseKnownPhotoIds, unknownStoredPhotos } from "@/lib/session-after-photo-rules";
 import { sessionUnchanged } from "@/lib/evaluation-photo-sync-rules";
-import { validateSessionPayload } from "../route";
 
 class ConsentRequiredError extends Error {}
 type Material = { productId: string; quantity: number; allocations?: Array<{ lotId: string; quantity: number }> };
@@ -219,5 +218,3 @@ async function createMaterialSnapshot(clinicId: string, items: Material[], produ
     }) };
   }));
 }
-
-function parseJson<T>(value: string, fallback: T): T { try { return JSON.parse(value) as T; } catch { return fallback; } }
