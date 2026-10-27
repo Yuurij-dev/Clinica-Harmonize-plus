@@ -1,15 +1,8 @@
 import { NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
+import { adminUser } from "@/lib/api-guards";
 import { prisma } from "@/lib/prisma";
 import { materialDetail } from "@/lib/stock";
 import { isStockKind, isStockUnit } from "@/lib/stock-rules";
-
-async function adminUser(requireActiveTrial = false) {
-  const user = await getCurrentUser({ requireActiveTrial });
-  if (!user) return { error: NextResponse.json({ message: "Não autenticado." }, { status: 401 }) };
-  if (user.role !== "ADMIN") return { error: NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 }) };
-  return { user };
-}
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { user, error } = await adminUser();
