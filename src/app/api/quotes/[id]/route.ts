@@ -49,6 +49,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (!quoteChangeAllowed(user.role, { current: existing.status, next: body?.status, editsContent })) {
     return NextResponse.json({ message: "Orçamento já fechado: só administrador ou profissional pode alterar." }, { status: 403 });
   }
+  // Com sessão de procedimento registrada, o orçamento fica fechado: só alterna entre Aprovado e Pago.
+  // O "desfazer pagamento" acontece antes de existir sessão, então não é afetado.
+  const reopening = body?.status !== undefined && ["Aprovado", "Pago"].includes(existing.status) && !["Aprovado", "Pago"].includes(body.status);
+  if (reopening && await prisma.patientProcedureSession.count({ where: { clinicId: user.clinicId, quoteId: id } })) {
+    return NextResponse.json({ message: "Este orçamento já tem sessão de procedimento registrada e não pode voltar a um status anterior à aprovação." }, { status: 409 });
+  }
   const updateData = {
     ...(nextItems ? { items: nextItems } : {}),
     ...(nextTotalCents !== undefined ? { totalCents: nextTotalCents } : {}),

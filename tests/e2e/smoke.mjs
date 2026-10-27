@@ -1763,8 +1763,13 @@ async function quoteStatusKeepsSessions() {
   check("status do orçamento: sessão criada no orçamento aprovado", Boolean(S) && await sessions() === 1, JSON.stringify({ proc: proc?.id, journey: J?.id, ev: ev?.id, Q, S }));
   let r = await api("PATCH", `/api/quotes/${Q}`, { status: "Pago", evaluationId: ev?.id });
   check("status do orçamento: pagar depois de criar a sessão mantém a sessão", r.status === 200 && await sessions() === 1, `${r.status} n=${await sessions()}`);
-  r = await api("PATCH", `/api/quotes/${Q}`, { status: "Enviado" });
-  check("status do orçamento: voltar para Enviado mantém a sessão", r.status === 200 && await sessions() === 1, `${r.status} n=${await sessions()}`);
+  for (const status of ["Enviado", "Pendente", "Cancelado"]) {
+    r = await api("PATCH", `/api/quotes/${Q}`, { status });
+    const stored = (await prisma.quote.findUnique({ where: { id: Q ?? "" }, select: { status: true } }))?.status;
+    check(`status do orçamento: com sessão, voltar para ${status} é recusado (409) e nada muda`, r.status === 409 && stored === "Pago" && await sessions() === 1, `${r.status} ${stored} n=${await sessions()}`);
+  }
+  r = await api("PATCH", `/api/quotes/${Q}`, { status: "Aprovado" });
+  check("status do orçamento: com sessão, alternar entre Pago e Aprovado continua permitido", r.status === 200 && await sessions() === 1, `${r.status} n=${await sessions()}`);
 
   // Orçamento sem avaliação e sem sessão: desfazer a aprovação continua removendo o procedimento gerado.
   const plain = (await api("POST", "/api/quotes", { patientId: P, journeyId: J?.id, items: "Avulso (1x)", total: 50 })).data.quote?.id;
