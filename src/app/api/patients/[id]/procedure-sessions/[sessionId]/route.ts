@@ -8,7 +8,7 @@ import { appointmentStartNow, approvedProcedureNames, combinedProcedureName, isM
 import { consentGate, consentRequiredCode } from "@/lib/consent-rules";
 import { consentCounts } from "@/lib/clinical-files-server";
 import { prisma } from "@/lib/prisma";
-import { lockLots, lotBalances } from "@/lib/stock";
+import { lotBalances } from "@/lib/stock";
 import { validateQuantity } from "@/lib/stock-rules";
 import { parseKnownPhotoIds, unknownStoredPhotos } from "@/lib/session-after-photo-rules";
 import { sessionUnchanged } from "@/lib/evaluation-photo-sync-rules";

@@ -106,7 +106,6 @@ export function checkUpload(bytes: Uint8Array, declaredMime: string | undefined,
 export function sanitizeFileName(value: unknown, fallback = "arquivo") {
   const text = typeof value === "string" ? value : "";
   const base = text.split(/[\\/]/).pop() ?? "";
-  // eslint-disable-next-line no-control-regex
   const cleaned = base.replace(/[\u0000-\u001f\u007f<>:"|?*]/g, "").replace(/\s+/g, " ").replace(/^\.+/, "").trim();
   return (cleaned || fallback).slice(0, maxNameLength);
 }

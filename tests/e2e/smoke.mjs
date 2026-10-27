@@ -806,7 +806,8 @@ async function evaluationRequiredGaps() {
 
   // Cada campo ausente ao concluir uma avaliação nova: 400 e nada gravado.
   for (const field of fields) {
-    const { [field]: _omit, ...rest } = fullAssessment;
+    const rest = { ...fullAssessment };
+    delete rest[field];
     const r = await api("PUT", url, { photos: [photo], assessment: rest, status: "Concluída" });
     check(`avaliação (lacunas): concluir sem enviar ${field} devolve 400`, r.status === 400, `${r.status} ${r.data.message}`);
   }
@@ -838,7 +839,8 @@ async function evaluationRequiredGaps() {
   check("avaliação (lacunas): campos extras no assessment são ignorados", r.status === 200 && r.data.evaluation.status === "Rascunho", `${r.status} ${r.data.evaluation?.status}`);
 
   // Mesclagem com o já gravado: rascunho com 7 campos + o último enviado ao concluir.
-  const { clinicalNotes: _notes, ...seven } = fullAssessment;
+  const seven = { ...fullAssessment };
+  delete seven.clinicalNotes;
   const d = await api("PUT", url, { photos: [], assessment: seven });
   const dId = d.data.evaluation.id;
   r = await api("PUT", url, { evaluationId: dId, photos: [], assessment: {}, status: "Concluída" });
@@ -2858,7 +2860,7 @@ async function paginationSuite() {
   // Limites e valores inválidos viram valores seguros (200, nunca 400/500).
   const safe = [["page=0", 1, 20], ["page=-3", 1, 20], ["page=abc", 1, 20], ["page=2.5", 1, 20], ["pageSize=0", 1, 20], ["pageSize=-5", 1, 20], ["pageSize=abc", 1, 20], ["pageSize=1000", 1, 100], ["pageSize=101", 1, 100], ["pageSize=100", 1, 100], ["page=99999999999999999999", 1, 20], ["sort=zzz", 1, 20], ["q=%27%3B%20DROP%20TABLE%20%22Patient%22%3B--", 1, 20]];
   const outcomes = [];
-  for (const [query, page, pageSize] of safe) { const x = await list(query); outcomes.push([query, x.status, x.data.pagination?.page, x.data.pagination?.pageSize]); }
+  for (const [query] of safe) { const x = await list(query); outcomes.push([query, x.status, x.data.pagination?.page, x.data.pagination?.pageSize]); }
   check("parâmetros inválidos ou extremos: 200 com valores seguros (pageSize máx. 100)", outcomes.every(([, status, page, pageSize], index) => status === 200 && page === safe[index][1] && pageSize === safe[index][2]), JSON.stringify(outcomes.filter(([, status, page, pageSize], index) => !(status === 200 && page === safe[index][1] && pageSize === safe[index][2]))));
   check("a clínica ainda tem todos os pacientes depois da busca com SQL malicioso", (await list("pageSize=100")).data.pagination.total === N, "");
   r = await list("page=999&pageSize=10");
@@ -3086,7 +3088,7 @@ async function paginationGaps() {
       const one = (await api("POST", "/api/patients", { name: `${tag} Unico`, phone: "11988880001", age: 30 })).data.patient;
       r = await list();
       check("1 paciente: total 1, pageCount 1, resumo 1", r.data.patients.length === 1 && r.data.pagination.total === 1 && r.data.pagination.pageCount === 1 && r.data.summary.total === 1 && r.data.summary.byStatus.Ativa === 1, JSON.stringify(r.data.pagination));
-      const two = (await api("POST", "/api/patients", { name: `${tag} Segundo`, phone: "11988880002", age: 31 })).data.patient;
+      await api("POST", "/api/patients", { name: `${tag} Segundo`, phone: "11988880002", age: 31 });
       r = await list("pageSize=1&page=2");
       check("2 pacientes com pageSize=1: pageCount 2 e a página 2 traz o último por nome (Unico depois de Segundo)", r.data.pagination.pageCount === 2 && r.data.patients.length === 1 && r.data.patients[0].id === one.id && r.data.summary.total === 2, JSON.stringify(r.data.pagination));
       await prisma.patient.deleteMany({ where: { clinicId } });

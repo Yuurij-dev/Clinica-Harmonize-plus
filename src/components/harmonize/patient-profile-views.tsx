@@ -583,15 +583,14 @@ function ProgressSteps({ journey }: { journey: PatientJourneySummary }) {
 }
 
 function ElapsedProcedureTimer({ startedAt }: { startedAt: string }) {
-  const [now, setNow] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    setNow(Date.now());
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(interval);
   }, []);
 
-  const elapsedSeconds = Math.max(0, Math.floor(((now ?? Date.parse(startedAt)) - Date.parse(startedAt)) / 1000));
+  const elapsedSeconds = Math.max(0, Math.floor((now - Date.parse(startedAt)) / 1000));
   const hours = Math.floor(elapsedSeconds / 3600);
   const minutes = Math.floor((elapsedSeconds % 3600) / 60);
   const seconds = elapsedSeconds % 60;
