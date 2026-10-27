@@ -23,7 +23,6 @@ import {
   PencilLine,
   Plus,
   Search,
-  Sparkles,
   ShieldCheck,
   Trash2,
   PlugZap,
@@ -65,7 +64,7 @@ import { cleanSearchQuery, defaultPatientPageSize, patientListKey, patientPageSi
 import { capitalizeFirst, formatDayBR, agendaDayInvalidationKey, agendaPeriodKey, agendaPeriodRange, dayInRange, shiftAgendaDay, type AgendaRange } from "@/lib/agenda-period-rules";
 import { PaginationBar } from "./clinical-pagination";
 import { usePatientLookup, type LookupPatient } from "./use-patient-lookup";
-import { runningAppointmentStatuses } from "@/lib/permissions";
+import { createDefaultRolePermissionMatrix, permissionGroups, roleLabels, roles, runningAppointmentStatuses, type Role, type RolePermissionMatrix } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import { describeTechnicalSheet } from "@/lib/stock-rules";
 import type { TechnicalSheetItem } from "./technical-sheet-editor";
@@ -1213,6 +1212,7 @@ function getCalendarAppointmentLayouts(appointments: AppointmentRow[]) {
 
 function CalendarAppointmentCard({ appointment, top, height, column, columns, open, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, appointmentToleranceMinutes, updating }: { appointment: AppointmentRow; top: number; height: number; column: number; columns: number; open: boolean; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; appointmentToleranceMinutes: number; updating: boolean }) {
   const canRun = useCan("appointment:run");
+  const canDelete = useCan("appointments:delete");
   const tone = appointmentTone(appointment);
   const past = appointmentHasPassed(appointment);
   const isCompleted = appointment.status === "Atendido";
@@ -1225,7 +1225,7 @@ function CalendarAppointmentCard({ appointment, top, height, column, columns, op
   const primaryLabel = appointment.status === "Em atendimento" ? "Finalizar" : isCompleted ? "Concluído" : isMissed ? "Faltou" : "Atender";
   return <div className={cn("group absolute z-10 cursor-pointer overflow-hidden rounded-[7px] border-l-[3px] p-2 text-[10px] shadow-[0_4px_12px_rgba(38,39,58,0.06)]", tone.card, past && "brightness-[0.84] saturate-[0.78]")} style={{ top, height, left: `calc(${column} * 100% / ${columns} + 4px)`, width: `calc(100% / ${columns} - 8px)` }} aria-label={`${appointment.procedure} - status: ${appointment.status}`} onClick={() => onSelect(appointment)}>
     <span className="pointer-events-none absolute -top-7 left-2 z-40 hidden whitespace-nowrap rounded-[5px] bg-[#303144] px-2 py-1 text-[10px] font-bold text-white shadow-lg group-hover:block">Status: {appointment.status}</span>
-    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><div className="mt-1 flex min-w-0 items-center gap-1"><ProcedureImage name={appointment.procedure} decorative className="h-5 w-5 rounded-sm" /><p className="truncate text-[11px] font-black">{appointment.procedure}</p></div><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0">{hasMenu ? <button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button> : null}{hasMenu && open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}>{canRun ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button> : null}{showStatusGroup ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button></> : null}{showWhatsapp ? <button type="button" className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] disabled:opacity-50" disabled title="Confirmação por WhatsApp em breve">Confirmar por WhatsApp</button> : null}</div> : null}</div></div>
+    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><div className="mt-1 flex min-w-0 items-center gap-1"><ProcedureImage name={appointment.procedure} decorative className="h-5 w-5 rounded-sm" /><p className="truncate text-[11px] font-black">{appointment.procedure}</p></div><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0">{hasMenu ? <button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button> : null}{hasMenu && open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}>{canRun ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button> : null}{showStatusGroup ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button>{canDelete ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button> : null}</> : null}{showWhatsapp ? <button type="button" className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] disabled:opacity-50" disabled title="Confirmação por WhatsApp em breve">Confirmar por WhatsApp</button> : null}</div> : null}</div></div>
     <span className={cn("mt-1 inline-flex rounded-full px-2 py-0.5 text-[9px] font-bold", tone.pill)}>{appointment.category || "Atendimento"}</span>
   </div>;
 }
@@ -1852,17 +1852,34 @@ function Time24Input({ name, label, value, onChange }: { name: string; label: st
   );
 }
 
-export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, onClinicNameChange, mode = "settings" }: { isAdmin?: boolean; isOwner?: boolean; clinicName?: string; onClinicNameChange?: (name: string) => void; mode?: "settings" | "calculator" }) {
+export function SettingsSection({ isOwner = false, clinicName, onClinicNameChange, onRolePermissionsChange }: { isOwner?: boolean; clinicName?: string; onClinicNameChange?: (name: string) => void; onRolePermissionsChange?: (matrix: RolePermissionMatrix) => void }) {
+  const canManageRolePermissions = useCan("settings:permissions");
+  const canManageTeam = useCan("settings:team");
+  const canManageSettings = useCan("settings:manage");
+  const canManageOwnLaborCost = useCan("settings:own-cost");
   const [editing, setEditing] = useState<string | null>(null);
   const [settingsSearch, setSettingsSearch] = useState("");
-  const [activeSettingsSection, setActiveSettingsSection] = useState("Dados da clínica");
-  const cachedTeam = readClientCache<{ members?: TeamMember[] }>("/api/team");
+  const [activeSettingsSection, setActiveSettingsSection] = useState(canManageSettings ? "Dados da clínica" : canManageOwnLaborCost ? "Custos e orçamento" : canManageTeam ? "Profissionais e equipe" : "Segurança e permissões");
+  const cachedTeam = canManageTeam ? readClientCache<{ members?: TeamMember[] }>("/api/team") : undefined;
   const [members, setMembers] = useState<TeamMember[]>(cachedTeam?.members ?? []);
   const [teamLoading, setTeamLoading] = useState(!cachedTeam);
   const [teamSaving, setTeamSaving] = useState(false);
+  const [newMemberCpf, setNewMemberCpf] = useState("");
+  const [newMemberPostalCode, setNewMemberPostalCode] = useState("");
+  const [newMemberAddress, setNewMemberAddress] = useState("");
+  const [newMemberCountry, setNewMemberCountry] = useState("");
+  const [newMemberState, setNewMemberState] = useState("");
+  const [newMemberCity, setNewMemberCity] = useState("");
+  const [postalCodeLoading, setPostalCodeLoading] = useState(false);
+  const [postalCodeError, setPostalCodeError] = useState("");
   const [laborCostSavingId, setLaborCostSavingId] = useState<string | null>(null);
   const [editingLaborCostId, setEditingLaborCostId] = useState<string | null>(null);
   const [laborCostFeedback, setLaborCostFeedback] = useState<{ message: string; success: boolean } | null>(null);
+  const ownLaborCostCacheKey = "/api/team/me/labor-cost";
+  const cachedOwnLaborCost = canManageOwnLaborCost ? readClientCache<{ laborCostCents: number | null }>(ownLaborCostCacheKey) : undefined;
+  const [ownLaborCostInput, setOwnLaborCostInput] = useState(currency.format((cachedOwnLaborCost?.laborCostCents ?? 0) / 100));
+  const [ownLaborCostLoading, setOwnLaborCostLoading] = useState(!cachedOwnLaborCost);
+  const [ownLaborCostSaving, setOwnLaborCostSaving] = useState(false);
   const [teamError, setTeamError] = useState("");
   const [memberToChangeRole, setMemberToChangeRole] = useState<TeamMember | null>(null);
   const [roleToChange, setRoleToChange] = useState("PROFESSIONAL");
@@ -1871,7 +1888,14 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
   const [memberToRemove, setMemberToRemove] = useState<TeamMember | null>(null);
   const [memberRemoving, setMemberRemoving] = useState(false);
   const [memberRemoveError, setMemberRemoveError] = useState("");
-  const cachedCostSettings = readClientCache<{ settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoCompleteAppointmentsEnabled: boolean; autoAdvancePatientJourneyEnabled: boolean; allowAppointmentsOutsideHours: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings");
+  const cachedRolePermissions = readClientCache<{ matrix: RolePermissionMatrix }>("/api/clinic/role-permissions");
+  const [rolePermissionMatrix, setRolePermissionMatrix] = useState<RolePermissionMatrix>(cachedRolePermissions?.matrix ?? createDefaultRolePermissionMatrix());
+  const [selectedPermissionRole, setSelectedPermissionRole] = useState<Role | null>(null);
+  const [rolePermissionsLoading, setRolePermissionsLoading] = useState(!cachedRolePermissions);
+  const [rolePermissionsSaving, setRolePermissionsSaving] = useState(false);
+  const [rolePermissionsDirty, setRolePermissionsDirty] = useState(false);
+  const [rolePermissionsError, setRolePermissionsError] = useState("");
+  const cachedCostSettings = canManageSettings ? readClientCache<{ settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoCompleteAppointmentsEnabled: boolean; autoAdvancePatientJourneyEnabled: boolean; allowAppointmentsOutsideHours: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings") : undefined;
   const [costSettings, setCostSettings] = useState(() => ({
     laborCost: cachedCostSettings?.settings?.laborCost ?? 0,
     facilityCost: cachedCostSettings?.settings?.facilityCost ?? 0,
@@ -1890,9 +1914,6 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
   const [appointmentToleranceInput, setAppointmentToleranceInput] = useState(String(costSettings.appointmentToleranceMinutes ?? 15));
   const [openingTimeInput, setOpeningTimeInput] = useState(costSettings.openingTime ?? "08:00");
   const [closingTimeInput, setClosingTimeInput] = useState(costSettings.closingTime ?? "19:00");
-  const [professionalOpeningTimeInput, setProfessionalOpeningTimeInput] = useState(costSettings.professionalOpeningTime);
-  const [professionalClosingTimeInput, setProfessionalClosingTimeInput] = useState(costSettings.professionalClosingTime);
-  const [professionalHourlyCostInput, setProfessionalHourlyCostInput] = useState(String(costSettings.professionalHourlyCost));
   const [clinicNameInput, setClinicNameInput] = useState(cachedCostSettings?.settings?.name ?? clinicName ?? "Harmonize+");
   const [clinicCnpjInput, setClinicCnpjInput] = useState(cachedCostSettings?.settings?.cnpj ?? "");
   const [clinicPhoneInput, setClinicPhoneInput] = useState(cachedCostSettings?.settings?.phone ?? "");
@@ -1951,15 +1972,55 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
   }
 
   useEffect(() => {
+    if (!canManageTeam) return;
     let active = true;
     getCachedJson<{ members?: TeamMember[] }>("/api/team")
       .then((data) => { if (active) setMembers(data.members ?? []); })
       .catch(() => { if (active) setTeamError("Não foi possível carregar os colaboradores."); })
       .finally(() => { if (active) setTeamLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [canManageTeam]);
 
   useEffect(() => {
+    if (!canManageRolePermissions) return;
+    let active = true;
+    getCachedJson<{ matrix: RolePermissionMatrix }>("/api/clinic/role-permissions")
+      .then((data) => { if (active) setRolePermissionMatrix(data.matrix); })
+      .catch(() => { if (active) setRolePermissionsError("Não foi possível carregar as permissões dos cargos."); })
+      .finally(() => { if (active) setRolePermissionsLoading(false); });
+    return () => { active = false; };
+  }, [canManageRolePermissions]);
+
+  useEffect(() => {
+    if (!canManageOwnLaborCost) return;
+    let active = true;
+    getCachedJson<{ laborCostCents: number | null }>(ownLaborCostCacheKey)
+      .then((data) => { if (active) setOwnLaborCostInput(currency.format((data.laborCostCents ?? 0) / 100)); })
+      .catch(() => { if (active) setLaborCostFeedback({ message: "Não foi possível carregar seu valor de mão de obra.", success: false }); })
+      .finally(() => { if (active) setOwnLaborCostLoading(false); });
+    return () => { active = false; };
+  }, [canManageOwnLaborCost, ownLaborCostCacheKey]);
+
+  async function saveRolePermissions() {
+    setRolePermissionsSaving(true);
+    setRolePermissionsError("");
+    try {
+      const response = await fetch("/api/clinic/role-permissions", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ matrix: rolePermissionMatrix }) });
+      const data = await response.json().catch(() => null) as { matrix?: RolePermissionMatrix; message?: string } | null;
+      if (!response.ok || !data?.matrix) throw new Error(data?.message ?? "Não foi possível salvar as permissões.");
+      setRolePermissionMatrix(data.matrix);
+      setRolePermissionsDirty(false);
+      invalidateClientCache("/api/clinic/role-permissions");
+      onRolePermissionsChange?.(data.matrix);
+    } catch (error) {
+      setRolePermissionsError(error instanceof Error ? error.message : "Não foi possível salvar as permissões.");
+    } finally {
+      setRolePermissionsSaving(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!canManageSettings) return;
     let active = true;
     getCachedJson<{ settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoCompleteAppointmentsEnabled: boolean; autoAdvancePatientJourneyEnabled: boolean; allowAppointmentsOutsideHours: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings")
       .then((data) => {
@@ -1989,9 +2050,6 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
         setAppointmentToleranceInput(String(settings.appointmentToleranceMinutes));
         setOpeningTimeInput(settings.openingTime ?? "08:00");
         setClosingTimeInput(settings.closingTime ?? "19:00");
-        setProfessionalOpeningTimeInput(settings.professionalOpeningTime ?? "09:00");
-        setProfessionalClosingTimeInput(settings.professionalClosingTime ?? "18:00");
-        setProfessionalHourlyCostInput(String(settings.professionalHourlyCost ?? 0));
         setClinicCnpjInput(settings.cnpj ?? "");
         setClinicPhoneInput(settings.phone ?? "");
         setClinicEmailInput(settings.email ?? "");
@@ -2010,7 +2068,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       .catch(() => { if (active) setCostSettingsError("Não foi possível carregar as configurações da clínica."); })
       .finally(() => { if (active) setCostSettingsLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [canManageSettings]);
 
   useEffect(() => {
     if (!clinicProfileReady || clinicProfile === savedClinicProfile.current) return;
@@ -2033,9 +2091,9 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       appointmentNotificationSoundEnabled,
       stockNotificationsEnabled,
       requireCancellationReason,
-      professionalHourlyCost: form.has("professionalHourlyCost") ? Number(form.get("professionalHourlyCost")) : costSettings.professionalHourlyCost,
-      professionalOpeningTime: form.has("professionalOpeningTime") ? String(form.get("professionalOpeningTime")) : professionalOpeningTimeInput,
-      professionalClosingTime: form.has("professionalClosingTime") ? String(form.get("professionalClosingTime")) : professionalClosingTimeInput,
+      professionalHourlyCost: costSettings.professionalHourlyCost,
+      professionalOpeningTime: costSettings.professionalOpeningTime,
+      professionalClosingTime: costSettings.professionalClosingTime,
       ...(form.has("name") ? { name: String(form.get("name")).trim() } : {}),
       ...(form.has("cnpj") ? { cnpj: String(form.get("cnpj")).trim() } : {}),
       ...(form.has("phone") ? { phone: String(form.get("phone")).trim() } : {}),
@@ -2087,7 +2145,6 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
     setAppointmentNotificationSoundEnabled(data.settings.appointmentNotificationSoundEnabled ?? appointmentNotificationSoundEnabled);
     setStockNotificationsEnabled(data.settings.stockNotificationsEnabled ?? stockNotificationsEnabled);
     setRequireCancellationReason(data.settings.requireCancellationReason ?? requireCancellationReason);
-    setProfessionalHourlyCostInput(String(data.settings.professionalHourlyCost ?? costSettings.professionalHourlyCost));
     if (data.settings.name) {
       setClinicNameInput(data.settings.name);
       onClinicNameChange?.(data.settings.name);
@@ -2096,9 +2153,41 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
     window.dispatchEvent(new Event("harmonize-notification-settings-updated"));
   }
 
-  const professionalShiftMinutes = Math.max(0, (Number(professionalClosingTimeInput.slice(0, 2)) * 60 + Number(professionalClosingTimeInput.slice(3, 5))) - (Number(professionalOpeningTimeInput.slice(0, 2)) * 60 + Number(professionalOpeningTimeInput.slice(3, 5))));
-  const professionalShiftCost = (professionalShiftMinutes / 60) * (Number(professionalHourlyCostInput) || 0);
   const professionalLaborCostMembers = members.filter((member) => member.role === "PROFESSIONAL");
+  function resetNewCollaboratorContact() {
+    setNewMemberCpf("");
+    setNewMemberPostalCode("");
+    setNewMemberAddress("");
+    setNewMemberCountry("");
+    setNewMemberState("");
+    setNewMemberCity("");
+    setPostalCodeError("");
+  }
+  async function lookupCollaboratorPostalCode() {
+    const digits = newMemberPostalCode.replace(/\D/g, "");
+    if (digits.length !== 8) {
+      setPostalCodeError("Informe um CEP com 8 dígitos.");
+      return;
+    }
+    setPostalCodeLoading(true);
+    setPostalCodeError("");
+    try {
+      const response = await fetch(`https://viacep.com.br/ws/${digits}/json/`);
+      const data = await response.json() as { erro?: boolean; logradouro?: string; complemento?: string; bairro?: string; localidade?: string; uf?: string; estado?: string };
+      if (!response.ok || data.erro) {
+        setPostalCodeError("CEP não encontrado. Confira o número e tente novamente.");
+        return;
+      }
+      setNewMemberAddress([data.logradouro, data.complemento, data.bairro].filter(Boolean).join(", "));
+      setNewMemberCountry("Brasil");
+      setNewMemberState(data.estado || data.uf || "");
+      setNewMemberCity(data.localidade || "");
+    } catch {
+      setPostalCodeError("Não foi possível consultar o CEP. Tente novamente.");
+    } finally {
+      setPostalCodeLoading(false);
+    }
+  }
   async function saveCollaborator(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setTeamSaving(true);
@@ -2108,7 +2197,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       const response = await fetch("/api/team", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: form.get("name"), email: form.get("email"), password: form.get("password"), role: form.get("role") }),
+        body: JSON.stringify({ name: form.get("name"), email: form.get("email"), password: form.get("password"), role: form.get("role"), cpf: newMemberCpf, postalCode: newMemberPostalCode, address: newMemberAddress, country: newMemberCountry, state: newMemberState, city: newMemberCity }),
       });
       const responseText = await response.text();
       let data: { member?: TeamMember; message?: string } | null = null;
@@ -2128,6 +2217,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       invalidateClientCache("/api/team", "/api/team/professionals");
       setEditing(null);
       setTeamError("");
+      resetNewCollaboratorContact();
     } catch {
       setTeamSaving(false);
       setTeamError("Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente.");
@@ -2152,6 +2242,26 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
       setLaborCostFeedback({ message: error instanceof Error ? error.message : "Não foi possível salvar o valor de mão de obra.", success: false });
     } finally {
       setLaborCostSavingId(null);
+    }
+  }
+
+  async function saveOwnLaborCost(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const laborCostCents = Math.round(parseCurrency(form.get("laborCost")) * 100);
+    setOwnLaborCostSaving(true);
+    setLaborCostFeedback(null);
+    try {
+      const response = await fetch(ownLaborCostCacheKey, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ laborCostCents }) });
+      const data = await response.json().catch(() => null) as { laborCostCents?: number; message?: string } | null;
+      if (!response.ok || typeof data?.laborCostCents !== "number") throw new Error(data?.message ?? "Não foi possível salvar seu valor de mão de obra.");
+      setOwnLaborCostInput(currency.format(data.laborCostCents / 100));
+      invalidateClientCache(ownLaborCostCacheKey);
+      setLaborCostFeedback({ message: "Seu valor de mão de obra foi salvo.", success: true });
+    } catch (error) {
+      setLaborCostFeedback({ message: error instanceof Error ? error.message : "Não foi possível salvar seu valor de mão de obra.", success: false });
+    } finally {
+      setOwnLaborCostSaving(false);
     }
   }
 
@@ -2199,65 +2309,6 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
     setMemberToRemove(null);
   }
 
-  if (mode === "calculator") {
-    return (
-      <div className="mx-auto flex min-h-[calc(100vh-9rem)] w-full max-w-4xl flex-col justify-center gap-5">
-        <header className="hp-page-enter mb-1 text-center">
-          <h2 className="text-lg font-bold text-primary">Calculadora de custos</h2>
-          <p className="mx-auto mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">Defina os custos dos seus procedimentos. Esses valores serão considerados nos novos orçamentos.</p>
-        </header>
-        <form className="space-y-4" onSubmit={saveCostSettings}>
-          <Card>
-            <CardHeader className="border-b border-border/70 text-center">
-              <div>
-                <CardTitle>Custo do profissional</CardTitle>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">Informe o horário de trabalho e o valor da hora para estimar o custo diário.</p>
-              </div>
-            </CardHeader>
-            <CardContent className="mx-auto w-full max-w-3xl space-y-4 pt-4">
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <FormField label="Início do expediente"><Time24Input name="professionalOpeningTime" label="Início do expediente" value={professionalOpeningTimeInput} onChange={setProfessionalOpeningTimeInput} /></FormField>
-                <FormField label="Fim do expediente"><Time24Input name="professionalClosingTime" label="Fim do expediente" value={professionalClosingTimeInput} onChange={setProfessionalClosingTimeInput} /></FormField>
-                <FormField label="Custo por hora (R$)"><input className={fieldClassName} name="professionalHourlyCost" type="number" min="0" step="0.01" value={professionalHourlyCostInput} onChange={(event) => setProfessionalHourlyCostInput(event.target.value)} placeholder="0,00" /></FormField>
-              </div>
-              <div className="flex flex-col gap-1 rounded-md bg-muted/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">Custo estimado por expediente</p>
-                  <p className="text-xs text-muted-foreground">Horas trabalhadas × custo por hora</p>
-                </div>
-                <strong className="text-lg font-bold text-primary">{currency.format(professionalShiftCost)}</strong>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="border-b border-border/70 text-center">
-              <div>
-                <CardTitle>Custos por atendimento</CardTitle>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">Valores padrão adicionados aos novos orçamentos.</p>
-              </div>
-            </CardHeader>
-            <CardContent className="mx-auto w-full max-w-3xl pt-4">
-              {costSettingsLoading ? <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : (
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  <FormField label="Mão de obra / honorários"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format(costSettings.laborCost)} inputMode="decimal" /></FormField>
-                  <FormField label="Sala / estrutura"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="facilityCost" defaultValue={currency.format(costSettings.facilityCost)} inputMode="decimal" /></FormField>
-                  <FormField label="Anestésico / medicamentos"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="medicationCost" defaultValue={currency.format(costSettings.medicationCost)} inputMode="decimal" /></FormField>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {costSettingsError ? <p className="mx-auto w-full max-w-3xl rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{costSettingsError}</p> : null}
-          <div className="flex justify-center border-t border-border pt-4">
-            <Button className="min-w-36" disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar custos"}</Button>
-          </div>
-        </form>
-
-      </div>
-    );
-  }
-
   const settingsNavigation = [
     { label: "Dados da clínica", icon: Building2 },
     { label: "Profissionais e equipe", icon: UsersRound },
@@ -2269,16 +2320,21 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
   ];
   const normalizeSettingsSearch = (value: string) => value.toLocaleLowerCase("pt-BR").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const normalizedSettingsSearch = normalizeSettingsSearch(settingsSearch.trim());
-  const isSearchingClinicPreferences = activeSettingsSection === "Dados da clínica" && Boolean(normalizedSettingsSearch);
+  const hasSettingsSectionPermission = (label: string) => label === "Segurança e permissões" ? canManageRolePermissions : label === "Profissionais e equipe" ? canManageTeam : label === "Custos e orçamento" ? canManageSettings || canManageOwnLaborCost : canManageSettings;
+  const permittedSettingsNavigation = settingsNavigation.filter((item) => hasSettingsSectionPermission(item.label));
+  const displayedSettingsSection = permittedSettingsNavigation.some((item) => item.label === activeSettingsSection) ? activeSettingsSection : permittedSettingsNavigation[0]?.label ?? "";
+  const isSearchingClinicPreferences = displayedSettingsSection === "Dados da clínica" && Boolean(normalizedSettingsSearch);
   const matchesClinicPreference = (text: string) => !isSearchingClinicPreferences || normalizeSettingsSearch(text).includes(normalizedSettingsSearch);
   const clinicPreferenceLabels = ["Alertas de agendamentos", "Alertas de estoque", "Exigir motivo ao cancelar", "Marcar faltas automaticamente", "Finalizar atendimentos automaticamente", "Avançar etapas do paciente automaticamente", "Permitir agendamentos fora do funcionamento"];
   const matchingClinicPreferenceCount = clinicPreferenceLabels.filter(matchesClinicPreference).length;
-  const isSearchingTeam = activeSettingsSection === "Profissionais e equipe" && Boolean(normalizedSettingsSearch);
+  const isSearchingTeam = displayedSettingsSection === "Profissionais e equipe" && Boolean(normalizedSettingsSearch);
   const filteredTeamMembers = members.filter((member) => {
     const role = member.isOwner ? "Administrador principal" : member.role === "PROFESSIONAL" ? "Profissional" : member.role === "STAFF" ? "Equipe Atendente" : "Administrador";
     return normalizeSettingsSearch(`${member.user.name} ${member.user.email} ${member.role} ${role}`).includes(normalizedSettingsSearch);
   });
-  const visibleSettingsNavigation = settingsNavigation.filter((item) => normalizeSettingsSearch(item.label).includes(normalizedSettingsSearch) || (isSearchingClinicPreferences && matchingClinicPreferenceCount > 0 && item.label === "Dados da clínica") || (isSearchingTeam && item.label === "Profissionais e equipe"));
+  const visibleSettingsNavigation = settingsNavigation.filter((item) => {
+    return hasSettingsSectionPermission(item.label) && (normalizeSettingsSearch(item.label).includes(normalizedSettingsSearch) || (isSearchingClinicPreferences && matchingClinicPreferenceCount > 0 && item.label === "Dados da clínica") || (isSearchingTeam && item.label === "Profissionais e equipe"));
+  });
   const settingsSearchPlaceholder: Record<string, string> = {
     "Dados da clínica": "Buscar dados da clínica",
     "Profissionais e equipe": "Buscar profissional ou equipe",
@@ -2288,7 +2344,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
     "Segurança e permissões": "Buscar segurança e permissões",
     Integrações: "Buscar integrações",
   };
-  const searchLabel = settingsSearchPlaceholder[activeSettingsSection] ?? "Buscar nas configurações";
+  const searchLabel = settingsSearchPlaceholder[displayedSettingsSection] ?? "Buscar nas configurações";
 
   return (
     <div className="mx-auto w-full max-w-[1440px] space-y-5">
@@ -2307,7 +2363,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
         <Card className="h-fit border-border/70 p-2.5">
           <nav aria-label="Seções de configurações" className="grid gap-1">
             {visibleSettingsNavigation.map(({ label, icon: Icon }) => (
-              <button aria-current={activeSettingsSection === label ? "page" : undefined} className={cn("flex min-h-11 items-center gap-3 rounded-md px-3 text-left text-sm font-semibold transition-colors", activeSettingsSection === label ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")} key={label} type="button" onClick={() => setActiveSettingsSection(label)}>
+              <button aria-current={displayedSettingsSection === label ? "page" : undefined} className={cn("flex min-h-11 items-center gap-3 rounded-md px-3 text-left text-sm font-semibold transition-colors", displayedSettingsSection === label ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")} key={label} type="button" onClick={() => setActiveSettingsSection(label)}>
                 <Icon className="h-4 w-4 shrink-0" />{label}
               </button>
             ))}
@@ -2316,7 +2372,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
         </Card>
 
         <div className="min-w-0 space-y-4">
-          {activeSettingsSection === "Dados da clínica" ? (
+          {displayedSettingsSection === "Dados da clínica" ? (
             <Card className="border-border/70">
               <CardHeader className="border-b border-border/70"><CardTitle>Dados da clínica</CardTitle><p className="text-sm text-muted-foreground">{isSearchingClinicPreferences ? "Preferências gerais filtradas pela busca." : "Informações básicas e dados de contato da sua clínica."}</p></CardHeader>
               <CardContent className="pt-5">
@@ -2357,11 +2413,11 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
             </Card>
           ) : null}
 
-          {activeSettingsSection === "Profissionais e equipe" ? (
+          {displayedSettingsSection === "Profissionais e equipe" ? (
             <Card className="border-border/70">
               <CardHeader className="flex flex-col gap-3 border-b border-border/70 sm:flex-row sm:items-center sm:justify-between">
                 <div><CardTitle>Profissionais e equipe</CardTitle><p className="mt-1 text-sm text-muted-foreground">Contas vinculadas à clínica e seus níveis de acesso.</p></div>
-                {isAdmin ? <Button size="sm" onClick={() => { setEditing("Novo colaborador"); setTeamError(""); }}><UserPlus className="h-4 w-4" />Novo colaborador</Button> : <span className="text-xs font-semibold text-muted-foreground">Apenas administradores</span>}
+                {canManageTeam ? <Button size="sm" onClick={() => { resetNewCollaboratorContact(); setTeamError(""); setEditing("Novo colaborador"); }}><UserPlus className="h-4 w-4" />Novo colaborador</Button> : <span className="text-xs font-semibold text-muted-foreground">Apenas administradores</span>}
               </CardHeader>
               <CardContent className="divide-y divide-border/70 pt-1">
                 {teamError && !editing ? <p className="my-4 rounded-md bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{teamError}</p> : null}
@@ -2375,7 +2431,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge variant={member.isOwner || member.role === "ADMIN" ? "purple" : "green"}>{member.isOwner ? "Administrador principal" : member.role === "PROFESSIONAL" ? "Profissional" : member.role === "STAFF" ? "Equipe" : "Administrador"}</Badge>
-                      {isAdmin && !member.isOwner ? <Button type="button" variant="secondary" size="sm" className="h-7 px-2.5 text-xs" onClick={() => { setRoleToChange(member.role); setRoleChangeError(""); setMemberToChangeRole(member); }}>Alterar cargo</Button> : null}
+                      {canManageTeam && !member.isOwner ? <Button type="button" variant="secondary" size="sm" className="h-7 px-2.5 text-xs" onClick={() => { setRoleToChange(member.role); setRoleChangeError(""); setMemberToChangeRole(member); }}>Alterar cargo</Button> : null}
                       {isOwner && !member.isOwner ? <Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-destructive" aria-label={"Remover " + member.user.name} title="Remover colaborador" onClick={() => { setMemberRemoveError(""); setMemberToRemove(member); }}><Trash2 className="h-3.5 w-3.5" /></Button> : null}
                     </div>
                   </div>
@@ -2384,7 +2440,7 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
             </Card>
           ) : null}
 
-          {activeSettingsSection === "Agenda e horários" ? (
+          {displayedSettingsSection === "Agenda e horários" ? (
             <Card className="border-border/70">
               <CardHeader className="border-b border-border/70"><CardTitle>Agenda e horários</CardTitle><p className="text-sm text-muted-foreground">Ajuste a tolerância usada para identificar atrasos e faltas.</p></CardHeader>
               <CardContent className="pt-5">
@@ -2401,11 +2457,19 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
             </Card>
           ) : null}
 
-          {activeSettingsSection === "Custos e orçamento" ? (
+          {displayedSettingsSection === "Custos e orçamento" ? (
             <Card className="border-border/70">
-              <CardHeader className="border-b border-border/70"><CardTitle>Custos e orçamento</CardTitle><p className="text-sm text-muted-foreground">Defina os valores de mão de obra de cada profissional da clínica.</p></CardHeader>
+              <CardHeader className="border-b border-border/70"><CardTitle>Custos e orçamento</CardTitle><p className="text-sm text-muted-foreground">{canManageTeam ? "Defina os valores de mão de obra da equipe e do seu próprio perfil." : "Consulte e altere somente o seu próprio valor de mão de obra."}</p></CardHeader>
               <CardContent className="pt-5">
-                <section className="mb-6 rounded-lg border border-border/70 px-4 py-4">
+                {canManageOwnLaborCost ? <section className="mb-6 rounded-lg border border-border/70 px-4 py-4">
+                  <div className="mb-3"><h3 className="text-sm font-bold text-foreground">Meu valor de mão de obra</h3><p className="mt-1 text-xs leading-5 text-muted-foreground">Este valor é usado nos cálculos da clínica. Você só pode alterar o seu próprio valor.</p></div>
+                  {ownLaborCostLoading ? <LoadingSkeleton className="h-12 w-full" /> : <form className="grid gap-3 sm:grid-cols-[minmax(180px,240px)_auto] sm:items-end" onSubmit={(event) => void saveOwnLaborCost(event)}>
+                    <FormField label="Mão de obra (R$)"><MaskedInput key={ownLaborCostInput} className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={ownLaborCostInput} inputMode="decimal" /></FormField>
+                    <Button className="sm:mb-0.5" type="submit" variant="secondary" disabled={ownLaborCostSaving}>{ownLaborCostSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{ownLaborCostSaving ? "Salvando..." : "Salvar meu valor"}</Button>
+                  </form>}
+                  {laborCostFeedback ? <p className={cn("mt-3 text-xs font-medium", laborCostFeedback.success ? "text-success" : "text-destructive")} role={laborCostFeedback.success ? "status" : "alert"}>{laborCostFeedback.message}</p> : null}
+                </section> : null}
+                {canManageTeam ? <section className="mb-6 rounded-lg border border-border/70 px-4 py-4">
                   <div className="mb-3">
                     <h3 className="text-sm font-bold text-foreground">Mão de obra por profissional</h3>
                     <p className="mt-1 text-xs leading-5 text-muted-foreground">Defina o valor em reais para cada profissional da clínica.</p>
@@ -2426,17 +2490,17 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
                     })}
                   </div> : <p className="py-3 text-sm text-muted-foreground">Cadastre alguém com o cargo Profissional na equipe para definir a mão de obra.</p>}
                   {laborCostFeedback ? <p className={cn("mt-3 text-xs font-medium", laborCostFeedback.success ? "text-success" : "text-destructive")} role={laborCostFeedback.success ? "status" : "alert"}>{laborCostFeedback.message}</p> : null}
-                </section>
+                </section> : null}
               </CardContent>
             </Card>
           ) : null}
 
-          {activeSettingsSection === "Notificações" ? (
+          {displayedSettingsSection === "Notificações" ? (
               <Card className="border-border/70">
                 <CardHeader className="border-b border-border/70"><CardTitle>Notificações</CardTitle><p className="text-sm text-muted-foreground">Escolha quais avisos aparecem no menu superior da aplicação.</p></CardHeader>
                 <CardContent className="pt-4">
                   <form onSubmit={saveCostSettings}>
-                    <SettingsToggle label="Som dos alertas" description="Toca um aviso quando surge um novo alerta de atendimento." checked={appointmentNotificationSoundEnabled} onChange={() => setAppointmentNotificationSoundEnabled((value) => !value)} />
+                    <SettingsToggle label="Som das notificações" description="Toca um plim leve quando chega uma nova notificação da clínica." checked={appointmentNotificationSoundEnabled} onChange={() => setAppointmentNotificationSoundEnabled((value) => !value)} />
                     {costSettingsError ? <p className="mt-4 rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{costSettingsError}</p> : null}
                     {costSettingsSuccess ? <p className="mt-4 text-sm font-medium text-success" role="status">{costSettingsSuccess}</p> : null}
                     <div className="mt-4 flex justify-end border-t border-border pt-4"><Button className="min-w-36" disabled={costSettingsSaving || costSettingsLoading} type="submit">{costSettingsSaving ? "Salvando..." : "Salvar preferências"}</Button></div>
@@ -2445,19 +2509,39 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
               </Card>
           ) : null}
 
-          {activeSettingsSection === "Segurança e permissões" ? (
+          {displayedSettingsSection === "Segurança e permissões" ? (
             <Card className="border-border/70">
-              <CardHeader className="border-b border-border/70"><CardTitle>Segurança e permissões</CardTitle><p className="text-sm text-muted-foreground">Os acessos são definidos pelo perfil de cada colaborador.</p></CardHeader>
-              <CardContent className="divide-y divide-border/70 pt-1">
-                <div className="py-4"><p className="text-sm font-bold text-foreground">Administrador</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Acesso às configurações da clínica, equipe, dados e operações administrativas.</p></div>
-                <div className="py-4"><p className="text-sm font-bold text-foreground">Profissional</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Acesso à agenda e aos recursos clínicos permitidos para conduzir atendimentos.</p></div>
-                <div className="py-4"><p className="text-sm font-bold text-foreground">Atendente</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Acesso à rotina administrativa, sem acesso a dados clínicos restritos.</p></div>
-                <div className="pt-4"><Button type="button" variant="secondary" onClick={() => setActiveSettingsSection("Profissionais e equipe")}>Gerenciar equipe</Button></div>
+              <CardHeader className="border-b border-border/70"><CardTitle>Segurança e permissões</CardTitle><p className="text-sm text-muted-foreground">Selecione um cargo para ativar ou desativar cada permissão. As alterações valem para todos os colaboradores daquele cargo.</p></CardHeader>
+              <CardContent className="space-y-3 pt-4">
+                {rolePermissionsLoading ? <LoadingSkeleton className="h-16 w-full" /> : roles.map((role) => {
+                  const rolePermissionCount = permissionGroups.flatMap((group) => group.permissions).filter(({ key }) => rolePermissionMatrix[role][key]).length;
+                  const expanded = selectedPermissionRole === role;
+                  return <section className="overflow-hidden rounded-lg border border-border/70" key={role}>
+                    <button aria-expanded={expanded} className="flex w-full items-center justify-between gap-3 p-4 text-left transition-colors hover:bg-muted/50" onClick={() => setSelectedPermissionRole(expanded ? null : role)} type="button">
+                      <span className="min-w-0"><span className="block text-sm font-bold text-foreground">{roleLabels[role]}</span><span className="mt-1 block text-xs text-muted-foreground">{rolePermissionCount} de {permissionGroups.flatMap((group) => group.permissions).length} permissões ativas</span></span>
+                      <ChevronDown className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-180")} />
+                    </button>
+                    {expanded ? <div className="space-y-5 border-t border-border/70 p-4">
+                      {permissionGroups.map((group) => <section className="space-y-2" key={group.label}>
+                        <h4 className="text-xs font-bold text-foreground">{group.label}</h4>
+                        <div className="divide-y divide-border/60 rounded-md border border-border/60">
+                          {group.permissions.map(({ key, label, description }) => <SettingsToggle key={key} label={label} description={description} checked={rolePermissionMatrix[role][key]} disabled={rolePermissionsSaving || rolePermissionsLoading} onChange={(enabled) => { setRolePermissionMatrix((current) => ({ ...current, [role]: { ...current[role], [key]: enabled } })); setRolePermissionsDirty(true); }} />)}
+                        </div>
+                      </section>)}
+                      {role === "ADMIN" ? <p className="text-xs leading-5 text-muted-foreground">O administrador principal sempre pode reabrir esta tela para recuperar permissões administrativas.</p> : null}
+                    </div> : null}
+                  </section>;
+                })}
+                {rolePermissionsError ? <p className="rounded-md bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{rolePermissionsError}</p> : null}
+                <div className="flex flex-wrap justify-between gap-2 border-t border-border/70 pt-4">
+                  {canManageTeam ? <Button type="button" variant="secondary" onClick={() => setActiveSettingsSection("Profissionais e equipe")}>Gerenciar equipe</Button> : <span />}
+                  <Button type="button" disabled={rolePermissionsSaving || rolePermissionsLoading || !rolePermissionsDirty} onClick={() => void saveRolePermissions()}>{rolePermissionsSaving ? "Salvando permissões..." : "Salvar permissões"}</Button>
+                </div>
               </CardContent>
             </Card>
           ) : null}
 
-          {activeSettingsSection === "Integrações" ? (
+          {displayedSettingsSection === "Integrações" ? (
             <Card className="border-border/70">
               <CardHeader className="border-b border-border/70"><CardTitle>Integrações</CardTitle><p className="text-sm text-muted-foreground">Conecte serviços externos para ampliar os recursos da clínica.</p></CardHeader>
               <CardContent className="space-y-3 pt-4">
@@ -2473,14 +2557,42 @@ export function SettingsSection({ isAdmin = false, isOwner = false, clinicName, 
         </div>
       </div>
 
-      <Modal open={editing === "Novo colaborador"} onClose={() => setEditing(null)} title="Novo colaborador" description="Adicione um acesso à clínica e escolha o nível de permissão.">
-        <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveCollaborator}>
-          <div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" autoComplete="name" required /></FormField></div>
-          <FormField label="E-mail de acesso"><input className={fieldClassName} name="email" type="email" autoComplete="email" required /></FormField>
-          <FormField label="Senha inicial"><input className={fieldClassName} name="password" type="password" minLength={8} autoComplete="new-password" required /></FormField>
-          <FormField label="Perfil"><select className={fieldClassName} name="role"><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Atendente</option><option value="ADMIN">Administrador</option></select></FormField>
-          {teamError ? <p className="sm:col-span-2 rounded-md bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{teamError}</p> : null}
-          <div className="flex justify-end gap-2 sm:col-span-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => setEditing(null)}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div>
+      <Modal open={editing === "Novo colaborador"} onClose={() => { if (!teamSaving) { setEditing(null); resetNewCollaboratorContact(); } }} title="Novo colaborador" description="Adicione um acesso à clínica e escolha o nível de permissão." panelClassName="max-w-7xl">
+        <form className="space-y-4" onSubmit={saveCollaborator}>
+          <section className="space-y-3">
+            <h3 className="border-b border-border pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Dados pessoais</h3>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField label="Nome completo" required><input className={fieldClassName} name="name" autoComplete="name" required /></FormField>
+              <FormField label="CPF" required><input className={fieldClassName} name="cpf" inputMode="numeric" autoComplete="off" placeholder="000.000.000-00" maxLength={14} value={newMemberCpf} onChange={(event) => setNewMemberCpf(event.target.value.replace(/\D/g, "").slice(0, 11).replace(/(\d{3})(\d)/, "$1.$2").replace(/(\d{3})(\d)/, "$1.$2").replace(/(\d{3})(\d{1,2})$/, "$1-$2"))} required /></FormField>
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <h3 className="border-b border-border pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Acesso à conta</h3>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField label="E-mail de acesso" required><input className={fieldClassName} name="email" type="email" autoComplete="email" required /></FormField>
+              <FormField label="Senha inicial" required><input className={fieldClassName} name="password" type="password" minLength={8} autoComplete="new-password" required /></FormField>
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <h3 className="border-b border-border pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Localidade</h3>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                <FormField label="CEP"><input className={fieldClassName} name="postalCode" inputMode="numeric" autoComplete="postal-code" placeholder="00000-000" maxLength={9} value={newMemberPostalCode} onChange={(event) => { setNewMemberPostalCode(event.target.value.replace(/\D/g, "").slice(0, 8).replace(/(\d{5})(\d)/, "$1-$2")); setPostalCodeError(""); }} /></FormField>
+                <Button className="w-full sm:w-auto" type="button" variant="secondary" size="sm" disabled={postalCodeLoading} onClick={() => void lookupCollaboratorPostalCode()}>{postalCodeLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}{postalCodeLoading ? "Buscando CEP..." : "Buscar CEP"}</Button>
+              </div>
+              {postalCodeError ? <p className="sm:col-span-2 -mt-2 text-xs text-destructive" role="alert">{postalCodeError}</p> : null}
+              <div className="sm:col-span-2"><FormField label="Endereço" required><input className={fieldClassName} name="address" autoComplete="address-line1" placeholder="Rua, número, bairro e complemento" value={newMemberAddress} onChange={(event) => setNewMemberAddress(event.target.value)} required /></FormField></div>
+              <FormField label="País" required><input className={fieldClassName} name="country" autoComplete="country-name" placeholder="Brasil" value={newMemberCountry} onChange={(event) => setNewMemberCountry(event.target.value)} required /></FormField>
+              <FormField label="Estado" required><input className={fieldClassName} name="state" autoComplete="address-level1" placeholder="Estado" value={newMemberState} onChange={(event) => setNewMemberState(event.target.value)} required /></FormField>
+              <FormField label="Cidade" required><input className={fieldClassName} name="city" autoComplete="address-level2" placeholder="Cidade" value={newMemberCity} onChange={(event) => setNewMemberCity(event.target.value)} required /></FormField>
+            </div>
+          </section>
+
+          <FormField label="Perfil" required><select className={fieldClassName} name="role" required><option value="PROFESSIONAL">Profissional</option><option value="STAFF">Atendente</option><option value="ADMIN">Administrador</option></select></FormField>
+          {teamError ? <p className="rounded-md bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{teamError}</p> : null}
+          <div className="flex justify-end gap-2"><Button disabled={teamSaving} type="button" variant="secondary" onClick={() => { setEditing(null); resetNewCollaboratorContact(); }}>Cancelar</Button><Button disabled={teamSaving} type="submit">{teamSaving ? "Criando conta..." : "Criar conta"}</Button></div>
         </form>
       </Modal>
 

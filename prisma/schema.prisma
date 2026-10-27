@@ -15,6 +15,12 @@ model User {
   passwordHash               String
   mustChangePassword         Boolean            @default(false)
   phone                      String?
+  cpf                        String?
+  postalCode                 String?
+  address                    String?
+  country                    String?
+  state                      String?
+  city                       String?
   profession                 String?
   practiceArea               String?
   hasSecretary               Boolean?
@@ -36,6 +42,7 @@ model Clinic {
   phone                       String?
   email                       String?
   address                     String?
+  rolePermissions             Json                       @default("{}") @db.JsonB
   appointmentNotificationsEnabled Boolean                @default(true)
   appointmentNotificationSoundEnabled Boolean            @default(true)
   stockNotificationsEnabled   Boolean                    @default(true)

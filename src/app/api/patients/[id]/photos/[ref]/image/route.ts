@@ -1,4 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
+import { denyUnless } from "@/lib/api-guards";
 import { can } from "@/lib/permissions";
 import { contentDisposition } from "@/lib/clinical-files-rules";
 import { recordReadAudit } from "@/lib/clinical-files-server";
@@ -17,7 +18,9 @@ const viewDedupeMinutes = 10;
 export async function GET(request: Request, { params }: { params: Promise<{ id: string; ref: string }> }) {
   const user = await getCurrentUser();
   if (!user) return json("Não autenticado.", 401);
-  if (!can(user.role, "clinical:read")) return json("Acesso restrito à equipe clínica.", 403);
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  if (!can(user.role, "clinical:read", user.rolePermissions)) return json("Acesso restrito à equipe clínica.", 403);
   const { id: patientId, ref: rawRef } = await params;
   const ref = decodeRefParam(rawRef);
   if (!ref) return json("Referência inválida.", 400);

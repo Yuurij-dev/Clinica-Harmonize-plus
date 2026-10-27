@@ -9,6 +9,7 @@ import type { SectionId } from "@/types/clinic";
 import type { StockAlert } from "@/lib/stock-rules";
 import { invalidateClientCache } from "@/lib/client-cache";
 import { StockAlertGroups, useStockAlerts } from "./stock-alerts";
+import { useCan } from "./current-user";
 
 type TopbarProps = {
   onMenu: () => void;
@@ -46,6 +47,9 @@ function formatTrialRemaining(milliseconds: number) {
 }
 
 export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStockAlert, onLogout, user }: TopbarProps) {
+  const canAccessDashboard = useCan("dashboard:access");
+  const canAccessSettings = useCan("settings:access");
+  const canAccessStock = useCan("stock:access");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
   const [stockNotificationsEnabled, setStockNotificationsEnabled] = useState(true);
@@ -55,7 +59,18 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
   const [trialRemaining, setTrialRemaining] = useState<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const previousAlertIdsRef = useRef<string[] | null>(null);
-  const stockAlerts = useStockAlerts(user?.role === "ADMIN" && stockNotificationsEnabled);
+  const previousStockAlertIdsRef = useRef<string[] | null>(null);
+  const notificationSoundEnabledRef = useRef(appointmentNotificationSoundEnabled);
+  notificationSoundEnabledRef.current = appointmentNotificationSoundEnabled;
+
+  function handleStockAlertsLoaded(alerts: StockAlert[], isInitialLoad: boolean) {
+    const ids = alerts.map((alert) => `${alert.kind}:${alert.productId}:${alert.lotId ?? ""}`);
+    const previousIds = previousStockAlertIdsRef.current;
+    if (!isInitialLoad && notificationSoundEnabledRef.current && previousIds && ids.some((id) => !previousIds.includes(id))) playNotificationSound();
+    previousStockAlertIdsRef.current = ids;
+  }
+
+  const stockAlerts = useStockAlerts(canAccessStock && stockNotificationsEnabled, handleStockAlertsLoaded);
   const notificationCount = appointmentAlerts.length + stockAlerts.length;
 
   function primeNotificationAudio() {
@@ -222,7 +237,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
           />
         </label>
 
-        {user?.role === "ADMIN" ? <Button className="hidden lg:inline-flex" size="sm" onClick={onDashboard}>
+        {canAccessDashboard ? <Button className="hidden lg:inline-flex" size="sm" onClick={onDashboard}>
           <Sparkles className="h-3.5 w-3.5" />
           Resumo do dia
         </Button> : null}
@@ -248,7 +263,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
             </> : null}
           </DropdownMenuContent>
         </DropdownMenu>
-        {user?.role === "ADMIN" ? <Button
+        {canAccessSettings ? <Button
           className="hidden sm:inline-flex"
           variant="secondary"
           size="icon"

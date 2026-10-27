@@ -6,10 +6,13 @@ import { appointmentDurations, appointmentTransactionOptions, lockAppointmentSlo
 import { prisma } from "@/lib/prisma";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 import { DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE, procedureAppointmentVariants } from "@/lib/procedure-session-rules";
+import { denyUnless } from "@/lib/api-guards";
 
 export async function POST(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user, "agenda:manage");
+  if (denied) return denied;
 
   const body = await request.json().catch(() => null) as {
     patientId?: string;

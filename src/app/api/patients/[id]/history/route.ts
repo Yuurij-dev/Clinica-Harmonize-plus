@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyUnless } from "@/lib/api-guards";
 import { appointmentHasPassed, clinicNow, dateOnly } from "@/lib/clinic-time";
 import { serializePayment } from "@/lib/finance";
 import { can, observationKindsFor } from "@/lib/permissions";
@@ -8,10 +9,12 @@ import { prisma } from "@/lib/prisma";
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
   const requestedTab = new URL(request.url).searchParams.get("tab");
   const requestedJourneyId = new URL(request.url).searchParams.get("journeyId");
   const patientId = (await params).id;
-  const clinical = can(user.role, "clinical:read");
+  const clinical = can(user.role, "clinical:read", user.rolePermissions);
   const journeyId = requestedJourneyId || undefined;
   const includeAppointments = ["Procedimentos", "Agendamentos", "Histórico"].includes(requestedTab ?? "");
   const includePayments = ["Pagamentos", "Histórico"].includes(requestedTab ?? "");
@@ -38,7 +41,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     // Materiais usados no paciente (rastreio): saídas de atendimento, sem custo.
     includeProcedureRecords && clinical ? prisma.stockMovement.findMany({ where: { clinicId: user.clinicId, patientId, type: "attendance" }, orderBy: { attendanceDate: "desc" }, select: { id: true, appointmentId: true, procedureSessionId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, kind: true, unit: true } }, lot: { select: { code: true, expiresOn: true } }, reversedBy: { select: { id: true } } } }) : Promise.resolve([]),
     includeProcedureRecords && clinical ? prisma.pendingStockOutput.findMany({ where: { clinicId: user.clinicId, patientId, status: "pending" }, select: { id: true, appointmentId: true, procedureSessionId: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, product: { select: { name: true, kind: true, unit: true } } } }) : Promise.resolve([]),
-    includeObservations ? prisma.patientObservation.findMany({ where: { patientId, clinicId: user.clinicId, kind: { in: observationKindsFor(user.role) } }, orderBy: { createdAt: "desc" }, select: { id: true, text: true, authorName: true, kind: true, createdAt: true } }) : Promise.resolve([]),
+    includeObservations ? prisma.patientObservation.findMany({ where: { patientId, clinicId: user.clinicId, kind: { in: observationKindsFor(user.role, user.rolePermissions) } }, orderBy: { createdAt: "desc" }, select: { id: true, text: true, authorName: true, kind: true, createdAt: true } }) : Promise.resolve([]),
     includeAppointmentProcedureNames ? prisma.procedure.findMany({ where: { clinicId: user.clinicId }, select: { name: true } }) : Promise.resolve([]),
   ]);
   const sessionEvaluationIds = clinical ? [...new Set(procedureRecords.flatMap((procedure) => "sessions" in procedure ? procedure.sessions.map((session) => session.evaluationId) : []))] : [];

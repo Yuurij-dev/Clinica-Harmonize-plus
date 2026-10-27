@@ -6,6 +6,7 @@ import { appointmentNeedsConflictCheck, cleanProfessionalName, professionalKey }
 import { prisma } from "@/lib/prisma";
 import { DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE, procedureAppointmentVariants } from "@/lib/procedure-session-rules";
 import { appointmentDeleteAllowed, appointmentStatusChangeAllowed, can, runningAppointmentStatuses } from "@/lib/permissions";
+import { denyUnless } from "@/lib/api-guards";
 
 const appointmentStatuses = ["Agendado", "Em atendimento", "Atendido", "Finalizado", "Faltou", "Cancelado"];
 
@@ -18,6 +19,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return NextResponse.json({ message: "Dados do agendamento inválidos." }, { status: 400 });
   }
   if (!body?.status && !body?.date && !body?.time && !body?.procedure && !body?.professional && body?.notes === undefined) return NextResponse.json({ message: "Informe uma alteração para o agendamento." }, { status: 400 });
+  if ([body.date, body.time, body.procedure, body.professional, body.notes].some((value) => value !== undefined)) {
+    const denied = denyUnless(user, "agenda:manage");
+    if (denied) return denied;
+  }
   if (body.status && !appointmentStatuses.includes(body.status)) return NextResponse.json({ message: "Status inválido." }, { status: 400 });
   if (body.time && parseClockMinutes(body.time) === null) return NextResponse.json({ message: "Horário inválido." }, { status: 400 });
   const day = body.date ? parseAppointmentDay(body.date) : null;
@@ -33,7 +38,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     const clinic = await prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { requireCancellationReason: true } });
     if (clinic?.requireCancellationReason && !cancellationReason) return NextResponse.json({ message: "Informe o motivo para cancelar este agendamento." }, { status: 400 });
   }
-  if (!appointmentStatusChangeAllowed(user.role, current.status, body.status)) {
+  if (!appointmentStatusChangeAllowed(user.role, current.status, body.status, user.rolePermissions)) {
     return NextResponse.json({ message: "O atendimento é conduzido pela equipe clínica." }, { status: 403 });
   }
   if ((day || body.time) && appointmentHasPassed({ date: appointmentInstant(day ?? appointmentDay(current.date)), time: body.time ?? current.time }, clinicNow())) {
@@ -73,7 +78,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       const conflict = await scheduleConflictError(tx, user.clinicId, { day: next.day, time: next.time, professional: next.professional, patientId: current.patientId, procedure: next.procedure, excludeId: id });
       if (conflict) return { conflict };
     }
-    return tx.appointment.updateMany({ where: { id, clinicId: user.clinicId, ...(can(user.role, "appointment:run") ? {} : { status: { notIn: [...runningAppointmentStatuses] } }) }, data: {
+    return tx.appointment.updateMany({ where: { id, clinicId: user.clinicId, ...(can(user.role, "appointment:run", user.rolePermissions) ? {} : { status: { notIn: [...runningAppointmentStatuses] } }) }, data: {
       ...(body.status ? { status: body.status } : {}),
       ...(day ? { date: appointmentInstant(day) } : {}),
       ...(body.time ? { time: body.time } : {}),
@@ -99,10 +104,10 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
   const id = (await params).id;
   const current = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, select: { status: true } });
   if (!current) return NextResponse.json({ message: "Agendamento não encontrado." }, { status: 404 });
-  if (!appointmentDeleteAllowed(user.role, current.status)) {
+  if (!appointmentDeleteAllowed(user.role, current.status, user.rolePermissions)) {
     return NextResponse.json({ message: "O atendimento é conduzido pela equipe clínica." }, { status: 403 });
   }
-  const result = await prisma.appointment.deleteMany({ where: { id, clinicId: user.clinicId, ...(can(user.role, "appointment:run") ? {} : { status: { notIn: [...runningAppointmentStatuses] } }) } });
+  const result = await prisma.appointment.deleteMany({ where: { id, clinicId: user.clinicId, ...(can(user.role, "appointment:run", user.rolePermissions) ? {} : { status: { notIn: [...runningAppointmentStatuses] } }) } });
   if (result.count === 0) return NextResponse.json({ message: "O atendimento já foi iniciado." }, { status: 409 });
   return NextResponse.json({ ok: true });
 }

@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
-import { canArchiveFiles, canDeleteFiles, checkUpload, isPhotoPhase, maxUploadBytes, photoCategoryNames, sanitizeFileName } from "@/lib/clinical-files-rules";
+import { canArchiveFiles, canDeleteFiles, canWritePhotos, checkUpload, isPhotoPhase, maxUploadBytes, photoCategoryNames, sanitizeFileName } from "@/lib/clinical-files-rules";
 import { auditEntry, findPatientScoped, readUploadForm, resolveLinks, sha256 } from "@/lib/clinical-files-server";
 import { prepareStorage, removeStoredBytes } from "@/lib/clinical-storage";
 import { buildGalleryIndex, type FollowUpRow, type LegacyRow, type SessionPhotoMeta, type SessionRow } from "@/lib/photo-gallery-rules";
@@ -56,7 +56,9 @@ async function galleryStamp(clinicId: string, patientId: string) {
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:read");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:read");
   if (denied) return denied;
   const patientId = (await params).id;
   const clinicId = user.clinicId;
@@ -100,7 +102,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       ...evaluations.map((row) => ({ type: "evaluation", id: row.id, journeyId: row.journeyId, title: "Avaliação", date: row.createdAt.toISOString() })),
       ...sessionList.map((row) => ({ type: "session", id: row.id, journeyId: row.journeyId, title: row.procedureName, date: row.performedAt })),
     ].sort((a, b) => b.date.localeCompare(a.date)),
-    access: { canWrite: user.role === "ADMIN" || user.role === "PROFESSIONAL", canArchive: canArchiveFiles(user.role), canDelete: canDeleteFiles(user.role), maxUploadBytes },
+    access: { canWrite: canWritePhotos(user.role, user.rolePermissions), canArchive: canArchiveFiles(user.role, user.rolePermissions), canDelete: canDeleteFiles(user.role, user.rolePermissions), maxUploadBytes },
   });
 }
 
@@ -108,7 +110,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:write");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:write");
   if (denied) return denied;
   const patientId = (await params).id;
   const clinicId = user.clinicId;

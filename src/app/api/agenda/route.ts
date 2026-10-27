@@ -2,12 +2,14 @@ import { NextResponse } from "next/server";
 import { parseAgendaRange } from "@/lib/agenda-period-rules";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { canForUser } from "@/lib/permissions";
 
 // Agendamentos do período [from, to] (dias AAAA-MM-DD, extremos incluídos, máx. 93 dias). A agenda carrega só o período visível
 // e consulta de novo ao navegar. O dia do agendamento é guardado ao meio-dia em São Paulo, então o intervalo em UTC cobre o dia inteiro.
 export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  if (!canForUser(user, "agenda:access")) return NextResponse.json({ message: "Seu cargo não tem acesso à agenda." }, { status: 403 });
 
   const params = new URL(request.url).searchParams;
   const parsed = parseAgendaRange(params.get("from"), params.get("to"));

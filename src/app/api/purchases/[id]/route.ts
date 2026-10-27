@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { lockLots, lotBalances, movementTypes } from "@/lib/stock";
 import { roundQuantity } from "@/lib/stock-rules";
@@ -10,7 +11,7 @@ import { roundQuantity } from "@/lib/stock-rules";
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  if (!canForUser(user, "purchases:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
   const body = await request.json().catch(() => null) as { action?: string } | null;
   if (body?.action !== "cancel" && body?.action !== "restore") return NextResponse.json({ message: "Ação inválida." }, { status: 400 });
   const id = (await params).id;

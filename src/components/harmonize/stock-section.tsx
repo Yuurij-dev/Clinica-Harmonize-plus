@@ -12,7 +12,7 @@ import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, r
 import { formatCurrency, parseCurrency } from "@/lib/input-masks";
 import { formatQuantity, parseQuantity, stockKindLabels, stockKinds, stockUnits, type StockKind, validateQuantity, type LotStatus, type ManualReason } from "@/lib/stock-rules";
 import { LotUsage, ManualMovementForm, MovementHistory } from "./stock-movements";
-import { useCurrentRole } from "./current-user";
+import { useCan } from "./current-user";
 import { invalidateFinanceCache } from "./finance-section";
 import { PurchaseFormModal } from "./purchases-panel";
 import { EmptyState, LoadingTable, MiniTable, SectionIntro } from "./shared";
@@ -31,8 +31,9 @@ const lotStatusBadge: Record<LotStatus, { label: string; variant: "green" | "amb
 };
 
 export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: () => void) => void }) {
-  const isAdmin = useCurrentRole() === "ADMIN";
-  const alertKinds = new Set(useStockAlerts(isAdmin).filter((alert) => alert.kind !== "pending").map((alert) => alert.productKind));
+  const canManageStock = useCan("stock:manage");
+  const canViewStock = useCan("stock:access");
+  const alertKinds = new Set(useStockAlerts(canViewStock).filter((alert) => alert.kind !== "pending").map((alert) => alert.productKind));
   const [showArchived, setShowArchived] = useState(false);
   const listKey = showArchived ? "/api/products?archived=1" : "/api/products";
   const [materials, setMaterials] = useState<StockMaterial[]>(() => readClientCache<{ products?: StockMaterial[] }>(listKey)?.products ?? []);
@@ -92,7 +93,7 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
 
   return (
     <div>
-      <SectionIntro title="Estoque" titleAddon={<SectionWarning section="estoque" enabled={isAdmin} />} description="Materiais, produtos, lotes, validades e saldo disponível da clínica." action={`Novo ${kindWord}`} onAction={() => setEditing({ kind: itemKind })} />
+      <SectionIntro title="Estoque" titleAddon={<SectionWarning section="estoque" enabled={canViewStock} />} description="Materiais, produtos, lotes, validades e saldo disponível da clínica." action={canManageStock ? `Novo ${kindWord}` : undefined} onAction={canManageStock ? () => setEditing({ kind: itemKind }) : undefined} />
       <div className="mb-4 flex flex-wrap gap-2">
         <Button variant={itemKind === "material" ? "primary" : "secondary"} size="sm" className={warningTabClass(alertKinds.has("material"), itemKind === "material")} onClick={() => setItemKind("material")}>Materiais</Button>
         <Button variant={itemKind === "produto" ? "primary" : "secondary"} size="sm" className={warningTabClass(alertKinds.has("produto"), itemKind === "produto")} onClick={() => setItemKind("produto")}>Produtos</Button>

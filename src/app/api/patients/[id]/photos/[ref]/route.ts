@@ -13,7 +13,9 @@ const badRef = () => NextResponse.json({ message: "Referência inválida." }, { 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string; ref: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:read");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:read");
   if (denied) return denied;
   const { id: patientId, ref: rawRef } = await params;
   const ref = decodeRefParam(rawRef);
@@ -31,8 +33,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string; ref: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
   // Permissão clínica antes de qualquer consulta: quem não pode ver foto não distingue "existe" de "não existe".
-  const readDenied = denyUnless(user.role, "clinical:read");
+  const readDenied = denyUnless(user, "clinical:read");
   if (readDenied) return readDenied;
   const { id: patientId, ref: rawRef } = await params;
   const ref = decodeRefParam(rawRef);
@@ -45,7 +49,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (!current) return NextResponse.json({ message: "Foto não encontrada." }, { status: 404 });
 
   if (typeof body.archived === "boolean") {
-    const denied = denyUnless(user.role, "clinical:archive");
+    const denied = denyUnless(user, "clinical:archive");
     if (denied) return denied;
     await prisma.$transaction([
       prisma.clinicalPhoto.update({ where: { id: current.id }, data: body.archived ? { archivedAt: new Date(), archivedBy: user.id } : { archivedAt: null, archivedBy: null } }),
@@ -53,7 +57,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     ]);
     return NextResponse.json({ ok: true });
   }
-  const denied = denyUnless(user.role, "clinical:write");
+  const denied = denyUnless(user, "clinical:write");
   if (denied) return denied;
   if (current.archivedAt) return NextResponse.json({ message: "Desarquive a foto para editar." }, { status: 409 });
   const next = { name: current.name, category: current.category, phase: current.phase, journeyId: current.journeyId, encounterType: current.encounterType, encounterId: current.encounterId };
@@ -80,7 +84,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string; ref: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:delete");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:delete");
   if (denied) return denied;
   const { id: patientId, ref: rawRef } = await params;
   const ref = decodeRefParam(rawRef);

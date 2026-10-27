@@ -5,12 +5,14 @@ import { appointmentsForAutomaticTransitions } from "@/lib/appointment-automatio
 import { getCurrentUser } from "@/lib/auth";
 import { appointmentHasPassed, clinicNow } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
+import { canForUser } from "@/lib/permissions";
 
 const candidateLimit = 400;
 
 export async function POST() {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  if (!canForUser(user, "agenda:access")) return NextResponse.json({ message: "Seu cargo não tem acesso à agenda." }, { status: 403 });
 
   const clinic = await prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { appointmentToleranceMinutes: true, autoMarkMissedAppointmentsEnabled: true, autoCompleteAppointmentsEnabled: true } });
   if (!clinic) return NextResponse.json({ message: "Clínica não encontrada." }, { status: 404 });

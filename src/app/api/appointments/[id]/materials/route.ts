@@ -8,7 +8,7 @@ import { denyUnless } from "@/lib/api-guards";
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "appointment:run");
+  const denied = denyUnless(user, "appointment:run");
   if (denied) return denied;
   const data = await attendanceCheckData(user.clinicId, (await params).id);
   if (!data) return NextResponse.json({ message: "Atendimento não encontrado." }, { status: 404 });
@@ -18,7 +18,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "appointment:run");
+  const denied = denyUnless(user, "appointment:run");
   if (denied) return denied;
   const attendance = await findAttendance(user.clinicId, (await params).id);
   if (!attendance) return NextResponse.json({ message: "Atendimento não encontrado." }, { status: 404 });

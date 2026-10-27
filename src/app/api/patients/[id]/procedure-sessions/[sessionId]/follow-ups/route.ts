@@ -9,7 +9,9 @@ type FollowUpPhotoInput = { id: string; name: string; category: string; imageUrl
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string; sessionId: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:write");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:write");
   if (denied) return denied;
   const { id: patientId, sessionId } = await params;
   const body = await request.json().catch(() => null) as { action?: string; appointmentId?: string } | null;
@@ -29,7 +31,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string; sessionId: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:read");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:read");
   if (denied) return denied;
   const { id: patientId, sessionId } = await params;
   const requestedJourneyId = new URL(_request.url).searchParams.get("journeyId");
@@ -86,7 +90,9 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string; sessionId: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:write");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:write");
   if (denied) return denied;
   const { id: patientId, sessionId } = await params;
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
@@ -122,7 +128,9 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string; sessionId: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:write");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:write");
   if (denied) return denied;
   const { id: patientId, sessionId } = await params;
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;

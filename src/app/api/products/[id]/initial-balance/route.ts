@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { canForUser } from "@/lib/permissions";
 import { parseDateOnly } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
 import { findOrCreateLot, materialDetail, movementTypes, StockError } from "@/lib/stock";
@@ -9,7 +10,7 @@ import { validateQuantity } from "@/lib/stock-rules";
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  if (!canForUser(user, "stock:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
   const productId = (await params).id;
   const body = await request.json().catch(() => null) as { lotCode?: string; expiresOn?: string; quantity?: number } | null;
   const product = await prisma.product.findFirst({ where: { id: productId, clinicId: user.clinicId, archivedAt: null }, select: { id: true, unit: true } });

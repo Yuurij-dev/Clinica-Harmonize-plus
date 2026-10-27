@@ -2,12 +2,13 @@ import { hash } from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  if (!canForUser(user, "settings:team")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
   const members = await prisma.clinicMembership.findMany({
     where: { clinicId: user.clinicId },
     orderBy: { user: { name: "asc" } },
@@ -19,15 +20,24 @@ export async function GET() {
 export async function POST(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Apenas administradores podem cadastrar colaboradores." }, { status: 403 });
+  if (!canForUser(user, "settings:team")) return NextResponse.json({ message: "Apenas administradores podem cadastrar colaboradores." }, { status: 403 });
 
-  const body = await request.json().catch(() => null) as { name?: string; email?: string; password?: string; role?: "ADMIN" | "PROFESSIONAL" | "STAFF" } | null;
+  const body = await request.json().catch(() => null) as { name?: string; email?: string; password?: string; role?: "ADMIN" | "PROFESSIONAL" | "STAFF"; cpf?: string; postalCode?: string; address?: string; country?: string; state?: string; city?: string } | null;
   const name = body?.name?.trim();
   const email = body?.email?.trim().toLowerCase();
   const password = body?.password ?? "";
   const role = body?.role ?? "PROFESSIONAL";
+  const cpf = (typeof body?.cpf === "string" ? body.cpf : "").replace(/\D/g, "") || null;
+  const postalCode = (typeof body?.postalCode === "string" ? body.postalCode : "").replace(/\D/g, "") || null;
+  const address = (typeof body?.address === "string" ? body.address : "").trim() || null;
+  const country = (typeof body?.country === "string" ? body.country : "").trim() || null;
+  const state = (typeof body?.state === "string" ? body.state : "").trim() || null;
+  const city = (typeof body?.city === "string" ? body.city : "").trim() || null;
   if (!name || !email || password.length < 8 || !["ADMIN", "PROFESSIONAL", "STAFF"].includes(role)) {
     return NextResponse.json({ message: "Informe nome, e-mail e uma senha com pelo menos 8 caracteres." }, { status: 400 });
+  }
+  if (!cpf || cpf.length !== 11 || !address || !country || !state || !city || (postalCode && postalCode.length !== 8)) {
+    return NextResponse.json({ message: "Preencha os campos obrigatórios. O CPF deve ter 11 dígitos e o CEP, quando informado, deve ter 8." }, { status: 400 });
   }
 
   const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
@@ -36,7 +46,7 @@ export async function POST(request: Request) {
   try {
     const passwordHash = await hash(password, 12);
     const member = await prisma.$transaction(async (transaction) => {
-      const createdUser = await transaction.user.create({ data: { name, email, passwordHash, role, mustChangePassword: true, emailVerifiedAt: new Date() } });
+      const createdUser = await transaction.user.create({ data: { name, email, passwordHash, role, mustChangePassword: true, emailVerifiedAt: new Date(), cpf, postalCode, address, country, state, city } });
       return transaction.clinicMembership.create({
         data: { userId: createdUser.id, clinicId: user.clinicId, role },
         select: { id: true, role: true, isOwner: true, laborCostCents: true, user: { select: { id: true, name: true, email: true, createdAt: true } } },
@@ -55,7 +65,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Apenas administradores podem alterar os dados da equipe." }, { status: 403 });
+  if (!canForUser(user, "settings:team")) return NextResponse.json({ message: "Apenas administradores podem alterar os dados da equipe." }, { status: 403 });
 
   const body = await request.json().catch(() => null) as { membershipId?: string; laborCostCents?: number; role?: string } | null;
   const membershipId = body?.membershipId?.trim();
@@ -98,7 +108,7 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN" || !user.isOwner) return NextResponse.json({ message: "Apenas o administrador principal pode remover colaboradores." }, { status: 403 });
+  if (!canForUser(user, "settings:team") || !user.isOwner) return NextResponse.json({ message: "Apenas o administrador principal pode remover colaboradores." }, { status: 403 });
 
   const body = await request.json().catch(() => null) as { membershipId?: string } | null;
   const membershipId = body?.membershipId?.trim();

@@ -6,10 +6,13 @@ import { ensurePatientJourney } from "@/lib/patient-journey";
 import { calculateQuote, type QuoteLineInput } from "@/lib/quote-rules";
 import { cpfForRole } from "@/lib/patient-cpf-mask";
 import { matchPaymentQuotes } from "@/lib/patient-finance-rules";
+import { denyUnless } from "@/lib/api-guards";
 
 export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user, "quotes:access");
+  if (denied) return denied;
   const searchParams = new URL(request.url).searchParams;
   const patientId = searchParams.get("patientId");
   const journeyId = searchParams.get("journeyId");
@@ -21,7 +24,7 @@ export async function GET(request: Request) {
       ...(patientId ? { evaluation: { select: { professional: true } }, clinic: { select: { name: true } } } : {}),
     },
   });
-  const serialized = quotes.map((quote) => serializeQuote({ ...quote, patient: cpfForRole(user.role, quote.patient) }));
+  const serialized = quotes.map((quote) => serializeQuote({ ...quote, patient: cpfForRole(user.role, quote.patient, user.rolePermissions) }));
   if (!patientId) return NextResponse.json({ quotes: serialized });
 
   const payments = await prisma.payment.findMany({
@@ -43,6 +46,8 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user, "quotes:manage");
+  if (denied) return denied;
   const body = await request.json().catch(() => null) as { patientId?: string; journeyId?: string; evaluationId?: string; items?: string; details?: QuoteLineInput[]; total?: number; expires?: string; paymentMethod?: string; installments?: number; notes?: string; status?: string } | null;
   const patient = body?.patientId ? await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId } }) : null;
   const total = Number(body?.total);

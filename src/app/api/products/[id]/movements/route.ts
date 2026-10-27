@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { lockLots, lotBalances, materialDetail } from "@/lib/stock";
 import { manualMovement } from "@/lib/stock-rules";
@@ -7,7 +8,7 @@ import { manualMovement } from "@/lib/stock-rules";
 async function adminUser(requireActiveTrial = false) {
   const user = await getCurrentUser({ requireActiveTrial });
   if (!user) return { error: NextResponse.json({ message: "Não autenticado." }, { status: 401 }) };
-  if (user.role !== "ADMIN") return { error: NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 }) };
+  if (!canForUser(user, "stock:manage")) return { error: NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 }) };
   return { user };
 }
 

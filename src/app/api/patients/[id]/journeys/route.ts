@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyUnless } from "@/lib/api-guards";
 import { appointmentHasPassed, clinicNow } from "@/lib/clinic-time";
 import { approvedProcedureNames, isProcedureAppointmentName, splitCombinedProcedureName } from "@/lib/procedure-session-rules";
 import { prisma } from "@/lib/prisma";
@@ -90,6 +91,8 @@ async function serializeJourneys(patientId: string, clinicId: string, journeys: 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
   const patientId = (await params).id;
   if (!await getPatient(patientId, user.clinicId)) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
   const url = new URL(request.url);
@@ -149,6 +152,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
   const patientId = (await params).id;
   if (!await getPatient(patientId, user.clinicId)) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
   const body = await request.json().catch(() => null) as { name?: string; professionalId?: string } | null;
@@ -168,6 +173,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
   const patientId = (await params).id;
   if (!await getPatient(patientId, user.clinicId)) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
   const body = await request.json().catch(() => null) as { journeyId?: string; name?: string } | null;

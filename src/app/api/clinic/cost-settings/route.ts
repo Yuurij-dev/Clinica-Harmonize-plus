@@ -1,22 +1,79 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { canForUser } from "@/lib/permissions";
 import { parseClockMinutes } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
 
-const settingsSelect = { name: true, cnpj: true, phone: true, email: true, address: true, appointmentNotificationsEnabled: true, appointmentNotificationSoundEnabled: true, stockNotificationsEnabled: true, requireCancellationReason: true, autoMarkMissedAppointmentsEnabled: true, autoCompleteAppointmentsEnabled: true, autoAdvancePatientJourneyEnabled: true, allowAppointmentsOutsideHours: true, laborCost: true, facilityCost: true, medicationCost: true, appointmentToleranceMinutes: true, openingTime: true, closingTime: true, professionalOpeningTime: true, professionalClosingTime: true, professionalHourlyCost: true } as const;
+type ClinicSettings = {
+  name: string;
+  cnpj: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  appointmentNotificationsEnabled: boolean;
+  appointmentNotificationSoundEnabled: boolean;
+  stockNotificationsEnabled: boolean;
+  requireCancellationReason: boolean;
+  autoMarkMissedAppointmentsEnabled: boolean;
+  autoCompleteAppointmentsEnabled: boolean;
+  autoAdvancePatientJourneyEnabled: boolean;
+  allowAppointmentsOutsideHours: boolean;
+  laborCost: number;
+  facilityCost: number;
+  medicationCost: number;
+  appointmentToleranceMinutes: number;
+  openingTime: string;
+  closingTime: string;
+  professionalOpeningTime: string;
+  professionalClosingTime: string;
+  professionalHourlyCost: number;
+};
+
+async function loadClinicSettings(clinicId: string): Promise<ClinicSettings | null> {
+  const rows = await prisma.$queryRaw<Array<{ settings: ClinicSettings }>>`
+    SELECT jsonb_build_object(
+      'name', to_jsonb(c)->'name',
+      'cnpj', to_jsonb(c)->'cnpj',
+      'phone', to_jsonb(c)->'phone',
+      'email', to_jsonb(c)->'email',
+      'address', to_jsonb(c)->'address',
+      'appointmentNotificationsEnabled', to_jsonb(c)->'appointmentNotificationsEnabled',
+      'appointmentNotificationSoundEnabled', to_jsonb(c)->'appointmentNotificationSoundEnabled',
+      'stockNotificationsEnabled', to_jsonb(c)->'stockNotificationsEnabled',
+      'requireCancellationReason', COALESCE(to_jsonb(c)->'requireCancellationReason', 'false'::jsonb),
+      'autoMarkMissedAppointmentsEnabled', COALESCE(to_jsonb(c)->'autoMarkMissedAppointmentsEnabled', 'true'::jsonb),
+      'autoCompleteAppointmentsEnabled', COALESCE(to_jsonb(c)->'autoCompleteAppointmentsEnabled', 'true'::jsonb),
+      'autoAdvancePatientJourneyEnabled', COALESCE(to_jsonb(c)->'autoAdvancePatientJourneyEnabled', 'true'::jsonb),
+      'allowAppointmentsOutsideHours', COALESCE(to_jsonb(c)->'allowAppointmentsOutsideHours', 'false'::jsonb),
+      'laborCost', to_jsonb(c)->'laborCost',
+      'facilityCost', to_jsonb(c)->'facilityCost',
+      'medicationCost', to_jsonb(c)->'medicationCost',
+      'appointmentToleranceMinutes', to_jsonb(c)->'appointmentToleranceMinutes',
+      'openingTime', to_jsonb(c)->'openingTime',
+      'closingTime', to_jsonb(c)->'closingTime',
+      'professionalOpeningTime', to_jsonb(c)->'professionalOpeningTime',
+      'professionalClosingTime', to_jsonb(c)->'professionalClosingTime',
+      'professionalHourlyCost', to_jsonb(c)->'professionalHourlyCost'
+    ) AS settings
+    FROM "Clinic" AS c
+    WHERE c."id" = ${clinicId}
+  `;
+  return rows[0]?.settings ?? null;
+}
 
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  if (!canForUser(user, "settings:manage")) return NextResponse.json({ message: "Acesso restrito à administração da clínica." }, { status: 403 });
 
-  const settings = await prisma.clinic.findUnique({ where: { id: user.clinicId }, select: settingsSelect });
+  const settings = await loadClinicSettings(user.clinicId);
   return NextResponse.json({ settings });
 }
 
 export async function PATCH(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  if (!canForUser(user, "settings:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
 
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   const laborCost = Number(body?.laborCost);
@@ -45,7 +102,7 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ message: "Confira os dados, horários, custos e a tolerância informados." }, { status: 400 });
   }
 
-  const settings = await prisma.clinic.update({
+  await prisma.clinic.update({
     where: { id: user.clinicId },
     data: {
       ...(body?.name !== undefined ? { name } : {}),
@@ -67,7 +124,8 @@ export async function PATCH(request: Request) {
       ...(professionalOpeningTime !== null ? { professionalOpeningTime } : {}),
       ...(professionalClosingTime !== null ? { professionalClosingTime } : {}),
     },
-    select: settingsSelect,
+    select: { id: true },
   });
+  const settings = await loadClinicSettings(user.clinicId);
   return NextResponse.json({ settings });
 }

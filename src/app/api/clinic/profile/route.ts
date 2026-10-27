@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { canForUser } from "@/lib/permissions";
 import { parseClockMinutes } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
 
 export async function PATCH(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  if (!canForUser(user, "settings:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
 
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   const name = typeof body?.name === "string" ? body.name.trim() : "";

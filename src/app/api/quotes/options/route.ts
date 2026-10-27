@@ -3,10 +3,12 @@ import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { procedureImageSelect, withImage } from "@/lib/procedure-server";
 import { describeTechnicalSheet } from "@/lib/stock-rules";
+import { canForUser } from "@/lib/permissions";
 
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  if (!canForUser(user, "quotes:access")) return NextResponse.json({ message: "Seu cargo não tem acesso a orçamentos." }, { status: 403 });
 
   // Pacientes não vêm mais aqui: os seletores pesquisam sob demanda em /api/patients/lookup.
   const [procedures, clinic] = await Promise.all([
