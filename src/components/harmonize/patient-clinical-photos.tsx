@@ -228,6 +228,12 @@ function AnnotationLayer({ annotations, width, height }: { annotations: Annotati
       return <g key={item.id}><polyline points={pairs.join(" ")} fill="none" stroke={stroke} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />{item.type === "arrow" ? <polygon fill={stroke} points={`${x2},${y2} ${x2 - size * Math.cos(angle - 0.4)},${y2 - size * Math.sin(angle - 0.4)} ${x2 - size * Math.cos(angle + 0.4)},${y2 - size * Math.sin(angle + 0.4)}`} /> : null}</g>;
     }
     if (item.type === "ellipse") { const w = Math.abs(item.width ?? 0); const h = Math.abs(item.height ?? 0); const x = Math.min(item.x ?? 0, (item.x ?? 0) + (item.width ?? 0)); const y = Math.min(item.y ?? 0, (item.y ?? 0) + (item.height ?? 0)); return <ellipse key={item.id} cx={x + w / 2} cy={y + h / 2} rx={w / 2} ry={h / 2} fill="none" stroke={stroke} strokeWidth={strokeWidth} />; }
+    if (item.type === "rectangle" || item.type === "triangle") {
+      const w = Math.abs(item.width ?? 0); const h = Math.abs(item.height ?? 0); const x = Math.min(item.x ?? 0, (item.x ?? 0) + (item.width ?? 0)); const y = Math.min(item.y ?? 0, (item.y ?? 0) + (item.height ?? 0));
+      return item.type === "rectangle"
+        ? <rect key={item.id} x={x} y={y} width={w} height={h} fill="none" stroke={stroke} strokeWidth={strokeWidth} strokeLinejoin="round" />
+        : <polygon key={item.id} points={`${x + w / 2},${y} ${x + w},${y + h} ${x},${y + h}`} fill="none" stroke={stroke} strokeWidth={strokeWidth} strokeLinejoin="round" />;
+    }
     if (item.type === "point") return <circle key={item.id} cx={item.x} cy={item.y} r={item.radius ?? 6} fill={stroke} />;
     if (item.type === "text") return <text key={item.id} x={item.x} y={(item.y ?? 0) + (item.fontSize ?? 16)} fill={stroke} fontSize={item.fontSize ?? 16} fontFamily="Inter, Arial, sans-serif">{item.text}</text>;
     return null;

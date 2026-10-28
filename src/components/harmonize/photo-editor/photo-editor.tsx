@@ -25,6 +25,7 @@ import { ReadOnlyStageNotice } from "../readonly-stage-notice";
 import { revealValidationTarget } from "../reveal-validation-target";
 import { JourneyProgress } from "../journey-progress";
 import type { AnnotationSnapshot, EditorTool, EvaluationPhoto, PhotoAnnotation } from "./types";
+import { annotationLimitMessage, exceedsAnnotationLimit, pushHistory, restyleAnnotation } from "@/lib/photo-annotation-rules";
 import type { Patient } from "@/types/clinic";
 
 const EditorCanvas = dynamic(
@@ -96,7 +97,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   const [savedPreviews, setSavedPreviews] = useState<Array<{ photo: EvaluationPhoto; dataUrl: string }>>([]);
   const isEncounterMode = Boolean(encounter);
   const activePhoto = photos.find((photo) => photo.id === activePhotoId) ?? null;
-  // No celular o canvas cabe na largura do contêiner (só a visualização escala; as anotações seguem em coordenadas da imagem).
+  // O canvas cabe na largura do contêiner (só a visualização escala; as anotações seguem em coordenadas da imagem).
   const canvasWrapRef = useRef<HTMLDivElement>(null);
   const [canvasWidth, setCanvasWidth] = useState<number | null>(null);
   const fitScale = activePhoto
@@ -105,13 +106,11 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   useEffect(() => {
     const element = canvasWrapRef.current;
     if (!element) return;
-    const mobile = window.matchMedia("(max-width: 1023.98px)");
-    const update = () => setCanvasWidth(mobile.matches ? element.clientWidth : null);
+    const update = () => setCanvasWidth(element.clientWidth);
     update();
     const observer = new ResizeObserver(update);
     observer.observe(element);
-    mobile.addEventListener("change", update);
-    return () => { observer.disconnect(); mobile.removeEventListener("change", update); };
+    return () => { observer.disconnect(); };
   }, [isLoading, loadError, activePhotoId]);
   const displayScale = fitScale * zoom;
   const canUndo = Boolean(activePhotoId && past[activePhotoId]?.length);
@@ -254,13 +253,41 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   }
 
   function commitAnnotations(next: PhotoAnnotation[], previous: AnnotationSnapshot) {
-    if (!activePhotoId) return;
+    if (!activePhotoId) return false;
+    // O PUT recusa mais de 1000 marcações por foto: avisa aqui em vez de falhar calado no autosave.
+    if (exceedsAnnotationLimit(next, previous)) { showNotice(annotationLimitMessage, "info"); return false; }
     setPast((current) => ({
       ...current,
-      [activePhotoId]: [...(current[activePhotoId] ?? []), previous],
+      [activePhotoId]: pushHistory(current[activePhotoId] ?? [], previous),
     }));
     setFuture((current) => ({ ...current, [activePhotoId]: [] }));
     updatePhotoAnnotations(next);
+    return true;
+  }
+
+  // Seleciona uma marcação e leva a cor/espessura dela para a barra; trocar cor ou espessura com algo selecionado edita a marcação (como no app).
+  function selectAnnotation(id: string | null) {
+    setSelectedId(id);
+    const target = id ? activePhoto?.annotations.find((annotation) => annotation.id === id) : undefined;
+    if (!target) return;
+    setColor(target.color);
+    if (target.type !== "text" && target.type !== "point") setStrokeWidth(target.strokeWidth);
+  }
+
+  const styleEditRef = useRef<{ id: string; at: number } | null>(null);
+  function restyleSelected(patch: { color?: string; strokeWidth?: number }) {
+    if (!activePhoto || !selectedId) return;
+    const target = activePhoto.annotations.find((annotation) => annotation.id === selectedId);
+    if (!target) return;
+    const restyled = restyleAnnotation(target, patch);
+    if (restyled.color === target.color && restyled.strokeWidth === target.strokeWidth) return;
+    const next = activePhoto.annotations.map((annotation) => annotation.id === selectedId ? restyled : annotation);
+    const now = Date.now();
+    const recent = styleEditRef.current;
+    // Arrastar o controle de espessura gera vários eventos: um só passo no histórico.
+    if (recent && recent.id === selectedId && now - recent.at < 800) updatePhotoAnnotations(next);
+    else commitAnnotations(next, activePhoto.annotations);
+    styleEditRef.current = { id: selectedId, at: now };
   }
 
   function undo() {
@@ -271,7 +298,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     setPast((current) => ({ ...current, [activePhoto.id]: history.slice(0, -1) }));
     setFuture((current) => ({
       ...current,
-      [activePhoto.id]: [...(current[activePhoto.id] ?? []), activePhoto.annotations],
+      [activePhoto.id]: pushHistory(current[activePhoto.id] ?? [], activePhoto.annotations),
     }));
     updatePhotoAnnotations(previous);
     setSelectedId(null);
@@ -559,14 +586,14 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
           <div className="min-w-0">
             {encounter || evaluationId ? <AssessmentForm assessment={assessment} errors={assessmentErrors} validationAttempt={assessmentValidationAttempt} onChange={changeAssessment} /> : null}
             <IncomingPhotoStatus active={receivingPhoto} />
-            <section id="evaluation-photo-card" tabIndex={-1} className={cn("mt-4 grid scroll-mt-24 grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)]", encounter && "rounded-md border border-[#e3e5f0] bg-white p-3 sm:p-4", saveError && "border-destructive")} aria-label="Registro fotográfico e marcação">
-              {encounter ? <div className="flex items-center gap-2 lg:col-span-2"><Camera className="h-4 w-4 text-primary" /><h3 className="text-sm font-bold">Registro fotográfico e marcação</h3></div> : null}
-              {isLoading ? <div className="grid min-h-[420px] gap-4 rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-5 lg:col-span-2"><LoadingSkeleton className="h-7 w-52" /><LoadingSkeleton className="h-3 w-80" /><div className="grid min-h-[300px] place-items-center rounded-[7px] border border-[#e4e6ef] bg-white"><div className="w-full max-w-md space-y-3 px-8"><LoadingSkeleton className="h-56 w-full" /><LoadingSkeleton className="mx-auto h-3 w-40" /><LoadingSkeleton className="mx-auto h-2.5 w-56" /></div></div></div> : loadError ? <div className="grid min-h-[360px] place-items-center rounded-lg border border-destructive/20 bg-destructive/5 p-6 text-center"><div><p className="text-sm font-semibold text-destructive">Não foi possível carregar esta avaliação.</p><Button className="mt-3" variant="outline" onClick={() => { setLoadError(false); setIsLoading(true); setLoadAttempt((value) => value + 1); }}>Tentar novamente</Button></div></div> : showResult ? <EvaluationResult onEdit={() => setShowResult(false)} previews={savedPreviews} /> : (<>
-                <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 lg:grid-cols-[minmax(150px,0.45fr)_minmax(0,1fr)]">
-                  <EditorToolbar canRedo={canRedo} canUndo={canUndo} color={color} strokeWidth={strokeWidth} hasSelection={Boolean(selectedId)} onClear={clearAnnotations} onColorChange={setColor} onStrokeWidthChange={setStrokeWidth} onDeleteSelected={deleteSelected} onExport={exportImage} onRedo={redo} onSave={() => { if (encounter) void autosave.flush(); else void saveEvaluation(); }} onToolChange={(nextTool) => { setTool(nextTool); if (nextTool !== "select") setSelectedId(null); }} onUndo={undo} onZoomIn={() => setZoom((value) => Math.min(2.25, value + 0.15))} onZoomOut={() => setZoom((value) => Math.max(0.55, value - 0.15))} onZoomReset={() => setZoom(1)} isSaving={isSaving} readOnly={readOnly} tool={tool} />
+            <section id="evaluation-photo-card" tabIndex={-1} className={cn("mt-4 grid scroll-mt-24 grid-cols-[minmax(0,1fr)] gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(240px,0.5fr)]", encounter && "rounded-md border border-[#e3e5f0] bg-white p-3 sm:p-4", saveError && "border-destructive")} aria-label="Registro fotográfico e marcação">
+              {encounter ? <div className="flex items-center gap-2 2xl:col-span-2"><Camera className="h-4 w-4 text-primary" /><h3 className="text-sm font-bold">Registro fotográfico e marcação</h3></div> : null}
+              {isLoading ? <div className="grid min-h-[420px] gap-4 rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-5 2xl:col-span-2"><LoadingSkeleton className="h-7 w-52" /><LoadingSkeleton className="h-3 w-80" /><div className="grid min-h-[300px] place-items-center rounded-[7px] border border-[#e4e6ef] bg-white"><div className="w-full max-w-md space-y-3 px-8"><LoadingSkeleton className="h-56 w-full" /><LoadingSkeleton className="mx-auto h-3 w-40" /><LoadingSkeleton className="mx-auto h-2.5 w-56" /></div></div></div> : loadError ? <div className="grid min-h-[360px] place-items-center rounded-lg border border-destructive/20 bg-destructive/5 p-6 text-center"><div><p className="text-sm font-semibold text-destructive">Não foi possível carregar esta avaliação.</p><Button className="mt-3" variant="outline" onClick={() => { setLoadError(false); setIsLoading(true); setLoadAttempt((value) => value + 1); }}>Tentar novamente</Button></div></div> : showResult ? <EvaluationResult onEdit={() => setShowResult(false)} previews={savedPreviews} /> : (<>
+                <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 lg:grid-cols-[184px_minmax(0,1fr)]">
+                  <EditorToolbar canRedo={canRedo} canUndo={canUndo} color={color} strokeWidth={strokeWidth} hasSelection={Boolean(selectedId)} onClear={clearAnnotations} onColorChange={(next) => { setColor(next); restyleSelected({ color: next }); }} onStrokeWidthChange={(next) => { setStrokeWidth(next); restyleSelected({ strokeWidth: next }); }} onDeleteSelected={deleteSelected} onExport={exportImage} onRedo={redo} onSave={() => { if (encounter) void autosave.flush(); else void saveEvaluation(); }} onToolChange={(nextTool) => { setTool(nextTool); if (nextTool !== "select") setSelectedId(null); }} onUndo={undo} onZoomIn={() => setZoom((value) => Math.min(2.25, value + 0.15))} onZoomOut={() => setZoom((value) => Math.max(0.55, value - 0.15))} onZoomReset={() => setZoom(1)} isSaving={isSaving} readOnly={readOnly} tool={tool} />
                   <div ref={canvasWrapRef} className="min-w-0">
                   {encounter ? <div className="mb-3 flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={() => void openCamera()}><Camera className="h-4 w-4" />Capturar foto</Button><Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}><ImagePlus className="h-4 w-4" />Upload de fotos</Button><input ref={fileInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} />{activePhoto ? <Button size="sm" variant="outline" onClick={() => setPreviewPhoto(activePhoto)}><Maximize2 className="h-4 w-4" />Ampliar foto</Button> : null}</div> : null}
-                  {activePhoto ? <EditorCanvas color={color} strokeWidth={strokeWidth} onCommitAnnotations={commitAnnotations} onPreviewAnnotations={updatePhotoAnnotations} onSelect={setSelectedId} photo={activePhoto} scale={displayScale} selectedId={selectedId} tool={tool} /> : <label className="flex min-h-[360px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed border-[#cfd3e4] bg-[#fbfbfe] px-5 text-center transition hover:border-[#5147dc] hover:bg-[#f8f7ff]"><span className="grid h-12 w-12 place-items-center rounded-full bg-[#efedff] text-[#5147dc]"><ImagePlus className="h-5 w-5" /></span><strong className="mt-4 text-sm">Adicione a primeira foto da avaliação</strong><span className="mt-1 max-w-sm text-xs leading-5 text-[#858696]">JPG, PNG ou WEBP. A imagem original fica preservada e as marcações são armazenadas separadamente.</span><span className="mt-4 inline-flex items-center rounded-[7px] bg-[#5147dc] px-4 py-2 text-xs font-bold text-white">Escolher foto</span><input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} /></label>}
+                  {activePhoto ? <EditorCanvas color={color} strokeWidth={strokeWidth} onCommitAnnotations={commitAnnotations} onPreviewAnnotations={updatePhotoAnnotations} onSelect={selectAnnotation} photo={activePhoto} scale={displayScale} selectedId={selectedId} tool={tool} /> : <label className="flex min-h-[360px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed border-[#cfd3e4] bg-[#fbfbfe] px-5 text-center transition hover:border-[#5147dc] hover:bg-[#f8f7ff]"><span className="grid h-12 w-12 place-items-center rounded-full bg-[#efedff] text-[#5147dc]"><ImagePlus className="h-5 w-5" /></span><strong className="mt-4 text-sm">Adicione a primeira foto da avaliação</strong><span className="mt-1 max-w-sm text-xs leading-5 text-[#858696]">JPG, PNG ou WEBP. A imagem original fica preservada e as marcações são armazenadas separadamente.</span><span className="mt-4 inline-flex items-center rounded-[7px] bg-[#5147dc] px-4 py-2 text-xs font-bold text-white">Escolher foto</span><input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} /></label>}
                   {photoUploadError ? <p id="evaluation-photo-upload-error" tabIndex={-1} role="alert" className="mt-2 scroll-mt-24 text-xs font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{photoUploadError}</p> : null}
                   {saveError ? <p id="evaluation-save-error" tabIndex={-1} role="alert" className="mt-2 scroll-mt-24 text-xs text-destructive animate-[hp-shake_0.42s_ease-in-out]">{saveError}</p> : null}
                 </div>
@@ -711,6 +738,7 @@ function drawAnnotation(context: CanvasRenderingContext2D, annotation: PhotoAnno
   context.lineJoin = "round";
 
   if (annotation.type === "text") {
+    context.textBaseline = "top"; // y é o topo do texto, como no editor
     context.font = `${annotation.fontSize}px Inter, Arial, sans-serif`;
     context.fillText(annotation.text, annotation.x, annotation.y);
     context.restore();
@@ -728,9 +756,22 @@ function drawAnnotation(context: CanvasRenderingContext2D, annotation: PhotoAnno
     return;
   }
 
-  if (annotation.type === "ellipse") {
+  if (annotation.type === "ellipse" || annotation.type === "rectangle" || annotation.type === "triangle") {
+    const left = Math.min(annotation.x, annotation.x + annotation.width);
+    const top = Math.min(annotation.y, annotation.y + annotation.height);
+    const boxWidth = Math.abs(annotation.width);
+    const boxHeight = Math.abs(annotation.height);
     context.beginPath();
-    context.ellipse(annotation.x + annotation.width / 2, annotation.y + annotation.height / 2, Math.abs(annotation.width / 2), Math.abs(annotation.height / 2), 0, 0, Math.PI * 2);
+    if (annotation.type === "ellipse") {
+      context.ellipse(left + boxWidth / 2, top + boxHeight / 2, boxWidth / 2, boxHeight / 2, 0, 0, Math.PI * 2);
+    } else if (annotation.type === "rectangle") {
+      context.rect(left, top, boxWidth, boxHeight);
+    } else {
+      context.moveTo(left + boxWidth / 2, top);
+      context.lineTo(left + boxWidth, top + boxHeight);
+      context.lineTo(left, top + boxHeight);
+      context.closePath();
+    }
     context.stroke();
     context.restore();
     return;

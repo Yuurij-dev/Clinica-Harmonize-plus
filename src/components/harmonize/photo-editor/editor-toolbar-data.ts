@@ -1,18 +1,19 @@
-import { ArrowUpRight, Circle, Eraser, MousePointer2, Move, Pencil, Slash, Type } from "lucide-react";
+import { ArrowUpRight, Circle, CircleDot, Eraser, MousePointer2, Pencil, Slash, Square, Triangle, Type } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { EditorTool } from "./types";
 
+// Mesmas ferramentas do editor do app: Lápis, Borracha, Mover e as formas; Ponto e Texto continuam da versão web.
 export const editorTools: { id: EditorTool; label: string; short: string; icon: LucideIcon }[] = [
-  { id: "select", label: "Seleção", short: "Seleção", icon: MousePointer2 },
-  { id: "pan", label: "Mover foto", short: "Mover", icon: Move },
-  { id: "pen", label: "Desenho livre", short: "Pincel", icon: Pencil },
-  { id: "point", label: "Ponto", short: "Ponto", icon: Circle },
-  { id: "line", label: "Linha", short: "Linha", icon: Slash },
-  { id: "curve", label: "Curva", short: "Curva", icon: Pencil },
-  { id: "arrow", label: "Seta", short: "Seta", icon: ArrowUpRight },
-  { id: "ellipse", label: "Círculo/elipse", short: "Forma", icon: Circle },
-  { id: "text", label: "Texto", short: "Texto", icon: Type },
+  { id: "pen", label: "Lápis (desenho livre)", short: "Lápis", icon: Pencil },
   { id: "eraser", label: "Borracha", short: "Borracha", icon: Eraser },
+  { id: "select", label: "Mover e selecionar formas", short: "Mover", icon: MousePointer2 },
+  { id: "line", label: "Linha", short: "Linha", icon: Slash },
+  { id: "arrow", label: "Seta", short: "Seta", icon: ArrowUpRight },
+  { id: "rectangle", label: "Retângulo", short: "Retângulo", icon: Square },
+  { id: "ellipse", label: "Elipse", short: "Elipse", icon: Circle },
+  { id: "triangle", label: "Triângulo", short: "Triângulo", icon: Triangle },
+  { id: "point", label: "Ponto", short: "Ponto", icon: CircleDot },
+  { id: "text", label: "Texto", short: "Texto", icon: Type },
 ];
 
 export const editorColors = [

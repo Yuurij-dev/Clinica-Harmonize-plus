@@ -75,7 +75,7 @@ function DesktopToolbar({
       <div>
         <p className="mb-2 text-xs font-black text-[#303144]">Ferramentas de desenho</p>
         <div className="grid grid-cols-2 gap-1.5">
-        {editorTools.map(({ id, label, icon: Icon }) => (
+        {editorTools.map(({ id, label, short, icon: Icon }) => (
           <button
             aria-label={label}
             className={cn(
@@ -90,7 +90,7 @@ function DesktopToolbar({
             onClick={() => onToolChange(id)}
           >
             <Icon className="h-4 w-4" />
-            <span>{label === "Círculo/elipse" ? "Forma" : label === "Desenho livre" ? "Pincel" : label}</span>
+            <span>{short}</span>
           </button>
         ))}
         </div>
@@ -138,9 +138,9 @@ function DesktopToolbar({
           <Save className="h-3.5 w-3.5 shrink-0" />
           <span className="min-w-0 text-center">{isSaving ? "Salvando..." : "Salvar avaliação"}</span>
         </Button>
-        <Button className="w-full min-w-0 justify-center whitespace-normal px-2 leading-4" size="sm" variant="secondary" onClick={onExport}>
+        <Button className="w-full min-w-0 justify-center whitespace-nowrap px-2 leading-4" size="sm" variant="secondary" aria-label="Exportar imagem" onClick={onExport}>
           <Download className="h-3.5 w-3.5 shrink-0" />
-          <span className="min-w-0 text-center">Exportar imagem</span>
+          <span className="min-w-0 text-center">Exportar</span>
         </Button>
         <Button className="w-full min-w-0 justify-center whitespace-normal px-2 leading-4 border-[#f2c8c3] text-[#b42318] hover:border-[#b42318] hover:text-[#b42318]" size="sm" variant="secondary" onClick={onClear}>
           <Trash2 className="h-3.5 w-3.5 shrink-0" />
