@@ -142,7 +142,6 @@ export function MiniTable({
 }) {
   return (
     <>
-    <RowCards columns={columns} rows={rows} />
     <div className="hp-panel-enter overflow-hidden rounded-lg border border-border bg-card shadow-sm max-lg:hidden">
       <Table className="min-w-[720px]">
         <TableHeader>
@@ -155,6 +154,7 @@ export function MiniTable({
         </TableBody>
       </Table>
     </div>
+    <RowCards columns={columns} rows={rows} />
     </>
   );
 }

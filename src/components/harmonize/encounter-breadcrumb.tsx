@@ -18,7 +18,7 @@ export function EncounterBreadcrumb({
   journeyName: string;
   stage: string;
 }) {
-  const buttonClass = "rounded-sm transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
+  const buttonClass = "rounded-sm transition-colors max-lg:min-h-11 max-lg:px-1 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
 
   return (
     <nav aria-label="Navegação do atendimento" className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">

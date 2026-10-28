@@ -64,7 +64,7 @@ export function MobileMoreSheet({ open, onOpenChange, active, sections, onSelect
               const Icon = item.icon;
               const isActive = active === item.id;
               return (
-                <button key={item.id} type="button" aria-current={isActive ? "page" : undefined} className={cn("hp-pressable flex min-h-20 min-w-0 flex-col items-center justify-center gap-1.5 rounded-lg border px-1 text-center leading-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", isActive ? "border-primary bg-accent text-accent-foreground" : "border-border text-foreground hover:bg-muted")} onClick={() => onSelect(item.id)}>
+                <button key={item.id} type="button" aria-current={isActive ? "page" : undefined} className={cn("hp-pressable flex min-h-20 min-w-0 flex-col items-center justify-center gap-1.5 rounded-lg border px-1 text-center leading-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", isActive ? "border-primary bg-accent text-accent-foreground" : "border-input text-foreground hover:bg-muted")} onClick={() => onSelect(item.id)}>
                   <Icon aria-hidden="true" className="h-5 w-5 text-primary" />
                   <span className="max-w-full break-words text-xs font-medium">{item.label}</span>
                 </button>

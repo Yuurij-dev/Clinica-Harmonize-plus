@@ -212,10 +212,10 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, 
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="icon" aria-label="Notificações" onClick={primeNotificationAudio} className="relative">
               <Bell className="h-5 w-5" />
-              {notificationCount ? <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#e0647d] px-1 text-xs font-black text-white ring-2 ring-background">{notificationCount}</span> : null}
+              {notificationCount ? <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-[#c9415e] px-1 text-xs font-black text-white ring-2 ring-background">{notificationCount}</span> : null}
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="max-h-[70vh] w-[min(20rem,calc(100vw-2rem))] overflow-y-auto p-4">
+          <DropdownMenuContent align="end" className="max-h-[70vh] w-[min(20rem,calc(100vw-2rem))] overflow-y-auto p-4 max-lg:border-input">
             <p className="text-xs font-semibold">Notificações</p>
             {appointmentAlerts.length ? appointmentAlerts.map((alert) => <p className="mt-3 rounded-md bg-accent p-3 text-xs leading-5 text-accent-foreground" key={alert.id}>{alert.message}</p>) : <><p className="mt-3 rounded-md bg-muted p-3 text-xs leading-5 text-muted-foreground">Nenhum atendimento no horário neste momento.</p><p className="mt-2 rounded-md bg-muted p-3 text-xs leading-5 text-muted-foreground">As notificações dos próximos atendimentos aparecerão aqui.</p></>}
             {stockAlerts.length ? <>

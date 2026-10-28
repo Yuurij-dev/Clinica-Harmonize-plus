@@ -150,7 +150,7 @@ export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (
                 ) : <ClientAvatar name={appointment.patient?.name ?? "Paciente"} />}
                 <div className="min-w-0 flex-1">
                   {appointment.patient?.id ? (
-                    <Link className={`block truncate text-sm font-bold text-[#121733] ${patientNameLinkClassName}`} href={`/clientes?patient=${encodeURIComponent(appointment.patient.id)}`} onClick={(event) => event.stopPropagation()}>
+                    <Link className={`block truncate max-lg:line-clamp-2 max-lg:whitespace-normal text-sm font-bold text-[#121733] ${patientNameLinkClassName}`} href={`/clientes?patient=${encodeURIComponent(appointment.patient.id)}`} onClick={(event) => event.stopPropagation()}>
                       {appointment.patient.name}
                     </Link>
                   ) : <p className="truncate text-sm font-bold text-[#121733]">{appointment.patient?.name ?? "Paciente"}</p>}
@@ -174,7 +174,7 @@ export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (
                 <div className="flex min-w-0 items-center gap-3">
                   <PatientAvatarLink patientId={patient.id} patientName={patient.name} />
                   <div className="min-w-0">
-                    <Link className={`block truncate font-bold text-[#121733] ${patientNameLinkClassName}`} href={`/clientes?patient=${encodeURIComponent(patient.id)}`}>
+                    <Link className={`block truncate max-lg:line-clamp-2 max-lg:whitespace-normal font-bold text-[#121733] ${patientNameLinkClassName}`} href={`/clientes?patient=${encodeURIComponent(patient.id)}`}>
                       {patient.name}
                     </Link>
                     <p className="text-sm text-[#65708b]">{patient.lastVisit ? new Date(patient.lastVisit).toLocaleDateString("pt-BR") : "Sem atendimento"}</p>
@@ -202,7 +202,7 @@ export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (
                       <PatientAvatarLink patientId={quote.patient.id} patientName={quote.patient.name} />
                     ) : <ClientAvatar name={quote.patient?.name ?? "Paciente"} />}
                     {quote.patient?.id ? (
-                      <Link className={`min-w-0 truncate font-bold text-[#121733] ${patientNameLinkClassName}`} href={`/clientes?patient=${encodeURIComponent(quote.patient.id)}`}>
+                      <Link className={`min-w-0 truncate max-lg:line-clamp-2 max-lg:whitespace-normal font-bold text-[#121733] ${patientNameLinkClassName}`} href={`/clientes?patient=${encodeURIComponent(quote.patient.id)}`}>
                         {quote.patient.name}
                       </Link>
                     ) : <p className="truncate font-bold text-[#121733]">{quote.patient?.name ?? "Paciente"}</p>}
@@ -266,7 +266,7 @@ function DashboardListActions({ canShowMore, onShowMore, onNavigate, destination
 }
 
 function ClientAvatar({ name }: { name: string }) {
-  const tones = ["#5147dc", "#6257e8", "#2f9c88", "#6d5ce7"];
+  const tones = ["#5147dc", "#6257e8", "#23806f", "#6d5ce7"];
   const tone = tones[name.split("").reduce((sum, character) => sum + character.charCodeAt(0), 0) % tones.length];
   return <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[10px] font-black text-white" style={{ backgroundColor: tone }}>{getInitials(name)}</span>;
 }

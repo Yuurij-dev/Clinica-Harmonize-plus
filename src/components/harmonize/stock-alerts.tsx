@@ -104,7 +104,7 @@ export function SectionWarning({ section, enabled, inMenu = false }: { section: 
   const Trigger = inMenu ? "span" : "button";
   return (
     <span className="group/warning relative inline-flex">
-      <Trigger type={inMenu ? undefined : "button"} aria-label={label} className={cn("grid place-items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", inMenu ? "h-6 w-6" : "h-8 w-8")}>
+      <Trigger type={inMenu ? undefined : "button"} aria-label={label} className={cn("grid place-items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", inMenu ? "h-6 w-6" : "h-8 w-8 max-lg:h-11 max-lg:w-11")}>
         <span aria-hidden="true" className={cn("stock-alert-dot block rounded-full", inMenu ? "h-1.5 w-1.5" : "h-2 w-2")} />
       </Trigger>
       <span role="tooltip" className={cn("pointer-events-none invisible absolute z-50 w-72 rounded-md border border-border bg-card p-3 text-left opacity-0 shadow-lg transition-opacity duration-150 group-hover/warning:visible group-hover/warning:opacity-100 group-focus-within/warning:visible group-focus-within/warning:opacity-100", inMenu ? "left-full top-1/2 ml-2 -translate-y-1/2" : "left-0 top-full mt-2")}>

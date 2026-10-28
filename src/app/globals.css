@@ -1199,3 +1199,70 @@ body:has(input:not([type="checkbox"], [type="radio"], [type="button"], [type="su
     min-height: 2.75rem;
   }
 }
+
+/* overflow-x: hidden no body e no html faz o body virar contêiner de rolagem e a topbar sticky nunca gruda. No celular usa clip. */
+@media (max-width: 1023.98px) {
+  body {
+    overflow-x: clip;
+  }
+}
+
+/* Contraste no tema escuro (celular): botão primário com texto branco >= 4.5:1 e bordas de componentes >= 3:1. */
+/* Só botões (não pontos, barras nem switches) e só no celular. #766cf0 (token) + branco = 4.06:1; #6358ec + branco = 5.08:1. */
+@media (max-width: 1023.98px) {
+  html.dark button[class~="bg-primary"]:not(:disabled) {
+    background-color: #6358ec;
+  }
+
+  html.dark button[class~="bg-primary"]:not(:disabled):hover {
+    background-color: #5a4fe0;
+  }
+
+  html.dark {
+    --input: #6b7192;
+  }
+
+  /* A regra global de campos no escuro fixa #34384c (1.5:1); no celular a borda usa o token --input (3.6:1). */
+  html.dark input,
+  html.dark select,
+  html.dark textarea {
+    border-color: var(--input);
+  }
+}
+
+/* Alturas da topbar e da barra inferior no celular; barra do editor, FAB e rodapés dependem delas. */
+:root {
+  --hp-topbar-h: 69px;
+  --hp-nav-h: 3.5rem;
+}
+
+@media (max-width: 1023.98px) and (max-height: 500px) and (orientation: landscape) {
+  :root {
+    --hp-topbar-h: 57px;
+    --hp-nav-h: 2.75rem;
+  }
+}
+
+/* Viewport curto (teclado aberto ou paisagem): a barra do editor deixa de ser sticky e a de ações fica compacta. */
+@media (max-width: 1023.98px) and (max-height: 520px) {
+  .hp-editor-bar {
+    position: static;
+  }
+
+  .hp-editor-actions {
+    padding: 0.25rem 0.5rem;
+  }
+}
+
+/* Celular em paisagem (pouca altura): barra inferior e topbar mais baixas, rótulo ao lado do ícone. */
+@media (max-width: 1023.98px) and (max-height: 500px) and (orientation: landscape) {
+  .hp-mobile-nav button {
+    min-height: 2.75rem;
+    flex-direction: row;
+    gap: 0.5rem;
+  }
+
+  header.sticky {
+    padding-block: 0.375rem;
+  }
+}

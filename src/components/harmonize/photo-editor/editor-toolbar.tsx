@@ -1,19 +1,11 @@
 "use client";
 
 import {
-  ArrowUpRight,
-  Circle,
   Download,
-  Eraser,
-  MousePointer2,
-  Pencil,
-  Move,
   Redo2,
   RotateCcw,
   Save,
-  Slash,
   Trash2,
-  Type,
   Undo2,
   ZoomIn,
   ZoomOut,
@@ -22,49 +14,10 @@ import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { EditorTool } from "./types";
+import { EditorMobileActions, EditorMobileBar } from "./editor-mobile-bar";
+import { editorColors, editorTools } from "./editor-toolbar-data";
 
-const tools: { id: EditorTool; label: string; icon: LucideIcon }[] = [
-  { id: "select", label: "Seleção", icon: MousePointer2 },
-  { id: "pan", label: "Mover foto", icon: Move },
-  { id: "pen", label: "Desenho livre", icon: Pencil },
-  { id: "point", label: "Ponto", icon: Circle },
-  { id: "line", label: "Linha", icon: Slash },
-  { id: "curve", label: "Curva", icon: Pencil },
-  { id: "arrow", label: "Seta", icon: ArrowUpRight },
-  { id: "ellipse", label: "Círculo/elipse", icon: Circle },
-  { id: "text", label: "Texto", icon: Type },
-  { id: "eraser", label: "Borracha", icon: Eraser },
-];
-
-const colors = [
-  { label: "Vermelho", value: "#ff3b30" },
-  { label: "Roxo", value: "#6c4cff" },
-  { label: "Azul", value: "#2563eb" },
-  { label: "Verde", value: "#16a34a" },
-  { label: "Branco", value: "#ffffff" },
-];
-
-export function EditorToolbar({
-  tool,
-  color,
-  strokeWidth,
-  canUndo,
-  canRedo,
-  hasSelection,
-  onToolChange,
-  onColorChange,
-  onStrokeWidthChange,
-  onUndo,
-  onRedo,
-  onZoomIn,
-  onZoomOut,
-  onZoomReset,
-  onDeleteSelected,
-  onClear,
-  onSave,
-  onExport,
-  isSaving,
-}: {
+export type EditorToolbarProps = {
   tool: EditorTool;
   color: string;
   strokeWidth: number;
@@ -84,13 +37,45 @@ export function EditorToolbar({
   onSave: () => void;
   onExport: () => void;
   isSaving?: boolean;
-}) {
+  /** Avaliação só para leitura: a barra fixa do celular (fora do `inert` do editor) desabilita as ações. */
+  readOnly?: boolean;
+};
+
+export function EditorToolbar(props: EditorToolbarProps) {
+  return <>
+    <EditorMobileBar {...props} />
+    <EditorMobileActions readOnly={props.readOnly} isSaving={props.isSaving} onClear={props.onClear} onExport={props.onExport} onSave={props.onSave} />
+    <DesktopToolbar {...props} />
+  </>;
+}
+
+function DesktopToolbar({
+  tool,
+  color,
+  strokeWidth,
+  canUndo,
+  canRedo,
+  hasSelection,
+  onToolChange,
+  onColorChange,
+  onStrokeWidthChange,
+  onUndo,
+  onRedo,
+  onZoomIn,
+  onZoomOut,
+  onZoomReset,
+  onDeleteSelected,
+  onClear,
+  onSave,
+  onExport,
+  isSaving,
+}: EditorToolbarProps) {
   return (
-    <div className="flex flex-col gap-4 rounded-[8px] border border-[#e3e5f0] bg-white p-3 text-[#303144] shadow-[0_8px_24px_rgba(38,39,58,0.05)] lg:w-[192px]">
+    <div className="flex flex-col gap-4 rounded-[8px] border border-[#e3e5f0] bg-white p-3 max-lg:hidden text-[#303144] shadow-[0_8px_24px_rgba(38,39,58,0.05)] lg:w-[192px]">
       <div>
         <p className="mb-2 text-xs font-black text-[#303144]">Ferramentas de desenho</p>
         <div className="grid grid-cols-2 gap-1.5">
-        {tools.map(({ id, label, icon: Icon }) => (
+        {editorTools.map(({ id, label, icon: Icon }) => (
           <button
             aria-label={label}
             className={cn(
@@ -119,7 +104,7 @@ export function EditorToolbar({
       <div className="border-t border-[#ececf3] pt-3">
         <p className="mb-2 text-xs font-black text-[#303144]">Cores</p>
         <div className="grid grid-cols-5 gap-1.5">
-        {colors.map((item) => (
+        {editorColors.map((item) => (
           <button
             aria-label={item.label}
             className={cn(
