@@ -3277,6 +3277,97 @@ async function paginationGaps() {
   }
 }
 
+// GET /api/patients/active-procedures: sessões "Em execução" da clínica logada (ADMIN/PROFESSIONAL; STAFF não).
+async function activeProcedures() {
+  const url = "/api/patients/active-procedures";
+  const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+  const dataUrl = `data:image/png;base64,${pngB64}`;
+  const staffEmail = `e2e-ap-staff-${run}@example.com`, staffPassword = `E2e-${run}-Staff9!`;
+  const proEmail = `e2e-ap-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
+  const otherEmail = `e2e-ap-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E ProcAtivos Externa ${run}`;
+  const members = [];
+  // Cria paciente, jornada, avaliação, orçamento aprovado e sessão (Rascunho) pelas rotas, na sessão atual.
+  const mkSession = async (label) => {
+    const procName = `E2E AP Proc ${label} ${run}`;
+    await api("POST", "/api/procedures", { name: procName, category: "Facial", price: 500, durationMinutes: 30, margin: 30 });
+    const proc = (await api("GET", "/api/quotes/options")).data.procedures?.find((item) => item.name === procName);
+    const patient = (await api("POST", "/api/patients", { name: `E2E AP Paciente ${label} ${run}`, phone: "11999990060", age: 33, cpf: randomCpf() })).data.patient;
+    const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
+    const journey = (await api("POST", `/api/patients/${patient.id}/journeys`, { name: `E2E AP Jornada ${label} ${run}`, professionalId: professional?.id })).data.journey;
+    const ev = (await api("PUT", `/api/patients/${patient.id}/evaluation`, { journeyId: journey.id, photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
+    const q = await api("POST", "/api/quotes", { patientId: patient.id, journeyId: journey.id, evaluationId: ev.id, details: [{ procedureId: proc.id, quantity: 1, discountCents: 0 }], paymentMethod: "Pix", installments: 1, notes: "" });
+    for (const status of ["Enviado", "Aprovado"]) await api("PATCH", `/api/quotes/${q.data.quote.id}`, { status, evaluationId: ev.id });
+    const s = await api("POST", `/api/patients/${patient.id}/procedure-sessions`, { journeyId: journey.id, quoteId: q.data.quote.id });
+    return { patient, journey, procName, session: s.data.session };
+  };
+  try {
+    let r = await withSession("", () => api("GET", url));
+    check("procedimentos ativos: sem sessão => 401", r.status === 401, r.status);
+
+    r = await api("GET", url);
+    check("procedimentos ativos: clínica sem sessões em execução => lista vazia", r.status === 200 && Array.isArray(r.data.sessions) && r.data.sessions.length === 0, `${r.status} ${JSON.stringify(r.data).slice(0, 100)}`);
+
+    // Três sessões na clínica de teste: A iniciada pela rota, B continua rascunho, C inicia e depois conclui.
+    const A = await mkSession("A"), B = await mkSession("B"), C = await mkSession("C");
+    check("procedimentos ativos: sessões criadas", A.session?.id && B.session?.id && C.session?.id, JSON.stringify([A.session?.id, B.session?.id, C.session?.id]));
+    if (!A.session || !B.session || !C.session) return;
+    const form = new FormData();
+    form.set("file", new Blob([Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n")], { type: "application/pdf" }), "Termo ap.pdf");
+    form.set("category", "TERMOS"); form.set("signatureStatus", "ASSINADO"); form.set("journeyId", A.journey.id);
+    const up = await fetch(`${baseUrl}/api/patients/${A.patient.id}/documents`, { method: "POST", headers: { cookie }, body: form });
+    check("procedimentos ativos: termo assinado enviado", up.status === 201, up.status);
+    r = await api("PATCH", `/api/patients/${A.patient.id}/procedure-sessions/${A.session.id}`, { status: "Em execução", technique: "E2E técnica", treatedAreas: "E2E região", photos: [{ id: `ph-${run}`, phase: "Antes", imageUrl: dataUrl, name: "antes", width: 1, height: 1 }] });
+    check("procedimentos ativos: sessão A iniciada pela rota", r.status === 200 && r.data.session?.status === "Em execução", `${r.status}`);
+    await prisma.patientProcedureSession.update({ where: { id: C.session.id }, data: { status: "Em execução" } });
+
+    const listIds = (res) => (res.data.sessions ?? []).map((x) => x.id);
+    r = await api("GET", url);
+    check("procedimentos ativos: ADMIN vê A e C em execução e não vê o rascunho B", r.status === 200 && listIds(r).includes(A.session.id) && listIds(r).includes(C.session.id) && !listIds(r).includes(B.session.id) && r.data.sessions.length === 2, `${r.status} ${JSON.stringify(listIds(r))}`);
+    const itemA = r.data.sessions?.find((x) => x.id === A.session.id);
+    check("procedimentos ativos: valores de A (paciente, jornada, procedimento)", itemA?.patientId === A.patient.id && itemA.journeyId === A.journey.id && itemA.procedureName === A.procName && itemA.patientName === A.patient.name && itemA.journeyName === A.journey.name, JSON.stringify(itemA));
+    const allowed = ["id", "patientId", "journeyId", "procedureName", "patientName", "journeyName"].sort().join();
+    check("procedimentos ativos: só os 6 campos enxutos (sem fotos, materiais, histórico)", r.data.sessions.every((x) => Object.keys(x).sort().join() === allowed) && Object.keys(r.data).join() === "sessions" && !JSON.stringify(r.data).includes("data:image") && !JSON.stringify(r.data).includes("auditLog"), JSON.stringify(Object.keys(itemA ?? {})));
+
+    await prisma.patientProcedureSession.update({ where: { id: C.session.id }, data: { status: "Concluída" } });
+    r = await api("GET", url);
+    check("procedimentos ativos: sessão concluída some da lista", r.status === 200 && listIds(r).join() === A.session.id, JSON.stringify(listIds(r)));
+
+    const sessions = {};
+    for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
+      const t = await api("POST", "/api/team", { name: `E2E ${role} AP`, email: memberEmail, password: memberPassword, role, cpf: randomCpf(), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
+      if (t.status === 201) members.push(t.data.member);
+      sessions[role] = t.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
+      if (sessions[role]?.status !== 200) check(`procedimentos ativos: usuário ${role} criado`, false, `team ${t.status}`);
+    }
+    if (sessions.STAFF?.status === 200) {
+      r = await withSession(sessions.STAFF.cookie, () => api("GET", url));
+      check("procedimentos ativos: STAFF => 403 sem dados", r.status === 403 && !JSON.stringify(r.data).includes(A.patient.name), `${r.status} ${JSON.stringify(r.data).slice(0, 100)}`);
+    }
+    if (sessions.PROFESSIONAL?.status === 200) {
+      r = await withSession(sessions.PROFESSIONAL.cookie, () => api("GET", url));
+      check("procedimentos ativos: PROFESSIONAL vê a sessão em execução", r.status === 200 && listIds(r).join() === A.session.id, `${r.status} ${JSON.stringify(listIds(r))}`);
+    }
+
+    // Outra clínica: a sessão dela nunca aparece aqui, e a nossa não aparece lá.
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990022", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    if (other?.status !== 200) { check("procedimentos ativos: clínica externa criada", false, `register ${r.status}`); return; }
+    const X = await withSession(other.cookie, async () => {
+      const made = await mkSession("X");
+      if (made.session) await prisma.patientProcedureSession.update({ where: { id: made.session.id }, data: { status: "Em execução" } });
+      return { made, mine: await api("GET", url) };
+    });
+    check("procedimentos ativos: clínica externa vê só a própria sessão", X.mine.status === 200 && listIds(X.mine).join() === X.made.session?.id, `${X.mine.status} ${JSON.stringify(listIds(X.mine))}`);
+    r = await api("GET", url);
+    check("procedimentos ativos: sessão da outra clínica não aparece na clínica de teste", r.status === 200 && !listIds(r).includes(X.made.session?.id) && !JSON.stringify(r.data).includes(`E2E AP Paciente X ${run}`), JSON.stringify(listIds(r)));
+  } finally {
+    for (const member of members) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [otherEmail, staffEmail, proEmail] } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: [otherEmail, staffEmail, proEmail] } } });
+  }
+}
+
 // Partes do roteiro, na ordem em que rodam. `needs` lista as partes que criam os dados que esta usa.
 // Conflitos de agenda: o mesmo profissional ou paciente não tem dois atendimentos sobrepostos (criar, remarcar, reativar, concorrência).
 async function scheduleConflicts() {
@@ -5206,6 +5297,7 @@ const suites = {
   telas: { needs: ["orcamentos"], run: (state) => browser(state.homonym) },
   login: { needs: [], run: () => loginLockout() },
   fotos: { needs: [], run: async () => { await mobilePhotos(); await mobilePhotosGaps(); } },
+  procedimentos_ativos: { needs: [], run: () => activeProcedures() },
 };
 
 // Sem nomes, roda tudo. Com nomes, roda essas partes e as que elas precisam.
