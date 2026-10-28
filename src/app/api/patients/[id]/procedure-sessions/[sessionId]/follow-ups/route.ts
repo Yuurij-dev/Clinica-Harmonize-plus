@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { denyUnless } from "@/lib/api-guards";
 import { appointmentDay, clinicToday } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
+import { parseJson } from "@/lib/procedure-session-rules";
 
 type FollowUpPhotoInput = { id: string; name: string; category: string; imageUrl: string; width: number; height: number; phase?: "Antes" | "Depois" | "Evolução" };
 
@@ -185,7 +186,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   return NextResponse.json({ followUp: { ...record, photos } }, { status: 201 });
 }
 
-function parseJson<T>(value: string, fallback: T): T { try { return JSON.parse(value) as T; } catch { return fallback; } }
 async function getBeforePhotoIds(patientId: string, clinicId: string, journeyId: string) {
   const sessions = await prisma.patientProcedureSession.findMany({
     where: { patientId, clinicId, journeyId, status: "Concluída" },

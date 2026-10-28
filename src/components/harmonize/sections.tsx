@@ -1350,10 +1350,11 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
   type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; createdAt?: string; patient?: { name: string } | null };
   type QuoteRow = Quote & { createdAt?: string };
   type QuoteOptions = { procedures?: Array<{ id: string; name: string; price: number; image?: { url: string | null } | null }>; costs?: { laborCost: number; facilityCost: number; medicationCost: number } };
-  const cachedQuotes = readClientCache<{ quotes?: ApiQuote[] }>("/api/quotes");
+  const cachedQuotes = readClientCache<{ quotes?: ApiQuote[]; hasMore?: boolean }>("/api/quotes");
   const cachedQuoteOptions = readClientCache<QuoteOptions>("/api/quotes/options");
   const [quoteRows, setQuoteRows] = useState<QuoteRow[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
-  const [isLoading, setIsLoading] = useState(!cachedQuotes);
+  const [loadedQuotesKey, setLoadedQuotesKey] = useState(cachedQuotes ? "/api/quotes" : "");
+  const [quotesHasMore, setQuotesHasMore] = useState(Boolean(cachedQuotes?.hasMore));
   const [isSaving, setIsSaving] = useState(false);
   const [selectedQuotePatient, setSelectedQuotePatient] = useState<LookupPatient | null>(null);
   const [quoteProcedures, setQuoteProcedures] = useState(cachedQuoteOptions?.procedures ?? []);
@@ -1365,15 +1366,22 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
   const [statusFilter, setStatusFilter] = useState("Todos");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  // O período vai ao servidor: a lista traz os 200 mais recentes dele, então orçamentos antigos aparecem ao filtrar.
+  const quotesKey = periodListKey("/api/quotes", dateFrom, dateTo);
+  const isLoading = loadedQuotesKey !== quotesKey;
   const [selectedPatientId, setSelectedPatientId] = useState("");
   const [selectedProcedureNames, setSelectedProcedureNames] = useState<string[]>([]);
 
   useEffect(() => {
-    getCachedJson<{ quotes?: ApiQuote[] }>("/api/quotes").then((data) => {
+    let active = true;
+    getCachedJson<{ quotes?: ApiQuote[]; hasMore?: boolean }>(quotesKey).then((data) => {
+      if (!active) return;
       setQuoteRows((data.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
-      setIsLoading(false);
-    }).catch(() => setIsLoading(false));
-  }, []);
+      setQuotesHasMore(Boolean(data.hasMore));
+      setLoadedQuotesKey(quotesKey);
+    }).catch(() => { if (active) setLoadedQuotesKey(quotesKey); });
+    return () => { active = false; };
+  }, [quotesKey]);
 
   useEffect(() => {
     getCachedJson<QuoteOptions>("/api/quotes/options").then((data) => {
@@ -1416,7 +1424,8 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
 
   async function sendQuote(quote: QuoteRow) {
     if (!quote.id) return;
-    await fetch(`/api/quotes/${quote.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Enviado" }) });
+    const response = await fetch(`/api/quotes/${quote.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "Enviado" }) });
+    if (!response.ok) { toast.error(await responseMessage(response, "Não foi possível marcar o orçamento como enviado.")); return; }
     setQuoteRows((current) => current.map((item) => item.id === quote.id ? { ...item, status: "Enviado" } : item));
     invalidateClientCache("/api/quotes", "/api/dashboard/bootstrap");
     onSaved?.("Orçamento marcado como enviado.");
@@ -1449,9 +1458,10 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
           <span className="font-black text-[#1438ff]" key={quote.total}>{quote.total}</span>,
           <StatusBadge key={quote.status} status={quote.status} />,
           quote.expires,
-          <Button key="send" size="sm" variant="secondary" disabled={quote.status === "Enviado"} onClick={() => sendQuote(quote)}>{quote.status === "Enviado" ? "Enviado" : "Enviar"}</Button>,
+          <Button key="send" size="sm" variant="secondary" disabled={!["Rascunho", "Pendente"].includes(quote.status)} onClick={() => sendQuote(quote)}>{quote.status === "Enviado" ? "Enviado" : "Enviar"}</Button>,
         ])}
       /> : <EmptyState title="Nenhum orçamento encontrado" description="Ajuste os filtros ou a pesquisa para encontrar orçamentos." />}
+      {!isLoading && quotesHasMore ? <p className="mt-2 text-xs text-[#68697b]" role="status">Mostrando os 200 orçamentos mais recentes{dateFrom || dateTo ? " do período" : ""}. Use o filtro de datas para ver os anteriores.</p> : null}
       <Modal open={openCreate} onClose={onCreateClose} title="Novo orçamento" description="Crie uma proposta comercial para o cliente.">
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={saveQuote}>
           <div className="relative sm:col-span-2">
@@ -1475,13 +1485,17 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
 
 export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
   type ApiPayment = { id: string; value: number; method: string; date: string; status: string; installments: string; patient?: { name: string } | null };
-  const cachedPayments = readClientCache<{ payments?: ApiPayment[] }>("/api/payments");
+  const cachedPayments = readClientCache<{ payments?: ApiPayment[]; hasMore?: boolean }>("/api/payments");
   const [paymentRows, setPaymentRows] = useState<Payment[]>(() => (cachedPayments?.payments ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), dateRaw: item.date, status: item.status, installments: item.installments })));
-  const [isLoading, setIsLoading] = useState(!cachedPayments);
+  const [loadedPaymentsKey, setLoadedPaymentsKey] = useState(cachedPayments ? "/api/payments" : "");
+  const [paymentsHasMore, setPaymentsHasMore] = useState(Boolean(cachedPayments?.hasMore));
   const [isSaving, setIsSaving] = useState(false);
   const [methodFilter, setMethodFilter] = useState("Todos");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  // O período vai ao servidor (ver a lista de orçamentos).
+  const paymentsKey = periodListKey("/api/payments", dateFrom, dateTo);
+  const isLoading = loadedPaymentsKey !== paymentsKey;
   const [paymentPatientQuery, setPaymentPatientQuery] = useState("");
   const [paymentPatient, setPaymentPatient] = useState<LookupPatient | null>(null);
   const paymentLookup = usePatientLookup(paymentPatientQuery, !paymentPatient);
@@ -1494,11 +1508,15 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
   });
 
   useEffect(() => {
-    getCachedJson<{ payments?: ApiPayment[] }>("/api/payments").then((data) => {
+    let active = true;
+    getCachedJson<{ payments?: ApiPayment[]; hasMore?: boolean }>(paymentsKey).then((data) => {
+      if (!active) return;
       setPaymentRows((data.payments ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), dateRaw: item.date, status: item.status, installments: item.installments })));
-      setIsLoading(false);
-    }).catch(() => setIsLoading(false));
-  }, []);
+      setPaymentsHasMore(Boolean(data.hasMore));
+      setLoadedPaymentsKey(paymentsKey);
+    }).catch(() => { if (active) setLoadedPaymentsKey(paymentsKey); });
+    return () => { active = false; };
+  }, [paymentsKey]);
 
   async function savePayment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patientId = paymentPatient?.id ?? ""; const patient = paymentPatient?.name ?? "Paciente";
@@ -1551,6 +1569,7 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
           payment.installments,
         ])}
       />}
+      {!isLoading && paymentsHasMore ? <p className="mt-2 text-xs text-[#68697b]" role="status">Mostrando os 200 pagamentos mais recentes{dateFrom || dateTo ? " do período" : ""}. Use o filtro de datas para ver os anteriores.</p> : null}
       <Modal open={openCreate} onClose={onCreateClose} title="Registrar pagamento" description="O lançamento aparecerá imediatamente no histórico financeiro.">
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={savePayment}>
           <div className="relative sm:col-span-2">
@@ -1569,6 +1588,12 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
       </Modal>
     </div>
   );
+}
+
+// Chave (e URL) da lista com o período no servidor; ?from/&to só quando preenchidos.
+function periodListKey(base: string, from: string, to: string) {
+  const params = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) }).toString();
+  return params ? `${base}?${params}` : base;
 }
 
 export function ReportsSection() {

@@ -1,15 +1,8 @@
 import { NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
+import { adminUser } from "@/lib/api-guards";
 import { prisma } from "@/lib/prisma";
 import { lockLots, lotBalances, materialDetail } from "@/lib/stock";
 import { manualMovement } from "@/lib/stock-rules";
-
-async function adminUser(requireActiveTrial = false) {
-  const user = await getCurrentUser({ requireActiveTrial });
-  if (!user) return { error: NextResponse.json({ message: "Não autenticado." }, { status: 401 }) };
-  if (user.role !== "ADMIN") return { error: NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 }) };
-  return { user };
-}
 
 // Histórico de movimentações do material (ou de um lote), da mais recente para a mais antiga.
 // Com type=attendance lista só as saídas em pacientes (rastreio de recall), paginado por ?page.

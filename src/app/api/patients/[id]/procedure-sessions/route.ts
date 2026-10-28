@@ -8,12 +8,7 @@ import { consentSummary } from "@/lib/consent-rules";
 import { prisma } from "@/lib/prisma";
 import { lotBalances } from "@/lib/stock";
 import { seedDraftMaterials } from "@/lib/session-materials";
-import { combinedProcedureName, shouldRefreshDraftName } from "@/lib/procedure-session-rules";
-
-type SessionPhotoInput = { id?: string; name?: string; phase?: string; category?: string; imageUrl?: string; sourceEvaluationPhotoId?: string; width?: number; height?: number };
-type MaterialInput = { productId?: string; quantity?: number; allocations?: Array<{ lotId?: string; quantity?: number }> };
-const statuses = new Set(["Rascunho", "Em execução", "Concluída"]);
-const phases = new Set(["Antes", "Imediatamente após"]);
+import { combinedProcedureName, parseJson, shouldRefreshDraftName, type SessionPhotoInput } from "@/lib/procedure-session-rules";
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
@@ -123,10 +118,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   return NextResponse.json({ session: { ...session, materials: parseJson<unknown[]>(session.materials, []), photos: [], auditLog: parseJson<unknown[]>(session.auditLog, []) }, reused }, { status: reused ? 200 : 201 });
 }
 
-function parseJson<T>(value: string, fallback: T): T {
-  try { return JSON.parse(value) as T; } catch { return fallback; }
-}
-
 function restoreLegacyQuoteItems(value: string, procedures: Array<{ id: string; name: string }>) {
   const items = value.split(",").map((item) => item.trim());
   return procedures.flatMap((procedure) => {
@@ -145,31 +136,4 @@ function resolvePhotos(value: string, evaluationPhotos: Array<{ id: string; name
     }
     return photo.imageUrl ? [photo] : [];
   });
-}
-
-export function validateSessionPayload(body: unknown) {
-  const value = body as Record<string, unknown> | null;
-  if (!value || !statuses.has(String(value.status ?? "Rascunho"))) return "Status de sessão inválido.";
-  for (const field of ["technique", "treatedAreas", "anesthesia", "complications", "observations"] as const) {
-    if (value[field] !== undefined && (typeof value[field] !== "string" || value[field].length > 5000)) return "Revise os campos clínicos da sessão.";
-  }
-  if (value.professional !== undefined && (typeof value.professional !== "string" || !value.professional.trim() || value.professional.length > 160)) return "Informe o profissional responsável.";
-  for (const field of ["estimatedMinutes", "durationMinutes"] as const) if (value[field] !== undefined && value[field] !== null && (!Number.isInteger(value[field]) || Number(value[field]) < 0 || Number(value[field]) > 1440)) return "A duração deve ser um número de minutos válido.";
-  if (value.performedAt !== undefined && (typeof value.performedAt !== "string" || !Number.isFinite(new Date(value.performedAt).getTime()))) return "Data da sessão inválida.";
-  for (const field of ["startedAt", "endedAt"] as const) if (value[field] !== undefined && value[field] !== null && (typeof value[field] !== "string" || !Number.isFinite(new Date(value[field]).getTime()))) return "Horário da sessão inválido.";
-  if (value.materials !== undefined && (!Array.isArray(value.materials) || value.materials.length > 40 || value.materials.some((item) => !isMaterial(item)))) return "Revise os produtos e quantidades informados.";
-  if (value.photos !== undefined && (!Array.isArray(value.photos) || value.photos.length > 20 || value.photos.some((photo) => !isPhoto(photo)))) return "Revise as fotografias. São aceitas até 20 imagens válidas por sessão.";
-  return null;
-}
-
-function isMaterial(value: unknown): value is MaterialInput {
-  const item = value as MaterialInput | null;
-  return Boolean(item && typeof item.productId === "string" && item.productId && Number.isFinite(item.quantity) && Number(item.quantity) > 0 && Number(item.quantity) <= 10000 && (!item.allocations || (Array.isArray(item.allocations) && item.allocations.length <= 20 && item.allocations.every((allocation) => typeof allocation.lotId === "string" && allocation.lotId && Number.isFinite(allocation.quantity) && Number(allocation.quantity) > 0))));
-}
-
-function isPhoto(value: unknown): value is SessionPhotoInput {
-  const photo = value as SessionPhotoInput | null;
-  if (!photo || typeof photo.id !== "string" || !photo.id || !phases.has(String(photo.phase))) return false;
-  if (photo.sourceEvaluationPhotoId) return photo.phase === "Antes" && !photo.imageUrl;
-  return typeof photo.imageUrl === "string" && /^data:image\/(jpeg|png|webp);base64,/i.test(photo.imageUrl) && photo.imageUrl.length <= 8_500_000 && typeof photo.name === "string" && photo.name.length <= 180 && Number.isInteger(photo.width) && Number(photo.width) > 0 && Number(photo.width) <= 8000 && Number.isInteger(photo.height) && Number(photo.height) > 0 && Number(photo.height) <= 8000 && Number(photo.width) * Number(photo.height) <= 25_000_000;
 }

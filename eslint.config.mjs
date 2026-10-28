@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Rascunhos e specs locais (ignorados pelo Git).
+    ".scratch/**",
   ]),
 ]);
 

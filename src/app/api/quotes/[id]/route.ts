@@ -3,7 +3,8 @@ import { getCurrentUser } from "@/lib/auth";
 import { serializeQuote, toCents } from "@/lib/finance";
 import { prisma } from "@/lib/prisma";
 import { can, quoteChangeAllowed, quoteProfessional } from "@/lib/permissions";
-import { calculateQuote, type QuoteLineInput } from "@/lib/quote-rules";
+import type { QuoteLineInput } from "@/lib/quote-rules";
+import { quoteDetails, quotePaymentMethods } from "@/lib/quote-server";
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
@@ -48,6 +49,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (!quoteChangeAllowed(user.role, { current: existing.status, next: body?.status, editsContent })) {
     return NextResponse.json({ message: "Orçamento já fechado: só administrador ou profissional pode alterar." }, { status: 403 });
   }
+  // Com sessão de procedimento registrada, o orçamento fica fechado: só alterna entre Aprovado e Pago.
+  // O "desfazer pagamento" acontece antes de existir sessão, então não é afetado.
+  const reopening = body?.status !== undefined && ["Aprovado", "Pago"].includes(existing.status) && !["Aprovado", "Pago"].includes(body.status);
+  if (reopening && await prisma.patientProcedureSession.count({ where: { clinicId: user.clinicId, quoteId: id } })) {
+    return NextResponse.json({ message: "Este orçamento já tem sessão de procedimento registrada e não pode voltar a um status anterior à aprovação." }, { status: 409 });
+  }
   const updateData = {
     ...(nextItems ? { items: nextItems } : {}),
     ...(nextTotalCents !== undefined ? { totalCents: nextTotalCents } : {}),
@@ -55,7 +62,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     ...(body?.notes !== undefined ? { notes: body.notes.trim() } : {}),
     ...(body?.installments !== undefined ? { installments: body.installments } : {}),
     ...(requestedEvaluationId ? { evaluationId: requestedEvaluationId } : {}),
-    ...(body?.paymentMethod && ["Cartão de crédito", "Cartão de débito", "Pix", "Dinheiro", "Boleto", "Transferência"].includes(body.paymentMethod) ? { paymentMethod: body.paymentMethod } : {}),
+    ...(body?.paymentMethod && quotePaymentMethods.includes(body.paymentMethod) ? { paymentMethod: body.paymentMethod } : {}),
     ...(body?.status ? { status: body.status } : {}),
     updatedBy: user.name,
     ...(body?.status === "Enviado" && existing.status !== "Enviado" ? { sentAt: new Date(), sentBy: user.name } : {}),
@@ -74,16 +81,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       create: { clinicId: user.clinicId, patientId: quote.patientId, journeyId: quote.journeyId, quoteId: quote.id, name: quote.items, professional: quoteProfessional(user.role, user.name), performedAt: new Date() },
     });
   } else if (quote && body?.status && quote.patientId) {
-    // Pagamento desfeito: remove o procedimento gerado pelo orçamento, desde que ainda não tenha fotos.
-    await prisma.patientProcedure.deleteMany({ where: { clinicId: user.clinicId, quoteId: quote.id, beforePhoto: null, afterPhoto: null, photoSessions: { none: {} } } });
+    // Pagamento desfeito: remove o procedimento gerado pelo orçamento, desde que ainda não tenha fotos nem sessões
+    // (a sessão é apagada em cascata com o procedimento; orçamento de avaliação sempre cai aqui ao mudar de status).
+    await prisma.patientProcedure.deleteMany({ where: { clinicId: user.clinicId, quoteId: quote.id, beforePhoto: null, afterPhoto: null, photoSessions: { none: {} }, sessions: { none: {} } } });
   }
   return NextResponse.json({ quote: quote ? serializeQuote(quote) : null });
-}
-
-async function quoteDetails(lines: QuoteLineInput[], clinicId: string) {
-  const procedures = await prisma.procedure.findMany({ where: { clinicId }, select: { id: true, name: true, price: true } });
-  const costs = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { laborCost: true, facilityCost: true, medicationCost: true } });
-  const costSnapshot = { laborCents: toCents(costs?.laborCost ?? 0), facilityCents: toCents(costs?.facilityCost ?? 0), medicationCents: toCents(costs?.medicationCost ?? 0) };
-  const calculated = calculateQuote(lines, procedures.map((procedure) => ({ id: procedure.id, name: procedure.name, priceCents: toCents(procedure.price) })), costSnapshot);
-  return calculated ? { ...calculated, costs: costSnapshot } : null;
 }

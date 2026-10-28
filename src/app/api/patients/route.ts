@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { rejectInvalidCpf } from "@/lib/patient-cpf";
+import { duplicateCpfResponse, rejectInvalidCpf } from "@/lib/patient-cpf";
 import { patientListSelect, searchPatientIds, withCurrentStage } from "@/lib/patient-list-server";
 import { cpfForRole, isMaskedCpf, patientsForRole } from "@/lib/patient-cpf-mask";
 import { paginationMeta, parsePatientListQuery, type PatientSort } from "@/lib/patient-list-rules";
@@ -85,7 +85,8 @@ export async function POST(request: Request) {
       totalValue: Number.isFinite(body?.totalValue) ? Math.max(0, Number(body?.totalValue)) : 0,
       clinicId: user.clinicId,
     },
-  });
+  }).catch((error: unknown) => duplicateCpfResponse(error) ?? Promise.reject(error));
+  if (patient instanceof NextResponse) return patient;
   return NextResponse.json({ patient: cpfForRole(user.role, patient) }, { status: 201 });
 }
 

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { rejectInvalidCpf } from "@/lib/patient-cpf";
+import { duplicateCpfResponse, rejectInvalidCpf } from "@/lib/patient-cpf";
 import { canSeeFullCpf, cpfForRole, isMaskedCpf } from "@/lib/patient-cpf-mask";
 import { patientListSelect, withCurrentStage } from "@/lib/patient-list-server";
 import { isPatientIdFormat } from "@/lib/patient-list-rules";
@@ -42,7 +42,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const patient = await prisma.patient.updateMany({
     where: { id, clinicId: user.clinicId },
     data: { name, cpf, phone, age },
-  });
+  }).catch((error: unknown) => duplicateCpfResponse(error) ?? Promise.reject(error));
+  if (patient instanceof NextResponse) return patient;
   if (!patient.count) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
 
   const updated = await prisma.patient.findFirst({ where: { id, clinicId: user.clinicId } });

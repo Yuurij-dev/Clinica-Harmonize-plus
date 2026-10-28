@@ -69,53 +69,49 @@ export async function getCurrentUser({ requireActiveTrial = false }: CurrentUser
   const userId = await verifiedUserId(cookieToken) ?? await verifiedUserId(parseBearerToken((await headers()).get("authorization")));
   if (!userId) return null;
 
-  try {
-    const cached = authCache.get(userId);
-    if (cached?.expiresAt && cached.expiresAt > Date.now()) {
-      const cachedUser = cached.pending ? await cached.pending : cached.value ?? null;
-      return requireActiveTrial && cachedUser?.trialExpired ? null : cachedUser;
-    }
-
-    const pending = prisma.user.findUnique({
-        where: { id: userId },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          memberships: {
-            take: 1,
-            orderBy: { id: "asc" },
-            select: { role: true, isOwner: true, clinic: { select: { id: true, name: true, slug: true, trialEndsAt: true } } },
-          },
-        },
-      }).then((user): AuthenticatedUser | null => {
-      const membership = user?.memberships[0];
-      if (!user || !membership) return null;
-      return {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: membership.role,
-        isOwner: membership.isOwner,
-        clinicId: membership.clinic.id,
-        trialExpired: Boolean(membership.clinic.trialEndsAt && membership.clinic.trialEndsAt.getTime() <= Date.now()),
-        clinic: membership.clinic,
-      };
-    });
-    const entry = { expiresAt: Date.now() + authCacheTtl, pending };
-    authCache.set(userId, entry);
-    let user: AuthenticatedUser | null;
-    try {
-      user = await pending;
-    } catch (error) {
-      // Falha momentânea do banco não pode virar 401 em cache por 15 s.
-      if (authCache.get(userId) === entry) authCache.delete(userId);
-      throw error;
-    }
-    authCache.set(userId, { expiresAt: Date.now() + authCacheTtl, value: user });
-    return requireActiveTrial && user?.trialExpired ? null : user;
-  } catch {
-    return null;
+  const cached = authCache.get(userId);
+  if (cached?.expiresAt && cached.expiresAt > Date.now()) {
+    const cachedUser = cached.pending ? await cached.pending : cached.value ?? null;
+    return requireActiveTrial && cachedUser?.trialExpired ? null : cachedUser;
   }
+
+  const pending = prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        memberships: {
+          take: 1,
+          orderBy: { id: "asc" },
+          select: { role: true, isOwner: true, clinic: { select: { id: true, name: true, slug: true, trialEndsAt: true } } },
+        },
+      },
+    }).then((user): AuthenticatedUser | null => {
+    const membership = user?.memberships[0];
+    if (!user || !membership) return null;
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: membership.role,
+      isOwner: membership.isOwner,
+      clinicId: membership.clinic.id,
+      trialExpired: Boolean(membership.clinic.trialEndsAt && membership.clinic.trialEndsAt.getTime() <= Date.now()),
+      clinic: membership.clinic,
+    };
+  });
+  const entry = { expiresAt: Date.now() + authCacheTtl, pending };
+  authCache.set(userId, entry);
+  let user: AuthenticatedUser | null;
+  try {
+    user = await pending;
+  } catch (error) {
+    // Falha do banco não fica em cache nem vira 401: o erro sobe e a rota responde 500 (o cliente mantém a sessão).
+    if (authCache.get(userId) === entry) authCache.delete(userId);
+    throw error;
+  }
+  authCache.set(userId, { expiresAt: Date.now() + authCacheTtl, value: user });
+  return requireActiveTrial && user?.trialExpired ? null : user;
 }

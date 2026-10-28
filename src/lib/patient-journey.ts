@@ -19,6 +19,10 @@ export async function ensurePatientJourney(patientId: string, clinicId: string, 
 
   // Com `tx` (chamador já dentro de transação, ex.: sob advisory lock) reaproveita a conexão em vez de abrir outra.
   const create = async (transaction: Prisma.TransactionClient) => {
+    // Dois pedidos simultâneos de um paciente sem jornada: o segundo espera a trava e reaproveita a jornada do primeiro.
+    await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`patient-journey:${patientId}`}))`;
+    const created = await transaction.patientJourney.findFirst({ where: { patientId, clinicId, archivedAt: null }, orderBy: { createdAt: "asc" } });
+    if (created) return created;
     const journey = await transaction.patientJourney.create({
       data: { patientId, clinicId, name: "Jornada 1" },
     });
