@@ -7,6 +7,9 @@ import { AppToaster } from "./app-toaster";
 import { Dashboard } from "./dashboard";
 import { AnimatedPage } from "./animated-page";
 import { Sidebar } from "./sidebar";
+import { MobileNav } from "./mobile-nav";
+import { MobileMoreSheet } from "./mobile-more-sheet";
+import { QuickCreateFab } from "./quick-create-fab";
 import { StockSection } from "./stock-section";
 import { PurchasesSection, type PurchasesTab } from "./purchases-section";
 import { FinanceSection } from "./finance-section";
@@ -26,6 +29,7 @@ import type { RolePermissionMatrix } from "@/lib/permissions";
 import type { StockAlert } from "@/lib/stock-rules";
 import { CLIENT_CACHE_UNAUTHORIZED_EVENT, getCachedJson, setClientCacheScope } from "@/lib/client-cache";
 import { visibleSections } from "@/lib/permissions";
+import { splitMobileSections } from "@/lib/mobile-nav-rules";
 import { CurrentRoleProvider } from "./current-user";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
 import { clientsHomeEvent } from "@/lib/section-events";
@@ -108,7 +112,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const pathname = usePathname();
   const router = useRouter();
   const active = sectionFromPath(pathname);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [createDialog, setCreateDialog] = useState<CreateDialog | null>(initialCreate ?? null);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [startup, setStartup] = useState<StartupState>({ status: "checking-session", sessionConfirmed: false, message: "Validando seu acesso..." });
@@ -117,8 +121,10 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const [purchasesTab, setPurchasesTab] = useState<PurchasesTab>("purchases");
   const [undoNotice, setUndoNotice] = useState<UndoNotice>(null);
   const undoNoticeId = useRef(0);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
   const trialExpired = currentUser?.trialExpired === true;
   const allowedSections = visibleSections(currentUser?.role, currentUser?.rolePermissions, currentUser?.isOwner);
+  const mobileSections = splitMobileSections(allowedSections);
   const initialSection = useRef(active).current;
 
   const activeUndoNoticeId = undoNotice?.id;
@@ -136,7 +142,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     if (!await guardDraftNavigation()) return;
     setAgendaFocus(section === "agenda" ? focus ?? null : null);
     if (section === "compras") setPurchasesTab(tab);
-    setMobileOpen(false);
+    setMoreOpen(false);
     setCreateDialog(null);
     // Já em Clientes: a tela está montada e guarda o paciente aberto; avisa para voltar à lista (a URL sozinha não limpa o estado).
     if (section === "clientes" && active === "clientes") window.dispatchEvent(new Event(clientsHomeEvent));
@@ -217,6 +223,12 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     };
   }, [router]);
 
+  // URL direta de uma seção que o papel não enxerga: vai para a primeira permitida (sempre permitida, então sem laço).
+  const fallbackSection = allowedSections[0];
+  useEffect(() => {
+    if (startup.status === "ready" && currentUser && fallbackSection && !allowedSections.includes(active)) router.replace(sectionPaths[fallbackSection]);
+  }, [startup.status, currentUser, active, fallbackSection, allowedSections, router]);
+
   async function openCreate(section: SectionId, dialog: NonNullable<typeof createDialog>) {
     if (trialExpired) {
       showNotice("O teste grátis terminou. Ative um plano para continuar alterando os dados.", undefined, "warning");
@@ -224,7 +236,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     }
     if (!await guardDraftNavigation()) return;
     setCreateDialog(dialog);
-    setMobileOpen(false);
+    setMoreOpen(false);
     router.push(`${sectionPaths[section]}?create=${dialog}`);
   }
 
@@ -241,7 +253,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       setClientCacheScope(null);
       setCurrentUser(null);
       window.localStorage.setItem("harmonize-session-change", String(Date.now()));
-      setMobileOpen(false);
+      setMoreOpen(false);
       setCreateDialog(null);
       router.replace("/login");
     }
@@ -275,8 +287,6 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     <div className="harmonize-app min-h-screen bg-background text-foreground">
       <Sidebar
         active={active}
-        mobileOpen={mobileOpen}
-        onClose={() => setMobileOpen(false)}
         onSelect={selectSection}
         onNewAppointment={() => openCreate("agenda", "appointment")}
         clinicName={currentUser?.clinic?.name}
@@ -285,8 +295,8 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
         rolePermissions={currentUser?.rolePermissions}
       />
       <div className="lg:pl-[220px]">
-        <Topbar user={currentUser} onMenu={() => setMobileOpen(true)} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onOpenStockAlert={openStockAlert} onLogout={logout} />
-        <main className={`mx-auto w-full ${active === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-10 pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
+        <Topbar user={currentUser} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onOpenStockAlert={openStockAlert} onLogout={logout} />
+        <main className={`mx-auto w-full ${active === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
           <AnimatedPage routeKey={active}>
           {currentUser && allowedSections.includes("dashboard") && active === "dashboard" ? <Dashboard userName={currentUser?.name} onNavigate={selectSection} /> : null}
           {currentUser && active === "agenda" ? <ScheduleSection focus={agendaFocus} openCreate={createDialog === "appointment"} onCreateOpen={() => openCreate("agenda", "appointment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
@@ -305,8 +315,11 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
           </AnimatedPage>
         </main>
       </div>
+      <MobileNav active={active} sections={mobileSections.bar} moreActive={mobileSections.more.includes(active)} moreOpen={moreOpen} onSelect={selectSection} onOpenMore={() => setMoreOpen(true)} moreButtonRef={moreButtonRef} />
+      <MobileMoreSheet open={moreOpen} onOpenChange={setMoreOpen} active={active} sections={mobileSections.more} onSelect={selectSection} onLogout={logout} onCloseAutoFocus={(event) => { event.preventDefault(); moreButtonRef.current?.focus(); }} user={currentUser} />
+      <QuickCreateFab sections={allowedSections} onCreate={(target) => { const section = { appointment: "agenda", client: "clientes", quote: "orcamentos", payment: "pagamentos" }[target] as SectionId; void openCreate(section, target); }} />
       <AppToaster />
-      {undoNotice ? <div className={`${undoNotice.leaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-6 left-1/2 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] border border-border bg-card px-4 py-3 text-xs font-bold text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.18)]`} role="status"><div className="flex items-center gap-3"><span className="min-w-0 flex-1">{undoNotice.message}</span><button className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-[11px] font-black text-foreground transition hover:bg-muted/80" onClick={() => { const undo = undoNotice.undo; setUndoNotice(null); undo(); }}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-success" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
+      {undoNotice ? <div className={`${undoNotice.leaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-[calc(8.5rem+env(safe-area-inset-bottom))] left-1/2 lg:bottom-6 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] border border-border bg-card px-4 py-3 text-xs font-bold text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.18)]`} role="status"><div className="flex items-center gap-3"><span className="min-w-0 flex-1">{undoNotice.message}</span><button className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-[11px] font-black text-foreground transition hover:bg-muted/80" onClick={() => { const undo = undoNotice.undo; setUndoNotice(null); undo(); }}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-success" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
     </div>
     </CurrentRoleProvider>
   );
