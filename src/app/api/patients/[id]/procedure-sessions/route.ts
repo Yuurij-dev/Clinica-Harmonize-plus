@@ -13,7 +13,9 @@ import { combinedProcedureName, parseJson, shouldRefreshDraftName, type SessionP
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:read");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:read");
   if (denied) return denied;
   const patientId = (await params).id;
   const query = new URL(request.url).searchParams;
@@ -60,7 +62,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:write");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:write");
   if (denied) return denied;
   const patientId = (await params).id;
   const body = await request.json().catch(() => null) as { journeyId?: string; quoteId?: string; procedureId?: string; performedAt?: string } | null;

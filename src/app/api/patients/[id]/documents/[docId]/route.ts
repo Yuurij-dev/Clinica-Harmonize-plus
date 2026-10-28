@@ -21,16 +21,18 @@ function present(row: NonNullable<Awaited<ReturnType<typeof findDocument>>>) {
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string; docId: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
   const { id: patientId, docId } = await params;
   const clinicId = user.clinicId;
   const current = await findDocument(clinicId, patientId, docId);
   // Categoria fora do que o papel enxerga responde igual a "não existe".
-  if (!current || !canViewDocumentCategory(user.role, current.category)) return NextResponse.json({ message: "Documento não encontrado." }, { status: 404 });
+  if (!current || !canViewDocumentCategory(user.role, current.category, user.rolePermissions)) return NextResponse.json({ message: "Documento não encontrado." }, { status: 404 });
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!body) return NextResponse.json({ message: "Requisição inválida." }, { status: 400 });
 
   if (typeof body.archived === "boolean") {
-    const denied = denyUnless(user.role, "clinical:archive");
+    const denied = denyUnless(user, "clinical:archive");
     if (denied) return denied;
     if (body.archived === Boolean(current.archivedAt)) return NextResponse.json({ item: present(current) });
     const reasonText = typeof body.reason === "string" ? body.reason : "";
@@ -39,7 +41,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
 
   if (current.archivedAt) return NextResponse.json({ message: "Desarquive o documento para editar." }, { status: 409 });
-  if (!canWriteDocumentCategory(user.role, current.category)) return NextResponse.json({ message: "Seu perfil não pode editar documentos desta categoria." }, { status: 403 });
+  if (!canWriteDocumentCategory(user.role, current.category, user.rolePermissions)) return NextResponse.json({ message: "Seu perfil não pode editar documentos desta categoria." }, { status: 403 });
   const next = { name: current.name, category: current.category, journeyId: current.journeyId, encounterType: current.encounterType, encounterId: current.encounterId, signatureStatus: current.signatureStatus };
   if (body.name !== undefined) {
     const name = cleanDisplayName(body.name);
@@ -48,7 +50,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
   if (body.category !== undefined) {
     if (!isDocumentCategory(body.category)) return NextResponse.json({ message: "Categoria inválida." }, { status: 400 });
-    if (!canWriteDocumentCategory(user.role, body.category)) return NextResponse.json({ message: "Seu perfil não pode usar esta categoria." }, { status: 403 });
+    if (!canWriteDocumentCategory(user.role, body.category, user.rolePermissions)) return NextResponse.json({ message: "Seu perfil não pode usar esta categoria." }, { status: 403 });
     next.category = body.category;
   }
   if (body.signatureStatus !== undefined) {
@@ -62,13 +64,13 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       journeyId: body.journeyId !== undefined ? body.journeyId ?? null : current.journeyId,
       encounterType: keepEncounter ? current.encounterType : body.encounterType ?? null,
       encounterId: keepEncounter ? current.encounterId : body.encounterId ?? null,
-    }, can(user.role, "clinical:read") || keepEncounter);
+    }, can(user.role, "clinical:read", user.rolePermissions) || keepEncounter);
     if (!links.ok) return NextResponse.json({ message: links.message }, { status: 400 });
     Object.assign(next, links.links);
   }
-  if (!canModifySignedTerm(user.role, current, next)) return NextResponse.json({ message: "Termo assinado só pode ser renomeado pelo seu perfil. Peça a um profissional ou administrador para alterar status, categoria ou vínculo." }, { status: 403 });
+  if (!canModifySignedTerm(user.role, current, next, user.rolePermissions)) return NextResponse.json({ message: "Termo assinado só pode ser renomeado pelo seu perfil. Peça a um profissional ou administrador para alterar status, categoria ou vínculo." }, { status: 403 });
   // Só quem é clínico atribui "Assinado" a um termo (mudança de status ou de categoria para Termos).
-  if (next.signatureStatus === "ASSINADO" && (next.signatureStatus !== current.signatureStatus || next.category !== current.category) && !canAssignSignatureStatus(user.role, next.category, next.signatureStatus)) return NextResponse.json({ message: "Seu perfil não pode marcar um termo como assinado." }, { status: 403 });
+  if (next.signatureStatus === "ASSINADO" && (next.signatureStatus !== current.signatureStatus || next.category !== current.category) && !canAssignSignatureStatus(user.role, next.category, next.signatureStatus, user.rolePermissions)) return NextResponse.json({ message: "Seu perfil não pode marcar um termo como assinado." }, { status: 403 });
   const actions = editActions({ ...current }, next);
   if (!actions.length) return NextResponse.json({ item: present(current) });
   const [updated] = await prisma.$transaction([
@@ -82,7 +84,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string; docId: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:delete");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:delete");
   if (denied) return denied;
   const { id: patientId, docId } = await params;
   const current = await findDocument(user.clinicId, patientId, docId);

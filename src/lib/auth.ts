@@ -3,6 +3,7 @@ import { cookies, headers } from "next/headers";
 import { parseBearerToken } from "./bearer-rules";
 import { getAuthSecret } from "./auth-secret";
 import { prisma } from "./prisma";
+import { canForUser, normalizeRolePermissionMatrix, type Permission, type RolePermissionMatrix } from "./permissions";
 
 export const sessionCookieName = "harmonize_session";
 // shortcut: cache em memória por instância; quem sai da equipe ainda passa por até 15s; usar sessão no banco se exigirem revogação imediata.
@@ -16,6 +17,7 @@ type AuthenticatedUser = {
   isOwner: boolean;
   clinicId: string;
   trialExpired: boolean;
+  rolePermissions: RolePermissionMatrix;
   clinic: { id: string; name: string; slug: string; trialEndsAt: Date | null };
 };
 
@@ -49,6 +51,14 @@ export async function createPasswordChangeSession(userId: string) {
 
 export function invalidateUserAuthCache(userId: string) {
   authCache.delete(userId);
+}
+
+export function invalidateAllUserAuthCache() {
+  authCache.clear();
+}
+
+export function userCan(user: AuthenticatedUser, permission: Permission) {
+  return canForUser(user, permission);
 }
 
 // userId de um JWT válido; sessão de troca de senha (passwordChangeOnly) nunca vale, seja qual for a origem.
@@ -85,7 +95,7 @@ export async function getCurrentUser({ requireActiveTrial = false }: CurrentUser
         memberships: {
           take: 1,
           orderBy: { id: "asc" },
-          select: { role: true, isOwner: true, clinic: { select: { id: true, name: true, slug: true, trialEndsAt: true } } },
+          select: { role: true, isOwner: true, clinic: { select: { id: true, name: true, slug: true, trialEndsAt: true, rolePermissions: true } } },
         },
       },
     }).then((user): AuthenticatedUser | null => {
@@ -99,7 +109,8 @@ export async function getCurrentUser({ requireActiveTrial = false }: CurrentUser
       isOwner: membership.isOwner,
       clinicId: membership.clinic.id,
       trialExpired: Boolean(membership.clinic.trialEndsAt && membership.clinic.trialEndsAt.getTime() <= Date.now()),
-      clinic: membership.clinic,
+      rolePermissions: normalizeRolePermissionMatrix(membership.clinic.rolePermissions),
+      clinic: { id: membership.clinic.id, name: membership.clinic.name, slug: membership.clinic.slug, trialEndsAt: membership.clinic.trialEndsAt },
     };
   });
   const entry = { expiresAt: Date.now() + authCacheTtl, pending };
@@ -108,7 +119,7 @@ export async function getCurrentUser({ requireActiveTrial = false }: CurrentUser
   try {
     user = await pending;
   } catch (error) {
-    // Falha do banco não fica em cache nem vira 401: o erro sobe e a rota responde 500 (o cliente mantém a sessão).
+    // Falha momentânea do banco não pode virar 401 em cache por 15 s; deixa a rota responder 500.
     if (authCache.get(userId) === entry) authCache.delete(userId);
     throw error;
   }

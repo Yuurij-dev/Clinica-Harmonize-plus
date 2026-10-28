@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { parseCreateProcedure } from "@/lib/procedure-catalog-rules";
 import { lockAsset, procedureSelect, serializeProcedure } from "@/lib/procedure-server";
@@ -9,7 +10,7 @@ import { parseTechnicalSheet } from "@/lib/stock";
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  if (!canForUser(user, "procedures:access")) return NextResponse.json({ message: "Acesso restrito." }, { status: 403 });
   const procedures = await prisma.procedure.findMany({ where: { clinicId: user.clinicId }, orderBy: { name: "asc" }, select: procedureSelect });
   return NextResponse.json({ procedures: procedures.map(serializeProcedure) });
 }
@@ -17,7 +18,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  if (!canForUser(user, "procedures:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
   const clinicId = user.clinicId;
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   const parsed = parseCreateProcedure(body);

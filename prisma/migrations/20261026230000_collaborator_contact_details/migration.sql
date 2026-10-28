@@ -1,0 +1,4 @@
+ALTER TABLE "User"
+ADD COLUMN "cpf" TEXT,
+ADD COLUMN "postalCode" TEXT,
+ADD COLUMN "address" TEXT;

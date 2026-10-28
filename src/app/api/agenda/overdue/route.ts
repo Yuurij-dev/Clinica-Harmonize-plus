@@ -5,12 +5,14 @@ import { appointmentDurations } from "@/lib/appointment-conflict";
 import { getCurrentUser } from "@/lib/auth";
 import { clinicNow } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
+import { canForUser } from "@/lib/permissions";
 
 // Agendamentos "Agendado" cujo fim (data + hora + duração real) já passou, dos mais antigos (máx. 200). Só leitura: a Agenda
 // usa esta lista para marcar "Faltou" mesmo em períodos que não está exibindo. Nunca inclui "Em atendimento" nem "Atendido".
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  if (!canForUser(user, "agenda:access")) return NextResponse.json({ message: "Seu cargo não tem acesso à agenda." }, { status: 403 });
 
   const now = clinicNow();
   const rows = await prisma.appointment.findMany({

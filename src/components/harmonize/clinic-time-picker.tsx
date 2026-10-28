@@ -8,6 +8,7 @@ type ClinicTimePickerProps = {
   openingTime: string;
   closingTime: string;
   latestTime?: string | null;
+  allowOutsideHours?: boolean;
   value: string;
   invalid?: boolean;
   disabled?: boolean;
@@ -15,7 +16,7 @@ type ClinicTimePickerProps = {
   className?: string;
 };
 
-export function ClinicTimePicker({ openingTime, closingTime, latestTime, value, invalid = false, disabled = false, onChange, className }: ClinicTimePickerProps) {
+export function ClinicTimePicker({ openingTime, closingTime, latestTime, allowOutsideHours = false, value, invalid = false, disabled = false, onChange, className }: ClinicTimePickerProps) {
   const [open, setOpen] = useState(false);
   const [draftHour, setDraftHour] = useState<number | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -23,8 +24,8 @@ export function ClinicTimePicker({ openingTime, closingTime, latestTime, value, 
   const opening = parseClockMinutes(openingTime);
   const closing = parseClockMinutes(closingTime);
   const latest = latestTime === undefined ? closing === null ? null : closing - 1 : latestTime === null ? -1 : parseClockMinutes(latestTime);
-  const firstMinute = opening ?? 0;
-  const lastMinute = latest ?? -1;
+  const firstMinute = allowOutsideHours ? 0 : opening ?? 0;
+  const lastMinute = allowOutsideHours ? (latestTime === undefined ? 23 * 60 + 59 : latest ?? -1) : latest ?? -1;
   const hours = lastMinute >= firstMinute
     ? Array.from({ length: Math.floor(lastMinute / 60) - Math.floor(firstMinute / 60) + 1 }, (_, index) => Math.floor(firstMinute / 60) + index)
     : [];

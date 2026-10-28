@@ -15,6 +15,12 @@ model User {
   passwordHash               String
   mustChangePassword         Boolean            @default(false)
   phone                      String?
+  cpf                        String?
+  postalCode                 String?
+  address                    String?
+  country                    String?
+  state                      String?
+  city                       String?
   profession                 String?
   practiceArea               String?
   hasSecretary               Boolean?
@@ -32,6 +38,19 @@ model User {
 model Clinic {
   id                          String                     @id @default(cuid())
   name                        String
+  cnpj                        String?
+  phone                       String?
+  email                       String?
+  address                     String?
+  rolePermissions             Json                       @default("{}") @db.JsonB
+  appointmentNotificationsEnabled Boolean                @default(true)
+  appointmentNotificationSoundEnabled Boolean            @default(true)
+  stockNotificationsEnabled   Boolean                    @default(true)
+  requireCancellationReason   Boolean                    @default(false)
+  autoMarkMissedAppointmentsEnabled Boolean                @default(true)
+  autoCompleteAppointmentsEnabled Boolean                  @default(true)
+  autoAdvancePatientJourneyEnabled Boolean                @default(true)
+  allowAppointmentsOutsideHours Boolean                   @default(false)
   slug                        String                     @unique
   laborCost                   Int                        @default(0)
   facilityCost                Int                        @default(0)
@@ -78,6 +97,7 @@ model ClinicMembership {
   clinicId String
   role     UserRole @default(STAFF)
   isOwner  Boolean  @default(false)
+  laborCostCents Int?
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   clinic   Clinic   @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
@@ -93,6 +113,7 @@ model Patient {
   phone               String
   age                 Int
   status              String                     @default("Ativa")
+  manualJourneyStage  String?
   lastVisit           DateTime?                  @db.Timestamptz(6)
   nextReturn          DateTime?                  @db.Timestamptz(6)
   totalValue          Int                        @default(0)

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "./auth";
-import { can, type Permission } from "./permissions";
+import { canForUser, type Permission, type PermissionPrincipal } from "./permissions";
 
-const messages: Record<Permission, string> = {
+const messages: Partial<Record<Permission, string>> = {
   "clinical:read": "Acesso restrito à equipe clínica.",
   "clinical:write": "Acesso restrito à equipe clínica.",
   "anamnesis:read": "A anamnese é restrita à equipe clínica.",
@@ -16,14 +16,14 @@ const messages: Record<Permission, string> = {
 };
 
 // Devolve a resposta 403 quando o papel não tem a permissão; null quando pode seguir.
-export function denyUnless(role: string, permission: Permission) {
-  return can(role, permission) ? null : NextResponse.json({ message: messages[permission] }, { status: 403 });
+export function denyUnless(user: PermissionPrincipal, permission: Permission) {
+  return canForUser(user, permission) ? null : NextResponse.json({ message: messages[permission] ?? "Seu cargo não tem permissão para esta ação." }, { status: 403 });
 }
 
 // Sessão de administrador (estoque e demais telas só de ADMIN): { user } ou { error } com 401/403 pronto para devolver.
-export async function adminUser(requireActiveTrial = false) {
+export async function adminUser(requireActiveTrial = false, permission: Permission = "stock:manage") {
   const user = await getCurrentUser({ requireActiveTrial });
   if (!user) return { error: NextResponse.json({ message: "Não autenticado." }, { status: 401 }) };
-  if (user.role !== "ADMIN") return { error: NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 }) };
+  if (!canForUser(user, permission)) return { error: NextResponse.json({ message: "Seu cargo não tem permissão para esta ação." }, { status: 403 }) };
   return { user };
 }

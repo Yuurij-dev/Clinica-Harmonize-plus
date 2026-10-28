@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { canForUser } from "@/lib/permissions";
 import { dateOnly, parseDateOnly } from "@/lib/clinic-time";
 import { splitInstallments } from "@/lib/finance-rules";
 import { prisma } from "@/lib/prisma";
@@ -11,7 +12,7 @@ type ItemInput = { productId?: unknown; lotCode?: unknown; expiresOn?: unknown; 
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  if (!canForUser(user, "purchases:access")) return NextResponse.json({ message: "Acesso restrito." }, { status: 403 });
   const purchases = await prisma.purchase.findMany({
     where: { clinicId: user.clinicId },
     orderBy: [{ purchasedOn: "desc" }, { createdAt: "desc" }],
@@ -36,7 +37,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  if (!canForUser(user, "purchases:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
   const body = await request.json().catch(() => null) as { supplier?: string; invoiceNumber?: string; purchasedOn?: string; paymentMethod?: string; installments?: number; firstDueOn?: string; paid?: boolean; items?: ItemInput[] } | null;
   const supplier = body?.supplier?.trim();
   const purchasedOn = parseDateOnly(body?.purchasedOn);

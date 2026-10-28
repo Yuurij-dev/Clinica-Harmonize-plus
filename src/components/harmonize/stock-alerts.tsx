@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,15 +14,23 @@ import { StockKindBadge } from "./stock-kind";
 const alertsKey = "/api/stock/alerts";
 
 // Avisos de estoque para administradores: carregados ao entrar e recarregados quando
-// uma movimentação invalida a chave. Sem consulta periódica e sem som.
-export function useStockAlerts(enabled: boolean) {
+// uma movimentação invalida a chave.
+export function useStockAlerts(enabled: boolean, onAlertsLoaded?: (alerts: StockAlert[], isInitialLoad: boolean) => void) {
   const [alerts, setAlerts] = useState<StockAlert[]>(() => (enabled ? readClientCache<{ alerts: StockAlert[] }>(alertsKey)?.alerts : undefined) ?? []);
   const [version, setVersion] = useState(0);
+  const hasLoadedRef = useRef(false);
+  const onAlertsLoadedRef = useRef(onAlertsLoaded);
+  onAlertsLoadedRef.current = onAlertsLoaded;
 
   useEffect(() => {
     if (!enabled) return;
     let active = true;
-    getCachedJson<{ alerts: StockAlert[] }>(alertsKey).then((data) => { if (active) setAlerts(data.alerts); }).catch(() => undefined);
+    getCachedJson<{ alerts: StockAlert[] }>(alertsKey).then((data) => {
+      if (!active) return;
+      setAlerts(data.alerts);
+      onAlertsLoadedRef.current?.(data.alerts, !hasLoadedRef.current);
+      hasLoadedRef.current = true;
+    }).catch(() => undefined);
     return () => { active = false; };
   }, [enabled, version]);
 

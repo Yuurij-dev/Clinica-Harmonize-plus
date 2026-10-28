@@ -5,7 +5,7 @@ import { materialDetail } from "@/lib/stock";
 import { isStockKind, isStockUnit } from "@/lib/stock-rules";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { user, error } = await adminUser();
+  const { user, error } = await adminUser(false, "stock:access");
   if (error) return error;
   const product = await materialDetail(user.clinicId, (await params).id);
   if (!product) return NextResponse.json({ message: "Item não encontrado." }, { status: 404 });

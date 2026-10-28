@@ -12,7 +12,9 @@ class JourneyDeleteRace extends Error {}
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string; journeyId: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:write");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:write");
   if (denied) return denied;
   const { id: patientId, journeyId } = await params;
   // Byte nulo no id derruba a consulta do Postgres (500): trata como jornada inexistente.
@@ -85,9 +87,11 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string; journeyId: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
   const { id: patientId, journeyId } = await params;
   const body = await request.json().catch(() => ({})) as { status?: string };
-  const denied = denyUnless(user.role, "clinical:write");
+  const denied = denyUnless(user, "clinical:write");
   if (denied) return denied;
   if (body.status === "Cancelado") {
     const journey = await prisma.patientJourney.findFirst({ where: { id: journeyId, patientId, clinicId: user.clinicId, archivedAt: null }, select: { id: true, quotes: { select: { status: true } } } });

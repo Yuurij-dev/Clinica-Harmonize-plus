@@ -11,7 +11,7 @@ const paymentStatuses = ["Pago", "Parcial", "Pendente"];
 export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "payments:access");
+  const denied = denyUnless(user, "payments:access");
   if (denied) return denied;
   const date = listPeriodFilter(new URL(request.url).searchParams);
   if (!date) return NextResponse.json({ message: "Período inválido." }, { status: 400 });
@@ -27,7 +27,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "payments:access");
+  const denied = denyUnless(user, "payments:manage");
   if (denied) return denied;
   const body = await request.json().catch(() => null) as { patientId?: string; journeyId?: string; value?: number; method?: string; status?: string; installments?: string } | null;
   const patient = body?.patientId ? await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId } }) : null;

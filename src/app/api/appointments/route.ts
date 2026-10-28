@@ -6,10 +6,13 @@ import { appointmentDurations, appointmentTransactionOptions, lockAppointmentSlo
 import { prisma } from "@/lib/prisma";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 import { DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE, procedureAppointmentVariants } from "@/lib/procedure-session-rules";
+import { denyUnless } from "@/lib/api-guards";
 
 export async function POST(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user, "agenda:manage");
+  if (denied) return denied;
 
   const body = await request.json().catch(() => null) as {
     patientId?: string;
@@ -39,13 +42,13 @@ export async function POST(request: Request) {
   if (!day) return NextResponse.json({ message: "Data inválida." }, { status: 400 });
 
   const [clinic, durationOf] = await Promise.all([
-    prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { openingTime: true, closingTime: true } }),
+    prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { openingTime: true, closingTime: true, allowAppointmentsOutsideHours: true } }),
     appointmentDurations(prisma, user.clinicId, [body.procedure]),
   ]);
   const openingTime = clinic?.openingTime ?? "08:00";
   const closingTime = clinic?.closingTime ?? "19:00";
   const durationMinutes = durationOf(body.procedure);
-  const slotError = appointmentSlotError(day, body.time, openingTime, closingTime, now, durationMinutes);
+  const slotError = appointmentSlotError(day, body.time, openingTime, closingTime, now, durationMinutes, clinic?.allowAppointmentsOutsideHours ?? false);
   if (slotError) return NextResponse.json({ message: slotError }, { status: 400 });
 
   if ((body.notes?.length ?? 0) > 500) return NextResponse.json({ message: "A observação deve ter até 500 caracteres." }, { status: 400 });

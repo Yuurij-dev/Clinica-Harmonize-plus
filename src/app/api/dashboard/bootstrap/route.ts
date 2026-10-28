@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { canForUser } from "@/lib/permissions";
 import { clinicToday } from "@/lib/clinic-time";
 import { serializePayment, serializeQuote } from "@/lib/finance";
 import { addMonths } from "@/lib/finance-rules";
@@ -8,7 +9,7 @@ import { prisma } from "@/lib/prisma";
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  if (!canForUser(user, "dashboard:access")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
 
   // Os gráficos comparam o mês atual com o anterior; os próximos atendimentos vêm do mesmo intervalo, que termina no fim
   // do mês seguinte (sem esse limite, toda a agenda futura vinha a cada abertura do dashboard).

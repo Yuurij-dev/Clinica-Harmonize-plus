@@ -7,7 +7,9 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Input } from "@/components/ui/input";
 import type { SectionId } from "@/types/clinic";
 import type { StockAlert } from "@/lib/stock-rules";
+import { invalidateClientCache } from "@/lib/client-cache";
 import { StockAlertGroups, useStockAlerts } from "./stock-alerts";
+import { useCan } from "./current-user";
 
 type TopbarProps = {
   onMenu: () => void;
@@ -45,14 +47,30 @@ function formatTrialRemaining(milliseconds: number) {
 }
 
 export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStockAlert, onLogout, user }: TopbarProps) {
+  const canAccessDashboard = useCan("dashboard:access");
+  const canAccessSettings = useCan("settings:access");
+  const canAccessStock = useCan("stock:access");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
+  const [stockNotificationsEnabled, setStockNotificationsEnabled] = useState(true);
+  const [appointmentNotificationSoundEnabled, setAppointmentNotificationSoundEnabled] = useState(true);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [trialRemaining, setTrialRemaining] = useState<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const previousAlertIdsRef = useRef<string[] | null>(null);
-  const stockAlerts = useStockAlerts(user?.role === "ADMIN");
+  const previousStockAlertIdsRef = useRef<string[] | null>(null);
+  const notificationSoundEnabledRef = useRef(appointmentNotificationSoundEnabled);
+  notificationSoundEnabledRef.current = appointmentNotificationSoundEnabled;
+
+  function handleStockAlertsLoaded(alerts: StockAlert[], isInitialLoad: boolean) {
+    const ids = alerts.map((alert) => `${alert.kind}:${alert.productId}:${alert.lotId ?? ""}`);
+    const previousIds = previousStockAlertIdsRef.current;
+    if (!isInitialLoad && notificationSoundEnabledRef.current && previousIds && ids.some((id) => !previousIds.includes(id))) playNotificationSound();
+    previousStockAlertIdsRef.current = ids;
+  }
+
+  const stockAlerts = useStockAlerts(canAccessStock && stockNotificationsEnabled, handleStockAlertsLoaded);
   const notificationCount = appointmentAlerts.length + stockAlerts.length;
 
   function primeNotificationAudio() {
@@ -145,10 +163,22 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
     let active = true;
 
     async function loadAppointmentAlerts() {
+      if (document.visibilityState === "visible") {
+        const automationResponse = await fetch("/api/appointments/auto-process", { method: "POST", cache: "no-store" }).catch(() => null);
+        if (automationResponse?.ok) {
+          const automation = await automationResponse.json().catch(() => null) as { updated?: Array<{ id: string; patientId: string; date: string }> } | null;
+          if (active && automation?.updated?.length) {
+            invalidateClientCache("/api/agenda", "/api/dashboard/bootstrap", "/api/patients", ...automation.updated.map(({ patientId }) => `/api/patients/${patientId}/history`));
+            window.dispatchEvent(new Event("harmonize-auto-appointments-updated"));
+          }
+        }
+      }
       const response = await fetch("/api/agenda/alerts", { cache: "no-store" }).catch(() => null);
       if (!response?.ok) return;
-      const data = await response.json() as { appointments?: Array<{ id: string; date: string; time: string; status: string; patient?: { name?: string } }> };
+      const data = await response.json() as { appointments?: Array<{ id: string; date: string; time: string; status: string; patient?: { name?: string } }>; settings?: { appointmentNotificationsEnabled?: boolean; appointmentNotificationSoundEnabled?: boolean; stockNotificationsEnabled?: boolean } };
       if (!active) return;
+      setStockNotificationsEnabled(data.settings?.stockNotificationsEnabled ?? true);
+      setAppointmentNotificationSoundEnabled(data.settings?.appointmentNotificationSoundEnabled ?? true);
 
       const now = clinicNow();
       const today = clinicDateKey(now);
@@ -165,15 +195,18 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
         })
         .map((appointment) => ({ id: appointment.id, message: `É hora do atendimento de ${appointment.patient?.name ?? "um cliente"}.` }));
       const previousAlertIds = previousAlertIdsRef.current;
-      if (previousAlertIds && alerts.some((alert) => !previousAlertIds.includes(alert.id))) playNotificationSound();
+      const soundEnabled = data.settings?.appointmentNotificationSoundEnabled ?? appointmentNotificationSoundEnabled;
+      if (soundEnabled && previousAlertIds && alerts.some((alert) => !previousAlertIds.includes(alert.id))) playNotificationSound();
       previousAlertIdsRef.current = alerts.map((alert) => alert.id);
       setAppointmentAlerts(alerts);
     }
 
     void loadAppointmentAlerts();
     const timer = window.setInterval(() => { void loadAppointmentAlerts(); }, 30_000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [user?.id]);
+    const handleSettingsChange = () => { void loadAppointmentAlerts(); };
+    window.addEventListener("harmonize-notification-settings-updated", handleSettingsChange);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener("harmonize-notification-settings-updated", handleSettingsChange); };
+  }, [user?.id, appointmentNotificationSoundEnabled]);
 
   async function handleLogout() {
     setIsLoggingOut(true);
@@ -204,7 +237,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
           />
         </label>
 
-        {user?.role === "ADMIN" ? <Button className="hidden lg:inline-flex" size="sm" onClick={onDashboard}>
+        {canAccessDashboard ? <Button className="hidden lg:inline-flex" size="sm" onClick={onDashboard}>
           <Sparkles className="h-3.5 w-3.5" />
           Resumo do dia
         </Button> : null}
@@ -230,7 +263,7 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
             </> : null}
           </DropdownMenuContent>
         </DropdownMenu>
-        {user?.role === "ADMIN" ? <Button
+        {canAccessSettings ? <Button
           className="hidden sm:inline-flex"
           variant="secondary"
           size="icon"

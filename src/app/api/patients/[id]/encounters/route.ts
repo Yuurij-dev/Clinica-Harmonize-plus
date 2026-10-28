@@ -42,7 +42,9 @@ async function countPhotos(clinicId: string, patientId: string, ids: { session: 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:read");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:read");
   if (denied) return denied;
   const patientId = (await params).id;
   const clinicId = user.clinicId;
