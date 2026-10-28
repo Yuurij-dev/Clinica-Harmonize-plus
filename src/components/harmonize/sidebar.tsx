@@ -1,10 +1,9 @@
 import Image from "next/image";
-import { Menu, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { navItems } from "@/data/navigation";
 import type { SectionId } from "@/types/clinic";
 import { Button } from "@/components/ui/button";
 import { SlidingIndicator } from "@/components/ui/sliding-indicator";
-import { Sheet } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { visibleSections, type RolePermissionMatrix } from "@/lib/permissions";
 import { useCan } from "./current-user";
@@ -13,8 +12,6 @@ import { SectionWarning } from "./stock-alerts";
 type SidebarProps = {
   active: SectionId;
   onSelect: (section: SectionId) => void;
-  mobileOpen: boolean;
-  onClose: () => void;
   onNewAppointment: () => void;
   clinicName?: string;
   role?: string | null;
@@ -25,8 +22,6 @@ type SidebarProps = {
 export function Sidebar({
   active,
   onSelect,
-  mobileOpen,
-  onClose,
   onNewAppointment,
   clinicName,
   role,
@@ -36,7 +31,8 @@ export function Sidebar({
   const allowed = visibleSections(role, rolePermissions, isOwner);
   const canManageAgenda = useCan("agenda:manage");
   const visibleNavItems = navItems.filter((item) => allowed.includes(item.id));
-  const content = (
+  return (
+    <div className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-40 lg:block">
     <aside className="flex h-full w-[220px] flex-col border-r border-border bg-card px-4 py-5 text-card-foreground">
       <div className="mb-7 flex items-center justify-between gap-3 px-1">
         <div className="min-w-0">
@@ -44,13 +40,6 @@ export function Sidebar({
           <Image alt="Harmonize+" className="hp-logo-dark h-auto w-[150px]" height={300} priority src="/brand/logo-horizontal-white.svg" unoptimized width={1200} />
           <p className="mt-0.5 text-xs font-medium text-muted-foreground">Gestão para clínicas</p>
         </div>
-        <button
-          className="grid h-9 w-9 place-items-center rounded-md bg-muted text-primary lg:hidden"
-          onClick={onClose}
-          aria-label="Fechar menu"
-        >
-          <Menu className="h-5 w-5" />
-        </button>
       </div>
 
       {canManageAgenda ? <Button className="mb-6 w-full justify-start whitespace-nowrap px-3 text-xs" variant="primary" onClick={onNewAppointment}>
@@ -77,7 +66,6 @@ export function Sidebar({
               )}
               onClick={() => {
                 onSelect(item.id);
-                onClose();
               }}
             >
               <span className="flex items-center gap-3">
@@ -97,16 +85,6 @@ export function Sidebar({
         <p className="mt-1 text-xs font-bold text-foreground">Plano profissional</p>
       </div>
     </aside>
-  );
-
-  return (
-    <>
-      <div className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-40 lg:block">
-        {content}
-      </div>
-      <Sheet open={mobileOpen} onOpenChange={(open) => { if (!open) onClose(); }} title="Navegação principal" side="left" className="p-0 lg:hidden" showCloseButton={false}>
-        {content}
-      </Sheet>
-    </>
+    </div>
   );
 }

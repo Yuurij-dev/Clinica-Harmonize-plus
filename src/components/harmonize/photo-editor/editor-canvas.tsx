@@ -221,7 +221,7 @@ export function EditorCanvas({
   return (
     <div className="flex min-h-[360px] items-center justify-center overflow-auto rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-4">
       <Stage
-        className="shrink-0 touch-none"
+        className={tool === "select" && !selectedId ? "shrink-0 touch-pan-y touch-pinch-zoom" : "shrink-0 touch-none"}
         height={height}
         ref={stageRef}
         width={width}

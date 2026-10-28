@@ -16,7 +16,7 @@ import { useRevealOnView } from "@/lib/use-reveal-on-view";
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 const percentFormat = (value: number) => `${Math.round(value)}%`;
-const patientNameLinkClassName = "origin-left transition-transform hover:scale-[1.03] focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]";
+const patientNameLinkClassName = "origin-left max-lg:-my-3 max-lg:py-3 transition-transform hover:scale-[1.03] focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]";
 
 export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (section: SectionId, focus?: { date: string; time: string }) => void; userName?: string }) {
   type DashboardData = { appointmentCount: number; appointments: Array<{ id: string; date: string; time: string; procedure: string; status: string; patient?: { id: string; name: string } | null }>; patients: Array<{ id: string; name: string; status: string; lastVisit: string | null; createdAt: string }>; quotes: Array<{ id: string; items: string; total: number; status: string; patient?: { id: string; name: string } | null }>; payments: Array<{ value: number; status: string; date: string }> };
@@ -100,7 +100,7 @@ export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (
         </div>
       </div>
 
-      <div className="hp-list-stagger grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <div className="hp-list-stagger grid grid-cols-2 gap-3 xl:grid-cols-6">
         {stats.map((stat) => (
           <StatCard key={stat.label} label={stat.label} value={<CountUp value={stat.value} format={stat.format} />} detail={stat.detail} icon={TrendingUp} />
         ))}
@@ -108,8 +108,8 @@ export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (
 
       <div className="hp-list-stagger grid gap-6 xl:grid-cols-3">
         <Card className="xl:col-span-2">
-          <CardHeader className="gap-4">
-            <div>
+          <CardHeader className="gap-4 max-sm:flex-col">
+            <div className="min-w-0">
               <CardTitle>Atendimentos no mês</CardTitle>
               <p className="mt-1 text-sm text-[#65708b]">Evolução diária de atendimentos com comparação ao mês anterior.</p>
             </div>
@@ -121,7 +121,7 @@ export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (
             </div>
           </CardHeader>
           <CardContent>
-            <div className="mb-5 grid auto-rows-fr gap-2 sm:grid-cols-3">
+            <div className="mb-5 grid auto-rows-fr gap-2 md:grid-cols-3">
               <AttendanceMetric icon={CalendarCheck} label="Atendimentos realizados" value={attendance.currentTotal} change={percentageChange(attendance.currentTotal, attendance.previousTotal)} comparison={attendance.previousTotal ? attendance.previousTotal : null} />
               <AttendanceMetric icon={UserPlus} label="Novos clientes" value={attendance.currentNewClients} change={percentageChange(attendance.currentNewClients, attendance.previousNewClients)} comparison={attendance.previousNewClients ? attendance.previousNewClients : null} />
               <AttendanceMetric icon={RotateCcw} label="Taxa de retorno" value={attendance.currentReturnRate} format={percentFormat} change={attendance.previousTotal ? attendance.currentReturnRate - attendance.previousReturnRate : null} comparison={attendance.previousTotal ? `${attendance.previousReturnRate}%` : null} suffix="p.p." />
@@ -130,7 +130,7 @@ export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="max-xl:order-first">
           <CardHeader>
             <CardTitle>Próximos atendimentos</CardTitle>
             <CalendarCheck className="h-5 w-5 text-[#1438ff]" />
@@ -150,7 +150,7 @@ export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (
                 ) : <ClientAvatar name={appointment.patient?.name ?? "Paciente"} />}
                 <div className="min-w-0 flex-1">
                   {appointment.patient?.id ? (
-                    <Link className={`block truncate text-sm font-bold text-[#121733] ${patientNameLinkClassName}`} href={`/clientes?patient=${encodeURIComponent(appointment.patient.id)}`} onClick={(event) => event.stopPropagation()}>
+                    <Link className={`block truncate max-lg:line-clamp-2 max-lg:whitespace-normal text-sm font-bold text-[#121733] ${patientNameLinkClassName}`} href={`/clientes?patient=${encodeURIComponent(appointment.patient.id)}`} onClick={(event) => event.stopPropagation()}>
                       {appointment.patient.name}
                     </Link>
                   ) : <p className="truncate text-sm font-bold text-[#121733]">{appointment.patient?.name ?? "Paciente"}</p>}
@@ -174,7 +174,7 @@ export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (
                 <div className="flex min-w-0 items-center gap-3">
                   <PatientAvatarLink patientId={patient.id} patientName={patient.name} />
                   <div className="min-w-0">
-                    <Link className={`block truncate font-bold text-[#121733] ${patientNameLinkClassName}`} href={`/clientes?patient=${encodeURIComponent(patient.id)}`}>
+                    <Link className={`block truncate max-lg:line-clamp-2 max-lg:whitespace-normal font-bold text-[#121733] ${patientNameLinkClassName}`} href={`/clientes?patient=${encodeURIComponent(patient.id)}`}>
                       {patient.name}
                     </Link>
                     <p className="text-sm text-[#65708b]">{patient.lastVisit ? new Date(patient.lastVisit).toLocaleDateString("pt-BR") : "Sem atendimento"}</p>
@@ -202,7 +202,7 @@ export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (
                       <PatientAvatarLink patientId={quote.patient.id} patientName={quote.patient.name} />
                     ) : <ClientAvatar name={quote.patient?.name ?? "Paciente"} />}
                     {quote.patient?.id ? (
-                      <Link className={`min-w-0 truncate font-bold text-[#121733] ${patientNameLinkClassName}`} href={`/clientes?patient=${encodeURIComponent(quote.patient.id)}`}>
+                      <Link className={`min-w-0 truncate max-lg:line-clamp-2 max-lg:whitespace-normal font-bold text-[#121733] ${patientNameLinkClassName}`} href={`/clientes?patient=${encodeURIComponent(quote.patient.id)}`}>
                         {quote.patient.name}
                       </Link>
                     ) : <p className="truncate font-bold text-[#121733]">{quote.patient?.name ?? "Paciente"}</p>}
@@ -266,7 +266,7 @@ function DashboardListActions({ canShowMore, onShowMore, onNavigate, destination
 }
 
 function ClientAvatar({ name }: { name: string }) {
-  const tones = ["#5147dc", "#6257e8", "#2f9c88", "#6d5ce7"];
+  const tones = ["#5147dc", "#6257e8", "#23806f", "#6d5ce7"];
   const tone = tones[name.split("").reduce((sum, character) => sum + character.charCodeAt(0), 0) % tones.length];
   return <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[10px] font-black text-white" style={{ backgroundColor: tone }}>{getInitials(name)}</span>;
 }
@@ -275,7 +275,7 @@ function PatientAvatarLink({ patientId, patientName, onClick }: { patientId: str
   return (
     <Link
       aria-label={`Abrir cliente ${patientName}`}
-      className="grid h-8 w-8 shrink-0 place-items-center rounded-full transition-transform hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]"
+      className="grid h-8 w-8 shrink-0 place-items-center rounded-full transition-transform max-lg:h-11 max-lg:w-11 hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#5147dc]"
       href={`/clientes?patient=${encodeURIComponent(patientId)}`}
       onClick={onClick}
     >

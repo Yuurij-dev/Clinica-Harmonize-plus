@@ -141,7 +141,8 @@ export function MiniTable({
   rows: (string | React.ReactNode)[][];
 }) {
   return (
-    <div className="hp-panel-enter overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+    <>
+    <div className="hp-panel-enter overflow-hidden rounded-lg border border-border bg-card shadow-sm max-lg:hidden">
       <Table className="min-w-[720px]">
         <TableHeader>
           <TableRow className="bg-muted/60 hover:bg-muted/60">
@@ -153,6 +154,42 @@ export function MiniTable({
         </TableBody>
       </Table>
     </div>
+    <RowCards columns={columns} rows={rows} />
+    </>
+  );
+}
+
+const actionColumns = ["Ação", "Ações"];
+const statusColumns = ["Status", "Situação"];
+
+/**
+ * Versão celular (abaixo de lg) do MiniTable: uma linha vira um cartão.
+ * Convenção das colunas: a 1ª identifica a linha, "Status"/"Situação" vira selo no topo,
+ * "Ação" fica no rodapé (alvo de 44px) e as demais viram pares rótulo/valor.
+ */
+function RowCards({ columns, rows }: { columns: string[]; rows: (string | React.ReactNode)[][] }) {
+  const actionIndex = actionColumns.includes(columns[columns.length - 1]) ? columns.length - 1 : -1;
+  const statusIndex = columns.findIndex((column, index) => index > 0 && statusColumns.includes(column));
+  return (
+    <ul className="hp-list-stagger space-y-3 lg:hidden">
+      {rows.map((row, rowIndex) => (
+        <li className="rounded-lg border border-border bg-card p-4 text-foreground shadow-sm" key={rowIndex}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1 break-words text-sm font-semibold">{row[0]}</div>
+            {statusIndex > 0 ? <div className="shrink-0">{row[statusIndex]}</div> : null}
+          </div>
+          <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2.5">
+            {columns.map((column, index) => index === 0 || index === statusIndex || index === actionIndex ? null : (
+              <div className="min-w-0" key={column}>
+                <dt className="text-xs font-medium text-muted-foreground">{column}</dt>
+                <dd className="mt-0.5 min-w-0 break-words text-sm">{row[index] || "—"}</dd>
+              </div>
+            ))}
+          </dl>
+          {actionIndex > 0 ? <div className="mt-3 flex gap-2 border-t border-border pt-3 [&>*]:flex-1">{row[actionIndex]}</div> : null}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -181,9 +218,12 @@ export function LoadingSkeleton({ className = "" }: { className?: string }) {
 
 export function LoadingTable({ columns = 6, rows = 4 }: { columns?: number; rows?: number }) {
   return (
-    <div aria-label="Carregando" aria-busy="true" className="overflow-hidden rounded-lg border border-border bg-card">
+    <>
+    <div aria-label="Carregando" aria-busy="true" className="space-y-3 lg:hidden">{Array.from({ length: rows }).map((_, row) => <div className="rounded-lg border border-border bg-card p-4" key={row}><LoadingSkeleton className="h-4 w-2/3" /><LoadingSkeleton className="mt-3 h-3 w-full" /><LoadingSkeleton className="mt-2 h-3 w-1/2" /></div>)}</div>
+    <div aria-label="Carregando" aria-busy="true" className="overflow-hidden rounded-lg border border-border bg-card max-lg:hidden">
       <Table className="min-w-[720px]"><TableHeader><TableRow className="bg-muted/60 hover:bg-muted/60">{Array.from({ length: columns }).map((_, index) => <TableHead key={index}><LoadingSkeleton className="h-3 w-full" /></TableHead>)}</TableRow></TableHeader><TableBody>{Array.from({ length: rows }).map((_, row) => <TableRow key={row}>{Array.from({ length: columns }).map((__, column) => <TableCell key={column}><LoadingSkeleton className={cn("h-3 w-full", column === 0 && "max-w-32")} /></TableCell>)}</TableRow>)}</TableBody></Table>
     </div>
+    </>
   );
 }
 
@@ -205,7 +245,7 @@ export function DetailCard({
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         {onAction ? (
-          <button type="button" aria-label={`${expanded ? "Recolher" : "Expandir"} ${title}`} aria-expanded={expanded} className="rounded-sm text-[#7c86a2] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" onClick={onAction}>
+          <button type="button" aria-label={`${expanded ? "Recolher" : "Expandir"} ${title}`} aria-expanded={expanded} className="rounded-sm text-[#7c86a2] max-lg:-m-3.5 max-lg:p-3.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary" onClick={onAction}>
             <ArrowRight className={`h-4 w-4 transition-transform ${expanded ? "rotate-90" : ""}`} />
           </button>
         ) : <ArrowRight className="h-4 w-4 text-[#7c86a2]" />}

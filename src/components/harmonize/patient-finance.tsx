@@ -109,7 +109,7 @@ export function PatientFinance({ patientId, onOpenJourney, onRegisterPayment }: 
         <div><h3 className="text-base font-bold">Financeiro</h3><p className="mt-0.5 text-xs text-muted-foreground">Orçamentos e pagamentos do paciente. Novos orçamentos e recebimentos são feitos na jornada do tratamento.</p></div>
       </div>
       {canPayments ? <div className="flex rounded-lg border border-border p-0.5" role="tablist" aria-label="Seções financeiras">
-        {([["quotes", "Orçamentos"], ["payments", "Pagamentos"]] as const).map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={view === id} onClick={() => { setView(id); setPage(1); }} className={cn("rounded-md px-3 py-1.5 text-xs font-semibold transition-colors", view === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}>{label}</button>)}
+        {([["quotes", "Orçamentos"], ["payments", "Pagamentos"]] as const).map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={view === id} onClick={() => { setView(id); setPage(1); }} className={cn("rounded-md px-3 py-1.5 text-xs font-semibold transition-colors max-lg:min-h-11", view === id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}>{label}</button>)}
       </div> : null}
     </div>
 
@@ -151,7 +151,7 @@ export function PatientFinance({ patientId, onOpenJourney, onRegisterPayment }: 
 }
 
 function Chip({ label, count, active, onClick }: { label: string; count?: number; active: boolean; onClick: () => void }) {
-  return <button type="button" aria-pressed={active} onClick={onClick} className={cn("flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition hover:border-primary/50", active ? "border-primary bg-primary/5 text-primary" : "border-border bg-card text-muted-foreground")}>{label}<span className={cn("rounded-full px-1.5 text-xs", active ? "bg-primary/10" : "bg-muted")}>{count ?? "–"}</span></button>;
+  return <button type="button" aria-pressed={active} onClick={onClick} className={cn("flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition hover:border-primary/50 max-lg:min-h-11", active ? "border-primary bg-primary/5 text-primary" : "border-border bg-card text-muted-foreground")}>{label}<span className={cn("rounded-full px-1.5 text-xs", active ? "bg-primary/10" : "bg-muted")}>{count ?? "–"}</span></button>;
 }
 
 function Detail({ label, children }: { label: string; children: React.ReactNode }) {

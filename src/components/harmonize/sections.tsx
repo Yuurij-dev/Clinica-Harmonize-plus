@@ -66,6 +66,8 @@ import { PaginationBar } from "./clinical-pagination";
 import { usePatientLookup, type LookupPatient } from "./use-patient-lookup";
 import { createDefaultRolePermissionMatrix, permissionGroups, roleLabels, roles, runningAppointmentStatuses, type Role, type RolePermissionMatrix } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
+import { AgendaMonthMobile } from "./agenda-month-mobile";
+import { weekScrollLeft } from "@/lib/agenda-mobile-rules";
 import { describeTechnicalSheet } from "@/lib/stock-rules";
 import type { TechnicalSheetItem } from "./technical-sheet-editor";
 import { ProcedureFormModal, procedureCatalogCacheKey, type EditableProcedure } from "./procedure-form-modal";
@@ -512,7 +514,7 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
           const currentStage = journey.find((stage) => stage.status === "current");
 
           return [
-          <button className="text-left font-bold text-[#303144] hover:text-[#5147dc]" key={patient.name} onClick={() => openPatient(patient)}>{patient.name}</button>,
+          <button className="text-left font-bold text-[#303144] hover:text-[#5147dc] max-lg:-my-3 max-lg:py-3" key={patient.name} onClick={() => openPatient(patient)}>{patient.name}</button>,
           patient.phone,
           <StatusBadge key={patient.status} status={patient.status} />,
           <span className="font-bold text-[#5147dc]" key={currentStage?.id}>{currentStage?.label ?? "Concluída"}</span>,
@@ -553,7 +555,8 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
 export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved, focus }: CreateProps & { focus?: ScheduleFocus | null }) {
   // Período inicial (foco vindo de outra tela abre o dia) e o que já está em cache para ele, para a primeira pintura sem espera.
   const [initial] = useState(() => {
-    const view: CalendarView = focus ? "Dia" : "Semana";
+    // No celular a agenda abre no Dia (uma coluna na largura da tela); no desktop continua na Semana.
+    const view: CalendarView = focus || (typeof window !== "undefined" && window.matchMedia("(max-width: 767.98px)").matches) ? "Dia" : "Semana";
     const date = focus ? focusDate(focus.date) : clinicNow();
     const bootstrap = readClientCache<AgendaBootstrap>(agendaBootstrapKey);
     const period = readClientCache<AgendaPeriodResponse>(agendaPeriodKey(agendaPeriodRange(calendarDateKey(date), view)));
@@ -866,11 +869,11 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
       </div>
 
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <Button variant="secondary" size="icon" aria-label="Período anterior" onClick={() => setCalendarDate((current) => shiftCalendarDate(current, activeView, -1))}><ChevronLeft className="h-4 w-4" /></Button>
           <Button variant="secondary" size="sm" onClick={() => setCalendarDate(clinicNow())}>Hoje</Button>
           <Button variant="secondary" size="icon" aria-label="Próximo período" onClick={() => setCalendarDate((current) => shiftCalendarDate(current, activeView, 1))}><ChevronRight className="h-4 w-4" /></Button>
-          <h3 className="ml-2 truncate text-base font-bold text-[#303144]">{calendarPeriodLabel(calendarDate, activeView)}</h3>
+          <h3 className="ml-2 truncate text-base font-bold text-[#303144] max-md:ml-0 max-md:basis-full max-md:whitespace-normal">{calendarPeriodLabel(calendarDate, activeView)}</h3>
           {periodLoading ? <span role="status" className="flex items-center gap-1 text-[10px] font-semibold text-[#858696]"><Loader2 className="h-3 w-3 animate-spin text-[#5147dc]" />Carregando período...</span> : null}
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
@@ -1085,7 +1088,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         </form>
       </Modal>
       <Modal open={Boolean(deleteTarget)} onClose={() => { if (!deleteSaving) setDeleteTarget(null); }} title="Excluir agendamento" description="Essa ação removerá o agendamento da agenda.">
-        <div className="space-y-4"><p className="rounded-[7px] bg-[#fff7f7] px-3 py-3 text-xs font-semibold leading-5 text-[#7e3b43]">Tem certeza que deseja excluir o agendamento de <strong>{deleteTarget?.patient}</strong> às <strong>{deleteTarget?.time}</strong>? Você poderá desfazer pelo aviso exibido após a exclusão.</p><div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={deleteSaving} onClick={() => setDeleteTarget(null)}>Cancelar</Button><Button type="button" className="bg-[#b42318] hover:bg-[#991b1b]" disabled={deleteSaving} onClick={() => void deleteAppointment()}>{deleteSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{deleteSaving ? "Excluindo..." : "Excluir agendamento"}</Button></div></div>
+        <div className="space-y-4"><p className="rounded-[7px] bg-[#fff7f7] px-3 py-3 text-xs font-semibold leading-5 text-[#7e3b43]">Tem certeza que deseja excluir o agendamento de <strong>{deleteTarget?.patient}</strong> às <strong>{deleteTarget?.time}</strong>? Você poderá desfazer pelo aviso exibido após a exclusão.</p><div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={deleteSaving} onClick={() => setDeleteTarget(null)}>Cancelar</Button><Button type="button" variant="destructive" className="purchase-cancel-button text-white" disabled={deleteSaving} onClick={() => void deleteAppointment()}>{deleteSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{deleteSaving ? "Excluindo..." : "Excluir agendamento"}</Button></div></div>
       </Modal>
       {anamnesisGate.gate}
       {materialCheck ? <MaterialCheckModal appointmentId={materialCheck.id} onClose={() => setMaterialCheck(null)} onDone={(message) => { invalidateClientCache(`/api/patients/${materialCheck.patientId}/history`); setMaterialCheck(null); onSaved?.(message); }} /> : null}
@@ -1109,6 +1112,20 @@ function ScheduleCalendar({ appointments, date, view, focusTime, openingTime, cl
   const hourHeight = 72;
   const calendarHeight = hours.length * hourHeight;
   const calendarRef = useRef<HTMLDivElement>(null);
+  const weekDayKeys = view === "Semana" ? getWeekDays(date).map(calendarDateKey) : [];
+  const weekKeyJoined = weekDayKeys.join(",");
+  const todayKey = calendarDateKey(now);
+
+  // Semana no celular: 3 dias visíveis, rolando por snap; abre com hoje no meio.
+  // Rola uma vez por semana exibida: recargas de período (loading) não descartam a rolagem do usuário.
+  const scrolledWeekRef = useRef("");
+  useEffect(() => {
+    if (!weekKeyJoined) { scrolledWeekRef.current = ""; return; }
+    const element = calendarRef.current;
+    if (!element || scrolledWeekRef.current === weekKeyJoined || !window.matchMedia("(max-width: 767.98px)").matches) return;
+    scrolledWeekRef.current = weekKeyJoined;
+    element.scrollTo({ left: weekScrollLeft(weekKeyJoined.split(","), todayKey, (element.clientWidth - 48) / 3) });
+  }, [weekKeyJoined, todayKey, loading]);
 
   useEffect(() => {
     const nowMinutes = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
@@ -1124,15 +1141,15 @@ function ScheduleCalendar({ appointments, date, view, focusTime, openingTime, cl
 
   const days = view === "Dia" ? [date] : getWeekDays(date);
   return (
-    <div ref={calendarRef} className="hp-calendar-tab-enter max-h-[720px] overflow-auto rounded-[8px] border border-[#e7e9f2] bg-white shadow-[0_8px_28px_rgba(38,39,58,0.035)]">
-      <div className="min-w-[760px]">
-        <div className={cn("grid border-b border-[#ececf3] bg-[#fbfbfe]", view === "Dia" ? "grid-cols-[64px_minmax(300px,1fr)]" : "grid-cols-[64px_repeat(7,minmax(130px,1fr))]")}>
-          <div className="border-r border-[#ececf3]" />
+    <div ref={calendarRef} className="hp-calendar-tab-enter max-h-[720px] overflow-auto max-md:snap-x max-md:snap-mandatory max-md:scroll-pl-12 rounded-[8px] border border-[#e7e9f2] bg-white shadow-[0_8px_28px_rgba(38,39,58,0.035)]">
+      <div className={cn("md:min-w-[760px]", view === "Semana" && "max-md:w-[calc(48px+7*((100vw-2rem-48px)/3))]")}>
+        <div className={cn("grid border-b border-[#ececf3] bg-[#fbfbfe] max-md:sticky max-md:top-0 max-md:z-30", view === "Dia" ? "grid-cols-[48px_minmax(0,1fr)] md:grid-cols-[64px_minmax(300px,1fr)]" : "grid-cols-[48px_repeat(7,minmax(0,1fr))] md:grid-cols-[64px_repeat(7,minmax(130px,1fr))]")}>
+          <div className="border-r border-[#ececf3] bg-[#fbfbfe] max-md:sticky max-md:left-0 max-md:z-30" />
           {days.map((day) => <CalendarDayHeader key={calendarDateKey(day)} date={day} />)}
           {view === "Dia" ? <div className="hidden" /> : null}
         </div>
-        <div className={cn("grid", view === "Dia" ? "grid-cols-[64px_minmax(300px,1fr)]" : "grid-cols-[64px_repeat(7,minmax(130px,1fr))]")}>
-          <div className="relative border-r border-[#ececf3] bg-[#fcfcfe]" style={{ height: calendarHeight }}>
+        <div className={cn("grid", view === "Dia" ? "grid-cols-[48px_minmax(0,1fr)] md:grid-cols-[64px_minmax(300px,1fr)]" : "grid-cols-[48px_repeat(7,minmax(0,1fr))] md:grid-cols-[64px_repeat(7,minmax(130px,1fr))]")}>
+          <div className="relative border-r border-[#ececf3] bg-[#fcfcfe] max-md:sticky max-md:left-0 max-md:z-30" style={{ height: calendarHeight }}>
             {hours.map((hour) => <span className="absolute right-2 -translate-y-1/2 text-[10px] font-semibold text-[#9a9baa]" style={{ top: (hour - firstHour) * hourHeight }} key={hour}>{String(hour).padStart(2, "0")}:00</span>)}
           </div>
           {days.map((day) => {
@@ -1150,7 +1167,7 @@ function ScheduleCalendar({ appointments, date, view, focusTime, openingTime, cl
 function CalendarDayHeader({ date }: { date: Date }) {
   const isToday = calendarDateKey(date) === calendarDateKey(clinicNow());
   const weekday = new Intl.DateTimeFormat("pt-BR", { weekday: "short" }).format(date).replace(".", "");
-  return <div className="border-r border-[#ececf3] px-2 py-3 text-center last:border-r-0"><span className="block text-[10px] font-bold uppercase text-[#858696]">{weekday}</span><span className={cn("mx-auto mt-1 grid h-8 w-8 place-items-center rounded-full text-sm font-black", isToday ? "bg-[#5147dc] text-white shadow-[0_4px_10px_rgba(81,71,220,0.25)]" : "text-[#303144]")}>{date.getDate()}</span></div>;
+  return <div className="border-r border-[#ececf3] px-2 py-3 text-center last:border-r-0 max-md:snap-start"><span className="block text-[10px] font-bold uppercase text-[#858696]">{weekday}</span><span className={cn("mx-auto mt-1 grid h-8 w-8 place-items-center rounded-full text-sm font-black", isToday ? "bg-[#5147dc] text-white shadow-[0_4px_10px_rgba(81,71,220,0.25)]" : "text-[#303144]")}>{date.getDate()}</span></div>;
 }
 
 function CalendarDayColumn({ date, now, appointments, firstHour, height, hourHeight, hourCount, openMenuId, onMenuToggle, onAdvance, onMissed, onCancel, onDelete, onSelect, appointmentToleranceMinutes, updatingId }: { date: Date; now: Date; appointments: AppointmentRow[]; firstHour: number; height: number; hourHeight: number; hourCount: number; openMenuId: string | null; onMenuToggle: (id: string) => void; onAdvance: (appointment: AppointmentRow) => void; onMissed: (appointment: AppointmentRow) => void; onCancel: (appointment: AppointmentRow) => void; onDelete: (appointment: AppointmentRow) => void; onSelect: (appointment: AppointmentRow) => void; appointmentToleranceMinutes: number; updatingId: string | null }) {
@@ -1160,7 +1177,7 @@ function CalendarDayColumn({ date, now, appointments, firstHour, height, hourHei
   const currentTimeTop = ((nowMinutes - firstHour * 60) / 60) * hourHeight;
   const showCurrentTime = (isPastDay || isToday) && currentTimeTop >= 0 && currentTimeTop <= height;
 
-  return <div className="relative border-r border-[#ececf3] last:border-r-0" style={{ height }}>
+  return <div className="relative border-r border-[#ececf3] last:border-r-0 max-md:snap-start" style={{ height }}>
     {Array.from({ length: hourCount }, (_, index) => <span className="pointer-events-none absolute inset-x-0 border-t border-[#f0f0f5]" style={{ top: index * hourHeight }} key={index} />)}
     <span className="pointer-events-none absolute inset-x-0 bottom-0 border-t border-[#f0f0f5]" />
     {showCurrentTime ? <div className="pointer-events-none absolute inset-x-0 z-20 h-0" style={{ top: currentTimeTop }} aria-label={`Horário atual: ${now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`}>
@@ -1223,9 +1240,9 @@ function CalendarAppointmentCard({ appointment, top, height, column, columns, op
   const showWhatsapp = appointment.status === "Agendado";
   const hasMenu = canRun || showStatusGroup || showWhatsapp;
   const primaryLabel = appointment.status === "Em atendimento" ? "Finalizar" : isCompleted ? "Concluído" : isMissed ? "Faltou" : "Atender";
-  return <div className={cn("group absolute z-10 cursor-pointer overflow-hidden rounded-[7px] border-l-[3px] p-2 text-[10px] shadow-[0_4px_12px_rgba(38,39,58,0.06)]", tone.card, past && "brightness-[0.84] saturate-[0.78]")} style={{ top, height, left: `calc(${column} * 100% / ${columns} + 4px)`, width: `calc(100% / ${columns} - 8px)` }} aria-label={`${appointment.procedure} - status: ${appointment.status}`} onClick={() => onSelect(appointment)}>
+  return <div className={cn("group absolute z-10 cursor-pointer rounded-[7px] border-l-[3px] p-2 text-[10px] shadow-[0_4px_12px_rgba(38,39,58,0.06)]", tone.card, (hasMenu && open) ? "z-30 overflow-visible" : "overflow-hidden", past && "brightness-[0.84] saturate-[0.78]")} style={{ top, height, left: `calc(${column} * 100% / ${columns} + 4px)`, width: `calc(100% / ${columns} - 8px)` }} aria-label={`${appointment.procedure} - status: ${appointment.status}`} onClick={() => onSelect(appointment)}>
     <span className="pointer-events-none absolute -top-7 left-2 z-40 hidden whitespace-nowrap rounded-[5px] bg-[#303144] px-2 py-1 text-[10px] font-bold text-white shadow-lg group-hover:block">Status: {appointment.status}</span>
-    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><div className="mt-1 flex min-w-0 items-center gap-1"><ProcedureImage name={appointment.procedure} decorative className="h-5 w-5 rounded-sm" /><p className="truncate text-[11px] font-black">{appointment.procedure}</p></div><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0">{hasMenu ? <button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button> : null}{hasMenu && open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}>{canRun ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button> : null}{showStatusGroup ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button>{canDelete ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button> : null}</> : null}{showWhatsapp ? <button type="button" className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] disabled:opacity-50" disabled title="Confirmação por WhatsApp em breve">Confirmar por WhatsApp</button> : null}</div> : null}</div></div>
+    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><div className="mt-1 flex min-w-0 items-center gap-1"><ProcedureImage name={appointment.procedure} decorative className="h-5 w-5 rounded-sm" /><p className="truncate text-[11px] font-black">{appointment.procedure}</p></div><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0">{hasMenu ? <button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5 max-md:-mr-2 max-md:-mt-2 max-md:h-11 max-md:w-11" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button> : null}{hasMenu && open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}>{canRun ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button> : null}{showStatusGroup ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button>{canDelete ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button> : null}</> : null}{showWhatsapp ? <button type="button" className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] disabled:opacity-50" disabled title="Confirmação por WhatsApp em breve">Confirmar por WhatsApp</button> : null}</div> : null}</div></div>
     <span className={cn("mt-1 inline-flex rounded-full px-2 py-0.5 text-[9px] font-bold", tone.pill)}>{appointment.category || "Atendimento"}</span>
   </div>;
 }
@@ -1235,7 +1252,7 @@ function MonthCalendar({ date, appointments, onSelect }: { date: Date; appointme
   const startOffset = (first.getDay() + 6) % 7;
   const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
   const cells = Array.from({ length: Math.ceil((startOffset + daysInMonth) / 7) * 7 }, (_, index) => index - startOffset + 1);
-  return <div className="overflow-x-auto rounded-[8px] border border-[#e7e9f2] bg-white shadow-[0_8px_28px_rgba(38,39,58,0.035)]"><div className="min-w-[700px]"><div className="grid grid-cols-7 border-b border-[#ececf3] bg-[#fbfbfe]">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((label) => <span className="px-2 py-3 text-center text-[10px] font-bold uppercase text-[#858696]" key={label}>{label}</span>)}</div><div className="grid grid-cols-7">{cells.map((day) => { const valid = day > 0 && day <= daysInMonth; const cellDate = valid ? new Date(date.getFullYear(), date.getMonth(), day) : null; const dayAppointments = cellDate ? appointments.filter((item) => calendarDateKey(item.date) === calendarDateKey(cellDate)) : []; return <div className={cn("min-h-28 border-b border-r border-[#f0f0f5] p-2", !valid && "bg-[#fbfbfd]")} key={`${date.getFullYear()}-${date.getMonth()}-${day}`}><span className={cn("grid h-6 w-6 place-items-center rounded-full text-[10px] font-bold", cellDate && calendarDateKey(cellDate) === calendarDateKey(clinicNow()) && "bg-[#5147dc] text-white")}>{valid ? day : ""}</span><div className="mt-1 space-y-1">{dayAppointments.slice(0, 3).map((item) => <button type="button" className={cn("block w-full truncate rounded-[4px] border-l-2 px-1.5 py-1 text-left text-[9px] font-bold", appointmentTone(item).card)} key={item.id} onClick={() => onSelect(item)}>{item.time} · {item.patient}</button>)}{dayAppointments.length > 3 ? <span className="text-[9px] font-semibold text-[#858696]">+{dayAppointments.length - 3} atendimentos</span> : null}</div></div>; })}</div></div></div>;
+  return <><div className="overflow-x-auto rounded-[8px] border border-[#e7e9f2] bg-white shadow-[0_8px_28px_rgba(38,39,58,0.035)] max-md:hidden"><div className="min-w-[700px]"><div className="grid grid-cols-7 border-b border-[#ececf3] bg-[#fbfbfe]">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((label) => <span className="px-2 py-3 text-center text-[10px] font-bold uppercase text-[#858696]" key={label}>{label}</span>)}</div><div className="grid grid-cols-7">{cells.map((day) => { const valid = day > 0 && day <= daysInMonth; const cellDate = valid ? new Date(date.getFullYear(), date.getMonth(), day) : null; const dayAppointments = cellDate ? appointments.filter((item) => calendarDateKey(item.date) === calendarDateKey(cellDate)) : []; return <div className={cn("min-h-28 border-b border-r border-[#f0f0f5] p-2", !valid && "bg-[#fbfbfd]")} key={`${date.getFullYear()}-${date.getMonth()}-${day}`}><span className={cn("grid h-6 w-6 place-items-center rounded-full text-[10px] font-bold", cellDate && calendarDateKey(cellDate) === calendarDateKey(clinicNow()) && "bg-[#5147dc] text-white")}>{valid ? day : ""}</span><div className="mt-1 space-y-1">{dayAppointments.slice(0, 3).map((item) => <button type="button" className={cn("block w-full truncate rounded-[4px] border-l-2 px-1.5 py-1 text-left text-[9px] font-bold", appointmentTone(item).card)} key={item.id} onClick={() => onSelect(item)}>{item.time} · {item.patient}</button>)}{dayAppointments.length > 3 ? <span className="text-[9px] font-semibold text-[#858696]">+{dayAppointments.length - 3} atendimentos</span> : null}</div></div>; })}</div></div></div><AgendaMonthMobile date={date} appointments={appointments} todayKey={calendarDateKey(clinicNow())} dateKey={calendarDateKey} tone={appointmentTone} onSelect={onSelect} /></>;
 }
 
 function CalendarSkeleton() {
@@ -1783,8 +1800,8 @@ function SettingsToggle({ label, description, checked, onChange, disabled = fals
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <span className={cn("min-w-14 text-right text-[11px] font-semibold", checked ? "text-primary" : "text-muted-foreground")}>{saving ? "Salvando" : checked ? "Ativado" : "Desativado"}</span>
-        <button className={cn("relative h-7 w-12 shrink-0 rounded-full transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2", checked ? "bg-primary" : "bg-muted-foreground/35", (disabled || saving) && "cursor-not-allowed opacity-60")} type="button" role="switch" aria-checked={checked} aria-label={label} disabled={disabled || saving} onClick={() => onChange?.(!checked)}>
-        <span className={cn("absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200 ease-out", checked ? "translate-x-5" : "translate-x-0")} />
+        <button className={cn("relative h-7 w-12 shrink-0 rounded-full max-lg:h-11 max-lg:bg-clip-content max-lg:py-2 transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2", checked ? "bg-primary" : "bg-muted-foreground/35", (disabled || saving) && "cursor-not-allowed opacity-60")} type="button" role="switch" aria-checked={checked} aria-label={label} disabled={disabled || saving} onClick={() => onChange?.(!checked)}>
+        <span className={cn("absolute left-1 top-1 max-lg:top-3 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200 ease-out", checked ? "translate-x-5" : "translate-x-0")} />
       </button>
       </div>
     </div>
@@ -1841,7 +1858,7 @@ function Time24Input({ name, label, value, onChange }: { name: string; label: st
         aria-label={`Escolher horário de ${label}`}
         aria-expanded={open}
         aria-haspopup="dialog"
-        className="absolute right-2 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        className="absolute right-2 top-1/2 grid h-7 w-7 max-lg:h-11 max-lg:w-11 max-lg:right-0 -translate-y-1/2 place-items-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         onClick={() => {
           const selected = /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value) ? value.split(":") : ["08", "00"];
           setDraftHour(selected[0]);

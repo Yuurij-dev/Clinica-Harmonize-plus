@@ -193,10 +193,10 @@ function ProcedureCard({ patientId, group, onOpen, onCompare }: { patientId: str
   const hidden = group.photos.length - maxCardThumbs;
   const shown = hidden > 0 ? group.photos.slice(0, maxCardThumbs - 1) : group.photos;
   const pair = group.hasPair ? beforeAfterPairs(group.photos)[0] : undefined;
-  return <article className="flex flex-col rounded-lg border border-border bg-card p-3">
+  return <article className="flex min-w-0 flex-col rounded-lg border border-border bg-card p-3">
     <div className="flex items-start gap-3">
       <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary"><Images className="h-5 w-5" aria-hidden="true" /></span>
-      <div className="min-w-0"><h4 className="truncate text-sm font-semibold">{group.title}</h4>
+      <div className="min-w-0 flex-1"><h4 className="truncate text-sm font-semibold max-lg:whitespace-normal max-lg:break-words">{group.title}</h4>
         <p className="mt-0.5 text-xs text-muted-foreground">{formatDate(group.date)}{formatTime(group.date) ? ` • ${formatTime(group.date)}` : ""}</p>
         <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"><Badge variant="blue">{encounterKindLabels[group.kind]}</Badge>{group.journeyName ? <span className="truncate">{group.journeyName}</span> : null}</p></div>
     </div>
@@ -416,10 +416,10 @@ function PhotoUploadPanel({ patientId, initialFiles, journeys, encounters, onUpl
       <label className="block font-semibold">Tratamento (opcional)<select className="mt-1 h-10 w-full rounded-md border border-input bg-background px-2 text-sm" value={journeyId} onChange={(event) => { setJourneyId(event.target.value); setEncounter(""); }}><option value="">Sem vínculo</option>{journeys.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
       <label className="block font-semibold">Atendimento (opcional)<select className="mt-1 h-10 w-full rounded-md border border-input bg-background px-2 text-sm" value={encounter} onChange={(event) => setEncounter(event.target.value)}><option value="">Sem vínculo</option>{options.map((entry) => <option key={`${entry.type}:${entry.id}`} value={`${entry.type}:${entry.id}`}>{entry.title} · {formatDate(entry.date)}</option>)}</select></label>
       {entries.length ? <ul className="space-y-2" aria-label="Fotos para enviar">{entries.map((entry) => <li key={entry.id} className="rounded-md border border-border p-2">
-        <div className="flex items-center justify-between gap-2"><span className="truncate font-medium">{entry.name}</span>{entry.status === "queued" || entry.status === "error" ? <button type="button" aria-label={`Remover ${entry.name}`} onClick={() => setEntries((current) => current.filter((item) => item.id !== entry.id))}><X className="h-4 w-4" /></button> : <span className="text-xs text-muted-foreground">{entry.status === "done" ? "Enviada" : `${entry.progress}%`}</span>}</div>
+        <div className="flex items-center justify-between gap-2"><span className="truncate font-medium">{entry.name}</span>{entry.status === "queued" || entry.status === "error" ? <button type="button" className="max-lg:grid max-lg:h-11 max-lg:min-w-11 max-lg:place-items-center" aria-label={`Remover ${entry.name}`} onClick={() => setEntries((current) => current.filter((item) => item.id !== entry.id))}><X className="h-4 w-4" /></button> : <span className="text-xs text-muted-foreground">{entry.status === "done" ? "Enviada" : `${entry.progress}%`}</span>}</div>
         {entry.status === "uploading" || entry.status === "done" ? <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted"><div className={cn("h-full", entry.status === "done" ? "bg-success" : "bg-primary")} style={{ width: `${entry.progress}%` }} /></div> : null}
         {entry.error ? <p role="alert" className="mt-1 text-xs text-destructive">{entry.error}</p> : null}</li>)}</ul> : null}
-      <Button className="w-full" disabled={busy || !pending.length} onClick={() => void start()}>{busy ? "Enviando..." : pending.length > 1 ? `Enviar ${pending.length} fotos` : "Enviar foto"}</Button>
+      <Button className="w-full max-lg:sticky max-lg:bottom-2 max-lg:z-10 max-lg:shadow-lg" disabled={busy || !pending.length} onClick={() => void start()}>{busy ? "Enviando..." : pending.length > 1 ? `Enviar ${pending.length} fotos` : "Enviar foto"}</Button>
       <p className="rounded-lg border border-border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">As fotos ficam em armazenamento privado, só abrem com login e permissão clínica e cada visualização ampliada e download é registrado. Documentos (PDF, exames, termos) são enviados na aba Documentos clínicos.</p>
   </div>;
 }
