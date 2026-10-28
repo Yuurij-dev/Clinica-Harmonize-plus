@@ -15,7 +15,9 @@ import { readImageSize } from "@/lib/thumb";
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:write");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:write");
   if (denied) return denied;
   const patientId = (await params).id;
   const clinicId = user.clinicId;

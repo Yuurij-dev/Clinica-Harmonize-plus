@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyUnless } from "@/lib/api-guards";
 import { observationKindsFor } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
   const patientId = (await params).id;
   const patient = await prisma.patient.findFirst({
     where: { id: patientId, clinicId: user.clinicId },
@@ -22,7 +25,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     prisma.evaluation.findMany({ where: { patientId, clinicId: user.clinicId }, orderBy: { createdAt: "desc" }, take: 12, select: { professional: true, createdAt: true } }),
     prisma.quote.findMany({ where: { patientId, clinicId: user.clinicId }, orderBy: { createdAt: "desc" }, take: 12, select: { items: true, status: true, createdAt: true } }),
     prisma.payment.findMany({ where: { patientId, clinicId: user.clinicId }, orderBy: { date: "desc" }, take: 12, select: { valueCents: true, status: true, date: true, method: true } }),
-    prisma.patientObservation.findMany({ where: { patientId, clinicId: user.clinicId, kind: { in: observationKindsFor(user.role) } }, orderBy: { createdAt: "desc" }, take: 5, select: { id: true, text: true, kind: true, createdAt: true } }),
+    prisma.patientObservation.findMany({ where: { patientId, clinicId: user.clinicId, kind: { in: observationKindsFor(user.role, user.rolePermissions) } }, orderBy: { createdAt: "desc" }, take: 5, select: { id: true, text: true, kind: true, createdAt: true } }),
     prisma.$queryRaw<Array<{ count: bigint }>>`SELECT
       (SELECT COUNT(*) FROM "EvaluationPhoto" ep INNER JOIN "Evaluation" e ON e."id" = ep."evaluationId" WHERE e."patientId" = ${patientId} AND e."clinicId" = ${user.clinicId})
       + (SELECT COUNT(*) FROM "PatientProcedure" pp WHERE pp."patientId" = ${patientId} AND pp."clinicId" = ${user.clinicId} AND pp."beforePhoto" IS NOT NULL AND pp."beforePhoto" <> '')

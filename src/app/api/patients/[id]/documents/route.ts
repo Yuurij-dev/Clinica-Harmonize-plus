@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
 import { getCurrentUser } from "@/lib/auth";
+import { denyUnless } from "@/lib/api-guards";
 import { prisma } from "@/lib/prisma";
 import {
   canArchiveFiles, canAssignSignatureStatus, canDeleteFiles, canSeeSystemDocument, canWriteDocumentCategory, checkUpload, displayNameFromFile, documentCategories, filterSystemDocuments, isDocumentCategory, isSignatureStatus,
@@ -17,7 +18,9 @@ const listSelect = { id: true, name: true, category: true, mimeType: true, sizeB
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const visible = visibleDocumentCategories(user.role);
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const visible = visibleDocumentCategories(user.role, user.rolePermissions);
   if (!visible.length) return NextResponse.json({ message: "Acesso restrito." }, { status: 403 });
   const patientId = (await params).id;
   const clinicId = user.clinicId;
@@ -76,7 +79,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   return NextResponse.json({
     items: pageInDb ? items : items.slice(start, start + query.pageSize), total, page: query.page, pageSize: query.pageSize, counts: { all, ...counts },
     professionals: [...new Set([...professionals.map((row) => row.uploadedByName), ...system.map((item) => item.professional)])].filter(Boolean).sort((a, b) => a.localeCompare(b, "pt-BR")),
-    access: { visibleCategories: visible, canArchive: canArchiveFiles(user.role), canDelete: canDeleteFiles(user.role), maxUploadBytes },
+    access: { visibleCategories: visible, canArchive: canArchiveFiles(user.role, user.rolePermissions), canDelete: canDeleteFiles(user.role, user.rolePermissions), maxUploadBytes },
   });
 }
 
@@ -84,7 +87,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (!visibleDocumentCategories(user.role).length) return NextResponse.json({ message: "Acesso restrito." }, { status: 403 });
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  if (!visibleDocumentCategories(user.role, user.rolePermissions).length) return NextResponse.json({ message: "Acesso restrito." }, { status: 403 });
   const patientId = (await params).id;
   const clinicId = user.clinicId;
   if (!await findPatientScoped(clinicId, patientId)) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
@@ -98,17 +103,17 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (file.size > maxUploadBytes) return NextResponse.json({ message: "O arquivo excede 4 MB." }, { status: 413 });
   const category = form.get("category");
   if (!isDocumentCategory(category)) return NextResponse.json({ message: "Escolha a categoria do documento." }, { status: 400 });
-  if (!canWriteDocumentCategory(user.role, category)) return NextResponse.json({ message: "Seu perfil não pode enviar documentos desta categoria." }, { status: 403 });
+  if (!canWriteDocumentCategory(user.role, category, user.rolePermissions)) return NextResponse.json({ message: "Seu perfil não pode enviar documentos desta categoria." }, { status: 403 });
   const signature = form.get("signatureStatus");
   if (signature !== null && signature !== "" && !isSignatureStatus(signature)) return NextResponse.json({ message: "Status de assinatura inválido." }, { status: 400 });
 
-  if (typeof signature === "string" && !canAssignSignatureStatus(user.role, category, signature)) return NextResponse.json({ message: "Seu perfil não pode marcar um termo como assinado. Envie como pendente." }, { status: 403 });
+  if (typeof signature === "string" && !canAssignSignatureStatus(user.role, category, signature, user.rolePermissions)) return NextResponse.json({ message: "Seu perfil não pode marcar um termo como assinado. Envie como pendente." }, { status: 403 });
 
   const bytes = new Uint8Array(await file.arrayBuffer());
   const check = checkUpload(bytes, file.type || undefined);
   if (!check.ok) return NextResponse.json({ message: check.message }, { status: check.status });
 
-  const links = await resolveLinks(clinicId, patientId, { journeyId: form.get("journeyId"), encounterType: form.get("encounterType"), encounterId: form.get("encounterId") }, can(user.role, "clinical:read"));
+  const links = await resolveLinks(clinicId, patientId, { journeyId: form.get("journeyId"), encounterType: form.get("encounterType"), encounterId: form.get("encounterId") }, can(user.role, "clinical:read", user.rolePermissions));
   if (!links.ok) return NextResponse.json({ message: links.message }, { status: 400 });
 
   const originalName = sanitizeFileName(file.name, `documento.${check.file.ext}`);

@@ -5,7 +5,8 @@ import type { SectionId } from "@/types/clinic";
 import { Button } from "@/components/ui/button";
 import { SlidingIndicator } from "@/components/ui/sliding-indicator";
 import { cn } from "@/lib/utils";
-import { visibleSections } from "@/lib/permissions";
+import { visibleSections, type RolePermissionMatrix } from "@/lib/permissions";
+import { useCan } from "./current-user";
 import { SectionWarning } from "./stock-alerts";
 
 type SidebarProps = {
@@ -14,6 +15,8 @@ type SidebarProps = {
   onNewAppointment: () => void;
   clinicName?: string;
   role?: string | null;
+  rolePermissions?: RolePermissionMatrix;
+  isOwner?: boolean;
 };
 
 export function Sidebar({
@@ -22,8 +25,11 @@ export function Sidebar({
   onNewAppointment,
   clinicName,
   role,
+  rolePermissions,
+  isOwner,
 }: SidebarProps) {
-  const allowed = visibleSections(role);
+  const allowed = visibleSections(role, rolePermissions, isOwner);
+  const canManageAgenda = useCan("agenda:manage");
   const visibleNavItems = navItems.filter((item) => allowed.includes(item.id));
   return (
     <div className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-40 lg:block">
@@ -36,10 +42,10 @@ export function Sidebar({
         </div>
       </div>
 
-      <Button className="mb-6 w-full justify-start whitespace-nowrap px-3 text-xs" variant="primary" onClick={onNewAppointment}>
+      {canManageAgenda ? <Button className="mb-6 w-full justify-start whitespace-nowrap px-3 text-xs" variant="primary" onClick={onNewAppointment}>
         <Plus className="h-4 w-4" />
         Novo agendamento
-      </Button>
+      </Button> : null}
 
       <nav className="relative space-y-0.5">
         <SlidingIndicator variant="block" />
@@ -67,7 +73,7 @@ export function Sidebar({
                 {item.label}
               </span>
               <span className="flex items-center gap-2">
-                {item.id === "estoque" || item.id === "compras" ? <SectionWarning section={item.id} enabled={role === "ADMIN"} inMenu /> : null}
+                {item.id === "estoque" || item.id === "compras" ? <SectionWarning section={item.id} enabled={allowed.includes(item.id)} inMenu /> : null}
               </span>
             </button>
           );

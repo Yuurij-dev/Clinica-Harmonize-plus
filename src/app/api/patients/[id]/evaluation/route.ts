@@ -26,6 +26,8 @@ const photoCategories = new Set(["Frontal", "Perfil direito", "Perfil esquerdo",
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
 
   const patientId = (await params).id;
   const searchParams = new URL(request.url).searchParams;
@@ -33,7 +35,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const journeyId = searchParams.get("journeyId");
   const patient = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true } });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
-  const clinical = can(user.role, "clinical:read");
+  const clinical = can(user.role, "clinical:read", user.rolePermissions);
 
   if (searchParams.get("list")) {
     const evaluations = await prisma.evaluation.findMany({
@@ -102,7 +104,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "clinical:write");
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
+  const denied = denyUnless(user, "clinical:write");
   if (denied) return denied;
 
   const patientId = (await params).id;

@@ -12,7 +12,6 @@ const sections = new Set<SectionId>([
   "pagamentos",
   "financeiro",
   "relatorios",
-  "calculadora",
   "configuracoes",
 ]);
 export default async function SectionPage({ params }: { params: Promise<{ section: string }> }) {

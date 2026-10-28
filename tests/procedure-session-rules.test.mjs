@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { approvedProcedureNames } from "../src/lib/procedure-session-rules.ts";
+import { approvedProcedureNames, parseJson, validateSessionPayload } from "../src/lib/procedure-session-rules.ts";
 
 test("approved procedure names are read from the quote details items object", () => {
   assert.deepEqual(approvedProcedureNames(JSON.stringify({ items: [{ name: "Preenchimento" }, { name: "Botox" }] })), ["Preenchimento", "Botox"]);
@@ -67,4 +67,21 @@ test("appointment duration resolves prefixed and combined names from the procedu
   assert.equal(appointmentProcedureDuration(catalog, "Avaliação"), undefined);
   assert.equal(appointmentProcedureDuration([{ name: "Procedimento - X", durationMinutes: 45 }], "Procedimento - X"), 45);
   assert.deepEqual(appointmentDurationLookupNames("Procedimento - A + B"), ["Procedimento - A + B", "A + B", "A", "B"]);
+});
+
+test("validateSessionPayload recusa status, materiais e fotos inválidos e aceita um rascunho simples", () => {
+  const photo = { id: "p1", phase: "Antes", imageUrl: "data:image/png;base64,AAAA", name: "antes", width: 10, height: 10 };
+  assert.equal(validateSessionPayload({ status: "Rascunho", technique: "x" }), null);
+  assert.equal(validateSessionPayload({ status: "Em execução", photos: [photo] }), null);
+  assert.equal(validateSessionPayload(null), "Status de sessão inválido.");
+  assert.equal(validateSessionPayload({ status: "Cancelada" }), "Status de sessão inválido.");
+  assert.match(validateSessionPayload({ materials: [{ productId: "a", quantity: 0 }] }), /produtos/);
+  assert.match(validateSessionPayload({ photos: [{ ...photo, phase: "Depois" }] }), /fotografias/);
+  assert.match(validateSessionPayload({ photos: Array.from({ length: 21 }, (_, index) => ({ ...photo, id: `p${index}` })) }), /fotografias/);
+  assert.match(validateSessionPayload({ durationMinutes: 1441 }), /duração/);
+});
+
+test("parseJson devolve o padrão para JSON inválido", () => {
+  assert.deepEqual(parseJson("[1]", []), [1]);
+  assert.deepEqual(parseJson("{", []), []);
 });

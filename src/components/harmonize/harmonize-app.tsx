@@ -13,7 +13,7 @@ import { QuickCreateFab } from "./quick-create-fab";
 import { StockSection } from "./stock-section";
 import { PurchasesSection, type PurchasesTab } from "./purchases-section";
 import { FinanceSection } from "./finance-section";
-import { StockSettingsCard, stockAlertSection } from "./stock-alerts";
+import { stockAlertSection } from "./stock-alerts";
 import { Topbar } from "./topbar";
 import {
   ClientsSection,
@@ -25,6 +25,7 @@ import {
   SettingsSection,
 } from "./sections";
 import type { SectionId } from "@/types/clinic";
+import type { RolePermissionMatrix } from "@/lib/permissions";
 import type { StockAlert } from "@/lib/stock-rules";
 import { CLIENT_CACHE_UNAUTHORIZED_EVENT, getCachedJson, setClientCacheScope } from "@/lib/client-cache";
 import { visibleSections } from "@/lib/permissions";
@@ -37,7 +38,7 @@ import { clinicToday } from "@/lib/clinic-time";
 import { patientListKey } from "@/lib/patient-list-rules";
 import { guardDraftNavigation } from "./use-draft-autosave";
 
-type CurrentUser = { id: string; clinicId: string; name: string; role: string; isOwner?: boolean; trialExpired?: boolean; clinic?: { name: string; trialEndsAt?: string | null } };
+type CurrentUser = { id: string; clinicId: string; name: string; role: string; isOwner?: boolean; trialExpired?: boolean; rolePermissions?: RolePermissionMatrix; clinic?: { name: string; trialEndsAt?: string | null } };
 type AgendaFocus = { date: string; time: string };
 type CreateDialog = "appointment" | "client" | "procedure" | "quote" | "payment";
 type HarmonizeAppProps = { initialCreate?: CreateDialog };
@@ -60,8 +61,6 @@ const initialScreenResources: Partial<Record<SectionId, { key: string; extraKeys
   pagamentos: { key: "/api/payments", message: "Carregando os pagamentos..." },
   financeiro: { key: "/api/finance/summary?period=month", message: "Carregando o resumo financeiro..." },
   relatorios: { key: "/api/dashboard/bootstrap", message: "Carregando os dados dos relatórios..." },
-  calculadora: { key: "/api/clinic/cost-settings", message: "Carregando os custos da clínica..." },
-  configuracoes: { key: "/api/clinic/cost-settings", message: "Carregando as configurações da clínica..." },
 };
 
 // Sessão inválida no cliente mas aceita pelo servidor (ex.: banco instável) faz /login e / se redirecionarem sem parar.
@@ -100,7 +99,6 @@ const sectionPaths: Record<SectionId, string> = {
   pagamentos: "/pagamentos",
   financeiro: "/financeiro",
   relatorios: "/relatorios",
-  calculadora: "/calculadora",
   configuracoes: "/configuracoes",
 };
 
@@ -125,9 +123,9 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const undoNoticeId = useRef(0);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const trialExpired = currentUser?.trialExpired === true;
-  const allowedSections = visibleSections(currentUser?.role);
+  const allowedSections = visibleSections(currentUser?.role, currentUser?.rolePermissions, currentUser?.isOwner);
   const mobileSections = splitMobileSections(allowedSections);
-  const [initialSection] = useState(active);
+  const initialSection = useRef(active).current;
 
   const activeUndoNoticeId = undoNotice?.id;
   useEffect(() => {
@@ -177,10 +175,10 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
         const user = session.user;
         sessionConfirmed = true;
         clinicName = user.clinic?.name;
-        setClientCacheScope(`${user.id}:${user.clinicId}`);
+        setClientCacheScope(`${user.id}:${user.clinicId}:${JSON.stringify(user.rolePermissions ?? {})}`);
         setCurrentUser(user);
 
-        const resource = visibleSections(user.role).includes(initialSection) ? initialScreenResources[initialSection] : undefined;
+        const resource = visibleSections(user.role, user.rolePermissions, user.isOwner).includes(initialSection) ? initialScreenResources[initialSection] : undefined;
         setStartup({
           status: "loading-data",
           sessionConfirmed: true,
@@ -285,7 +283,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   }
 
   return (
-    <CurrentRoleProvider value={currentUser?.role ?? null}>
+    <CurrentRoleProvider value={currentUser ? { role: currentUser.role, isOwner: currentUser.isOwner, rolePermissions: currentUser.rolePermissions } : null}>
     <div className="harmonize-app min-h-screen bg-background text-foreground">
       <Sidebar
         active={active}
@@ -293,15 +291,14 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
         onNewAppointment={() => openCreate("agenda", "appointment")}
         clinicName={currentUser?.clinic?.name}
         role={currentUser?.role}
+        isOwner={currentUser?.isOwner}
+        rolePermissions={currentUser?.rolePermissions}
       />
       <div className="lg:pl-[220px]">
         <Topbar user={currentUser} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onOpenStockAlert={openStockAlert} onLogout={logout} />
         <main className={`mx-auto w-full ${active === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
           <AnimatedPage routeKey={active}>
-          {currentUser && allowedSections.includes("dashboard") && active === "dashboard" ? <Dashboard userName={currentUser?.name} onAction={(action) => {
-            const target = { client: ["clientes", "client"], appointment: ["agenda", "appointment"], quote: ["orcamentos", "quote"], payment: ["pagamentos", "payment"] }[action] as [SectionId, NonNullable<typeof createDialog>];
-            openCreate(target[0], target[1]);
-          }} onNavigate={selectSection} /> : null}
+          {currentUser && allowedSections.includes("dashboard") && active === "dashboard" ? <Dashboard userName={currentUser?.name} onNavigate={selectSection} /> : null}
           {currentUser && active === "agenda" ? <ScheduleSection focus={agendaFocus} openCreate={createDialog === "appointment"} onCreateOpen={() => openCreate("agenda", "appointment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && active === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => openCreate("clientes", "client")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && allowedSections.includes("procedimentos") && active === "procedimentos" ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => openCreate("procedimentos", "procedure")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
@@ -311,9 +308,10 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
           {currentUser && allowedSections.includes("pagamentos") && active === "pagamentos" ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => openCreate("pagamentos", "payment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && allowedSections.includes("financeiro") && active === "financeiro" ? <FinanceSection /> : null}
           {currentUser && allowedSections.includes("relatorios") && active === "relatorios" ? <ReportsSection /> : null}
-          {currentUser && allowedSections.includes("calculadora") && active === "calculadora" ? <SettingsSection mode="calculator" /> : null}
-          {currentUser && allowedSections.includes("configuracoes") && active === "configuracoes" ? <SettingsSection isAdmin isOwner={currentUser?.isOwner} clinicName={currentUser?.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} /> : null}
-          {currentUser && allowedSections.includes("configuracoes") && active === "configuracoes" ? <StockSettingsCard onSaved={showNotice} /> : null}
+          {currentUser && allowedSections.includes("configuracoes") && active === "configuracoes" ? <SettingsSection isOwner={currentUser.isOwner} clinicName={currentUser.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} onRolePermissionsChange={(rolePermissions) => {
+            setClientCacheScope(`${currentUser.id}:${currentUser.clinicId}:${JSON.stringify(rolePermissions)}`);
+            setCurrentUser((current) => current ? { ...current, rolePermissions } : current);
+          }} /> : null}
           </AnimatedPage>
         </main>
       </div>
