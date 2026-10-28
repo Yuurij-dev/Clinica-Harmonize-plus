@@ -1,28 +1,44 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { serializeQuote, toCents } from "@/lib/finance";
+import { listLimit, listPeriodFilter, serializeQuote, toCents } from "@/lib/finance";
 import { ensurePatientJourney } from "@/lib/patient-journey";
-import { calculateQuote, type QuoteLineInput } from "@/lib/quote-rules";
+import type { QuoteLineInput } from "@/lib/quote-rules";
+import { quoteDetails, quotePaymentMethods } from "@/lib/quote-server";
 import { cpfForRole } from "@/lib/patient-cpf-mask";
 import { matchPaymentQuotes } from "@/lib/patient-finance-rules";
+import { denyUnless } from "@/lib/api-guards";
 
 export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user, "quotes:access");
+  if (denied) return denied;
   const searchParams = new URL(request.url).searchParams;
   const patientId = searchParams.get("patientId");
   const journeyId = searchParams.get("journeyId");
+  if (!patientId) {
+    // Lista da tela de Orçamentos: só as colunas da tabela, os mais recentes do período (sem details/notes, que crescem com o histórico).
+    const createdAt = listPeriodFilter(searchParams);
+    if (!createdAt) return NextResponse.json({ message: "Período inválido." }, { status: 400 });
+    const recent = await prisma.quote.findMany({
+      where: { clinicId: user.clinicId, ...(journeyId ? { journeyId } : {}), createdAt },
+      orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+      take: listLimit + 1,
+      select: { id: true, items: true, totalCents: true, status: true, expires: true, createdAt: true, patient: { select: { name: true } } },
+    });
+    return NextResponse.json({ quotes: recent.slice(0, listLimit).map(serializeQuote), hasMore: recent.length > listLimit });
+  }
   const quotes = await prisma.quote.findMany({
-    where: { clinicId: user.clinicId, ...(patientId ? { patientId } : {}), ...(journeyId ? { journeyId } : {}) },
+    where: { clinicId: user.clinicId, patientId, ...(journeyId ? { journeyId } : {}) },
     orderBy: { createdAt: "desc" },
     include: {
-      patient: { select: { name: true, ...(patientId ? { cpf: true } : {}) } },
-      ...(patientId ? { evaluation: { select: { professional: true } }, clinic: { select: { name: true } } } : {}),
+      patient: { select: { name: true, cpf: true } },
+      evaluation: { select: { professional: true } },
+      clinic: { select: { name: true } },
     },
   });
-  const serialized = quotes.map((quote) => serializeQuote({ ...quote, patient: cpfForRole(user.role, quote.patient) }));
-  if (!patientId) return NextResponse.json({ quotes: serialized });
+  const serialized = quotes.map((quote) => serializeQuote({ ...quote, patient: cpfForRole(user.role, quote.patient, user.rolePermissions) }));
 
   const payments = await prisma.payment.findMany({
     where: { clinicId: user.clinicId, patientId, status: "Pago", ...(journeyId ? { journeyId } : {}) },
@@ -43,6 +59,8 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const denied = denyUnless(user, "quotes:manage");
+  if (denied) return denied;
   const body = await request.json().catch(() => null) as { patientId?: string; journeyId?: string; evaluationId?: string; items?: string; details?: QuoteLineInput[]; total?: number; expires?: string; paymentMethod?: string; installments?: number; notes?: string; status?: string } | null;
   const patient = body?.patientId ? await prisma.patient.findFirst({ where: { id: body.patientId, clinicId: user.clinicId } }) : null;
   const total = Number(body?.total);
@@ -59,14 +77,11 @@ export async function POST(request: Request) {
   let totalCents = Number.isFinite(total) ? toCents(total) : 0;
   let details = "[]";
   if (body?.details !== undefined) {
-    const procedures = await prisma.procedure.findMany({ where: { clinicId: user.clinicId }, select: { id: true, name: true, price: true } });
-    const costs = await prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { laborCost: true, facilityCost: true, medicationCost: true } });
-    const costSnapshot = { laborCents: toCents(costs?.laborCost ?? 0), facilityCents: toCents(costs?.facilityCost ?? 0), medicationCents: toCents(costs?.medicationCost ?? 0) };
-    const calculated = calculateQuote(body.details, procedures.map((procedure) => ({ id: procedure.id, name: procedure.name, priceCents: toCents(procedure.price) })), costSnapshot);
+    const calculated = await quoteDetails(body.details, user.clinicId);
     if (!calculated) return NextResponse.json({ message: "Revise os procedimentos, quantidades e descontos do orçamento." }, { status: 400 });
     items = calculated.items.map((item) => `${item.name} (${item.quantity}x)`).join(", ");
     totalCents = calculated.totalCents;
-    details = JSON.stringify({ ...calculated, costs: costSnapshot });
+    details = JSON.stringify(calculated);
   }
   if (!items || (body?.details === undefined && !Number.isFinite(total))) return NextResponse.json({ message: "Selecione ao menos um procedimento e preencha o orçamento." }, { status: 400 });
   const notes = typeof body?.notes === "string" ? body.notes.trim() : "";
@@ -77,7 +92,7 @@ export async function POST(request: Request) {
 }
 
 function validPaymentMethod(value?: string) {
-  return ["Cartão de crédito", "Cartão de débito", "Pix", "Dinheiro", "Boleto", "Transferência"].includes(value ?? "") ? value! : "Cartão de crédito";
+  return quotePaymentMethods.includes(value ?? "") ? value! : "Cartão de crédito";
 }
 
 function parseDate(value?: string) {

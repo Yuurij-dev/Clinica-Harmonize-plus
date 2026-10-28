@@ -12,6 +12,14 @@ test("return appointments stay inside clinic hours and allow enough time for the
   assert.equal(latestAppointmentStart("19:00"), "18:00");
 });
 
+test("outside-hours preference bypasses clinic opening/closing only, retaining date, time, and day-end checks", () => {
+  const now = { date: "2026-10-14", minutes: 12 * 60 };
+  assert.equal(appointmentSlotError("2026-10-15", "22:00", "08:00", "19:00", now, 60, true), null);
+  assert.equal(appointmentSlotError("2026-10-15", "23:01", "08:00", "19:00", now, 60, true), "O atendimento deve terminar até 23:59.");
+  assert.equal(appointmentSlotError("2026-10-15", "22:00", "08:00", "19:00", now, 60, false), "Escolha um horário dentro do funcionamento da clínica (08:00 às 18:00).");
+  assert.equal(appointmentSlotError("2026-10-14", "11:00", "08:00", "19:00", now, 60, true), "Não é possível agendar em um horário ou data que já passou.");
+});
+
 test("procedure start window follows the clinic appointment tolerance", () => {
   assert.equal(appointmentWithinStartWindow(appointment, 15, { date: "2026-10-10", time: "13:59" }), false);
   assert.equal(appointmentWithinStartWindow(appointment, 15, { date: "2026-10-10", time: "14:00" }), true);

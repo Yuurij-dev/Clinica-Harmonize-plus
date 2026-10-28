@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { filterCatalog, parseCatalogListParams } from "@/lib/procedure-catalog-rules";
 import { isSafeCatalogImageFile } from "@/lib/procedure-image-rules";
@@ -9,6 +10,7 @@ import { isSafeCatalogImageFile } from "@/lib/procedure-image-rules";
 export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  if (!canForUser(user, "procedures:access")) return NextResponse.json({ message: "Seu cargo não tem acesso aos procedimentos." }, { status: 403 });
   const { q, limit, offset } = parseCatalogListParams(new URL(request.url).searchParams);
   const [items, enabled] = await Promise.all([
     prisma.procedureCatalogItem.findMany({ where: { active: true }, orderBy: [{ sortOrder: "asc" }, { name: "asc" }], select: { id: true, slug: true, name: true, imageFile: true, imageAlt: true } }),

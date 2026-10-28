@@ -17,6 +17,8 @@ const prisma = new PrismaClient();
 // Avaliação completa: para CONCLUIR, a API exige queixa, objetivo, os 5 campos da anamnese rápida e observações.
 const fullAssessment = { chiefComplaint: "Queixa", patientGoal: "Obj", allergies: "Não", pregnancyStatus: "Não", anticoagulantUse: "Não", autoimmuneDiseases: "Não", previousProcedures: "Não", clinicalNotes: "Obs" };
 let cookie = "";
+// Nome da conta de teste (autor gravado em anamnese, auditoria etc.); vem do login.
+let accountName = "";
 
 async function api(method, path, body) {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -44,6 +46,7 @@ async function login() {
   const response = await api("POST", "/api/auth/login", { login: email, password });
   if (response.status !== 200) throw new Error(`Login da conta de teste falhou (${response.status}): ${JSON.stringify(response.data)}`);
   if (response.data.user?.clinic?.name !== testClinicName) throw new Error(`A conta de teste não está na "${testClinicName}". Abortado para não mexer em clínica real.`);
+  accountName = response.data.user.name;
 }
 
 async function patientsAndPayments() {
@@ -55,21 +58,45 @@ async function patientsAndPayments() {
   check("cadastro de paciente", r.status === 201, r.status);
   r = await api("POST", "/api/patients", { name: `Outro ${run}`, phone: "11999990001", age: 31, cpf });
   check("CPF repetido devolve 409", r.status === 409, r.status);
+  const sameCpf = randomCpf();
+  const pair = await Promise.all([1, 2].map((n) => api("POST", "/api/patients", { name: `CPF Simultâneo ${n} ${run}`, phone: "11999990004", age: 30, cpf: sameCpf })));
+  check("dois cadastros simultâneos com o mesmo CPF: um 201 e um 409, nunca 500", pair.map((res) => res.status).sort().join() === "201,409", pair.map((res) => res.status).join("/"));
   r = await api("POST", "/api/patients", { name: `Paciente ${run}`, phone: "11999990002", age: 40 });
   const homonym = r.data.patient;
 
   const before = (await api("GET", "/api/finance/summary?period=month")).data.totals?.receivedCents ?? 0;
   r = await api("POST", "/api/payments", { patient: `Paciente ${run}`, value: 10, method: "Pix", installments: "A vista" });
   check("pagamento só com nome é recusado", r.status === 400, r.status);
+  for (const [label, extra] of [["valor negativo", { value: -50 }], ["status fora da lista", { status: "pago" }]]) {
+    r = await api("POST", "/api/payments", { patientId: homonym.id, value: 10, method: "Pix", status: "Pago", installments: "A vista", ...extra });
+    check(`pagamento com ${label} é recusado (400)`, r.status === 400, r.status);
+  }
+  r = await api("POST", "/api/payments", { patientId: homonym.id, value: 0, method: "Pix", status: "Pago", installments: "A vista" });
+  check("pagamento de R$ 0 (orçamento de cortesia) é aceito", r.status === 201 && r.data.payment?.value === 0, r.status);
   r = await api("POST", "/api/payments", { patientId: homonym.id, value: 150.5, method: "Pix", status: "Pago", installments: "A vista" });
   check("pagamento guarda centavos (R$ 150,50)", r.status === 201 && r.data.payment?.value === 150.5, JSON.stringify(r.data.payment?.value));
   check("pagamento fica no paciente escolhido, não no homônimo", r.data.payment?.patientId === homonym.id);
   r = await api("GET", "/api/payments");
   check("lista de pagamentos devolve reais", r.data.payments?.some((payment) => payment.id && payment.value === 150.5));
+  const listedPayment = r.data.payments?.find((payment) => payment.value === 150.5);
+  const paymentsIn = async (query) => api("GET", `/api/payments?${query}`);
+  const today = day(0);
+  const [inToday, inPast, badPeriod] = await Promise.all([paymentsIn(`from=${today}&to=${today}`), paymentsIn("from=2000-01-01&to=2000-01-31"), paymentsIn("from=31/12/2000")]);
+  check("lista de pagamentos filtra o período no servidor (hoje traz, 2000 não, data inválida 400)", inToday.data.payments?.some((payment) => payment.value === 150.5) && inToday.data.hasMore === false && inPast.status === 200 && inPast.data.payments?.length === 0 && badPeriod.status === 400, `${inToday.data.payments?.length}/${inPast.data.payments?.length}/${badPeriod.status}`);
+  check("lista de pagamentos é enxuta e limitada a 200",listedPayment && !("clinicId" in listedPayment) && !("journeyId" in listedPayment) && listedPayment.patient?.name && r.data.payments.length <= 200, JSON.stringify(Object.keys(listedPayment ?? {})));
   const after = (await api("GET", "/api/finance/summary?period=month")).data.totals?.receivedCents ?? 0;
   check("resumo financeiro soma o pagamento em centavos", after - before === 15_050, `${before} → ${after}`);
   r = await api("GET", "/api/dashboard/bootstrap");
   check("dashboard traz total de atendimentos e valores em reais", typeof r.data.appointmentCount === "number" && r.data.payments?.some((payment) => payment.value === 150.5), r.status);
+  // Paciente sem jornada recebendo registros ao mesmo tempo: uma só "Jornada 1".
+  const fresh = (await api("POST", "/api/patients", { name: `Sem Jornada ${run}`, phone: "11999990003", age: 28 })).data.patient;
+  const burst = await Promise.all([
+    api("POST", "/api/payments", { patientId: fresh?.id, value: 5, method: "Pix", status: "Pago", installments: "A vista" }),
+    api("POST", "/api/payments", { patientId: fresh?.id, value: 6, method: "Pix", status: "Pago", installments: "A vista" }),
+    api("POST", "/api/quotes", { patientId: fresh?.id, items: "Avulso (1x)", total: 7 }),
+  ]);
+  const journeyCount = await prisma.patientJourney.count({ where: { patientId: fresh?.id ?? "" } });
+  check("registros simultâneos de paciente sem jornada criam uma só jornada", burst.every((res) => res.status === 201) && journeyCount === 1, `${burst.map((res) => res.status).join("/")} jornadas=${journeyCount}`);
   return { patient, homonym };
 }
 
@@ -77,6 +104,11 @@ async function quotesAndProcedures(patient) {
   let r = await api("POST", "/api/quotes", { patientId: patient.id, items: "Botox (1x)", total: 99.4, expires: "30/12/2030" });
   const quote = r.data.quote;
   check("orçamento guarda centavos (R$ 99,40)", quote?.total === 99.4, JSON.stringify(quote?.total));
+  const list = await api("GET", "/api/quotes");
+  const listed = list.data.quotes?.find((item) => item.id === quote?.id);
+  const [quotesToday, quotesPast, quotesBad] = await Promise.all([api("GET", `/api/quotes?from=${day(0)}&to=${day(0)}`), api("GET", "/api/quotes?to=2000-01-31"), api("GET", "/api/quotes?to=2000-13-01")]);
+  check("lista de orçamentos filtra o período no servidor (hoje traz, até 2000 não, data inválida 400)", quotesToday.data.quotes?.some((item) => item.id === quote?.id) && quotesToday.data.hasMore === false && quotesPast.data.quotes?.length === 0 && quotesBad.status === 400, `${quotesToday.data.quotes?.length}/${quotesPast.data.quotes?.length}/${quotesBad.status}`);
+  check("lista de orçamentos é enxuta (sem details/notes) e limitada a 200",listed && listed.total === 99.4 && listed.patient?.name && !("details" in listed) && !("notes" in listed) && list.data.quotes.length <= 200, JSON.stringify(Object.keys(listed ?? {})));
   const [a, b] = await Promise.all([api("PATCH", `/api/quotes/${quote.id}`, { status: "Aprovado" }), api("PATCH", `/api/quotes/${quote.id}`, { status: "Aprovado" })]);
   r = await api("GET", `/api/patients/${patient.id}/history?tab=Procedimentos`);
   const fromQuote = r.data.patient?.procedureRecords?.filter((procedure) => procedure.quoteId === quote.id) ?? [];
@@ -94,6 +126,10 @@ async function appointments(patient) {
   const appointment = r.data.appointment;
   check("agendamento para amanhã é criado", r.status === 201, JSON.stringify(r.data).slice(0, 120));
   check("dia do agendamento gravado ao meio-dia de São Paulo", appointment?.date === `${day(1)}T15:00:00.000Z`, appointment?.date);
+  const far = (await api("POST", "/api/appointments", { patientId: patient.id, procedure: "Retorno", professional: "Teste Distante", time: "09:00", date: day(100) })).data.appointment;
+  const dashboard = (await api("GET", "/api/dashboard/bootstrap")).data;
+  check("dashboard traz o agendamento de amanhã mas não o de daqui a 100 dias", Boolean(far) && dashboard.appointments?.some((item) => item.id === appointment?.id) && !dashboard.appointments?.some((item) => item.id === far?.id), `${far?.id} ${dashboard.appointments?.length}`);
+  if (far) await api("DELETE", `/api/appointments/${far.id}`);
   r = await api("POST", "/api/appointments", { patient: `Paciente ${run}`, procedure: "Retorno", professional: "Teste", time: "10:00", date: day(1) });
   check("agendamento só com nome é recusado", r.status === 400, r.status);
   r = await api("GET", `/api/patients/${patient.id}/history?tab=Agendamentos`);
@@ -110,7 +146,8 @@ async function journeys(patient, quote) {
   let r = await api("GET", `/api/patients/${patient.id}/journeys`);
   const first = r.data.journeys?.[0];
   check("jornadas trazem marcações de progresso", first?.hasPaidQuote === true && first?.hasProcedure === true, JSON.stringify(first));
-  r = await api("POST", `/api/patients/${patient.id}/journeys`, { name: "Jornada 2" });
+  const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
+  r = await api("POST", `/api/patients/${patient.id}/journeys`, { name: "Jornada 2", professionalId: professional?.id });
   const second = r.data.journey;
   r = await api("DELETE", `/api/patients/${patient.id}/journeys/${first.id}`);
   check("jornada com orçamento aprovado não pode ser excluída", r.status === 409, r.status);
@@ -539,6 +576,14 @@ async function browser(homonym) {
     await page.goto(`${baseUrl}/pagamentos`);
     await page.getByRole("cell", { name: "R$ 150,50" }).first().waitFor();
     check("tela de Pagamentos mostra R$ 150,50", true);
+    const periodRequest = page.waitForRequest((request) => request.url().includes("/api/payments?from=2000-01-01&to=2000-01-31"));
+    await page.getByLabel("Data inicial").fill("2000-01-01");
+    await page.getByLabel("Data final").fill("2000-01-31");
+    await periodRequest;
+    await page.getByRole("cell", { name: "R$ 150,50" }).first().waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "Limpar datas" }).click();
+    await page.getByRole("cell", { name: "R$ 150,50" }).first().waitFor();
+    check("filtro de datas da tela de Pagamentos busca o período no servidor e volta ao limpar", true);
     await page.getByRole("button", { name: "Registrar pagamento" }).first().click();
     // Busca de paciente: o homônimo é o que não tem CPF.
     await page.locator(`input[name="patientSearch"]`).fill(homonym.name);
@@ -550,6 +595,8 @@ async function browser(homonym) {
     const saved = (await api("GET", "/api/payments")).data.payments?.find((payment) => payment.value === 12.34);
     check("pagamento pela tela grava 12.34 no paciente escolhido", saved?.patientId === homonym.id, JSON.stringify(saved && { value: saved.value, patientId: saved.patientId }));
 
+    // Orçamento próprio: o da parte "orcamentos" pode ter sido apagado pela parte "jornadas" (exclusão da jornada).
+    await api("POST", "/api/quotes", { patientId: homonym.id, items: "Botox (1x)", total: 99.4, expires: "30/12/2030" });
     await page.goto(`${baseUrl}/orcamentos`);
     await page.getByRole("cell", { name: "R$ 99,40" }).first().waitFor();
     check("tela de Orçamentos mostra R$ 99,40", true);
@@ -759,7 +806,8 @@ async function evaluationRequiredGaps() {
 
   // Cada campo ausente ao concluir uma avaliação nova: 400 e nada gravado.
   for (const field of fields) {
-    const { [field]: _omit, ...rest } = fullAssessment;
+    const rest = { ...fullAssessment };
+    delete rest[field];
     const r = await api("PUT", url, { photos: [photo], assessment: rest, status: "Concluída" });
     check(`avaliação (lacunas): concluir sem enviar ${field} devolve 400`, r.status === 400, `${r.status} ${r.data.message}`);
   }
@@ -791,7 +839,8 @@ async function evaluationRequiredGaps() {
   check("avaliação (lacunas): campos extras no assessment são ignorados", r.status === 200 && r.data.evaluation.status === "Rascunho", `${r.status} ${r.data.evaluation?.status}`);
 
   // Mesclagem com o já gravado: rascunho com 7 campos + o último enviado ao concluir.
-  const { clinicalNotes: _notes, ...seven } = fullAssessment;
+  const seven = { ...fullAssessment };
+  delete seven.clinicalNotes;
   const d = await api("PUT", url, { photos: [], assessment: seven });
   const dId = d.data.evaluation.id;
   r = await api("PUT", url, { evaluationId: dId, photos: [], assessment: {}, status: "Concluída" });
@@ -1037,9 +1086,9 @@ async function anamnesis() {
   const done = await Promise.all([1, 2].map(() => api("POST", `${base(A)}/anamnesis/${draft.id}`, { action: "complete", expectedUpdatedAt: revision })));
   check("conclusão dupla simultânea: uma conclui, a outra recebe 409", sortedStatuses(done) === "200,409", done.map((item) => item.status).join(","));
   const v1 = (await api("GET", `${base(A)}/anamnesis/${draft.id}`)).data.version;
-  check("versão concluída: status, autor e data", v1.status === "CONCLUIDA" && v1.completedBy === "E2E Admin" && Boolean(v1.completedAt), `${v1.status} ${v1.completedBy}`);
+  check("versão concluída: status, autor e data", v1.status === "CONCLUIDA" && v1.completedBy === accountName && Boolean(v1.completedAt), `${v1.status} ${v1.completedBy}`);
   check("conclusão descarta a linha de medicamento vazia", v1.content.medications.items.length === 1 && v1.content.medications.items[0].name === "Losartana");
-  check("auditoria registra criação e conclusão", ["draft-created", "completed"].every((action) => v1.audit.some((entry) => entry.action === action && entry.by === "E2E Admin")), JSON.stringify(v1.audit.map((entry) => entry.action)));
+  check("auditoria registra criação e conclusão", ["draft-created", "completed"].every((action) => v1.audit.some((entry) => entry.action === action && entry.by === accountName)), JSON.stringify(v1.audit.map((entry) => entry.action)));
   check("alertas só para Sim, com nível e sem apto/inapto", v1.alerts.some((alert) => alert.id === "allergy-latex" && alert.level === "important") && v1.alerts.some((alert) => alert.id === "health-hypertension") && !v1.alerts.some((alert) => alert.id === "health-diabetes") && !/\binapto|\bapto\b|liberad/i.test(JSON.stringify(v1.alerts)), JSON.stringify(v1.alerts.map((alert) => alert.id)));
 
   // Imutabilidade.
@@ -1061,11 +1110,11 @@ async function anamnesis() {
   o = await overview(A);
   check("visão geral após concluir: revisada, versão atual e alertas", o.state === "REVISADA" && o.exists === true && o.current?.id === draft.id && o.alerts.some((alert) => alert.id === "allergy-latex"), `${o.state}`);
   r = await api("POST", `${base(A)}/anamnesis/${draft.id}`, { action: "confirm-review", note: "Conferido com a paciente" });
-  check("confirmar revisão registra autor e data", r.status === 200 && r.data.version.reviewConfirmedBy === "E2E Admin" && Boolean(r.data.version.reviewConfirmedAt) && r.data.version.status === "CONCLUIDA", `${r.status}`);
+  check("confirmar revisão registra autor e data", r.status === 200 && r.data.version.reviewConfirmedBy === accountName && Boolean(r.data.version.reviewConfirmedAt) && r.data.version.status === "CONCLUIDA", `${r.status}`);
   r = await api("POST", `${base(A)}/anamnesis/${draft.id}`, { action: "request-review", note: "" });
   check("pedir revisão sem motivo é recusado (400)", r.status === 400, r.status);
   r = await api("POST", `${base(A)}/anamnesis/${draft.id}`, { action: "request-review", note: "Paciente engravidou" });
-  check("pedir revisão marca pendente com motivo e autor", r.status === 200 && r.data.version.status === "PENDENTE_REVISAO" && r.data.version.reviewReason === "Paciente engravidou" && r.data.version.reviewRequestedBy === "E2E Admin", `${r.status}`);
+  check("pedir revisão marca pendente com motivo e autor", r.status === 200 && r.data.version.status === "PENDENTE_REVISAO" && r.data.version.reviewReason === "Paciente engravidou" && r.data.version.reviewRequestedBy === accountName, `${r.status}`);
   r = await api("POST", `${base(A)}/anamnesis/${draft.id}`, { action: "request-review", note: "de novo" });
   check("pedir revisão duas vezes devolve 409", r.status === 409, r.status);
   o = await overview(A);
@@ -1715,6 +1764,40 @@ async function sessionPerQuote() {
   check("sessão única: a nova também traz nome combinado e 85 minutos", newer?.data.session.procedureName === combined && newer.data.session.estimatedMinutes === 85, JSON.stringify([newer?.data.session.procedureName, newer?.data.session.estimatedMinutes]));
   r = await api("POST", url, { journeyId: J.id, quoteId: Qother });
   check("sessão única: outro orçamento aprovado tem a própria sessão (nome simples, 10 min)", r.status === 201 && r.data.session?.procedureName === nameC && r.data.session.estimatedMinutes === 10 && r.data.session.id !== S.id, `${r.status} ${r.data.session?.procedureName} ${r.data.session?.estimatedMinutes}`);
+}
+
+// Mudar o status de um orçamento com sessão nunca apaga a sessão (o procedimento pai some em cascata com ela).
+async function quoteStatusKeepsSessions() {
+  const name = `E2E Status Orc ${run}`;
+  const created = await api("POST", "/api/procedures", { name, category: "Facial", price: 300, durationMinutes: 15, margin: 30 });
+  const proc = (await api("GET", "/api/quotes/options")).data.procedures?.find((item) => item.name === name);
+  if (!proc) { check("status do orçamento: procedimento de teste criado", false, `${created.status} ${JSON.stringify(created.data).slice(0, 150)}`); return; }
+  const P = (await api("POST", "/api/patients", { name: `E2E Status Orc ${run}`, phone: "11999990060", age: 35, cpf: randomCpf() })).data.patient?.id;
+  const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
+  const J = (await api("POST", `/api/patients/${P}/journeys`, { name: `E2E Status J ${run}`, professionalId: professional?.id })).data.journey;
+  const ev = (await api("PUT", `/api/patients/${P}/evaluation`, { journeyId: J?.id, photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
+  const Q = (await api("POST", "/api/quotes", { patientId: P, journeyId: J?.id, evaluationId: ev?.id, details: [{ procedureId: proc?.id, quantity: 1, discountCents: 0 }], paymentMethod: "Pix", installments: 1, notes: "" })).data.quote?.id;
+  for (const status of ["Enviado", "Aprovado"]) await api("PATCH", `/api/quotes/${Q}`, { status, evaluationId: ev?.id });
+  const S = (await api("POST", `/api/patients/${P}/procedure-sessions`, { journeyId: J?.id, quoteId: Q })).data.session?.id;
+  const sessions = () => prisma.patientProcedureSession.count({ where: { id: S ?? "" } });
+  check("status do orçamento: sessão criada no orçamento aprovado", Boolean(S) && await sessions() === 1, JSON.stringify({ proc: proc?.id, journey: J?.id, ev: ev?.id, Q, S }));
+  let r = await api("PATCH", `/api/quotes/${Q}`, { status: "Pago", evaluationId: ev?.id });
+  check("status do orçamento: pagar depois de criar a sessão mantém a sessão", r.status === 200 && await sessions() === 1, `${r.status} n=${await sessions()}`);
+  for (const status of ["Enviado", "Pendente", "Cancelado"]) {
+    r = await api("PATCH", `/api/quotes/${Q}`, { status });
+    const stored = (await prisma.quote.findUnique({ where: { id: Q ?? "" }, select: { status: true } }))?.status;
+    check(`status do orçamento: com sessão, voltar para ${status} é recusado (409) e nada muda`, r.status === 409 && stored === "Pago" && await sessions() === 1, `${r.status} ${stored} n=${await sessions()}`);
+  }
+  r = await api("PATCH", `/api/quotes/${Q}`, { status: "Aprovado" });
+  check("status do orçamento: com sessão, alternar entre Pago e Aprovado continua permitido", r.status === 200 && await sessions() === 1, `${r.status} n=${await sessions()}`);
+
+  // Orçamento sem avaliação e sem sessão: desfazer a aprovação continua removendo o procedimento gerado.
+  const plain = (await api("POST", "/api/quotes", { patientId: P, journeyId: J?.id, items: "Avulso (1x)", total: 50 })).data.quote?.id;
+  await api("PATCH", `/api/quotes/${plain}`, { status: "Aprovado" });
+  const generated = () => prisma.patientProcedure.count({ where: { quoteId: plain ?? "" } });
+  const afterApprove = await generated();
+  await api("PATCH", `/api/quotes/${plain}`, { status: "Pendente" });
+  check("status do orçamento: sem sessão, desfazer a aprovação remove o procedimento gerado", afterApprove === 1 && await generated() === 0, `${afterApprove} → ${await generated()}`);
 }
 
 async function scheduledProcedure() {
@@ -2777,7 +2860,7 @@ async function paginationSuite() {
   // Limites e valores inválidos viram valores seguros (200, nunca 400/500).
   const safe = [["page=0", 1, 20], ["page=-3", 1, 20], ["page=abc", 1, 20], ["page=2.5", 1, 20], ["pageSize=0", 1, 20], ["pageSize=-5", 1, 20], ["pageSize=abc", 1, 20], ["pageSize=1000", 1, 100], ["pageSize=101", 1, 100], ["pageSize=100", 1, 100], ["page=99999999999999999999", 1, 20], ["sort=zzz", 1, 20], ["q=%27%3B%20DROP%20TABLE%20%22Patient%22%3B--", 1, 20]];
   const outcomes = [];
-  for (const [query, page, pageSize] of safe) { const x = await list(query); outcomes.push([query, x.status, x.data.pagination?.page, x.data.pagination?.pageSize]); }
+  for (const [query] of safe) { const x = await list(query); outcomes.push([query, x.status, x.data.pagination?.page, x.data.pagination?.pageSize]); }
   check("parâmetros inválidos ou extremos: 200 com valores seguros (pageSize máx. 100)", outcomes.every(([, status, page, pageSize], index) => status === 200 && page === safe[index][1] && pageSize === safe[index][2]), JSON.stringify(outcomes.filter(([, status, page, pageSize], index) => !(status === 200 && page === safe[index][1] && pageSize === safe[index][2]))));
   check("a clínica ainda tem todos os pacientes depois da busca com SQL malicioso", (await list("pageSize=100")).data.pagination.total === N, "");
   r = await list("page=999&pageSize=10");
@@ -3005,7 +3088,7 @@ async function paginationGaps() {
       const one = (await api("POST", "/api/patients", { name: `${tag} Unico`, phone: "11988880001", age: 30 })).data.patient;
       r = await list();
       check("1 paciente: total 1, pageCount 1, resumo 1", r.data.patients.length === 1 && r.data.pagination.total === 1 && r.data.pagination.pageCount === 1 && r.data.summary.total === 1 && r.data.summary.byStatus.Ativa === 1, JSON.stringify(r.data.pagination));
-      const two = (await api("POST", "/api/patients", { name: `${tag} Segundo`, phone: "11988880002", age: 31 })).data.patient;
+      await api("POST", "/api/patients", { name: `${tag} Segundo`, phone: "11988880002", age: 31 });
       r = await list("pageSize=1&page=2");
       check("2 pacientes com pageSize=1: pageCount 2 e a página 2 traz o último por nome (Unico depois de Segundo)", r.data.pagination.pageCount === 2 && r.data.patients.length === 1 && r.data.patients[0].id === one.id && r.data.summary.total === 2, JSON.stringify(r.data.pagination));
       await prisma.patient.deleteMany({ where: { clinicId } });
@@ -4986,7 +5069,7 @@ async function mobilePhotosGaps() {
     const entry = (idx.data.photos ?? []).find((z) => z.id === `evaluation:${first.data.photo.id}`);
     check("photos index: foto do app aparece com source \"evaluation\", sem base64", idx.status === 200 && entry?.source === "evaluation" && !JSON.stringify(idx.data).includes("base64"), `${idx.status} ${JSON.stringify(entry)?.slice(0, 160)}`);
     const upAudit = await prisma.clinicalFileAudit.findFirst({ where: { patientId: pRace.id, action: "UPLOAD", fileId: `evaluation:${first.data.photo.id}` } });
-    check("auditoria UPLOAD: clínica, paciente, ator (id/nome), categoria e nome preenchidos", upAudit?.clinicId === clinicId && upAudit.actorId === adminId && upAudit.actorName === "E2E Admin" && upAudit.fileKind === "PHOTO" && upAudit.category === "Outra" && upAudit.fileName.length > 0, JSON.stringify(upAudit));
+    check("auditoria UPLOAD: clínica, paciente, ator (id/nome), categoria e nome preenchidos", upAudit?.clinicId === clinicId && upAudit.actorId === adminId && upAudit.actorName === accountName && upAudit.fileKind === "PHOTO" && upAudit.category === "Outra" && upAudit.fileName.length > 0, JSON.stringify(upAudit));
     const proId = (await prisma.user.findUnique({ where: { email: proEmail }, select: { id: true } })).id;
     const v1 = await fetch(`${baseUrl}${imgUrl(pRace.id, first.data.photo.id, "?size=thumb")}`, { headers: bearer(proToken) });
     await v1.arrayBuffer();
@@ -5114,6 +5197,7 @@ const suites = {
   catalogo: { needs: [], run: async () => { await procedureCatalog(); await procedureCatalogGaps(); } },
   consentimento: { needs: [], run: () => consentGate() },
   sessao_unica: { needs: [], run: () => sessionPerQuote() },
+  status_orcamento: { needs: [], run: () => quoteStatusKeepsSessions() },
   materiais_sessao: { needs: [], run: async () => { await sessionMaterials(); await sessionMaterialsGaps(); } },
   agendar_procedimento: { needs: [], run: () => scheduledProcedure() },
   inicio_move_agenda: { needs: [], run: () => startMovesAppointment() },

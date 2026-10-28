@@ -1,0 +1,3 @@
+-- Intentionally empty. This migration previously contained a destructive drift
+-- diff that removed schema still required by prisma/schema.prisma and the app.
+-- Keep the migration ID for ordering, but do not drop clinical or procedure data.

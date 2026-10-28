@@ -1,6 +1,7 @@
 // Regras puras de documentos clínicos e fotos: categorias, permissões por papel, validação de upload (assinatura de bytes) e nomes.
 
 export const documentCategories = ["TERMOS", "EXAMES", "RECEITAS", "ORIENTACOES", "DECLARACOES", "OUTROS"] as const;
+import { can } from "./permissions.ts";
 export type DocumentCategory = typeof documentCategories[number];
 
 export const documentCategoryLabels: Record<DocumentCategory, string> = {
@@ -39,39 +40,39 @@ const clinicalRole = (role: string | null | undefined) => role === "ADMIN" || ro
 // STAFF só lida com documentos administrativos; o restante é clínico e exige clinical:read.
 const administrativeCategories: readonly DocumentCategory[] = ["TERMOS", "DECLARACOES", "ORIENTACOES"];
 
-export function visibleDocumentCategories(role: string | null | undefined): DocumentCategory[] {
-  if (clinicalRole(role)) return [...documentCategories];
+export function visibleDocumentCategories(role: string | null | undefined, matrix?: unknown): DocumentCategory[] {
+  if (can(role, "clinical:read", matrix)) return [...documentCategories];
   if (role === "STAFF") return [...administrativeCategories];
   return [];
 }
-export function canViewDocumentCategory(role: string | null | undefined, category: string) {
-  return (visibleDocumentCategories(role) as string[]).includes(category);
+export function canViewDocumentCategory(role: string | null | undefined, category: string, matrix?: unknown) {
+  return (visibleDocumentCategories(role, matrix) as string[]).includes(category);
 }
 // Enviar, renomear, categorizar e vincular: mesma regra de visibilidade (a categoria de destino também precisa ser permitida).
 export const canWriteDocumentCategory = canViewDocumentCategory;
 // Marcar um termo como Assinado é ato clínico: STAFF envia termos, mas só como Pendente/Não se aplica.
-export function canAssignSignatureStatus(role: string | null | undefined, category: string, status: string) {
-  return !(category === "TERMOS" && status === "ASSINADO") || clinicalRole(role);
+export function canAssignSignatureStatus(role: string | null | undefined, category: string, status: string, matrix?: unknown) {
+  return !(category === "TERMOS" && status === "ASSINADO") || can(role, "clinical:write", matrix);
 }
 type SignedTermFields = { category: string; signatureStatus?: string | null; journeyId: string | null; encounterType: string | null; encounterId: string | null };
 // Termo TERMOS já ASSINADO: papel não clínico (STAFF) só pode renomear. Status, categoria e vínculos (inclusive remover) ficam travados,
 // senão o termo sairia da jornada/categoria que libera o início do procedimento. Mudar de dono de jornada liberaria o gate de outra.
-export function canModifySignedTerm(role: string | null | undefined, current: SignedTermFields, next: SignedTermFields) {
-  if (clinicalRole(role)) return true;
+export function canModifySignedTerm(role: string | null | undefined, current: SignedTermFields, next: SignedTermFields, matrix?: unknown) {
+  if (can(role, "clinical:write", matrix)) return true;
   if (current.category !== "TERMOS" || current.signatureStatus !== "ASSINADO") return true;
   return current.category === next.category && current.signatureStatus === next.signatureStatus && current.journeyId === next.journeyId
     && current.encounterType === next.encounterType && current.encounterId === next.encounterId;
 }
-export function signatureStatusesFor(role: string | null | undefined, category = "TERMOS"): SignatureStatus[] {
-  return signatureStatuses.filter((status) => canAssignSignatureStatus(role, category, status));
+export function signatureStatusesFor(role: string | null | undefined, category = "TERMOS", matrix?: unknown): SignatureStatus[] {
+  return signatureStatuses.filter((status) => canAssignSignatureStatus(role, category, status, matrix));
 }
-export const canArchiveFiles = (role: string | null | undefined) => clinicalRole(role);
-export const canDeleteFiles = (role: string | null | undefined) => role === "ADMIN";
-export const canUsePhotos = (role: string | null | undefined) => clinicalRole(role);
-export const canWritePhotos = (role: string | null | undefined) => clinicalRole(role);
+export const canArchiveFiles = (role: string | null | undefined, matrix?: unknown) => can(role, "clinical:archive", matrix);
+export const canDeleteFiles = (role: string | null | undefined, matrix?: unknown) => can(role, "clinical:delete", matrix);
+export const canUsePhotos = (role: string | null | undefined, matrix?: unknown) => can(role, "clinical:read", matrix);
+export const canWritePhotos = (role: string | null | undefined, matrix?: unknown) => can(role, "clinical:write", matrix);
 // Itens de sistema por referência seguem a permissão da origem.
-export function canSeeSystemDocument(role: string | null | undefined, kind: "anamnesis" | "evaluation") {
-  return clinicalRole(role) && (kind === "anamnesis" || kind === "evaluation");
+export function canSeeSystemDocument(role: string | null | undefined, kind: "anamnesis" | "evaluation", matrix?: unknown) {
+  return can(role, "clinical:read", matrix) && (kind === "anamnesis" || kind === "evaluation");
 }
 
 // ---- Validação de arquivo ----
@@ -106,7 +107,6 @@ export function checkUpload(bytes: Uint8Array, declaredMime: string | undefined,
 export function sanitizeFileName(value: unknown, fallback = "arquivo") {
   const text = typeof value === "string" ? value : "";
   const base = text.split(/[\\/]/).pop() ?? "";
-  // eslint-disable-next-line no-control-regex
   const cleaned = base.replace(/[\u0000-\u001f\u007f<>:"|?*]/g, "").replace(/\s+/g, " ").replace(/^\.+/, "").trim();
   return (cleaned || fallback).slice(0, maxNameLength);
 }

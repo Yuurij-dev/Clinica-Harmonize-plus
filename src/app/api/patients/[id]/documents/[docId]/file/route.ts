@@ -1,4 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
+import { denyUnless } from "@/lib/api-guards";
 import { prisma } from "@/lib/prisma";
 import { canViewDocumentCategory, contentDisposition } from "@/lib/clinical-files-rules";
 import { recordReadAudit } from "@/lib/clinical-files-server";
@@ -13,9 +14,11 @@ const extensions: Record<string, string> = { "application/pdf": "pdf", "image/jp
 export async function GET(request: Request, { params }: { params: Promise<{ id: string; docId: string }> }) {
   const user = await getCurrentUser();
   if (!user) return json("Não autenticado.", 401);
+  const patientDenied = denyUnless(user, "patients:access");
+  if (patientDenied) return patientDenied;
   const { id: patientId, docId } = await params;
   const row = await prisma.clinicalDocument.findFirst({ where: { id: docId, clinicId: user.clinicId, patientId }, select: { id: true, name: true, category: true, mimeType: true, storageDriver: true, storageKey: true } });
-  if (!row || !canViewDocumentCategory(user.role, row.category)) return json("Documento não encontrado.", 404);
+  if (!row || !canViewDocumentCategory(user.role, row.category, user.rolePermissions)) return json("Documento não encontrado.", 404);
   const bytes = await readStoredBytes("document", row.id, row);
   if (!bytes) return json("Arquivo indisponível.", 404);
   const url = new URL(request.url);

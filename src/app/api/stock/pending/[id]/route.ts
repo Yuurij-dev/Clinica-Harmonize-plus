@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { canForUser } from "@/lib/permissions";
 import { clinicToday, dateOnly } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
 import { lockLots, lotBalances, movementTypes } from "@/lib/stock";
@@ -12,7 +13,7 @@ class PendingError extends Error {}
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  if (!canForUser(user, "purchases:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
   const id = (await params).id;
   const body = await request.json().catch(() => null) as { lotId?: string } | null;
 

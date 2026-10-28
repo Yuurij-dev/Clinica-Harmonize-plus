@@ -57,10 +57,10 @@ export function Modal({ open, title, description, children, onClose, overlayCont
   );
 }
 
-export function FormField({ label, children, htmlFor, description }: { label: string; children: React.ReactNode; htmlFor?: string; description?: string }) {
+export function FormField({ label, children, htmlFor, description, required = false }: { label: string; children: React.ReactNode; htmlFor?: string; description?: string; required?: boolean }) {
   return (
     <div className="space-y-2">
-      <Label htmlFor={htmlFor} className="text-xs font-medium text-foreground">{label}</Label>
+      <Label htmlFor={htmlFor} className="text-xs font-medium text-foreground">{label}{required ? <span aria-hidden="true" className="ml-1 text-destructive">*</span> : null}</Label>
       {children}
       {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
     </div>

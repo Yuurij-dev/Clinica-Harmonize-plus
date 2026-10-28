@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { checkUpload, maxUploadBytes } from "@/lib/clinical-files-rules";
 import { readUploadForm, sha256 } from "@/lib/clinical-files-server";
@@ -17,7 +18,7 @@ const dimension = (value: FormDataEntryValue | null) => {
 export async function POST(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  if (!canForUser(user, "procedures:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
   const clinicId = user.clinicId;
 
   const read = await readUploadForm(request);

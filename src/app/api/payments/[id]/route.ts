@@ -6,7 +6,7 @@ import { denyUnless } from "@/lib/api-guards";
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  const denied = denyUnless(user.role, "payments:delete");
+  const denied = denyUnless(user, "payments:delete");
   if (denied) return denied;
   const { id } = await params;
   const result = await prisma.payment.deleteMany({ where: { id, clinicId: user.clinicId } });

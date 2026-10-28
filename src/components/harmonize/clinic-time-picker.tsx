@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Clock3 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -8,6 +8,7 @@ type ClinicTimePickerProps = {
   openingTime: string;
   closingTime: string;
   latestTime?: string | null;
+  allowOutsideHours?: boolean;
   value: string;
   invalid?: boolean;
   disabled?: boolean;
@@ -15,15 +16,16 @@ type ClinicTimePickerProps = {
   className?: string;
 };
 
-export function ClinicTimePicker({ openingTime, closingTime, latestTime, value, invalid = false, disabled = false, onChange, className }: ClinicTimePickerProps) {
+export function ClinicTimePicker({ openingTime, closingTime, latestTime, allowOutsideHours = false, value, invalid = false, disabled = false, onChange, className }: ClinicTimePickerProps) {
   const [open, setOpen] = useState(false);
   const [draftHour, setDraftHour] = useState<number | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const popupId = useId();
   const opening = parseClockMinutes(openingTime);
   const closing = parseClockMinutes(closingTime);
   const latest = latestTime === undefined ? closing === null ? null : closing - 1 : latestTime === null ? -1 : parseClockMinutes(latestTime);
-  const firstMinute = opening ?? 0;
-  const lastMinute = latest ?? -1;
+  const firstMinute = allowOutsideHours ? 0 : opening ?? 0;
+  const lastMinute = allowOutsideHours ? (latestTime === undefined ? 23 * 60 + 59 : latest ?? -1) : latest ?? -1;
   const hours = lastMinute >= firstMinute
     ? Array.from({ length: Math.floor(lastMinute / 60) - Math.floor(firstMinute / 60) + 1 }, (_, index) => Math.floor(firstMinute / 60) + index)
     : [];
@@ -51,11 +53,11 @@ export function ClinicTimePicker({ openingTime, closingTime, latestTime, value, 
   }, [open]);
 
   return <div ref={rootRef} className="relative">
-    <button type="button" disabled={disabled || !hours.length} aria-haspopup="listbox" aria-invalid={invalid || undefined} aria-expanded={open} onClick={() => { setDraftHour(selectedHour); setOpen((current) => !current); }} className={cn("flex h-10 w-full items-center justify-between rounded-md border border-border bg-background px-3 text-left text-xs transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-60", invalid && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]", className)}>
+    <button type="button" role="combobox" disabled={disabled || !hours.length} aria-haspopup="listbox" aria-controls={popupId} aria-invalid={invalid || undefined} aria-expanded={open} onClick={() => { setDraftHour(selectedHour); setOpen((current) => !current); }} className={cn("flex h-10 w-full items-center justify-between rounded-md border border-border bg-background px-3 text-left text-xs transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-60", invalid && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]", className)}>
       <span className={value ? "text-foreground" : "text-muted-foreground"}>{value || "Selecione o horário"}</span>
       <Clock3 className="h-4 w-4 text-muted-foreground" />
     </button>
-    {open ? <div className="absolute left-0 top-full z-40 mt-1 grid w-[156px] grid-cols-2 overflow-hidden rounded-md border border-border bg-popover text-sm text-popover-foreground shadow-lg" role="group" aria-label="Horários disponíveis">
+    {open ? <div id={popupId} className="absolute left-0 top-full z-40 mt-1 grid w-[156px] grid-cols-2 overflow-hidden rounded-md border border-border bg-popover text-sm text-popover-foreground shadow-lg" role="group" aria-label="Horários disponíveis">
       <div className="max-h-60 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden border-r border-border p-1" role="listbox" aria-label="Hora">
         {hours.map((hour) => <button type="button" role="option" aria-selected={hour === activeHour} className={cn("block w-full rounded-sm px-3 py-1.5 text-left", hour === activeHour ? "bg-primary text-primary-foreground" : "hover:bg-accent")} key={hour} onClick={() => setDraftHour(hour)}>{String(hour).padStart(2, "0")}</button>)}
       </div>

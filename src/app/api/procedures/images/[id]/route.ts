@@ -1,4 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
+import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { readStoredBytes } from "@/lib/clinical-storage";
 import { isValidId } from "@/lib/procedure-catalog-rules";
@@ -29,7 +30,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return json("Não autenticado.", 401);
-  if (user.role !== "ADMIN") return json("Acesso restrito a administradores.", 403);
+  if (!canForUser(user, "procedures:manage")) return json("Acesso restrito a administradores.", 403);
   const id = (await params).id;
   if (!isValidId(id)) return json("Imagem não encontrada.", 404);
   // Apagadores concorrentes da mesma imagem: o perdedor reencontra a imagem já removida (404).

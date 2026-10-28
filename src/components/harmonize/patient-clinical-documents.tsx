@@ -161,6 +161,7 @@ export function FilterSelect({ label, value, onChange, children }: { label: stri
 function FileGlyph({ item, patientId }: { item: DocumentItem; patientId: string }) {
   if (item.system) return <span className="grid h-11 w-11 place-items-center rounded-lg bg-primary/10 text-primary"><ClipboardList className="h-5 w-5" aria-hidden="true" /></span>;
   if (item.mimeType?.startsWith("image/")) {
+    // eslint-disable-next-line @next/next/no-img-element -- bytes vêm de rota autenticada por cookie ou data URL; o otimizador do next/image não tem a sessão
     return <img alt="" loading="lazy" className="h-11 w-11 rounded-lg border border-border object-cover" src={`${base(patientId)}/${encodeURIComponent(item.id)}/file?thumb=1`} />;
   }
   return <span className="grid h-11 w-11 place-items-center rounded-lg bg-red-50 text-red-500"><FileText className="h-5 w-5" aria-hidden="true" /></span>;
@@ -203,6 +204,7 @@ function PreviewModal({ item, patientId, onClose }: { item: DocumentItem | null;
   const url = item ? `${base(patientId)}/${encodeURIComponent(item.id)}/file` : "";
   return <Modal open={Boolean(item)} onClose={onClose} title={item?.name ?? "Documento"} description={item ? `${documentCategoryLabels[item.category]} • ${formatBytes(item.sizeBytes ?? 0)}` : undefined}>
     {item ? <div className="space-y-3">
+      {/* eslint-disable-next-line @next/next/no-img-element -- bytes vêm de rota autenticada por cookie ou data URL; o otimizador do next/image não tem a sessão */}
       <div className="overflow-hidden rounded-md border border-border bg-muted">{item.mimeType === "application/pdf" ? <iframe title={item.name} src={url} className="h-[60dvh] w-full" /> : <img alt={item.name} src={url} className="max-h-[60dvh] w-full object-contain" />}</div>
       <div className="flex justify-end gap-2"><Button variant="outline" asChild><a href={`${url}?download=1`}><Download className="h-4 w-4" />Baixar</a></Button><Button onClick={onClose}>Fechar</Button></div>
     </div> : null}

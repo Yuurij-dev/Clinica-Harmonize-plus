@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { canForUser } from "@/lib/permissions";
 import { clinicToday, dateOnly } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
 import { clinicWarningDays, lotBalances } from "@/lib/stock";
@@ -10,7 +11,7 @@ import { materialBalance, stockAlerts, type StockKind } from "@/lib/stock-rules"
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
-  if (user.role !== "ADMIN") return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  if (!canForUser(user, "stock:access")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
 
   const [products, balances, warningDays, pendingOutputs, pendingChecks] = await Promise.all([
     prisma.product.findMany({ where: { clinicId: user.clinicId, archivedAt: null }, select: { id: true, name: true, kind: true, unit: true, minStock: true, lots: { select: { id: true, code: true, expiresOn: true } } } }),
