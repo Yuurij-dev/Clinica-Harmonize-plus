@@ -4,6 +4,7 @@ import { serializeQuote, toCents } from "@/lib/finance";
 import { prisma } from "@/lib/prisma";
 import { can, quoteChangeAllowed, quoteProfessional } from "@/lib/permissions";
 import { calculateQuote, type QuoteLineInput } from "@/lib/quote-rules";
+import { quoteCostSnapshot } from "@/lib/quote-cost-snapshot";
 import { denyUnless } from "@/lib/api-guards";
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -34,7 +35,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     });
     if (!evaluation) return NextResponse.json({ message: "A avaliação não pertence ao mesmo paciente, clínica e jornada deste orçamento." }, { status: 400 });
   }
-  const details = body?.details === undefined ? undefined : await quoteDetails(body.details, user.clinicId);
+  const details = body?.details === undefined ? undefined : await quoteDetails(body.details, user.clinicId, user.id, user.role);
   if (body?.details !== undefined && !details) return NextResponse.json({ message: "Revise os procedimentos, quantidades e descontos do orçamento." }, { status: 400 });
   if (body?.notes !== undefined && (typeof body.notes !== "string" || body.notes.length > 2000)) return NextResponse.json({ message: "As observações devem ter até 2.000 caracteres." }, { status: 400 });
   if (body?.installments !== undefined && (!Number.isInteger(body.installments) || body.installments < 1 || body.installments > 12)) return NextResponse.json({ message: "O número de parcelas deve ficar entre 1 e 12." }, { status: 400 });
@@ -83,10 +84,11 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   return NextResponse.json({ quote: quote ? serializeQuote(quote) : null });
 }
 
-async function quoteDetails(lines: QuoteLineInput[], clinicId: string) {
-  const procedures = await prisma.procedure.findMany({ where: { clinicId }, select: { id: true, name: true, price: true } });
-  const costs = await prisma.clinic.findUnique({ where: { id: clinicId }, select: { laborCost: true, facilityCost: true, medicationCost: true } });
-  const costSnapshot = { laborCents: toCents(costs?.laborCost ?? 0), facilityCents: toCents(costs?.facilityCost ?? 0), medicationCents: toCents(costs?.medicationCost ?? 0) };
+async function quoteDetails(lines: QuoteLineInput[], clinicId: string, userId: string, role: string) {
+  const [procedures, costSnapshot] = await Promise.all([
+    prisma.procedure.findMany({ where: { clinicId }, select: { id: true, name: true, price: true } }),
+    quoteCostSnapshot(clinicId, userId, role),
+  ]);
   const calculated = calculateQuote(lines, procedures.map((procedure) => ({ id: procedure.id, name: procedure.name, priceCents: toCents(procedure.price) })), costSnapshot);
   return calculated ? { ...calculated, costs: costSnapshot } : null;
 }

@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { appointmentDeleteAllowed, appointmentStatusChangeAllowed, can, createDefaultRolePermissionMatrix, normalizeRolePermissionMatrix, observationKindsFor, permissionGroups, quoteChangeAllowed, quoteProfessional, visibleSections } from "../src/lib/permissions.ts";
 
-test("matriz completa: administrador tem tudo, profissional atende e edita só o próprio custo, atendente fica na recepção", () => {
+test("matriz completa: administrador tem tudo, profissional atende, atendente fica na recepção", () => {
   const matrix = createDefaultRolePermissionMatrix();
   const permissions = permissionGroups.flatMap((group) => group.permissions.map(({ key }) => key));
   assert.equal(new Set(permissions).size, permissions.length, "cada permissão tem chave única");
   for (const permission of permissions) assert.equal(matrix.ADMIN[permission], true, `ADMIN ${permission}`);
 
-  for (const permission of ["agenda:access", "agenda:manage", "patients:access", "patients:manage", "patients:cpf-full", "procedures:access", "clinical:read", "clinical:write", "anamnesis:read", "anamnesis:write", "appointment:run", "quotes:access", "quotes:manage", "quote:edit-closed", "settings:access", "settings:own-cost"]) {
+  for (const permission of ["agenda:access", "agenda:manage", "patients:access", "patients:manage", "patients:cpf-full", "procedures:access", "clinical:read", "clinical:write", "anamnesis:read", "anamnesis:write", "appointment:run", "quotes:access", "quotes:manage", "quote:edit-closed", "settings:access"]) {
     assert.equal(matrix.PROFESSIONAL[permission], true, `PROFESSIONAL ${permission}`);
   }
   for (const permission of ["payments:access", "payments:manage", "finance:access", "finance:manage", "settings:manage", "settings:team", "settings:permissions", "patients:delete", "clinical:delete", "stock:manage", "purchases:manage"]) {

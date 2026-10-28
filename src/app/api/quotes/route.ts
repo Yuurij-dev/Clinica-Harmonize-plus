@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { serializeQuote, toCents } from "@/lib/finance";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 import { calculateQuote, type QuoteLineInput } from "@/lib/quote-rules";
+import { quoteCostSnapshot } from "@/lib/quote-cost-snapshot";
 import { cpfForRole } from "@/lib/patient-cpf-mask";
 import { matchPaymentQuotes } from "@/lib/patient-finance-rules";
 import { denyUnless } from "@/lib/api-guards";
@@ -64,9 +65,10 @@ export async function POST(request: Request) {
   let totalCents = Number.isFinite(total) ? toCents(total) : 0;
   let details = "[]";
   if (body?.details !== undefined) {
-    const procedures = await prisma.procedure.findMany({ where: { clinicId: user.clinicId }, select: { id: true, name: true, price: true } });
-    const costs = await prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { laborCost: true, facilityCost: true, medicationCost: true } });
-    const costSnapshot = { laborCents: toCents(costs?.laborCost ?? 0), facilityCents: toCents(costs?.facilityCost ?? 0), medicationCents: toCents(costs?.medicationCost ?? 0) };
+    const [procedures, costSnapshot] = await Promise.all([
+      prisma.procedure.findMany({ where: { clinicId: user.clinicId }, select: { id: true, name: true, price: true } }),
+      quoteCostSnapshot(user.clinicId, user.id, user.role),
+    ]);
     const calculated = calculateQuote(body.details, procedures.map((procedure) => ({ id: procedure.id, name: procedure.name, priceCents: toCents(procedure.price) })), costSnapshot);
     if (!calculated) return NextResponse.json({ message: "Revise os procedimentos, quantidades e descontos do orçamento." }, { status: 400 });
     items = calculated.items.map((item) => `${item.name} (${item.quantity}x)`).join(", ");

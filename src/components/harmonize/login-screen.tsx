@@ -151,7 +151,7 @@ function LoginForm({ error, isSubmitting, login, onLoginChange, onPasswordChange
     <>
       <header className="mb-7 text-center"><h2 className="text-2xl font-black tracking-[0] text-[#211960]">Bem-vindo!</h2><p className="mt-2 text-[13px] leading-5 text-[#7783a8]">Acesse sua conta para continuar na Harmonize+.</p></header>
       <div className="mb-6 border-b border-[#e6e8f1]"><div className="w-fit border-b-[3px] border-[#4938f4] px-2 pb-2 text-[13px] font-bold text-[#4938f4]">Login</div></div>
-      <form className="hp-list-stagger" onSubmit={onSubmit}>
+      <form autoComplete="off" className="hp-list-stagger" onSubmit={onSubmit}>
         <TextField compact icon={Mail} label="seu e-mail" onChange={onLoginChange} placeholder="nome@dominio.com" value={login} autoComplete="username" />
         <div className="mt-4">
           <PasswordField compact label="sua senha" onChange={onPasswordChange} password={password} setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="current-password" />

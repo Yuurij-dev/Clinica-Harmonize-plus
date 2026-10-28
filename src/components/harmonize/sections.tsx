@@ -22,6 +22,7 @@ import {
   MoreVertical,
   PencilLine,
   Plus,
+  Save,
   Search,
   ShieldCheck,
   Trash2,
@@ -51,6 +52,7 @@ import { useAnamnesisStartGate, type AnamnesisOpenMode } from "./anamnesis-start
 import { buildCustomerJourney } from "@/lib/customer-journey";
 import {
   formatCurrency,
+  formatCnpj,
   formatCpf,
   formatDate,
   formatInteger,
@@ -1856,10 +1858,9 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const canManageRolePermissions = useCan("settings:permissions");
   const canManageTeam = useCan("settings:team");
   const canManageSettings = useCan("settings:manage");
-  const canManageOwnLaborCost = useCan("settings:own-cost");
   const [editing, setEditing] = useState<string | null>(null);
   const [settingsSearch, setSettingsSearch] = useState("");
-  const [activeSettingsSection, setActiveSettingsSection] = useState(canManageSettings ? "Dados da clínica" : canManageOwnLaborCost ? "Custos e orçamento" : canManageTeam ? "Profissionais e equipe" : "Segurança e permissões");
+  const [activeSettingsSection, setActiveSettingsSection] = useState(canManageSettings ? "Dados da clínica" : canManageTeam ? "Custos e orçamento" : "Segurança e permissões");
   const cachedTeam = canManageTeam ? readClientCache<{ members?: TeamMember[] }>("/api/team") : undefined;
   const [members, setMembers] = useState<TeamMember[]>(cachedTeam?.members ?? []);
   const [teamLoading, setTeamLoading] = useState(!cachedTeam);
@@ -1875,11 +1876,6 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const [laborCostSavingId, setLaborCostSavingId] = useState<string | null>(null);
   const [editingLaborCostId, setEditingLaborCostId] = useState<string | null>(null);
   const [laborCostFeedback, setLaborCostFeedback] = useState<{ message: string; success: boolean } | null>(null);
-  const ownLaborCostCacheKey = "/api/team/me/labor-cost";
-  const cachedOwnLaborCost = canManageOwnLaborCost ? readClientCache<{ laborCostCents: number | null }>(ownLaborCostCacheKey) : undefined;
-  const [ownLaborCostInput, setOwnLaborCostInput] = useState(currency.format((cachedOwnLaborCost?.laborCostCents ?? 0) / 100));
-  const [ownLaborCostLoading, setOwnLaborCostLoading] = useState(!cachedOwnLaborCost);
-  const [ownLaborCostSaving, setOwnLaborCostSaving] = useState(false);
   const [teamError, setTeamError] = useState("");
   const [memberToChangeRole, setMemberToChangeRole] = useState<TeamMember | null>(null);
   const [roleToChange, setRoleToChange] = useState("PROFESSIONAL");
@@ -1915,8 +1911,8 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const [openingTimeInput, setOpeningTimeInput] = useState(costSettings.openingTime ?? "08:00");
   const [closingTimeInput, setClosingTimeInput] = useState(costSettings.closingTime ?? "19:00");
   const [clinicNameInput, setClinicNameInput] = useState(cachedCostSettings?.settings?.name ?? clinicName ?? "Harmonize+");
-  const [clinicCnpjInput, setClinicCnpjInput] = useState(cachedCostSettings?.settings?.cnpj ?? "");
-  const [clinicPhoneInput, setClinicPhoneInput] = useState(cachedCostSettings?.settings?.phone ?? "");
+  const [clinicCnpjInput, setClinicCnpjInput] = useState(formatCnpj(cachedCostSettings?.settings?.cnpj ?? ""));
+  const [clinicPhoneInput, setClinicPhoneInput] = useState(formatPhone(cachedCostSettings?.settings?.phone ?? ""));
   const [clinicEmailInput, setClinicEmailInput] = useState(cachedCostSettings?.settings?.email ?? "");
   const [clinicAddressInput, setClinicAddressInput] = useState(cachedCostSettings?.settings?.address ?? "");
   const [appointmentNotificationsEnabled, setAppointmentNotificationsEnabled] = useState(cachedCostSettings?.settings?.appointmentNotificationsEnabled ?? true);
@@ -1930,27 +1926,37 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const [savingPreference, setSavingPreference] = useState("");
   const [clinicProfileStatus, setClinicProfileStatus] = useState("");
   const [clinicProfileError, setClinicProfileError] = useState("");
+  const [clinicProfileSaving, setClinicProfileSaving] = useState(false);
   const [clinicProfileReady, setClinicProfileReady] = useState(Boolean(cachedCostSettings?.settings));
-  const savedClinicProfile = useRef(cachedCostSettings?.settings ? JSON.stringify({ name: cachedCostSettings.settings.name?.trim() ?? "", cnpj: cachedCostSettings.settings.cnpj?.trim() ?? "", phone: cachedCostSettings.settings.phone?.trim() ?? "", email: cachedCostSettings.settings.email?.trim() ?? "", address: cachedCostSettings.settings.address?.trim() ?? "", openingTime: cachedCostSettings.settings.openingTime, closingTime: cachedCostSettings.settings.closingTime }) : "");
+  const [savedClinicProfile, setSavedClinicProfile] = useState(cachedCostSettings?.settings ? JSON.stringify({ name: cachedCostSettings.settings.name?.trim() ?? "", cnpj: formatCnpj(cachedCostSettings.settings.cnpj ?? ""), phone: formatPhone(cachedCostSettings.settings.phone ?? ""), email: cachedCostSettings.settings.email?.trim() ?? "", address: cachedCostSettings.settings.address?.trim() ?? "", openingTime: cachedCostSettings.settings.openingTime, closingTime: cachedCostSettings.settings.closingTime }) : "");
   const clinicProfile = JSON.stringify({ name: clinicNameInput.trim(), cnpj: clinicCnpjInput.trim(), phone: clinicPhoneInput.trim(), email: clinicEmailInput.trim(), address: clinicAddressInput.trim(), openingTime: openingTimeInput, closingTime: closingTimeInput });
 
   const persistClinicProfile = useCallback(async (payload: string) => {
+    setClinicProfileSaving(true);
     setClinicProfileStatus("Salvando...");
     setClinicProfileError("");
     try {
       const response = await fetch("/api/clinic/profile", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: payload });
       const data = await response.json().catch(() => ({})) as { message?: string };
       if (!response.ok) throw new Error(data.message ?? "Não foi possível salvar os dados da clínica.");
-      savedClinicProfile.current = payload;
+      setSavedClinicProfile(payload);
       onClinicNameChange?.((JSON.parse(payload) as { name: string }).name);
       invalidateClientCache("/api/clinic/cost-settings", "/api/agenda/bootstrap", "/api/appointments/options");
       window.dispatchEvent(new Event("harmonize-notification-settings-updated"));
-      setClinicProfileStatus("Dados da clínica salvos automaticamente.");
+      setClinicProfileStatus("Dados da clínica salvos.");
     } catch (error) {
       setClinicProfileStatus("");
       setClinicProfileError(error instanceof Error ? error.message : "Não foi possível salvar os dados da clínica.");
+    } finally {
+      setClinicProfileSaving(false);
     }
   }, [onClinicNameChange]);
+
+  function updateClinicProfileField(setter: (value: string) => void, value: string) {
+    setter(value);
+    setClinicProfileStatus("");
+    setClinicProfileError("");
+  }
 
   async function persistClinicPreference(key: string, enabled: boolean) {
     setSavingPreference(key);
@@ -1990,16 +1996,6 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
       .finally(() => { if (active) setRolePermissionsLoading(false); });
     return () => { active = false; };
   }, [canManageRolePermissions]);
-
-  useEffect(() => {
-    if (!canManageOwnLaborCost) return;
-    let active = true;
-    getCachedJson<{ laborCostCents: number | null }>(ownLaborCostCacheKey)
-      .then((data) => { if (active) setOwnLaborCostInput(currency.format((data.laborCostCents ?? 0) / 100)); })
-      .catch(() => { if (active) setLaborCostFeedback({ message: "Não foi possível carregar seu valor de mão de obra.", success: false }); })
-      .finally(() => { if (active) setOwnLaborCostLoading(false); });
-    return () => { active = false; };
-  }, [canManageOwnLaborCost, ownLaborCostCacheKey]);
 
   async function saveRolePermissions() {
     setRolePermissionsSaving(true);
@@ -2050,11 +2046,11 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
         setAppointmentToleranceInput(String(settings.appointmentToleranceMinutes));
         setOpeningTimeInput(settings.openingTime ?? "08:00");
         setClosingTimeInput(settings.closingTime ?? "19:00");
-        setClinicCnpjInput(settings.cnpj ?? "");
-        setClinicPhoneInput(settings.phone ?? "");
+        setClinicCnpjInput(formatCnpj(settings.cnpj ?? ""));
+        setClinicPhoneInput(formatPhone(settings.phone ?? ""));
         setClinicEmailInput(settings.email ?? "");
         setClinicAddressInput(settings.address ?? "");
-        savedClinicProfile.current = JSON.stringify({ name: settings.name?.trim() ?? "", cnpj: settings.cnpj?.trim() ?? "", phone: settings.phone?.trim() ?? "", email: settings.email?.trim() ?? "", address: settings.address?.trim() ?? "", openingTime: settings.openingTime ?? "08:00", closingTime: settings.closingTime ?? "19:00" });
+        setSavedClinicProfile(JSON.stringify({ name: settings.name?.trim() ?? "", cnpj: formatCnpj(settings.cnpj ?? ""), phone: formatPhone(settings.phone ?? ""), email: settings.email?.trim() ?? "", address: settings.address?.trim() ?? "", openingTime: settings.openingTime ?? "08:00", closingTime: settings.closingTime ?? "19:00" }));
         setClinicProfileReady(true);
         setAppointmentNotificationsEnabled(settings.appointmentNotificationsEnabled ?? true);
         setAppointmentNotificationSoundEnabled(settings.appointmentNotificationSoundEnabled ?? true);
@@ -2069,12 +2065,6 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
       .finally(() => { if (active) setCostSettingsLoading(false); });
     return () => { active = false; };
   }, [canManageSettings]);
-
-  useEffect(() => {
-    if (!clinicProfileReady || clinicProfile === savedClinicProfile.current) return;
-    const timeout = window.setTimeout(() => { void persistClinicProfile(clinicProfile); }, 700);
-    return () => window.clearTimeout(timeout);
-  }, [clinicProfile, clinicProfileReady, persistClinicProfile]);
 
   async function saveCostSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2245,26 +2235,6 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
     }
   }
 
-  async function saveOwnLaborCost(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const laborCostCents = Math.round(parseCurrency(form.get("laborCost")) * 100);
-    setOwnLaborCostSaving(true);
-    setLaborCostFeedback(null);
-    try {
-      const response = await fetch(ownLaborCostCacheKey, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ laborCostCents }) });
-      const data = await response.json().catch(() => null) as { laborCostCents?: number; message?: string } | null;
-      if (!response.ok || typeof data?.laborCostCents !== "number") throw new Error(data?.message ?? "Não foi possível salvar seu valor de mão de obra.");
-      setOwnLaborCostInput(currency.format(data.laborCostCents / 100));
-      invalidateClientCache(ownLaborCostCacheKey);
-      setLaborCostFeedback({ message: "Seu valor de mão de obra foi salvo.", success: true });
-    } catch (error) {
-      setLaborCostFeedback({ message: error instanceof Error ? error.message : "Não foi possível salvar seu valor de mão de obra.", success: false });
-    } finally {
-      setOwnLaborCostSaving(false);
-    }
-  }
-
   async function saveMemberRole(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!memberToChangeRole) return;
@@ -2320,7 +2290,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   ];
   const normalizeSettingsSearch = (value: string) => value.toLocaleLowerCase("pt-BR").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const normalizedSettingsSearch = normalizeSettingsSearch(settingsSearch.trim());
-  const hasSettingsSectionPermission = (label: string) => label === "Segurança e permissões" ? canManageRolePermissions : label === "Profissionais e equipe" ? canManageTeam : label === "Custos e orçamento" ? canManageSettings || canManageOwnLaborCost : canManageSettings;
+  const hasSettingsSectionPermission = (label: string) => label === "Segurança e permissões" ? canManageRolePermissions : label === "Profissionais e equipe" ? canManageTeam : label === "Custos e orçamento" ? canManageTeam : canManageSettings;
   const permittedSettingsNavigation = settingsNavigation.filter((item) => hasSettingsSectionPermission(item.label));
   const displayedSettingsSection = permittedSettingsNavigation.some((item) => item.label === activeSettingsSection) ? activeSettingsSection : permittedSettingsNavigation[0]?.label ?? "";
   const isSearchingClinicPreferences = displayedSettingsSection === "Dados da clínica" && Boolean(normalizedSettingsSearch);
@@ -2376,27 +2346,30 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
             <Card className="border-border/70">
               <CardHeader className="border-b border-border/70"><CardTitle>Dados da clínica</CardTitle><p className="text-sm text-muted-foreground">{isSearchingClinicPreferences ? "Preferências gerais filtradas pela busca." : "Informações básicas e dados de contato da sua clínica."}</p></CardHeader>
               <CardContent className="pt-5">
-                {!isSearchingClinicPreferences ? <div className="space-y-5">
+                {!isSearchingClinicPreferences ? <form className="space-y-5" onSubmit={(event) => { event.preventDefault(); if (!clinicProfileReady || clinicProfileSaving || clinicProfile === savedClinicProfile) return; void persistClinicProfile(clinicProfile); }}>
                   <div className="grid gap-4 md:grid-cols-2">
-                    <FormField label="Nome da clínica"><input className={fieldClassName} autoComplete="organization" maxLength={120} name="name" required value={clinicNameInput} onChange={(event) => setClinicNameInput(event.target.value)} /></FormField>
-                    <FormField label="CNPJ"><input className={fieldClassName} autoComplete="off" inputMode="numeric" maxLength={24} name="cnpj" value={clinicCnpjInput} onChange={(event) => setClinicCnpjInput(event.target.value)} placeholder="00.000.000/0000-00" /></FormField>
-                    <FormField label="Telefone"><input className={fieldClassName} autoComplete="tel" maxLength={32} name="phone" type="tel" value={clinicPhoneInput} onChange={(event) => setClinicPhoneInput(event.target.value)} placeholder="(11) 98765-4321" /></FormField>
-                    <FormField label="E-mail"><input className={fieldClassName} autoComplete="email" maxLength={254} name="email" type="email" value={clinicEmailInput} onChange={(event) => setClinicEmailInput(event.target.value)} placeholder="contato@clinica.com.br" /></FormField>
+                    <FormField label="Nome da clínica"><input className={fieldClassName} autoComplete="organization" maxLength={120} name="name" required value={clinicNameInput} onChange={(event) => updateClinicProfileField(setClinicNameInput, event.target.value)} /></FormField>
+                    <FormField label="CNPJ"><input className={fieldClassName} autoComplete="off" inputMode="numeric" maxLength={18} name="cnpj" value={clinicCnpjInput} onChange={(event) => updateClinicProfileField(setClinicCnpjInput, formatCnpj(event.target.value))} placeholder="00.000.000/0000-00" /></FormField>
+                    <FormField label="Telefone"><input className={fieldClassName} autoComplete="tel" inputMode="tel" maxLength={15} name="phone" type="tel" value={clinicPhoneInput} onChange={(event) => updateClinicProfileField(setClinicPhoneInput, formatPhone(event.target.value))} placeholder="(11) 98765-4321" /></FormField>
+                    <FormField label="E-mail"><input className={fieldClassName} autoComplete="email" maxLength={254} name="email" type="email" value={clinicEmailInput} onChange={(event) => updateClinicProfileField(setClinicEmailInput, event.target.value)} /></FormField>
                   </div>
-                  <FormField label="Endereço"><input className={fieldClassName} autoComplete="street-address" maxLength={240} name="address" value={clinicAddressInput} onChange={(event) => setClinicAddressInput(event.target.value)} placeholder="Rua, número, bairro, cidade e CEP" /></FormField>
+                  <FormField label="Endereço"><input className={fieldClassName} autoComplete="street-address" maxLength={240} name="address" value={clinicAddressInput} onChange={(event) => updateClinicProfileField(setClinicAddressInput, event.target.value)} placeholder="Rua, número, bairro e CEP" /></FormField>
                   <div className="rounded-lg border border-border/70 bg-muted/20 p-4">
                     <div className="mb-4">
                       <h3 className="text-sm font-bold text-foreground">Horário diário de funcionamento</h3>
                       <p className="mt-1 text-xs leading-5 text-muted-foreground">Defina a abertura e o fechamento. A agenda usa esse período como limite para novos atendimentos.</p>
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
-                      <FormField label="Abre às"><Time24Input name="openingTime" label="Abre às" value={openingTimeInput} onChange={setOpeningTimeInput} /></FormField>
-                      <FormField label="Fecha às"><Time24Input name="closingTime" label="Fecha às" value={closingTimeInput} onChange={setClosingTimeInput} /></FormField>
+                      <FormField label="Abre às"><Time24Input name="openingTime" label="Abre às" value={openingTimeInput} onChange={(value) => updateClinicProfileField(setOpeningTimeInput, value)} /></FormField>
+                      <FormField label="Fecha às"><Time24Input name="closingTime" label="Fecha às" value={closingTimeInput} onChange={(value) => updateClinicProfileField(setClosingTimeInput, value)} /></FormField>
                     </div>
                   </div>
                   {clinicProfileError ? <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{clinicProfileError}</p> : null}
                   {clinicProfileStatus ? <p className="text-xs font-medium text-muted-foreground" role="status">{clinicProfileStatus}</p> : null}
-                </div> : null}
+                  <div className="flex justify-end border-t border-border/70 pt-4">
+                    <Button disabled={!clinicProfileReady || clinicProfileSaving || clinicProfile === savedClinicProfile} type="submit"><Save className="h-4 w-4" />{clinicProfileSaving ? "Salvando..." : "Salvar dados"}</Button>
+                  </div>
+                </form> : null}
                   <div className={cn("rounded-lg border border-border/70 px-4 py-2", !isSearchingClinicPreferences && "mt-7")}>
                     <h3 className="pt-2 text-sm font-bold text-foreground">Preferências gerais</h3>
                     <p className="mb-2 mt-1 text-xs text-muted-foreground">Configuração para toda a clínica</p>
@@ -2459,16 +2432,8 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
 
           {displayedSettingsSection === "Custos e orçamento" ? (
             <Card className="border-border/70">
-              <CardHeader className="border-b border-border/70"><CardTitle>Custos e orçamento</CardTitle><p className="text-sm text-muted-foreground">{canManageTeam ? "Defina os valores de mão de obra da equipe e do seu próprio perfil." : "Consulte e altere somente o seu próprio valor de mão de obra."}</p></CardHeader>
+              <CardHeader className="border-b border-border/70"><CardTitle>Custos e orçamento</CardTitle><p className="text-sm text-muted-foreground">Defina o valor de mão de obra para cada profissional da clínica.</p></CardHeader>
               <CardContent className="pt-5">
-                {canManageOwnLaborCost ? <section className="mb-6 rounded-lg border border-border/70 px-4 py-4">
-                  <div className="mb-3"><h3 className="text-sm font-bold text-foreground">Meu valor de mão de obra</h3><p className="mt-1 text-xs leading-5 text-muted-foreground">Este valor é usado nos cálculos da clínica. Você só pode alterar o seu próprio valor.</p></div>
-                  {ownLaborCostLoading ? <LoadingSkeleton className="h-12 w-full" /> : <form className="grid gap-3 sm:grid-cols-[minmax(180px,240px)_auto] sm:items-end" onSubmit={(event) => void saveOwnLaborCost(event)}>
-                    <FormField label="Mão de obra (R$)"><MaskedInput key={ownLaborCostInput} className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={ownLaborCostInput} inputMode="decimal" /></FormField>
-                    <Button className="sm:mb-0.5" type="submit" variant="secondary" disabled={ownLaborCostSaving}>{ownLaborCostSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{ownLaborCostSaving ? "Salvando..." : "Salvar meu valor"}</Button>
-                  </form>}
-                  {laborCostFeedback ? <p className={cn("mt-3 text-xs font-medium", laborCostFeedback.success ? "text-success" : "text-destructive")} role={laborCostFeedback.success ? "status" : "alert"}>{laborCostFeedback.message}</p> : null}
-                </section> : null}
                 {canManageTeam ? <section className="mb-6 rounded-lg border border-border/70 px-4 py-4">
                   <div className="mb-3">
                     <h3 className="text-sm font-bold text-foreground">Mão de obra por profissional</h3>
