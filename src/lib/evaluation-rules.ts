@@ -31,6 +31,18 @@ export function assessmentFieldErrors(assessment: AssessmentValues, previous?: A
   return Object.fromEntries(missingAssessmentFields(assessment, previous).map((field) => [field.key, field.message])) as Partial<Record<RequiredAssessmentField, string>>;
 }
 
+/** Limite das observações da avaliação facial (campo opcional, nunca bloqueia salvar nem concluir). */
+export const facialNotesMaxLength = 500;
+export const facialNotesTooLongMessage = `As observações da avaliação facial aceitam até ${facialNotesMaxLength} caracteres.`;
+
+/** Valida e normaliza (trim) o campo enviado ao PUT. Quem não envia o campo (app mobile) não chama isto e o valor gravado fica como está. */
+export function parseFacialNotes(value: unknown): { ok: true; value: string } | { ok: false; message: string } {
+  if (typeof value !== "string") return { ok: false, message: "As observações da avaliação facial devem ser um texto." };
+  const trimmed = value.trim();
+  if (trimmed.length > facialNotesMaxLength) return { ok: false, message: facialNotesTooLongMessage };
+  return { ok: true, value: trimmed };
+}
+
 // Mensagem da API ao concluir sem todos os campos.
 export function assessmentCompletionError(assessment: AssessmentValues, previous?: AssessmentValues | null) {
   const missing = missingAssessmentFields(assessment, previous);

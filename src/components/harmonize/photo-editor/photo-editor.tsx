@@ -1,9 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, Baby, Camera, Check, ChevronRight, CircleCheck, ClipboardPenLine, Dna, Droplet, FileJson, ImagePlus, Info, Loader2, Maximize2, ShieldAlert, Syringe, UserRound } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertTriangle, ArrowLeft, Baby, Camera, Check, ChevronRight, CircleCheck, ClipboardPenLine, Dna, Droplet, FileJson, ImagePlus, Info, Loader2, ShieldAlert, Syringe, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
@@ -16,7 +15,13 @@ import { assessmentFieldErrors, type RequiredAssessmentField } from "@/lib/evalu
 import { anamnesisKey, type AnamnesisOverview } from "../patient-clinical-data";
 import { LoadingSkeleton } from "../shared";
 import { IncomingPhotoStatus } from "../incoming-photo-status";
-import { EditorToolbar } from "./editor-toolbar";
+import { EditorToolbar, type EditorToolbarProps } from "./editor-toolbar";
+import { defaultMarkColor, viewOnlyTools } from "./editor-toolbar-data";
+import { FacialFooter } from "./facial-footer";
+import { FacialCardActions, FacialExpandedBar, FacialTitle } from "./facial-header";
+import type { FacialSidePanelProps } from "./facial-side-panel";
+import { FacialWorkspace, type FacialWorkspaceProps } from "./facial-workspace";
+import { renderExport } from "./photo-export";
 import { EvaluationResult } from "./evaluation-result";
 import { PhotoGallery } from "./photo-gallery";
 import { EncounterBreadcrumb, type EncounterBreadcrumbActions } from "../encounter-breadcrumb";
@@ -25,7 +30,10 @@ import { ReadOnlyStageNotice } from "../readonly-stage-notice";
 import { revealValidationTarget } from "../reveal-validation-target";
 import { JourneyProgress } from "../journey-progress";
 import type { AnnotationSnapshot, EditorTool, EvaluationPhoto, PhotoAnnotation } from "./types";
-import { annotationLimitMessage, exceedsAnnotationLimit, pushHistory, restyleAnnotation } from "@/lib/photo-annotation-rules";
+import { annotationLimitMessage, exceedsAnnotationLimit, pushHistory, restyleAnnotation, withAnnotationLabel } from "@/lib/photo-annotation-rules";
+import { fitToArea, isTextEntryTarget, shortcutFromKey, stepZoom } from "@/lib/facial-editor-rules";
+import { facialNotesMaxLength } from "@/lib/evaluation-rules";
+import type { EvaluationStep } from "@/lib/evaluation-step-rules";
 import type { Patient } from "@/types/clinic";
 
 const EditorCanvas = dynamic(
@@ -48,11 +56,22 @@ export type ClinicalAssessment = {
   contraindications: string;
   previousProcedures: string;
   clinicalNotes: string;
+  /** Observações da avaliação facial (até 500 caracteres); vão no mesmo PUT, mas não fazem parte do formulário clínico. */
+  facialNotes: string;
 };
 
-const emptyAssessment: ClinicalAssessment = { chiefComplaint: "", patientGoal: "", medicalHistory: "", allergies: "", pregnancyStatus: "", anticoagulantUse: "", autoimmuneDiseases: "", contraindications: "", previousProcedures: "", clinicalNotes: "" };
+/** A avaliação grava sozinha a cada 2 min (teto contado da primeira alteração não salva); sair, trocar de etapa, Salvar e Concluir gravam na hora. */
+const evaluationAutosaveMs = 120_000;
 
-export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, onSaved, encounter, encounterLabel = "Novo atendimento", readOnly = false }: { patientId: string; evaluationId?: string; journeyId?: string; patientName: string; onSaved?: (evaluation: SavedEvaluation) => void; encounter?: { patient: Patient; onContinue: (evaluationId: string) => void } & EncounterBreadcrumbActions; encounterLabel?: string; readOnly?: boolean }) {
+const maxEvaluationPhotos = 20;
+const photoLimitMessage = "A avaliação aceita até 20 fotos. Remova uma imagem para adicionar outra.";
+const photoAngles: EvaluationPhoto["category"][] = ["Frontal", "Perfil direito", "Perfil esquerdo", "Sorriso", "Outra"];
+
+const emptyAssessment: ClinicalAssessment = { chiefComplaint: "", patientGoal: "", medicalHistory: "", allergies: "", pregnancyStatus: "", anticoagulantUse: "", autoimmuneDiseases: "", contraindications: "", previousProcedures: "", clinicalNotes: "", facialNotes: "" };
+
+// Contêiner único da avaliação: um registro, um estado, um autosave e um PUT. `step` só escolhe a visão (formulário clínico ou fotos + marcação);
+// trocar de etapa não remonta nem refaz o fetch. Sem `encounter` (uso antigo) mostra o formulário (se há avaliação) e as fotos juntos.
+export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, onSaved, encounter, encounterLabel = "Novo atendimento", readOnly = false, step = "clinical", onStepChange }: { patientId: string; evaluationId?: string; journeyId?: string; patientName: string; onSaved?: (evaluation: SavedEvaluation) => void; encounter?: { patient: Patient; onContinue: (evaluationId: string) => void } & EncounterBreadcrumbActions; encounterLabel?: string; readOnly?: boolean; step?: EvaluationStep; onStepChange?: (step: EvaluationStep) => void }) {
   const [currentEvaluationId, setCurrentEvaluationId] = useState(evaluationId);
   const currentEvaluationIdRef = useRef(evaluationId);
   const evaluationCacheKey = evaluationId ? `/api/patients/${patientId}/evaluation?evaluationId=${encodeURIComponent(evaluationId)}` : null;
@@ -63,10 +82,19 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   const [professional, setProfessional] = useState(cachedEvaluation?.evaluation?.professional ?? "");
   const [activePhotoId, setActivePhotoId] = useState<string | null>(null);
   const [tool, setTool] = useState<EditorTool>("select");
-  const [color, setColor] = useState("#6c4cff");
-  const [strokeWidth, setStrokeWidth] = useState(3);
+  const [color, setColor] = useState(defaultMarkColor);
+  const [strokeWidth, setStrokeWidth] = useState(2);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
+  // Estado só de visualização da avaliação facial (não vai para o servidor nem para o armazenamento do navegador).
+  const [showMarks, setShowMarks] = useState(true);
+  const [showLabels, setShowLabels] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+  const [recenterKey, setRecenterKey] = useState(0);
+  const [labelFocusId, setLabelFocusId] = useState<string | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  const facialRootRef = useRef<HTMLDivElement>(null);
+  const labelEditRef = useRef<{ id: string; at: number } | null>(null);
   const [past, setPast] = useState<Record<string, AnnotationSnapshot[]>>({});
   const [future, setFuture] = useState<Record<string, AnnotationSnapshot[]>>({});
   const [notice, setNotice] = useState<Notice>(null);
@@ -91,31 +119,59 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
-  const [previewPhoto, setPreviewPhoto] = useState<EvaluationPhoto | null>(null);
-  const cameraVideoRef = useRef<HTMLVideoElement>(null);
+  // Fotos lidas (upload ou câmera) esperando a escolha do ângulo antes de entrar na avaliação; uma pergunta por foto.
+  const [pendingPhotos, setPendingPhotos] = useState<EvaluationPhoto[] | null>(null);
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [cameraHint, setCameraHint] = useState("");
+  // Geração do pedido de câmera: fechar ou desmontar enquanto o getUserMedia está pendente invalida o pedido, e o stream que chegar tarde é parado.
+  const cameraRequestRef = useRef(0);
+  const openingCameraRef = useRef(false);
+  // O conteúdo do modal (portal) monta depois do efeito: o stream é ligado quando o <video> aparece, não antes.
+  const attachCameraVideo = (element: HTMLVideoElement | null) => {
+    cameraVideoRef.current = element;
+    if (element && cameraStream && element.srcObject !== cameraStream) element.srcObject = cameraStream;
+  };
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [savedPreviews, setSavedPreviews] = useState<Array<{ photo: EvaluationPhoto; dataUrl: string }>>([]);
   const isEncounterMode = Boolean(encounter);
+  const showClinicalView = encounter ? step === "clinical" : Boolean(evaluationId);
+  // A etapa facial do atendimento tem a tela nova (FacialWorkspace); sem `encounter` (uso antigo) continua o editor com a barra lateral.
+  const facialMode = Boolean(encounter) && step === "facial";
+  const showLegacyPhotos = !encounter;
   const activePhoto = photos.find((photo) => photo.id === activePhotoId) ?? null;
   // O canvas cabe na largura do contêiner (só a visualização escala; as anotações seguem em coordenadas da imagem).
   const canvasWrapRef = useRef<HTMLDivElement>(null);
   const [canvasWidth, setCanvasWidth] = useState<number | null>(null);
-  const fitScale = activePhoto
-    ? Math.min(1, 980 / activePhoto.width, 540 / activePhoto.height, canvasWidth ? Math.max(0.1, canvasWidth - 34) / activePhoto.width : Infinity)
-    : 1;
+  const [canvasHeight, setCanvasHeight] = useState<number | null>(null);
+  // Facial: a foto inteira cabe na área ampla (sem a medida ainda, uma escala segura para não montar um canvas gigante).
+  const fitScale = !activePhoto
+    ? 1
+    : facialMode
+      ? canvasWidth && canvasHeight ? fitToArea({ areaWidth: canvasWidth, areaHeight: canvasHeight, photoWidth: activePhoto.width, photoHeight: activePhoto.height }) : Math.min(1, 640 / activePhoto.width)
+      : Math.min(1, 980 / activePhoto.width, 540 / activePhoto.height, canvasWidth ? Math.max(0.1, canvasWidth - 34) / activePhoto.width : Infinity);
   useEffect(() => {
     const element = canvasWrapRef.current;
     if (!element) return;
-    const update = () => setCanvasWidth(element.clientWidth);
+    const update = () => { setCanvasWidth(element.clientWidth); setCanvasHeight(element.clientHeight); };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(element);
     return () => { observer.disconnect(); };
-  }, [isLoading, loadError, activePhotoId]);
+  }, [isLoading, loadError, activePhotoId, showLegacyPhotos, facialMode, expanded]);
   const displayScale = fitScale * zoom;
   const canUndo = Boolean(activePhotoId && past[activePhotoId]?.length);
   const canRedo = Boolean(activePhotoId && future[activePhotoId]?.length);
-  const autosave = useDraftAutosave({ scope: `${patientId}:${journeyId ?? ""}`, revision: editRevision, enabled: isEncounterMode && !readOnly && hydrated && !loadError, save: async () => Boolean(await saveEvaluation("Rascunho", true)) });
+  const autosave = useDraftAutosave({ scope: `${patientId}:${journeyId ?? ""}`, revision: editRevision, enabled: isEncounterMode && !readOnly && hydrated && !loadError, delay: evaluationAutosaveMs, maxWait: evaluationAutosaveMs, save: async () => Boolean(await saveEvaluation(evaluationStatus, true)) });
+
+  // Ao trocar de etapa a nova página abre no topo, com o foco no cabeçalho do atendimento.
+  const previousStepRef = useRef(step);
+  useEffect(() => {
+    if (previousStepRef.current === step) return;
+    previousStepRef.current = step;
+    const header = document.getElementById("evaluation-header-card");
+    header?.scrollIntoView({ block: "start" });
+    header?.focus({ preventScroll: true });
+  }, [step]);
 
   function markDirty() {
     editRevisionRef.current += 1;
@@ -123,11 +179,8 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     setIsDirty(true);
   }
 
-  useEffect(() => {
-    if (cameraVideoRef.current && cameraStream) cameraVideoRef.current.srcObject = cameraStream;
-  }, [cameraStream, cameraOpen]);
-
   useEffect(() => () => cameraStream?.getTracks().forEach((track) => track.stop()), [cameraStream]);
+  useEffect(() => () => { cameraRequestRef.current += 1; }, []);
 
   useEffect(() => {
     if (!evaluationCacheKey) return;
@@ -324,12 +377,13 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   }
 
   async function uploadPhotos(files: FileList | null) {
+    if (readOnly) return;
     if (!files?.length) return;
     setPhotoUploadError("");
     const selectedFiles = Array.from(files);
     const accepted = selectedFiles.filter((file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type) && file.size <= 6_000_000);
     if (accepted.length !== selectedFiles.length) showPhotoUploadError("Alguns arquivos foram ignorados. Use JPG, PNG ou WEBP de até 6 MB.");
-    if (photos.length + accepted.length > 20) { showPhotoUploadError("A avaliação aceita até 20 fotos. Remova uma imagem ou selecione menos arquivos."); return; }
+    if (photos.length + accepted.length > maxEvaluationPhotos) { showPhotoUploadError(photoLimitMessage); return; }
     let loaded: EvaluationPhoto[];
     try {
       loaded = await Promise.all(accepted.map((file, index) => readPhoto(file, photos.length + index)));
@@ -341,10 +395,23 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
       showPhotoUploadError("Escolha imagens JPG, PNG ou WEBP de até 6 MB.");
       return;
     }
-    setPhotos((current) => [...current, ...loaded]);
-    setActivePhotoId((current) => current ?? loaded[0].id);
+    setPendingPhotos(loaded);
+  }
+
+  function confirmPendingPhotos() {
+    if (!pendingPhotos?.length) return;
+    // O limite vale também aqui: pode ter chegado foto do app com o modal aberto.
+    if (photos.length + pendingPhotos.length > maxEvaluationPhotos) {
+      setPendingPhotos(null);
+      showPhotoUploadError(photoLimitMessage);
+      return;
+    }
+    const added = pendingPhotos.map((photo, index) => ({ ...photo, sortOrder: photos.length + index }));
+    setPhotos((current) => [...current, ...added]);
+    selectPhoto(added[0].id); // a foto recém-anexada fica ativa
     markDirty();
-    showNotice(`${loaded.length} foto${loaded.length > 1 ? "s" : ""} adicionada${loaded.length > 1 ? "s" : ""}.`);
+    setPendingPhotos(null);
+    showNotice(`${added.length} foto${added.length > 1 ? "s" : ""} adicionada${added.length > 1 ? "s" : ""}.`);
   }
 
   function removePhoto(photoId: string) {
@@ -431,32 +498,48 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   }
 
   async function openCamera() {
+    if (cameraOpen || openingCameraRef.current) return; // dois cliques rápidos não abrem dois streams
+    if (photos.length >= maxEvaluationPhotos) { showPhotoUploadError(photoLimitMessage); return; }
     setCameraError("");
+    setCameraHint("");
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError("Este dispositivo ou navegador não permite capturar fotos pela câmera.");
       setCameraOpen(true);
       return;
     }
+    openingCameraRef.current = true;
+    const request = ++cameraRequestRef.current;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "user" } }, audio: false });
+      if (request !== cameraRequestRef.current) { stream.getTracks().forEach((track) => track.stop()); return; } // fechou/desmontou no meio: stream órfão parado
       setCameraStream(stream);
       setCameraOpen(true);
     } catch {
+      if (request !== cameraRequestRef.current) return;
       setCameraError("Não foi possível acessar a câmera. Verifique a permissão do navegador e tente novamente.");
       setCameraOpen(true);
+    } finally {
+      openingCameraRef.current = false;
     }
   }
 
   function closeCamera() {
+    cameraRequestRef.current += 1;
     cameraStream?.getTracks().forEach((track) => track.stop());
     setCameraStream(null);
     setCameraOpen(false);
   }
 
   async function captureCameraPhoto() {
+    // O limite é checado antes de tudo: foto do app pode ter chegado com a câmera aberta.
+    if (photos.length >= maxEvaluationPhotos) { closeCamera(); showPhotoUploadError(photoLimitMessage); return; }
     const video = cameraVideoRef.current;
-    if (!video || !video.videoWidth || !video.videoHeight) return;
+    if (!video || !video.videoWidth || !video.videoHeight) { setCameraHint("A câmera ainda não está pronta. Aguarde a imagem aparecer e tente de novo."); return; }
+    setCameraHint("");
     if (video.videoWidth * video.videoHeight > 25_000_000) {
+      // Para a câmera (LED apagado) e, sem stream, "Capturar" fica desabilitado.
+      cameraStream?.getTracks().forEach((track) => track.stop());
+      setCameraStream(null);
       setCameraError("A resolução da câmera excede o limite seguro de 25 megapixels.");
       return;
     }
@@ -466,11 +549,8 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
     const imageUrl = canvas.toDataURL("image/jpeg", 0.9);
     const photo: EvaluationPhoto = { id: `photo-${crypto.randomUUID()}`, name: `captura-${new Date().toISOString()}.jpg`, imageUrl, width: canvas.width, height: canvas.height, category: "Frontal", sortOrder: photos.length, annotations: [] };
-    setPhotos((current) => [...current, photo]);
-    setActivePhotoId(photo.id);
-    markDirty();
     closeCamera();
-    showNotice("Foto capturada e adicionada à avaliação.");
+    setPendingPhotos([photo]);
   }
 
   function changeAssessment(field: keyof ClinicalAssessment, value: string) {
@@ -487,18 +567,95 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     if (!firstInvalid) return true;
     setAssessmentErrors(errors);
     setAssessmentValidationAttempt((current) => current + 1);
-    revealValidationTarget("evaluation-assessment-card", `assessment-field-${firstInvalid}`);
+    // Concluindo pela etapa facial: os campos pendentes estão na clínica, então volta para lá (sem perder nada) e só então rola até o primeiro.
+    if (step === "facial" && onStepChange) {
+      onStepChange("clinical");
+      showNotice("Complete a avaliação clínica para concluir e seguir ao orçamento.", "info");
+      window.setTimeout(() => revealValidationTarget("evaluation-assessment-card", `assessment-field-${firstInvalid}`), 120);
+    } else revealValidationTarget("evaluation-assessment-card", `assessment-field-${firstInvalid}`);
     return false;
   }
 
-  function deleteSelected() {
-    if (!activePhoto || !selectedId) return;
-    commitAnnotations(
-      activePhoto.annotations.filter((annotation) => annotation.id !== selectedId),
-      activePhoto.annotations,
-    );
-    setSelectedId(null);
+  function deleteAnnotation(id: string) {
+    if (!activePhoto) return;
+    commitAnnotations(activePhoto.annotations.filter((annotation) => annotation.id !== id), activePhoto.annotations);
+    if (selectedId === id) setSelectedId(null);
   }
+
+  function deleteSelected() {
+    if (selectedId) deleteAnnotation(selectedId);
+  }
+
+  // Legenda da marcação: a digitação seguida vira um só passo no histórico (como a espessura).
+  function labelAnnotation(id: string, value: string) {
+    if (!activePhoto) return;
+    const target = activePhoto.annotations.find((annotation) => annotation.id === id);
+    if (!target) return;
+    const labeled = withAnnotationLabel(target, value);
+    if (labeled.label === target.label) return;
+    const next = activePhoto.annotations.map((annotation) => annotation.id === id ? labeled : annotation);
+    const now = Date.now();
+    const recent = labelEditRef.current;
+    if (recent && recent.id === id && now - recent.at < 2000) updatePhotoAnnotations(next);
+    else commitAnnotations(next, activePhoto.annotations);
+    labelEditRef.current = { id, at: now };
+  }
+
+  const clearLabelFocus = useCallback(() => setLabelFocusId(null), []);
+
+  function changeTool(next: EditorTool) {
+    if (!showMarks && !viewOnlyTools.includes(next)) return; // com as marcações ocultas só Selecionar e Mover
+    setTool(next);
+    if (next !== "select") setSelectedId(null);
+  }
+
+  function changeShowMarks(next: boolean) {
+    setShowMarks(next);
+    if (next) return;
+    setSelectedId(null);
+    if (!viewOnlyTools.includes(tool)) setTool("select");
+  }
+
+  function changeColor(next: string) {
+    setColor(next);
+    restyleSelected({ color: next });
+  }
+
+  function changeStrokeWidth(next: number) {
+    setStrokeWidth(next);
+    restyleSelected({ strokeWidth: next });
+  }
+
+  function zoomIn() { setZoom((value) => stepZoom(value, 1)); }
+  function zoomOut() { setZoom((value) => stepZoom(value, -1)); }
+  function zoomReset() { setZoom(1); setRecenterKey((value) => value + 1); }
+  function toggleExpanded() { setExpanded((value) => !value); setZoom(1); setRecenterKey((value) => value + 1); }
+  function selectPhoto(photoId: string) { setActivePhotoId(photoId); setSelectedId(null); setZoom(1); setRecenterKey((value) => value + 1); }
+  // Área ampliada (overlay fixo sobre a viewport): o mesmo elemento muda de classe, então nada é remontado nem perde estado.
+  const wasExpandedRef = useRef(false);
+  useEffect(() => {
+    if (!facialMode || !expanded) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    wasExpandedRef.current = true;
+    const frame = window.requestAnimationFrame(() => facialRootRef.current?.querySelector<HTMLElement>("[data-facial-collapse]")?.focus());
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.body.style.overflow = previousOverflow;
+      if (wasExpandedRef.current) { wasExpandedRef.current = false; window.setTimeout(() => document.querySelector<HTMLElement>("[data-facial-expand]")?.focus(), 0); }
+    };
+  }, [facialMode, expanded]);
+  function trapTab(event: React.KeyboardEvent<HTMLDivElement>) {
+    const root = facialRootRef.current;
+    if (event.key !== "Tab" || !root || !root.contains(event.target as Node)) return;
+    const items = [...root.querySelectorAll<HTMLElement>("a[href], button, input, select, textarea, [tabindex]:not([tabindex='-1'])")].filter((element) => !(element as HTMLButtonElement).disabled && element.tabIndex >= 0 && element.getClientRects().length > 0 && !element.closest("[inert]"));
+    if (!items.length) return;
+    const first = items[0]; const last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }
+
+  function openFilePicker() { fileInputRef.current?.click(); }
 
   async function saveEvaluation(status: "Rascunho" | "Concluída" = encounter ? "Rascunho" : evaluationStatus, automatic = false) {
     if (!encounter && !photos.length) {
@@ -520,6 +677,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
       if (!response.ok || !data.evaluation) throw new Error(data.message ?? "Não foi possível salvar a avaliação.");
       setCurrentEvaluationId(data.evaluation.id);
       currentEvaluationIdRef.current = data.evaluation.id;
+      setLastSavedAt(Date.now()); // só aqui, com o servidor já tendo confirmado
       setEvaluationStatus(status);
       setProfessional(data.evaluation.professional ?? professional);
       invalidateClientCache(`/api/patients/${patientId}/evaluation`, `/api/patients/${patientId}/history`, `/api/patients/${patientId}/journeys`, "/api/patients");
@@ -543,6 +701,22 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     }
   }
 
+  // Clínica -> facial: nada além do rascunho é exigido; grava o que estiver pendente para a URL da etapa facial já hidratar esta avaliação.
+  async function continueToFacial() {
+    if (!await autosave.flush()) { showNotice("Não foi possível salvar as alterações. Tente novamente antes de continuar.", "info"); revealValidationTarget("evaluation-header-card"); return; }
+    onStepChange?.("facial");
+  }
+
+  async function backToClinical() {
+    if (!await autosave.flush()) { showNotice("Não foi possível salvar as alterações. Tente novamente antes de voltar.", "info"); revealValidationTarget("evaluation-header-card"); return; }
+    onStepChange?.("clinical");
+  }
+
+  async function saveNow() {
+    const ok = await autosave.flush();
+    showNotice(ok ? "Avaliação salva." : "Não foi possível salvar. Tente novamente.", ok ? "success" : "info");
+  }
+
   async function continueToQuote() {
     if (readOnly) { if (currentEvaluationIdRef.current) encounter?.onContinue(currentEvaluationIdRef.current); return; }
     if (!validateAssessment()) return;
@@ -551,9 +725,10 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     if (savedEvaluationId) encounter?.onContinue(savedEvaluationId);
   }
 
+  // Na avaliação facial o PNG segue as chaves de visibilidade da tela (marcações ocultas = só a foto; legendas desligadas = sem as pílulas).
   async function exportImage() {
     if (!activePhoto) return;
-    const dataUrl = await renderExport(activePhoto);
+    const dataUrl = await renderExport(activePhoto, facialMode ? { marks: showMarks, labels: showLabels } : undefined);
     const link = document.createElement("a");
     link.download = `${activePhoto.name.replace(/\.[^.]+$/, "")}-avaliacao.png`;
     link.href = dataUrl;
@@ -561,17 +736,65 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     showNotice("Imagem exportada com as marcações.");
   }
 
+  // Atalhos da avaliação facial (Ctrl/Cmd + Z, Y, Shift+Z, +, -, 0 e Esc): valem com o foco no editor ou na página, nunca em campo de texto ou diálogo.
+  const shortcutRef = useRef({ undo, redo, zoomIn, zoomOut, zoomReset, toggleExpanded, expanded, marksHidden: !showMarks });
+  useEffect(() => { shortcutRef.current = { undo, redo, zoomIn, zoomOut, zoomReset, toggleExpanded, expanded, marksHidden: !showMarks }; });
+  useEffect(() => {
+    if (!facialMode || readOnly) return;
+    function onKeyDown(event: KeyboardEvent) {
+      const root = facialRootRef.current;
+      const target = event.target as HTMLElement | null;
+      if (!root || !target || !(root.contains(target) || target === document.body || target === document.documentElement)) return;
+      if (isTextEntryTarget(target)) return;
+      const current = shortcutRef.current;
+      if (event.key === "Escape" && current.expanded) { event.preventDefault(); current.toggleExpanded(); return; }
+      const action = shortcutFromKey(event);
+      if (!action) return;
+      event.preventDefault(); // dentro do editor Ctrl +/-/0 é do zoom da foto, não da página
+      if (action === "zoomIn") current.zoomIn();
+      else if (action === "zoomOut") current.zoomOut();
+      else if (action === "zoomReset") current.zoomReset();
+      else if (current.marksHidden) return;
+      else if (action === "undo") current.undo();
+      else current.redo();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [facialMode, readOnly]);
+
+  const toolbarProps: EditorToolbarProps = {
+    tool, color, strokeWidth, canUndo, canRedo, hasSelection: Boolean(selectedId), marksHidden: !showMarks, isSaving, readOnly,
+    onToolChange: changeTool, onColorChange: changeColor, onStrokeWidthChange: changeStrokeWidth, onUndo: undo, onRedo: redo, onZoomIn: zoomIn, onZoomOut: zoomOut, onZoomReset: zoomReset,
+    onDeleteSelected: deleteSelected, onClear: clearAnnotations, onSave: () => void saveNow(), onExport: exportImage,
+  };
+  const panelProps: FacialSidePanelProps = {
+    readOnly, photos, activePhotoId, onSelectPhoto: selectPhoto, onAddPhotos: openFilePicker, onCapture: () => void openCamera(), onCategoryChange: changePhotoCategory, onMovePhoto: movePhoto, onReplacePhoto: replacePhoto, onRemovePhoto: removePhoto,
+    annotations: activePhoto?.annotations ?? [], selectedId, onSelectAnnotation: selectAnnotation, onDeleteAnnotation: deleteAnnotation, onClearAllAnnotations: clearAnnotations, onLabelChange: labelAnnotation, labelFocusId, onLabelFocused: clearLabelFocus,
+    notes: assessment.facialNotes, notesMax: facialNotesMaxLength, onNotesChange: (value) => changeAssessment("facialNotes", value),
+    color, onColorChange: changeColor, strokeWidth, onStrokeWidthChange: changeStrokeWidth, showMarks, onShowMarks: changeShowMarks, showLabels, onShowLabels: setShowLabels,
+  };
+  const workspaceProps: FacialWorkspaceProps = {
+    status: isLoading ? "loading" : loadError ? "error" : "ready",
+    onRetryLoad: () => { setLoadError(false); setIsLoading(true); setHydrated(false); setLoadAttempt((value) => value + 1); },
+    receivingPhoto, activePhoto, areaRef: canvasWrapRef, scale: displayScale, recenterKey, zoomPercent: Math.round(zoom * 100),
+    tool, color, strokeWidth, selectedId, showMarks, showLabels, expanded, canUndo, canRedo, mobile: toolbarProps,
+    onToolChange: changeTool, onUndo: undo, onRedo: redo, onZoomIn: zoomIn, onZoomOut: zoomOut, onToggleExpanded: toggleExpanded, onAddPhotos: openFilePicker, onCapture: () => void openCamera(), onExport: exportImage, onSave: () => void saveNow(), saveDisabled: !hydrated || loadError, saving: isSaving || autosave.state === "saving",
+    onSelect: selectAnnotation, onCommitAnnotations: commitAnnotations, onPreviewAnnotations: updatePhotoAnnotations,
+    onPointCreated: (id) => { setShowLabels(true); setLabelFocusId(id); },
+    panel: panelProps, photoUploadError, saveError,
+  };
+
   return (
     <div data-hide-fab className={cn("max-lg:pb-24", encounter && "space-y-4")}>
       {encounter ? <>
-        <EncounterBreadcrumb patientName={patientName} journeyName={encounterLabel} stage="Avaliação" onClients={() => void autosave.leave(encounter.onClients)} onPatient={() => void autosave.leave(encounter.onPatient)} onJourney={() => void autosave.leave(encounter.onJourney)} />
-        <button type="button" onClick={() => void autosave.leave(encounter.onJourney)} className="flex items-center gap-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-primary max-lg:min-h-11"><ArrowLeft className="h-4 w-4" />Voltar aos tratamentos</button>
+        <EncounterBreadcrumb patientName={patientName} journeyName={encounterLabel} stage={step === "facial" ? "Avaliação facial" : "Avaliação clínica"} onClients={() => void autosave.leave(encounter.onClients)} onPatient={() => void autosave.leave(encounter.onPatient)} onJourney={() => void autosave.leave(encounter.onJourney)} />
+        {step === "facial" ? <FacialTitle /> : <button type="button" onClick={() => void autosave.leave(encounter.onJourney)} className="flex items-center gap-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-primary max-lg:min-h-11"><ArrowLeft className="h-4 w-4" />Voltar aos tratamentos</button>}
         <Card id="evaluation-header-card" tabIndex={-1} className="flex scroll-mt-24 flex-wrap items-center justify-between gap-4 p-4">
           <div className="flex min-w-0 items-center gap-3">
             <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[#efedff] text-sm font-black text-[#5147dc]">{patientName.split(" ").map((part) => part[0]).slice(0, 2).join("")}</div>
             <div className="min-w-0"><h2 className="truncate text-base font-bold">{patientName}</h2><p className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground"><span>{encounter.patient.age ? `${encounter.patient.age} anos` : "Idade não informada"}</span><span>{encounter.patient.phone || "Telefone não informado"}</span></p><div className="mt-1.5 flex flex-wrap gap-2"><span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">{encounter.patient.status}</span><span className="rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">Paciente desde {encounter.patient.createdAt ? new Date(encounter.patient.createdAt).toLocaleDateString("pt-BR") : "data indisponível"}</span></div></div>
           </div>
-          <div className="flex flex-wrap items-center gap-2"><span role="status" className={cn("text-xs", autosave.state === "error" ? "text-destructive" : "text-muted-foreground")}>{readOnly ? "Somente leitura" : autosave.state === "saving" ? "Salvando..." : autosave.state === "pending" ? "Alterações pendentes" : autosave.state === "error" ? "Não foi possível salvar" : "Rascunho salvo"}</span>{autosave.state === "error" && !readOnly ? <Button size="sm" variant="outline" onClick={() => void autosave.flush()}>Tentar novamente</Button> : null}<Button disabled={isSaving} onClick={() => void continueToQuote()}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Avançar para orçamento<ChevronRight className="h-4 w-4" /></Button></div>
+          {step === "facial" ? <FacialCardActions autosaveState={autosave.state} finishLabel={readOnly ? "Avançar para orçamento" : "Concluir e ir ao orçamento"} finishing={isSaving} hasRecord={Boolean(currentEvaluationId)} isSaving={isSaving} lastSavedAt={lastSavedAt} readOnly={readOnly} onBack={() => void backToClinical()} onFinish={() => void continueToQuote()} onRetry={() => void autosave.flush()} /> : <div className="flex flex-wrap items-center gap-2"><span role="status" className={cn("text-xs", autosave.state === "error" ? "text-destructive" : "text-muted-foreground")}>{readOnly ? "Somente leitura" : autosave.state === "saving" ? "Salvando..." : autosave.state === "pending" ? "Alterações pendentes" : autosave.state === "error" ? "Não foi possível salvar" : "Rascunho salvo"}</span>{autosave.state === "error" && !readOnly ? <Button size="sm" variant="outline" onClick={() => void autosave.flush()}>Tentar novamente</Button> : null}</div>}
         </Card>
         <JourneyProgress current={0} />
         {readOnly ? <ReadOnlyStageNotice /> : null}
@@ -582,17 +805,20 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
           <div className="flex items-center gap-2 text-xs text-[#858696]"><FileJson className="h-3.5 w-3.5 text-[#5147dc]" />Marcações editáveis salvas separadamente</div>
         </div> : null}
 
-        <div inert={readOnly} className={cn("grid gap-4 p-4", encounter && "grid-cols-1 p-0 lg:grid-cols-[minmax(0,1fr)_290px]")}>
+        {facialMode ? <div ref={facialRootRef} role={expanded ? "dialog" : undefined} aria-modal={expanded ? true : undefined} aria-label={expanded ? "Área de trabalho ampliada da avaliação facial" : undefined} onKeyDown={expanded ? trapTab : undefined} className={cn("space-y-3", expanded && "fixed inset-0 z-[70] flex flex-col gap-3 space-y-0 overflow-auto bg-background p-3")}>
+          {expanded ? <FacialExpandedBar autosaveState={autosave.state} hasRecord={Boolean(currentEvaluationId)} isSaving={isSaving} lastSavedAt={lastSavedAt} patientName={patientName} readOnly={readOnly} onCollapse={toggleExpanded} /> : null}
+          <FacialWorkspace {...workspaceProps} />
+          <input ref={fileInputRef} aria-hidden="true" className="sr-only" tabIndex={-1} type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} />
+          <FacialFooter autosaveState={autosave.state} hasRecord={Boolean(currentEvaluationId)} isSaving={isSaving} lastSavedAt={lastSavedAt} markings={activePhoto?.annotations.length ?? 0} readOnly={readOnly} onRetry={() => void autosave.flush()} />
+        </div> : <div inert={readOnly} className={cn("grid gap-4 p-4", encounter && "grid-cols-1 p-0 lg:grid-cols-[minmax(0,1fr)_290px]")}>
           <div className="min-w-0">
-            {encounter || evaluationId ? <AssessmentForm assessment={assessment} errors={assessmentErrors} validationAttempt={assessmentValidationAttempt} onChange={changeAssessment} /> : null}
+            {showClinicalView ? (encounter && !hydrated ? <Card className="space-y-3 p-4"><LoadingSkeleton className="h-5 w-40" /><LoadingSkeleton className="h-16 w-full" /><LoadingSkeleton className="h-28 w-full" /></Card> : encounter && loadError ? <div className="grid min-h-[200px] place-items-center rounded-lg border border-destructive/20 bg-destructive/5 p-6 text-center"><div><p className="text-sm font-semibold text-destructive">Não foi possível carregar esta avaliação.</p><Button className="mt-3" variant="outline" onClick={() => { setLoadError(false); setIsLoading(true); setHydrated(false); setLoadAttempt((value) => value + 1); }}>Tentar novamente</Button></div></div> : <AssessmentForm assessment={assessment} errors={assessmentErrors} validationAttempt={assessmentValidationAttempt} onChange={changeAssessment} />) : null}
             <IncomingPhotoStatus active={receivingPhoto} />
-            <section id="evaluation-photo-card" tabIndex={-1} className={cn("mt-4 grid scroll-mt-24 grid-cols-[minmax(0,1fr)] gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(240px,0.5fr)]", encounter && "rounded-md border border-[#e3e5f0] bg-white p-3 sm:p-4", saveError && "border-destructive")} aria-label="Registro fotográfico e marcação">
-              {encounter ? <div className="flex items-center gap-2 2xl:col-span-2"><Camera className="h-4 w-4 text-primary" /><h3 className="text-sm font-bold">Registro fotográfico e marcação</h3></div> : null}
+            {showLegacyPhotos ? <section id="evaluation-photo-card" tabIndex={-1} className={cn("mt-4 grid scroll-mt-24 grid-cols-[minmax(0,1fr)] gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(240px,0.5fr)]", saveError && "border-destructive")} aria-label="Registro fotográfico e marcação">
               {isLoading ? <div className="grid min-h-[420px] gap-4 rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-5 2xl:col-span-2"><LoadingSkeleton className="h-7 w-52" /><LoadingSkeleton className="h-3 w-80" /><div className="grid min-h-[300px] place-items-center rounded-[7px] border border-[#e4e6ef] bg-white"><div className="w-full max-w-md space-y-3 px-8"><LoadingSkeleton className="h-56 w-full" /><LoadingSkeleton className="mx-auto h-3 w-40" /><LoadingSkeleton className="mx-auto h-2.5 w-56" /></div></div></div> : loadError ? <div className="grid min-h-[360px] place-items-center rounded-lg border border-destructive/20 bg-destructive/5 p-6 text-center"><div><p className="text-sm font-semibold text-destructive">Não foi possível carregar esta avaliação.</p><Button className="mt-3" variant="outline" onClick={() => { setLoadError(false); setIsLoading(true); setLoadAttempt((value) => value + 1); }}>Tentar novamente</Button></div></div> : showResult ? <EvaluationResult onEdit={() => setShowResult(false)} previews={savedPreviews} /> : (<>
                 <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 lg:grid-cols-[184px_minmax(0,1fr)]">
-                  <EditorToolbar canRedo={canRedo} canUndo={canUndo} color={color} strokeWidth={strokeWidth} hasSelection={Boolean(selectedId)} onClear={clearAnnotations} onColorChange={(next) => { setColor(next); restyleSelected({ color: next }); }} onStrokeWidthChange={(next) => { setStrokeWidth(next); restyleSelected({ strokeWidth: next }); }} onDeleteSelected={deleteSelected} onExport={exportImage} onRedo={redo} onSave={() => { if (encounter) void autosave.flush(); else void saveEvaluation(); }} onToolChange={(nextTool) => { setTool(nextTool); if (nextTool !== "select") setSelectedId(null); }} onUndo={undo} onZoomIn={() => setZoom((value) => Math.min(2.25, value + 0.15))} onZoomOut={() => setZoom((value) => Math.max(0.55, value - 0.15))} onZoomReset={() => setZoom(1)} isSaving={isSaving} readOnly={readOnly} tool={tool} />
+                  <EditorToolbar canRedo={canRedo} canUndo={canUndo} color={color} strokeWidth={strokeWidth} hasSelection={Boolean(selectedId)} onClear={clearAnnotations} onColorChange={changeColor} onStrokeWidthChange={changeStrokeWidth} onDeleteSelected={deleteSelected} onExport={exportImage} onRedo={redo} onSave={() => { if (encounter) void autosave.flush(); else void saveEvaluation(); }} onToolChange={changeTool} onUndo={undo} onZoomIn={zoomIn} onZoomOut={zoomOut} onZoomReset={zoomReset} isSaving={isSaving} readOnly={readOnly} tool={tool} />
                   <div ref={canvasWrapRef} className="min-w-0">
-                  {encounter ? <div className="mb-3 flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={() => void openCamera()}><Camera className="h-4 w-4" />Capturar foto</Button><Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}><ImagePlus className="h-4 w-4" />Upload de fotos</Button><input ref={fileInputRef} className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} />{activePhoto ? <Button size="sm" variant="outline" onClick={() => setPreviewPhoto(activePhoto)}><Maximize2 className="h-4 w-4" />Ampliar foto</Button> : null}</div> : null}
                   {activePhoto ? <EditorCanvas color={color} strokeWidth={strokeWidth} onCommitAnnotations={commitAnnotations} onPreviewAnnotations={updatePhotoAnnotations} onSelect={selectAnnotation} photo={activePhoto} scale={displayScale} selectedId={selectedId} tool={tool} /> : <label className="flex min-h-[360px] cursor-pointer flex-col items-center justify-center rounded-[8px] border border-dashed border-[#cfd3e4] bg-[#fbfbfe] px-5 text-center transition hover:border-[#5147dc] hover:bg-[#f8f7ff]"><span className="grid h-12 w-12 place-items-center rounded-full bg-[#efedff] text-[#5147dc]"><ImagePlus className="h-5 w-5" /></span><strong className="mt-4 text-sm">Adicione a primeira foto da avaliação</strong><span className="mt-1 max-w-sm text-xs leading-5 text-[#858696]">JPG, PNG ou WEBP. A imagem original fica preservada e as marcações são armazenadas separadamente.</span><span className="mt-4 inline-flex items-center rounded-[7px] bg-[#5147dc] px-4 py-2 text-xs font-bold text-white">Escolher foto</span><input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} /></label>}
                   {photoUploadError ? <p id="evaluation-photo-upload-error" tabIndex={-1} role="alert" className="mt-2 scroll-mt-24 text-xs font-medium text-destructive animate-[hp-shake_0.42s_ease-in-out]">{photoUploadError}</p> : null}
                   {saveError ? <p id="evaluation-save-error" tabIndex={-1} role="alert" className="mt-2 scroll-mt-24 text-xs text-destructive animate-[hp-shake_0.42s_ease-in-out]">{saveError}</p> : null}
@@ -607,15 +833,22 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
                     <PhotoGallery activePhotoId={activePhotoId} onCategoryChange={changePhotoCategory} onMove={movePhoto} onRemove={removePhoto} onReplace={replacePhoto} onSelect={(photoId) => { setActivePhotoId(photoId); setSelectedId(null); setZoom(1); }} onUpload={uploadPhotos} photos={photos} />
                   </div>
                   <div className="rounded-[8px] border border-[#e3e5f0] bg-white p-3"><h4 className="text-xs font-bold">Marcação / observações sobre a foto</h4>{activePhoto ? <div className="mt-2 space-y-1.5 text-xs text-muted-foreground"><p>Categoria: <strong className="text-foreground">{activePhoto.category}</strong></p><p>{activePhoto.annotations.length ? `${activePhoto.annotations.length} marcação(ões) editável(is) nesta imagem.` : "Nenhuma marcação feita nesta foto."}</p><p className="truncate" title={activePhoto.name}>Arquivo: {activePhoto.name}</p></div> : <p className="mt-2 text-xs text-muted-foreground">Selecione ou adicione uma foto para ver suas marcações.</p>}</div>
+                  <div className="rounded-[8px] border border-[#e3e5f0] bg-white p-3">
+                    <label htmlFor="facial-notes" className="text-xs font-bold">Observações da avaliação facial</label>
+                    <textarea id="facial-notes" className="mt-2 w-full resize-y rounded-[5px] border border-[#dfe1ea] bg-white px-2.5 py-2 text-sm font-normal text-[#25263a] outline-none placeholder:text-[#8c8d9c] focus:border-[#5147dc] focus:ring-1 focus:ring-[#5147dc]/20" rows={4} maxLength={facialNotesMaxLength} placeholder="Adicione observações sobre esta avaliação..." value={assessment.facialNotes} onChange={(event) => changeAssessment("facialNotes", event.target.value)} />
+                    <p className="mt-1 text-right text-xs text-muted-foreground">{assessment.facialNotes.length}/{facialNotesMaxLength}</p>
+                  </div>
                 </aside>
               </>)}
-            </section>
+            </section> : null}
           </div>
-          {encounter ? <aside className="space-y-3"><Card className="space-y-2 p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><UserRound className="h-4 w-4 text-primary" />Resumo rápido do atendimento</h3>{[["Etapa atual", "Avaliação"], ["Profissional", professional || "Não informado"], ["Data", new Date().toLocaleDateString("pt-BR")], ["Status", currentEvaluationId ? evaluationStatus : "Novo rascunho"], ["Fotos anexadas", String(photos.length)]].map(([label, value]) => <div className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2.5 py-2 text-xs" key={label}><span className="text-muted-foreground">{label}</span><span className="truncate font-semibold">{value}</span></div>)}</Card><Card className="space-y-2 p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><CircleCheck className="h-4 w-4 text-primary" />Checklist da avaliação</h3>{[["Anamnese preenchida", Boolean(assessment.chiefComplaint.trim() && (assessment.allergies.trim() || assessment.pregnancyStatus || assessment.anticoagulantUse || assessment.autoimmuneDiseases || assessment.previousProcedures.trim()))], ["Fotos iniciais registradas", photos.length > 0], ["Marcação realizada", photos.some((photo) => photo.annotations.length > 0)], ["Observações clínicas salvas", Boolean(assessment.clinicalNotes.trim() && !isDirty)]].map(([label, done]) => <div className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-2 text-xs" key={String(label)}><span className={cn("grid h-4 w-4 place-items-center rounded border", done ? "border-primary bg-primary text-primary-foreground" : "border-input")}>{done ? <Check className="h-3 w-3" /> : null}</span>{label}</div>)}</Card></aside> : null}
-        </div>
+          {encounter ? <aside className="space-y-3"><Card className="space-y-2 p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><UserRound className="h-4 w-4 text-primary" />Resumo rápido do atendimento</h3>{[["Etapa atual", step === "facial" ? "Avaliação facial" : "Avaliação clínica"], ["Profissional", professional || "Não informado"], ["Data", new Date().toLocaleDateString("pt-BR")], ["Status", currentEvaluationId ? evaluationStatus : "Novo rascunho"], ["Fotos anexadas", String(photos.length)]].map(([label, value]) => <div className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2.5 py-2 text-xs" key={label}><span className="text-muted-foreground">{label}</span><span className="truncate font-semibold">{value}</span></div>)}</Card><Card className="space-y-2 p-4"><h3 className="flex items-center gap-2 text-sm font-bold"><CircleCheck className="h-4 w-4 text-primary" />Checklist da avaliação</h3>{[["Anamnese preenchida", Boolean(assessment.chiefComplaint.trim() && (assessment.allergies.trim() || assessment.pregnancyStatus || assessment.anticoagulantUse || assessment.autoimmuneDiseases || assessment.previousProcedures.trim()))], ["Fotos iniciais registradas", photos.length > 0], ["Marcação realizada", photos.some((photo) => photo.annotations.length > 0)], ["Observações clínicas salvas", Boolean(assessment.clinicalNotes.trim() && !isDirty)]].map(([label, done]) => <div className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-2 text-xs" key={String(label)}><span className={cn("grid h-4 w-4 place-items-center rounded border", done ? "border-primary bg-primary text-primary-foreground" : "border-input")}>{done ? <Check className="h-3 w-3" /> : null}</span>{label}</div>)}</Card></aside> : null}
+        </div>}
+
+      {encounter && step === "clinical" ? <div className="mt-4 flex justify-end max-lg:[&>button]:w-full"><Button className="max-lg:min-h-11" disabled={isSaving || !hydrated || loadError} onClick={() => void continueToFacial()}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}Continuar para avaliação facial<ChevronRight className="h-4 w-4" /></Button></div> : null}
 
       {notice ? (
-        <div id="evaluation-notice" tabIndex={-1} className={cn("mx-4 mb-4 flex scroll-mt-24 items-center gap-2 rounded-[7px] border px-3 py-2 text-xs", notice.tone === "success" ? "border-[#b9e8d8] bg-[#effbf6] text-[#16805d]" : "border-[#d7d9ee] bg-[#f7f6ff] text-[#5147dc]")}>
+        <div id="evaluation-notice" role="status" tabIndex={-1} className={cn("mx-4 mb-4 flex scroll-mt-24 items-center gap-2 rounded-[7px] border px-3 py-2 text-xs", facialMode && "fixed bottom-24 right-4 z-[80] mx-0 mb-0 max-w-sm shadow-lg lg:bottom-6", notice.tone === "success" ? "border-[#b9e8d8] bg-[#effbf6] text-[#16805d]" : "border-[#d7d9ee] bg-[#f7f6ff] text-[#5147dc]")}>
           <Info className="h-3.5 w-3.5 shrink-0" />
           {notice.text}
         </div>
@@ -624,7 +857,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
       <Modal
         open={Boolean(confirmAction)}
         onClose={() => setConfirmAction(null)}
-        title={confirmAction?.type === "clear" ? "Limpar marcações" : "Remover foto"}
+        title={confirmAction?.type === "clear" ? "Limpar marcações" : "Excluir imagem"}
         description={confirmAction?.type === "clear" ? "A foto original continuará preservada." : `A foto "${confirmAction?.photoName ?? ""}" será removida da avaliação.`}
       >
         <div className="flex flex-col gap-5">
@@ -635,13 +868,31 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
           <div className="flex justify-end gap-2">
             <Button type="button" variant="secondary" onClick={() => setConfirmAction(null)}>Cancelar</Button>
             <Button className="border-[#f2c8c3] text-[#b42318] hover:border-[#b42318] hover:bg-[#fff7f7] hover:text-[#b42318]" type="button" variant="secondary" onClick={confirmPendingAction}>
-              {confirmAction?.type === "clear" ? "Limpar marcações" : "Remover foto"}
+              {confirmAction?.type === "clear" ? "Limpar marcações" : "Excluir imagem"}
             </Button>
           </div>
         </div>
       </Modal>
-      <Modal open={cameraOpen} onClose={closeCamera} title="Capturar foto" description="A imagem será vinculada a esta avaliação clínica."><div className="grid gap-4">{cameraError ? <p role="alert" className="rounded-md bg-red-50 p-3 text-sm text-red-700">{cameraError}</p> : <video ref={cameraVideoRef} autoPlay playsInline className="max-h-[65vh] w-full rounded-md bg-black" />}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={closeCamera}>Cancelar</Button><Button type="button" disabled={!cameraStream} onClick={() => void captureCameraPhoto()}><Camera className="h-4 w-4" />Capturar</Button></div></div></Modal>
-      <Modal open={Boolean(previewPhoto)} onClose={() => setPreviewPhoto(null)} title={previewPhoto?.category ?? "Pré-visualização"} description={previewPhoto?.name ?? ""}>{previewPhoto ? <Image className="mx-auto max-h-[75vh] max-w-full object-contain" src={previewPhoto.imageUrl} alt={`Foto ${previewPhoto.category} de ${patientName}`} width={previewPhoto.width} height={previewPhoto.height} unoptimized /> : null}</Modal>
+      <Modal open={Boolean(pendingPhotos)} onClose={() => setPendingPhotos(null)} title="Qual é o ângulo da foto?" description="Escolha o ângulo de cada foto antes de anexá-la à avaliação.">
+        <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); confirmPendingPhotos(); }}>
+          <ul className="grid gap-3">
+            {pendingPhotos?.map((photo) => (
+              <li className="flex items-center gap-3" key={photo.id}>
+                {/* eslint-disable-next-line @next/next/no-img-element -- prévia local (data URL) da foto ainda não anexada */}
+                <img alt="" className="h-14 w-14 shrink-0 rounded-md border border-border object-cover object-top" src={photo.imageUrl} />
+                <div className="min-w-0 flex-1">
+                  <label className="block truncate text-xs text-muted-foreground" htmlFor={`angle-${photo.id}`} title={photo.name}>{photo.name}</label>
+                  <select className="mt-1 h-10 w-full rounded-lg border border-input bg-card px-3 text-sm text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" id={`angle-${photo.id}`} value={photo.category} onChange={(event) => setPendingPhotos((current) => current?.map((item) => item.id === photo.id ? { ...item, category: event.target.value as EvaluationPhoto["category"] } : item) ?? null)}>
+                    {photoAngles.map((angle) => <option key={angle}>{angle}</option>)}
+                  </select>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setPendingPhotos(null)}>Cancelar</Button><Button type="submit">Adicionar {pendingPhotos && pendingPhotos.length > 1 ? "fotos" : "foto"}</Button></div>
+        </form>
+      </Modal>
+      <Modal open={cameraOpen} onClose={closeCamera} title="Capturar foto" description="A imagem será vinculada a esta avaliação clínica."><div className="grid gap-4">{cameraError ? <p role="alert" className="rounded-md bg-red-50 p-3 text-sm text-red-700">{cameraError}</p> : <video ref={attachCameraVideo} autoPlay muted playsInline className="max-h-[65vh] w-full rounded-md bg-black" />}{cameraHint ? <p role="alert" className="text-sm text-destructive">{cameraHint}</p> : null}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={closeCamera}>Cancelar</Button><Button type="button" disabled={!cameraStream} onClick={() => void captureCameraPhoto()}><Camera className="h-4 w-4" />Capturar</Button></div></div></Modal>
       </Card>
     </div>
   );
@@ -706,99 +957,6 @@ function getImageSize(src: string) {
     image.onerror = reject;
     image.src = src;
   });
-}
-
-async function renderExport(photo: EvaluationPhoto) {
-  const canvas = document.createElement("canvas");
-  canvas.width = photo.width;
-  canvas.height = photo.height;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Não foi possível preparar a exportação.");
-  const image = await getImageElement(photo.imageUrl);
-  context.drawImage(image, 0, 0, photo.width, photo.height);
-  photo.annotations.forEach((annotation) => drawAnnotation(context, annotation));
-  return canvas.toDataURL("image/png");
-}
-
-function getImageElement(src: string) {
-  return new Promise<HTMLImageElement>((resolve, reject) => {
-    const image = new window.Image();
-    image.onload = () => resolve(image);
-    image.onerror = reject;
-    image.src = src;
-  });
-}
-
-function drawAnnotation(context: CanvasRenderingContext2D, annotation: PhotoAnnotation) {
-  context.save();
-  context.strokeStyle = annotation.color;
-  context.fillStyle = annotation.color;
-  context.lineWidth = annotation.strokeWidth;
-  context.lineCap = "round";
-  context.lineJoin = "round";
-
-  if (annotation.type === "text") {
-    context.textBaseline = "top"; // y é o topo do texto, como no editor
-    context.font = `${annotation.fontSize}px Inter, Arial, sans-serif`;
-    context.fillText(annotation.text, annotation.x, annotation.y);
-    context.restore();
-    return;
-  }
-
-  if (annotation.type === "point") {
-    context.beginPath();
-    context.arc(annotation.x, annotation.y, annotation.radius, 0, Math.PI * 2);
-    context.fill();
-    context.lineWidth = Math.max(1, annotation.strokeWidth);
-    context.strokeStyle = "#ffffff";
-    context.stroke();
-    context.restore();
-    return;
-  }
-
-  if (annotation.type === "ellipse" || annotation.type === "rectangle" || annotation.type === "triangle") {
-    const left = Math.min(annotation.x, annotation.x + annotation.width);
-    const top = Math.min(annotation.y, annotation.y + annotation.height);
-    const boxWidth = Math.abs(annotation.width);
-    const boxHeight = Math.abs(annotation.height);
-    context.beginPath();
-    if (annotation.type === "ellipse") {
-      context.ellipse(left + boxWidth / 2, top + boxHeight / 2, boxWidth / 2, boxHeight / 2, 0, 0, Math.PI * 2);
-    } else if (annotation.type === "rectangle") {
-      context.rect(left, top, boxWidth, boxHeight);
-    } else {
-      context.moveTo(left + boxWidth / 2, top);
-      context.lineTo(left + boxWidth, top + boxHeight);
-      context.lineTo(left, top + boxHeight);
-      context.closePath();
-    }
-    context.stroke();
-    context.restore();
-    return;
-  }
-
-  if (annotation.points.length < 4) {
-    context.restore();
-    return;
-  }
-  context.beginPath();
-  context.moveTo(annotation.points[0], annotation.points[1]);
-  for (let index = 2; index < annotation.points.length; index += 2) context.lineTo(annotation.points[index], annotation.points[index + 1]);
-  context.stroke();
-
-  if (annotation.type === "arrow") {
-    const end = annotation.points.length - 2;
-    const beforeEnd = Math.max(0, end - 2);
-    const angle = Math.atan2(annotation.points[end + 1] - annotation.points[beforeEnd + 1], annotation.points[end] - annotation.points[beforeEnd]);
-    const size = 14;
-    context.beginPath();
-    context.moveTo(annotation.points[end], annotation.points[end + 1]);
-    context.lineTo(annotation.points[end] - size * Math.cos(angle - Math.PI / 6), annotation.points[end + 1] - size * Math.sin(angle - Math.PI / 6));
-    context.lineTo(annotation.points[end] - size * Math.cos(angle + Math.PI / 6), annotation.points[end + 1] - size * Math.sin(angle + Math.PI / 6));
-    context.closePath();
-    context.fill();
-  }
-  context.restore();
 }
 
 function omitKey<T>(record: Record<string, T>, key: string) {

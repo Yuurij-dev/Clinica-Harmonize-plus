@@ -10,13 +10,14 @@ import { LoadingSkeleton } from "./shared";
 type EvaluationSummary = {
   evaluation: null | {
     id: string; professional: string; status: string; createdAt: string; chiefComplaint: string; patientGoal: string; medicalHistory: string; allergies: string; pregnancyStatus: string;
-    anticoagulantUse: string; autoimmuneDiseases: string; contraindications: string; previousProcedures: string; clinicalNotes: string;
+    anticoagulantUse: string; autoimmuneDiseases: string; contraindications: string; previousProcedures: string; clinicalNotes: string; facialNotes?: string;
   };
 };
 
 const fields: Array<[keyof NonNullable<EvaluationSummary["evaluation"]>, string]> = [
   ["chiefComplaint", "Queixa principal"], ["patientGoal", "Objetivo do paciente"], ["medicalHistory", "Histórico médico"], ["allergies", "Alergias"], ["pregnancyStatus", "Gestação / amamentação"],
   ["anticoagulantUse", "Uso de anticoagulantes"], ["autoimmuneDiseases", "Doenças autoimunes"], ["contraindications", "Contraindicações"], ["previousProcedures", "Procedimentos anteriores"], ["clinicalNotes", "Observações clínicas"],
+  ["facialNotes", "Observações da avaliação facial"],
 ];
 
 // Resumo somente leitura de uma avaliação concluída (destino de "Abrir atendimento" em Atendimentos); as fotos ficam na sub-aba Fotos.

@@ -39,6 +39,8 @@ export type EditorToolbarProps = {
   isSaving?: boolean;
   /** Avaliação só para leitura: a barra fixa do celular (fora do `inert` do editor) desabilita as ações. */
   readOnly?: boolean;
+  /** "Mostrar marcações" desligado: só Selecionar e Mover seguem ativas; desenhar, apagar e desfazer ficam desabilitados. */
+  marksHidden?: boolean;
 };
 
 export function EditorToolbar(props: EditorToolbarProps) {

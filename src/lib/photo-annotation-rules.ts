@@ -5,6 +5,34 @@ import type { LineAnnotation, PhotoAnnotation } from "../components/harmonize/ph
 export const maxHistory = 60;
 /** Mesmo limite do PUT da avaliação (annotations.length <= 1000 por foto). */
 export const maxAnnotationsPerPhoto = 1000;
+/** Legenda de uma marcação (campo opcional `label` dentro do JSON da anotação; sem schema próprio). */
+export const maxAnnotationLabelLength = 60;
+
+/** Texto da legenda pronto para gravar: espaços aparados e repetidos reduzidos, cortado no limite; vazio ou não-texto vira `undefined` (sem legenda). */
+export function normalizeAnnotationLabel(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.replace(/\s+/g, " ").trim().slice(0, maxAnnotationLabelLength).trim();
+  return text || undefined;
+}
+
+/** Valor aceito para `label`: ausente (marcações antigas) ou texto de até o limite depois de aparado. */
+export function isValidAnnotationLabel(value: unknown) {
+  return value === undefined || (typeof value === "string" && value.trim().length <= maxAnnotationLabelLength);
+}
+
+/** Alguma marcação do JSON recebido traz `label` inválido (não é texto ou passa do limite)? Marcações antigas, sem o campo, passam. */
+export function annotationsHaveInvalidLabel(annotations: readonly unknown[]) {
+  return annotations.some((annotation) => Boolean(annotation) && typeof annotation === "object" && "label" in (annotation as object) && !isValidAnnotationLabel((annotation as { label?: unknown }).label));
+}
+
+/** Define (ou remove, se vazia) a legenda de uma marcação, sem tocar no resto. */
+export function withAnnotationLabel(annotation: PhotoAnnotation, label: unknown): PhotoAnnotation {
+  const { label: previous, ...rest } = annotation;
+  void previous;
+  const next = normalizeAnnotationLabel(label);
+  return (next ? { ...rest, label: next } : rest) as PhotoAnnotation;
+}
+
 export const annotationLimitMessage = "Esta foto atingiu o limite de 1000 marcações. Apague ou limpe algumas para continuar.";
 
 /** A mudança passaria do limite por foto aumentando a quantidade? (apagar ou editar sempre é permitido) */
@@ -25,7 +53,7 @@ export type Point = { x: number; y: number };
 export type ShapeKind = "line" | "arrow" | "rectangle" | "ellipse" | "triangle";
 export const shapeKinds: readonly ShapeKind[] = ["line", "arrow", "rectangle", "ellipse", "triangle"];
 /** Forma editável em dois cantos (x1,y1)-(x2,y2). `weight` é a espessura em pixels de tela, como `strokeWidth`. */
-export type Shape = { id: string; kind: ShapeKind; x1: number; y1: number; x2: number; y2: number; color: string; weight: number };
+export type Shape = { id: string; kind: ShapeKind; x1: number; y1: number; x2: number; y2: number; color: string; weight: number; label?: string };
 
 export function isShapeKind(value: string): value is ShapeKind {
   return (shapeKinds as readonly string[]).includes(value);
@@ -53,7 +81,7 @@ export function isInkAnnotation(annotation: PhotoAnnotation): annotation is Line
 }
 
 export function shapeFromAnnotation(annotation: PhotoAnnotation): Shape | null {
-  const base = { id: annotation.id, color: annotation.color, weight: annotation.strokeWidth };
+  const base = { id: annotation.id, color: annotation.color, weight: annotation.strokeWidth, ...(annotation.label ? { label: annotation.label } : {}) };
   if (annotation.type === "line" || annotation.type === "arrow") {
     const p = annotation.points;
     if (!Array.isArray(p) || p.length < 4 || !p.every(finite)) return null;
@@ -67,7 +95,7 @@ export function shapeFromAnnotation(annotation: PhotoAnnotation): Shape | null {
 }
 
 export function annotationFromShape(shape: Shape): PhotoAnnotation {
-  const base = { id: shape.id, color: shape.color, strokeWidth: shape.weight };
+  const base = { id: shape.id, color: shape.color, strokeWidth: shape.weight, ...(shape.label ? { label: shape.label } : {}) };
   if (shape.kind === "line" || shape.kind === "arrow") return { ...base, type: shape.kind, points: [shape.x1, shape.y1, shape.x2, shape.y2].map(round2) };
   return { ...base, type: shape.kind, x: round2(shape.x1), y: round2(shape.y1), width: round2(shape.x2 - shape.x1), height: round2(shape.y2 - shape.y1) };
 }
@@ -194,9 +222,10 @@ export function simplifyStroke(points: InkPoint[], minDistance: number): InkPoin
   return kept.map((p) => ({ x: round2(p.x), y: round2(p.y), pressure: round2(p.pressure) }));
 }
 
-function inkToAnnotation(id: string, base: { color: string; strokeWidth: number }, points: InkPoint[]): LineAnnotation {
+function inkToAnnotation(id: string, base: { color: string; strokeWidth: number; label?: string }, points: InkPoint[]): LineAnnotation {
   const flat = points.length === 1 ? [points[0], points[0]] : points;
   const annotation: LineAnnotation = { id, type: "freehand", points: flat.flatMap((p) => [p.x, p.y]), color: base.color, strokeWidth: base.strokeWidth };
+  if (base.label) annotation.label = base.label;
   if (flat.some((p) => p.pressure !== defaultPressure)) annotation.pressure = flat.map((p) => p.pressure);
   return annotation;
 }
@@ -319,7 +348,7 @@ export function eraseInkStroke(stroke: LineAnnotation, path: readonly Point[], r
   if (current.length) runs.push(current);
   return runs
     .filter((run) => run.length >= 2)
-    .map((run, index) => inkToAnnotation(index === 0 ? stroke.id : pieceId(stroke.id), { color: stroke.color, strokeWidth: stroke.strokeWidth }, simplifyStroke(run, pixelScale)));
+    .map((run, index) => inkToAnnotation(index === 0 ? stroke.id : pieceId(stroke.id), { color: stroke.color, strokeWidth: stroke.strokeWidth, label: index === 0 ? stroke.label : undefined }, simplifyStroke(run, pixelScale)));
 }
 
 export function textBounds(annotation: Extract<PhotoAnnotation, { type: "text" }>) {

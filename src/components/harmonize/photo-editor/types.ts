@@ -1,5 +1,6 @@
 export type EditorTool =
   | "select"
+  | "pan"
   | "pen"
   | "eraser"
   | "line"
@@ -14,6 +15,8 @@ export type AnnotationBase = {
   id: string;
   color: string;
   strokeWidth: number;
+  /** Legenda opcional (ex.: "Glabela") desenhada com linha guia; ausente nas marcações antigas. Limite em `maxAnnotationLabelLength`. */
+  label?: string;
 };
 
 /** Pontos em pares [x0, y0, x1, y1, ...] no espaço da imagem. `curve` e `freehand` são traços; `pressure` (opcional, um valor por ponto) vem do Atrament. */

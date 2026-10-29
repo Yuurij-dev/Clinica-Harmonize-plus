@@ -1266,3 +1266,6 @@ body:has(input:not([type="checkbox"], [type="radio"], [type="button"], [type="su
     padding-block: 0.375rem;
   }
 }
+
+/* Texto pequeno em roxo: o primario do escuro (#766cf0) fica abaixo de 4,5:1; esta classe usa um tom mais claro so onde for aplicada. */
+html.dark .hp-accent-text { color: #b4aeff; }

@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import Atrament from "atrament";
 import type { AnnotationSnapshot, EditorTool, EvaluationPhoto, PhotoAnnotation } from "./types";
-import { AnnotationNode, SelectionOverlay } from "./annotation-svg";
+import { AnnotationLabel, AnnotationNode, SelectionOverlay } from "./annotation-svg";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
@@ -37,6 +37,11 @@ export function EditorCanvas({
   onSelect,
   onPreviewAnnotations,
   onCommitAnnotations,
+  showMarks = true,
+  showLabels = true,
+  fill = false,
+  recenterKey = 0,
+  onPointCreated,
 }: {
   photo: EvaluationPhoto;
   tool: EditorTool;
@@ -48,6 +53,15 @@ export function EditorCanvas({
   onPreviewAnnotations: (annotations: PhotoAnnotation[]) => void;
   /** Devolve false quando a mudança foi recusada (ex.: limite de marcações por foto). */
   onCommitAnnotations: (annotations: PhotoAnnotation[], previous: AnnotationSnapshot) => boolean | void;
+  /** Só visualização: esconde (sem apagar) as marcações / as legendas. */
+  showMarks?: boolean;
+  showLabels?: boolean;
+  /** Ocupa toda a área do contêiner (avaliação facial): fundo lavanda, foto centralizada e com folga para arrastar com a ferramenta Mover. */
+  fill?: boolean;
+  /** Muda para recentralizar a foto na área (ex.: "ajustar à tela"). */
+  recenterKey?: number;
+  /** Chamado depois de criar um ponto, para o painel pedir a legenda dele. */
+  onPointCreated?: (id: string) => void;
 }) {
   const width = Math.max(1, Math.round(photo.width * scale));
   const height = Math.max(1, Math.round(photo.height * scale));
@@ -68,6 +82,41 @@ export function EditorCanvas({
   const [textDialog, setTextDialog] = useState<TextDialog>(null);
   const [textDraft, setTextDraft] = useState("");
   const annotations = photo.annotations;
+  const areaRef = useRef<HTMLDivElement>(null);
+  const [area, setArea] = useState({ w: 0, h: 0 });
+  const panRef = useRef<{ id: number; x: number; y: number; left: number; top: number } | null>(null);
+
+  useEffect(() => {
+    const element = areaRef.current;
+    if (!element || !fill) return;
+    const update = () => setArea({ w: element.clientWidth, h: element.clientHeight });
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [fill]);
+  // A folga em volta da foto permite arrastá-la; a rolagem volta ao centro quando a foto, o zoom ou a área mudam.
+  const padX = fill ? Math.round(area.w * 0.35) : 0;
+  const padY = fill ? Math.round(area.h * 0.35) : 0;
+
+  // Ferramenta Mover: arrastar com mouse/caneta rola a área (o toque usa a rolagem nativa, que a classe touch-pan libera).
+  function panDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (tool !== "pan" || event.pointerType === "touch" || event.button !== 0) return;
+    const element = event.currentTarget;
+    panRef.current = { id: event.pointerId, x: event.clientX, y: event.clientY, left: element.scrollLeft, top: element.scrollTop };
+    try { element.setPointerCapture(event.pointerId); } catch { /* sem captura */ }
+  }
+  function panMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const pan = panRef.current;
+    if (!pan || pan.id !== event.pointerId) return;
+    event.currentTarget.scrollLeft = pan.left - (event.clientX - pan.x);
+    event.currentTarget.scrollTop = pan.top - (event.clientY - pan.y);
+  }
+  function panEnd(event: ReactPointerEvent<HTMLDivElement>) {
+    if (panRef.current?.id !== event.pointerId) return;
+    panRef.current = null;
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* sem captura */ }
+  }
 
   // Valores atuais para os ouvintes do Atrament e dos ponteiros (registrados uma vez por tamanho de canvas).
   const latest = useRef({ photo, tool, color, strokeWidth, width, height, pixelScale, annotations, onSelect, onPreviewAnnotations, commit: onCommitAnnotations });
@@ -88,6 +137,13 @@ export function EditorCanvas({
   // O canvas do Atrament só é recriado quando o tamanho se firma e não há ponteiro pressionado (zoom/redimensionamento no meio do traço).
   const [penSize, setPenSize] = useState({ w: width, h: height });
   const pointerDownRef = useRef(false);
+  useLayoutEffect(() => {
+    const element = areaRef.current;
+    if (!element || !fill) return;
+    element.scrollLeft = Math.max(0, (element.scrollWidth - element.clientWidth) / 2);
+    element.scrollTop = Math.max(0, (element.scrollHeight - element.clientHeight) / 2);
+    // penSize entra porque o canvas do Atrament demora a acompanhar o zoom e, enquanto isso, alarga a área rolável.
+  }, [fill, width, height, penSize.w, penSize.h, photo.id, area.w, area.h, recenterKey]);
   useEffect(() => {
     if (penSize.w === width && penSize.h === height) return;
     let timer = 0;
@@ -275,15 +331,17 @@ export function EditorCanvas({
 
   useEffect(() => {
     function removeSelected(event: KeyboardEvent) {
-      if (!selectedId || (event.key !== "Delete" && event.key !== "Backspace")) return;
+      if (!showMarks || !selectedId || (event.key !== "Delete" && event.key !== "Backspace")) return;
       const target = event.target as HTMLElement | null;
-      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (target?.closest("input, textarea, select, button, a[href], [role='switch'], [role='menuitem'], [role='radio'], [role='tab'], [role='dialog'], [contenteditable='true']")) return;
+      // Backspace/Delete só apagam a marcação com o foco na própria área da foto (ou solto no corpo da página), nunca em botões e controles de fora.
+      if (target && target !== document.body && target !== document.documentElement && !areaRef.current?.contains(target)) return;
       if (commit(annotations.filter((annotation) => annotation.id !== selectedId), annotations) !== false) onSelect(null);
     }
 
     window.addEventListener("keydown", removeSelected);
     return () => window.removeEventListener("keydown", removeSelected);
-  }, [commit, onSelect, annotations, selectedId]);
+  }, [commit, onSelect, annotations, selectedId, showMarks]);
 
   /* ---------- gestos nas formas (SVG) ---------- */
 
@@ -328,7 +386,8 @@ export function EditorCanvas({
       return;
     }
     if (tool === "point") {
-      commit([...annotations, { id: `annotation-${crypto.randomUUID()}`, type: "point", x: point.x, y: point.y, radius: 7 * pixelScale, color, strokeWidth }], annotations);
+      const id = `annotation-${crypto.randomUUID()}`;
+      if (commit([...annotations, { id, type: "point", x: point.x, y: point.y, radius: 7 * pixelScale, color, strokeWidth }], annotations) !== false) { onSelect(id); onPointCreated?.(id); }
       return;
     }
     if (tool === "text") {
@@ -414,21 +473,30 @@ export function EditorCanvas({
     ? annotations.some((annotation) => annotation.id === override.id) ? annotations.map((annotation) => annotation.id === override.id ? override : annotation) : [...annotations, override]
     : annotations;
   const selected = selectedId ? shown.find((annotation) => annotation.id === selectedId) : undefined;
-  const touchClass = tool === "select" && !selectedId ? "touch-pan-x touch-pan-y touch-pinch-zoom" : "touch-none";
+  const touchClass = (tool === "select" && !selectedId) || tool === "pan" ? "touch-pan-x touch-pan-y touch-pinch-zoom" : "touch-none";
+  const hidden = !showMarks ? ({ visibility: "hidden" } as const) : undefined;
 
   return (
-    <div className="flex min-h-[360px] overflow-auto rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-4">
+    <div
+      ref={areaRef}
+      className={cn("overflow-auto", fill ? "h-full w-full rounded-xl bg-primary/[0.06] [overflow-anchor:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" : "flex min-h-[360px] rounded-[8px] border border-[#dfe2ee] bg-[#f8f9fc] p-4", tool === "pan" && "cursor-grab touch-pan-x touch-pan-y touch-pinch-zoom active:cursor-grabbing")}
+      onPointerCancel={panEnd}
+      onPointerDown={panDown}
+      onPointerMove={panMove}
+      onPointerUp={panEnd}
+    >
+      <div className={fill ? "grid min-h-full w-max min-w-full place-items-center" : "contents"} style={fill ? { padding: `${padY}px ${padX}px` } : undefined}>
       <div ref={stageRef} className={cn("relative m-auto shrink-0 select-none bg-white shadow-[0_4px_22px_rgba(81,71,220,0.22)]", touchClass)} style={{ width, height }}>
         {/* eslint-disable-next-line @next/next/no-img-element -- foto da avaliação em data URL/rota autenticada; o otimizador do next/image não serve aqui */}
         <img alt={`Foto ${photo.category}`} className="pointer-events-none absolute inset-0 block h-full w-full select-none" draggable={false} src={photo.imageUrl} />
-        <canvas key={`${penSize.w}x${penSize.h}`} ref={canvasRef} aria-hidden="true" className="absolute inset-0" style={{ width: penSize.w, height: penSize.h, pointerEvents: inking ? "auto" : "none" }} />
+        <canvas key={`${penSize.w}x${penSize.h}`} ref={canvasRef} aria-hidden="true" className="absolute inset-0" style={{ width: penSize.w, height: penSize.h, pointerEvents: inking && showMarks ? "auto" : "none", ...hidden }} />
         <svg
           ref={svgRef}
           aria-label="Marcações sobre a foto"
           className="absolute inset-0 h-full w-full touch-none overflow-visible"
           preserveAspectRatio="none"
           role="img"
-          style={{ pointerEvents: inking || (tool === "select" && !selectedId) ? "none" : "auto" }}
+          style={{ pointerEvents: !showMarks || tool === "pan" || inking || (tool === "select" && !selectedId) ? "none" : "auto", ...hidden }}
           viewBox={`0 0 ${photo.width} ${photo.height}`}
           onPointerCancel={(event) => endGesture(event, true)}
           onPointerDown={onSvgPointerDown}
@@ -438,9 +506,13 @@ export function EditorCanvas({
           {shown.map((annotation) => (
             <AnnotationNode annotation={annotation} interactive={tool === "select" || (editable && annotation.id === selectedId)} key={annotation.id} onGrab={grab} pixelScale={pixelScale} />
           ))}
+          {showLabels ? shown.map((annotation) => (
+            <AnnotationLabel annotation={annotation} interactive={tool === "select" || (editable && annotation.id === selectedId)} key={`label-${annotation.id}`} onGrab={grab} photoHeight={photo.height} photoWidth={photo.width} pixelScale={pixelScale} />
+          )) : null}
           {selected && editable ? <SelectionOverlay annotation={selected} onResize={beginResize} pixelScale={pixelScale} /> : null}
         </svg>
         <div ref={eraserDotRef} aria-hidden="true" className="pointer-events-none absolute z-[5] box-border rounded-full border-[2.5px] border-[#5147dc] bg-white/55 opacity-0 shadow-[0_0_0_1.5px_rgba(255,255,255,0.9),0_2px_8px_rgba(0,0,0,0.35)] transition-opacity duration-200" />
+      </div>
       </div>
       <Modal
         open={Boolean(textDialog)}

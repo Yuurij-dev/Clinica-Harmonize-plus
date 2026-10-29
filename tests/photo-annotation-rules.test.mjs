@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  annotationFromShape, annotationToReplay, eraseAnnotations, eraseInkStroke, eraserSize, finishCreate, hitShape, isInkAnnotation,
+  annotationFromShape, annotationToReplay, annotationsHaveInvalidLabel, isValidAnnotationLabel, maxAnnotationLabelLength, normalizeAnnotationLabel, withAnnotationLabel, eraseAnnotations, eraseInkStroke, eraserSize, finishCreate, hitShape, isInkAnnotation,
   inkSmoothing, maxHistory, pushHistory, replaySmoothing, resizeShape, restyleAnnotation, sameAnnotationList, shapeFromAnnotation, simplifyStroke, smoothPath, smoothingFactor, strokeToAnnotation, translateAnnotation,
 } from "../src/lib/photo-annotation-rules.ts";
 
@@ -239,4 +239,62 @@ test("limite de 1000 marcações por foto: só recusa o que aumenta a quantidade
   assert.equal(exceedsAnnotationLimit(full.slice(1), full), false);
   assert.equal(exceedsAnnotationLimit([...full, 1], [...full, 1]), false); // foto já acima do limite: editar/apagar continua possível
   assert.equal(exceedsAnnotationLimit([1, 2], [1]), false);
+});
+
+test("legenda: espaços aparados, cortada no limite e vazia vira sem legenda", () => {
+  assert.equal(normalizeAnnotationLabel("  Sulco   orbitário "), "Sulco orbitário");
+  assert.equal(normalizeAnnotationLabel(""), undefined);
+  assert.equal(normalizeAnnotationLabel("   "), undefined);
+  assert.equal(normalizeAnnotationLabel(undefined), undefined);
+  assert.equal(normalizeAnnotationLabel(42), undefined);
+  assert.equal(normalizeAnnotationLabel("a".repeat(maxAnnotationLabelLength + 20)).length, maxAnnotationLabelLength);
+});
+
+test("legenda: anotação antiga sem label continua válida; texto longo demais não", () => {
+  assert.equal(isValidAnnotationLabel(undefined), true);
+  assert.equal(isValidAnnotationLabel("Glabela"), true);
+  assert.equal(isValidAnnotationLabel("a".repeat(maxAnnotationLabelLength)), true);
+  assert.equal(isValidAnnotationLabel("a".repeat(maxAnnotationLabelLength + 1)), false);
+  assert.equal(isValidAnnotationLabel(null), false);
+  assert.equal(isValidAnnotationLabel(7), false);
+});
+
+test("legenda: define e remove sem tocar no resto da marcação", () => {
+  const point = { id: "p1", type: "point", x: 10, y: 20, radius: 6, ...base };
+  const labeled = withAnnotationLabel(point, " Glabela ");
+  assert.deepEqual(labeled, { ...point, label: "Glabela" });
+  assert.deepEqual(withAnnotationLabel(labeled, ""), point);
+  assert.equal("label" in withAnnotationLabel(labeled, undefined), false);
+  assert.equal(point.label, undefined, "não altera o original");
+});
+
+test("legenda sobrevive a mover, redimensionar e restilizar a forma", () => {
+  const arrow = { id: "a1", type: "arrow", points: [10, 10, 50, 50], label: "Zigomático", ...base };
+  assert.equal(shapeFromAnnotation(arrow).label, "Zigomático");
+  assert.equal(annotationFromShape(shapeFromAnnotation(arrow)).label, "Zigomático");
+  assert.equal(translateAnnotation(arrow, 5, 5, 200, 200).label, "Zigomático");
+  assert.equal(restyleAnnotation(arrow, { color: "#00ff00" }).label, "Zigomático");
+  const box = { id: "r1", type: "rectangle", x: 10, y: 10, width: 40, height: 30, label: "Mento", ...base };
+  assert.equal(annotationFromShape(resizeShape(shapeFromAnnotation(box), "se", 5, 5, 200, 200)).label, "Mento");
+  const plain = { id: "r2", type: "rectangle", x: 10, y: 10, width: 40, height: 30, ...base };
+  assert.equal("label" in annotationFromShape(shapeFromAnnotation(plain)), false, "sem legenda não ganha campo");
+});
+
+test("legenda: a borracha mantém a legenda no primeiro trecho do traço cortado", () => {
+  const stroke = { ...line("s1"), label: "Contorno" };
+  const pieces = eraseInkStroke(stroke, [{ x: 100, y: 100 }], 5, 1);
+  assert.ok(pieces.length >= 1);
+  assert.equal(pieces[0].label, "Contorno");
+  for (const piece of pieces.slice(1)) assert.equal(piece.label, undefined);
+});
+
+test("servidor: legenda inválida em qualquer marcação é recusada; sem label passa", () => {
+  const ok = { id: "a", type: "point", x: 1, y: 1, radius: 5, ...base };
+  assert.equal(annotationsHaveInvalidLabel([]), false);
+  assert.equal(annotationsHaveInvalidLabel([ok, { ...ok, id: "b", label: "Glabela" }]), false);
+  assert.equal(annotationsHaveInvalidLabel([ok, { ...ok, id: "b", label: "a".repeat(maxAnnotationLabelLength) }]), false);
+  assert.equal(annotationsHaveInvalidLabel([ok, { ...ok, id: "b", label: "a".repeat(maxAnnotationLabelLength + 1) }]), true);
+  assert.equal(annotationsHaveInvalidLabel([{ ...ok, label: 5 }]), true);
+  assert.equal(annotationsHaveInvalidLabel([{ ...ok, label: null }]), true);
+  assert.equal(annotationsHaveInvalidLabel([null, "x", 3]), false, "itens que não são objeto não são problema de legenda");
 });
