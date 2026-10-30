@@ -53,6 +53,7 @@ import { ClinicTimePicker } from "./clinic-time-picker";
 import { clinicDateKey, type EncounterItem } from "@/lib/clinical-record-rules";
 import type { AnamnesisRequest } from "@/lib/anamnesis-rules";
 import { guardDraftNavigation } from "./use-draft-autosave";
+import { evaluationStepFromParams, paramsWithEvaluationStep, type EvaluationStep } from "@/lib/evaluation-step-rules";
 import { PatientAnamnesis } from "./patient-anamnesis";
 import { PatientClinicalDocuments } from "./patient-clinical-documents";
 import { PatientClinicalPhotos } from "./patient-clinical-photos";
@@ -145,6 +146,24 @@ type PatientHistoryRecord = {
 
 type PatientObservation = { id: string; text: string; authorName: string; createdAt: string; kind: "clinical" | "administrative" };
 
+// A etapa facial da avaliação tem URL própria (`?journey=<id>&step=facial`); só troca a query, sem refazer a rota do Next.
+function writeStepToUrl(step: EvaluationStep, mode: "push" | "replace") {
+  const params = paramsWithEvaluationStep(new URLSearchParams(window.location.search), step);
+  const url = `${window.location.pathname}?${params.toString()}`;
+  if (mode === "push") window.history.pushState(null, "", url);
+  else window.history.replaceState(null, "", url);
+}
+
+// Voltar/Avançar recusado (rascunho sem gravar e a pessoa quis ficar): reescreve a URL do editor sem depender da direção do histórico.
+function restoreEditorUrl(route: { journeyId: string | null; patientKey: string; step: EvaluationStep }) {
+  if (!route.journeyId) return;
+  const params = new URLSearchParams(window.location.search);
+  params.set("patient", route.patientKey);
+  params.set("journey", route.journeyId);
+  const url = `${window.location.pathname}?${paramsWithEvaluationStep(params, route.step).toString()}`;
+  if (url !== `${window.location.pathname}${window.location.search}`) window.history.pushState(null, "", url);
+}
+
 type PinnedJourney = { key: string; title: string; stages: CustomerJourneyStage[] };
 
 type EvaluationSummary = { id: string; professional: string; createdAt: string };
@@ -198,6 +217,10 @@ export function PatientDetail({
   // Vem dos dados da jornada (procedimento já realizado): avaliação e orçamento passam a abrir só para consulta.
   const [journeyPastProcedure, setJourneyPastProcedure] = useState(false);
   const [encounterEvaluationId, setEncounterEvaluationId] = useState<string | undefined>();
+  const [encounterStep, setEncounterStep] = useState<EvaluationStep>(() => typeof window === "undefined" ? "clinical" : evaluationStepFromParams(new URLSearchParams(window.location.search)));
+  // O popstate precisa saber se o editor da avaliação está aberto e de qual tratamento, sem refazer o efeito a cada render.
+  const editorRouteRef = useRef<{ journeyId: string | null; editing: boolean; patientKey: string; step: EvaluationStep }>({ journeyId: null, editing: false, patientKey: "", step: "clinical" });
+  useEffect(() => { editorRouteRef.current = { journeyId: selectedJourneyId, editing: encounterMode, patientKey: currentPatient.id ?? currentPatient.name, step: encounterStep }; });
   const [encounterLabel, setEncounterLabel] = useState("Novo atendimento");
   const [journeyWorkflowLoading, setJourneyWorkflowLoading] = useState(() => typeof window !== "undefined" && new URLSearchParams(window.location.search).has("journey"));
   const [journeyWorkflowError, setJourneyWorkflowError] = useState("");
@@ -239,15 +262,28 @@ export function PatientDetail({
   useEffect(() => {
     const syncJourneyRoute = () => {
       const params = new URLSearchParams(window.location.search);
-      setSelectedJourneyId(params.get("journey"));
-      setJourneyWorkflowLoading(params.has("journey"));
-      setJourneyWorkflowError("");
-      setEncounterMode(false);
-      setEncounterQuoteMode(false);
-      setEncounterProcedureMode(false);
-      setEncounterPostProcedureMode(false);
-      setEncounterPostProcedureInitialView("post");
-      if (params.has("journey")) setActiveTab("Tratamentos");
+      const nextJourney = params.get("journey");
+      const route = editorRouteRef.current;
+      // Voltar/avançar entre as etapas da avaliação do mesmo tratamento só troca a visão: o editor segue montado, sem recarregar nem perder edições.
+      if (nextJourney && route.editing && nextJourney === route.journeyId) { setEncounterStep(evaluationStepFromParams(params)); return; }
+      const apply = () => {
+        setSelectedJourneyId(nextJourney);
+        setJourneyWorkflowLoading(params.has("journey"));
+        setJourneyWorkflowError("");
+        setEncounterMode(false);
+        setEncounterQuoteMode(false);
+        setEncounterProcedureMode(false);
+        setEncounterPostProcedureMode(false);
+        setEncounterPostProcedureInitialView("post");
+        setEncounterStep(evaluationStepFromParams(params));
+        // Mesmo tratamento (ex.: voltou de outra etapa do fluxo): o efeito da jornada não rodaria sozinho, então pede de novo a etapa certa.
+        if (nextJourney && nextJourney === route.journeyId) setJourneyWorkflowRetry((value) => value + 1);
+        if (nextJourney) setActiveTab("Tratamentos");
+      };
+      // Saindo do editor por Voltar/Avançar do navegador: grava o rascunho pendente antes de desmontar. Se não der e a pessoa quiser ficar, a URL volta ao
+      // endereço do editor, montado de novo (paciente + tratamento + etapa), com pushState: não depende da direção nem de haver entrada à frente.
+      if (route.editing) { void guardDraftNavigation().then((ok) => { if (ok) apply(); else restoreEditorUrl(route); }); return; }
+      apply();
     };
     window.addEventListener("popstate", syncJourneyRoute);
     return () => window.removeEventListener("popstate", syncJourneyRoute);
@@ -326,6 +362,9 @@ export function PatientDetail({
     params.set("patient", currentPatient.id ?? currentPatient.name);
     if (journeyId) params.set("journey", journeyId);
     else params.delete("journey");
+    // Abrir ou sair de um tratamento sempre começa na etapa clínica: nunca herda o `step` da URL anterior.
+    params.delete("step");
+    setEncounterStep("clinical");
     router.push(`/clientes?${params.toString()}`);
   }
 
@@ -410,6 +449,12 @@ export function PatientDetail({
     openAppointmentDialog({ name: "", professional: "", kind: "procedure", journeyId: selectedJourneyId ?? undefined });
   }
 
+  function changeEncounterStep(step: EvaluationStep) {
+    if (step === encounterStep) return;
+    setEncounterStep(step);
+    writeStepToUrl(step, "push");
+  }
+
   function openJourneyEvaluation(journey: PatientJourneySummary, evaluationId?: string) {
     setEncounterEvaluationId(evaluationId);
     setEncounterLabel(journey.name);
@@ -434,6 +479,11 @@ export function PatientDetail({
         const focusedEvaluation = focusedQuote?.evaluationId ? evaluations.find((item) => item.id === focusedQuote.evaluationId && item.status !== "Rascunho") : undefined;
         const evaluation = focusedEvaluation ?? evaluations.find((item) => item.status === "Rascunho") ?? evaluations[0];
         const approvedQuote = quoteData.quotes?.find((item) => ["Aprovado", "Pago"].includes(item.status));
+        // Reabrir a URL da etapa facial só vale quando a jornada ainda está na avaliação; nas demais etapas o `step` sobrando é removido.
+        if ((journey.hasEvaluation && evaluation && evaluation.status !== "Rascunho") && new URLSearchParams(window.location.search).has("step")) {
+          setEncounterStep("clinical");
+          writeStepToUrl("clinical", "replace");
+        }
         setSelectedJourneyLabel(journey.name);
         setEncounterLabel(journey.name);
         setEncounterEvaluationId(evaluation?.id);
@@ -497,11 +547,11 @@ export function PatientDetail({
   }
 
   if (encounterMode && currentPatient.id) {
-    return <div className="mx-auto max-w-[1400px]"><PhotoEditor patientId={currentPatient.id} evaluationId={encounterEvaluationId} journeyId={selectedJourneyId ?? undefined} patientName={currentPatient.name} encounterLabel={encounterLabel} readOnly={journeyPastProcedure} encounter={{ patient: currentPatient, onContinue: (savedEvaluationId) => { setEncounterEvaluationId(savedEvaluationId); setEncounterMode(false); setEncounterQuoteMode(true); }, onClients: onBack, onPatient: returnToPatientProfile, onJourney: () => openJourney(null) }} onSaved={() => { setHistory(undefined); setHistoryLoading(true); setHistoryRefreshKey((current) => current + 1); }} /></div>;
+    return <div className="mx-auto max-w-[1400px]"><PhotoEditor patientId={currentPatient.id} evaluationId={encounterEvaluationId} journeyId={selectedJourneyId ?? undefined} patientName={currentPatient.name} encounterLabel={encounterLabel} readOnly={journeyPastProcedure} step={encounterStep} onStepChange={changeEncounterStep} encounter={{ patient: currentPatient, onContinue: (savedEvaluationId) => { setEncounterEvaluationId(savedEvaluationId); setEncounterMode(false); setEncounterQuoteMode(true); setEncounterStep("clinical"); writeStepToUrl("clinical", "replace"); }, onClients: onBack, onPatient: returnToPatientProfile, onJourney: () => openJourney(null) }} onSaved={() => { setHistory(undefined); setHistoryLoading(true); setHistoryRefreshKey((current) => current + 1); }} /></div>;
   }
 
   if (encounterQuoteMode && currentPatient.id) {
-    return <div data-hide-fab className="mx-auto max-w-[1400px]"><PatientExpenses key={`${currentPatient.id}-${selectedJourneyId ?? "none"}-${encounterEvaluationId ?? "none"}`} patientId={currentPatient.id} patient={currentPatient} journeyId={selectedJourneyId ?? undefined} evaluationId={encounterEvaluationId} quoteId={encounterQuoteFocusId} journeyLabel={encounterLabel} breadcrumb={{ onClients: onBack, onPatient: returnToPatientProfile, onJourney: () => openJourney(null) }} mode="encounter" readOnly={journeyPastProcedure} onReturnToEvaluation={() => { setEncounterQuoteMode(false); setEncounterMode(true); }} onAdvance={(quoteId) => { setEncounterQuoteId(quoteId); setEncounterQuoteMode(false); setEncounterProcedureMode(true); }} /></div>;
+    return <div data-hide-fab className="mx-auto max-w-[1400px]"><PatientExpenses key={`${currentPatient.id}-${selectedJourneyId ?? "none"}-${encounterEvaluationId ?? "none"}`} patientId={currentPatient.id} patient={currentPatient} journeyId={selectedJourneyId ?? undefined} evaluationId={encounterEvaluationId} quoteId={encounterQuoteFocusId} journeyLabel={encounterLabel} breadcrumb={{ onClients: onBack, onPatient: returnToPatientProfile, onJourney: () => openJourney(null) }} mode="encounter" readOnly={journeyPastProcedure} onReturnToEvaluation={() => { setEncounterQuoteMode(false); setEncounterMode(true); changeEncounterStep("facial"); }} onAdvance={(quoteId) => { setEncounterQuoteId(quoteId); setEncounterQuoteMode(false); setEncounterProcedureMode(true); }} /></div>;
   }
 
   if (encounterProcedureMode && currentPatient.id && encounterQuoteId) {

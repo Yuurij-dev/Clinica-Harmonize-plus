@@ -19,6 +19,7 @@ import { pollOutcomeForStatus } from "@/lib/evaluation-photo-sync-rules";
 import { IncomingPhotoStatus } from "./incoming-photo-status";
 import { usePhotoSyncPoll } from "./use-photo-sync-poll";
 import { cn } from "@/lib/utils";
+import { labelLayout } from "@/lib/annotation-label-rules";
 import { PaginationBar } from "./clinical-pagination";
 import { postForm, prepareImage, sendJson, type UploadEntry } from "./clinical-upload";
 import { formatDate, formatTime, useCachedResource } from "./patient-clinical-data";
@@ -216,7 +217,7 @@ function ProcedureCard({ patientId, group, onOpen, onCompare }: { patientId: str
   </article>;
 }
 
-type Annotation = { id: string; type: string; color: string; strokeWidth: number; points?: number[]; x?: number; y?: number; width?: number; height?: number; text?: string; fontSize?: number; radius?: number };
+type Annotation = { id: string; type: string; color: string; strokeWidth: number; points?: number[]; x?: number; y?: number; width?: number; height?: number; text?: string; fontSize?: number; radius?: number; label?: string };
 
 function AnnotationLayer({ annotations, width, height }: { annotations: Annotation[]; width: number; height: number }) {
   return <svg className="pointer-events-none absolute inset-0 h-full w-full" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">{annotations.map((item) => {
@@ -228,9 +229,21 @@ function AnnotationLayer({ annotations, width, height }: { annotations: Annotati
       return <g key={item.id}><polyline points={pairs.join(" ")} fill="none" stroke={stroke} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />{item.type === "arrow" ? <polygon fill={stroke} points={`${x2},${y2} ${x2 - size * Math.cos(angle - 0.4)},${y2 - size * Math.sin(angle - 0.4)} ${x2 - size * Math.cos(angle + 0.4)},${y2 - size * Math.sin(angle + 0.4)}`} /> : null}</g>;
     }
     if (item.type === "ellipse") { const w = Math.abs(item.width ?? 0); const h = Math.abs(item.height ?? 0); const x = Math.min(item.x ?? 0, (item.x ?? 0) + (item.width ?? 0)); const y = Math.min(item.y ?? 0, (item.y ?? 0) + (item.height ?? 0)); return <ellipse key={item.id} cx={x + w / 2} cy={y + h / 2} rx={w / 2} ry={h / 2} fill="none" stroke={stroke} strokeWidth={strokeWidth} />; }
+    if (item.type === "rectangle" || item.type === "triangle") {
+      const w = Math.abs(item.width ?? 0); const h = Math.abs(item.height ?? 0); const x = Math.min(item.x ?? 0, (item.x ?? 0) + (item.width ?? 0)); const y = Math.min(item.y ?? 0, (item.y ?? 0) + (item.height ?? 0));
+      return item.type === "rectangle"
+        ? <rect key={item.id} x={x} y={y} width={w} height={h} fill="none" stroke={stroke} strokeWidth={strokeWidth} strokeLinejoin="round" />
+        : <polygon key={item.id} points={`${x + w / 2},${y} ${x + w},${y + h} ${x},${y + h}`} fill="none" stroke={stroke} strokeWidth={strokeWidth} strokeLinejoin="round" />;
+    }
     if (item.type === "point") return <circle key={item.id} cx={item.x} cy={item.y} r={item.radius ?? 6} fill={stroke} />;
     if (item.type === "text") return <text key={item.id} x={item.x} y={(item.y ?? 0) + (item.fontSize ?? 16)} fill={stroke} fontSize={item.fontSize ?? 16} fontFamily="Inter, Arial, sans-serif">{item.text}</text>;
     return null;
+  })}{annotations.map((item) => {
+    // Legenda: pílula lavanda + linha guia, no mesmo lugar do editor (a foto aparece reduzida, então a letra usa uma escala de tela estimada).
+    const layout = labelLayout(item, width, height, width / 640);
+    if (!layout) return null;
+    const { pill, anchor, join, fontSize, text } = layout;
+    return <g key={`label-${item.id}`}><line x1={anchor.x} y1={anchor.y} x2={join.x} y2={join.y} stroke={item.color.toLowerCase() === "#ffffff" ? "#b9a7f5" : item.color} strokeWidth={1.25} strokeLinecap="round" vectorEffect="non-scaling-stroke" /><rect x={pill.x} y={pill.y} width={pill.width} height={pill.height} rx={pill.height / 2} fill="#f3efff" stroke="#b9a7f5" vectorEffect="non-scaling-stroke" /><text x={pill.x + pill.width / 2} y={pill.y + pill.height / 2} fill="#5b21b6" fontSize={fontSize} fontWeight={600} fontFamily="Inter, Arial, sans-serif" textAnchor="middle" dominantBaseline="central">{text}</text></g>;
   })}</svg>;
 }
 

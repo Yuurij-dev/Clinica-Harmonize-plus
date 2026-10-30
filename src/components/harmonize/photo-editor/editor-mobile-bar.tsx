@@ -6,7 +6,7 @@ import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollFade } from "@/components/ui/scroll-fade";
 import { cn } from "@/lib/utils";
-import { editorColors, editorTools } from "./editor-toolbar-data";
+import { editorColors, editorTools, viewOnlyTools } from "./editor-toolbar-data";
 import type { EditorToolbarProps } from "./editor-toolbar";
 
 const iconButton = "grid h-11 w-11 shrink-0 place-items-center rounded-[7px] border border-border bg-card text-foreground transition disabled:cursor-not-allowed disabled:opacity-40";
@@ -20,20 +20,20 @@ function IconAction({ icon: Icon, label, ...props }: { icon: LucideIcon; label: 
  * e ferramentas, cores e espessura em uma linha rolável. Só muda a apresentação: as chamadas são as mesmas do desktop.
  */
 export function EditorMobileBar(props: EditorToolbarProps) {
-  const { tool, color, strokeWidth, canUndo, canRedo, hasSelection, onToolChange, onColorChange, onStrokeWidthChange, onUndo, onRedo, onZoomIn, onZoomOut, onZoomReset, onDeleteSelected } = props;
+  const { tool, color, strokeWidth, canUndo, canRedo, hasSelection, marksHidden, onToolChange, onColorChange, onStrokeWidthChange, onUndo, onRedo, onZoomIn, onZoomOut, onZoomReset, onDeleteSelected } = props;
   return (
     <div className="hp-editor-bar sticky top-[var(--hp-topbar-h)] z-20 space-y-1.5 rounded-[8px] border border-border bg-card p-1.5 shadow-sm lg:hidden">
       <div className="flex justify-between gap-1">
-        <IconAction disabled={!canUndo} icon={Undo2} label="Desfazer" onClick={onUndo} />
-        <IconAction disabled={!canRedo} icon={Redo2} label="Refazer" onClick={onRedo} />
+        <IconAction disabled={!canUndo || marksHidden} icon={Undo2} label="Desfazer" onClick={onUndo} />
+        <IconAction disabled={!canRedo || marksHidden} icon={Redo2} label="Refazer" onClick={onRedo} />
         <IconAction icon={ZoomOut} label="Zoom -" onClick={onZoomOut} />
         <IconAction icon={ZoomIn} label="Zoom +" onClick={onZoomIn} />
         <IconAction icon={RotateCcw} label="Resetar zoom" onClick={onZoomReset} />
-        <IconAction disabled={!hasSelection} icon={Trash2} label="Excluir seleção" onClick={onDeleteSelected} />
+        <IconAction disabled={!hasSelection || marksHidden} icon={Trash2} label="Excluir seleção" onClick={onDeleteSelected} />
       </div>
       <ScrollFade className="flex snap-x items-center gap-1" aria-label="Ferramentas de desenho">
         {editorTools.map(({ id, label, short, icon: Icon }) => (
-          <button aria-label={label} aria-pressed={tool === id} key={id} title={label} type="button" onClick={() => onToolChange(id)} className={cn("flex h-11 min-w-14 shrink-0 snap-start flex-col items-center justify-center rounded-[7px] border px-1.5 transition", tool === id ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground")}>
+          <button aria-label={label} aria-pressed={tool === id} disabled={marksHidden && !viewOnlyTools.includes(id)} key={id} title={marksHidden && !viewOnlyTools.includes(id) ? "Ative \"Mostrar marcações\" para desenhar" : label} type="button" onClick={() => onToolChange(id)} className={cn("flex h-11 min-w-14 shrink-0 snap-start flex-col items-center justify-center rounded-[7px] border px-1.5 transition disabled:cursor-not-allowed disabled:opacity-40", tool === id ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground")}>
             <Icon aria-hidden="true" className="h-4 w-4" />
             <span className="text-xs font-medium leading-none">{short}</span>
           </button>

@@ -763,10 +763,13 @@ async function evaluationRequired() {
     const filled = await values();
     check("avaliação (tela): campos vazios vêm preenchidos pela anamnese; null/não informado ficam vazios", filled.chiefComplaint === "Manchas" && filled.patientGoal === "Uniformizar" && filled.allergies === "Não" && filled.pregnancyStatus === "Não" && filled.anticoagulantUse === "" && filled.autoimmuneDiseases === "" && filled.previousProcedures === "" && filled.clinicalNotes === "", JSON.stringify(filled));
     check("avaliação (tela): campos obrigatórios têm asterisco e a opção vazia não diz Não", (await page.locator("#evaluation-assessment-card span.text-destructive").count()) === 8 && (await field("anticoagulantUse").locator("option").allTextContents()).join("|").startsWith("Selecione|Não|Sim"), await field("anticoagulantUse").locator("option").allTextContents());
-    await page.getByRole("button", { name: "Avançar para orçamento" }).click();
+    // Fluxo em duas etapas: a clínica avança para a facial sem validar; a conclusão (e a validação) está em "Concluir e ir ao orçamento".
+    await page.getByRole("button", { name: "Continuar para avaliação facial" }).click();
+    await page.getByRole("button", { name: "Concluir e ir ao orçamento" }).click();
     await page.locator("#assessment-error-clinicalNotes").waitFor();
     const errors = await page.locator("#evaluation-assessment-card [role=alert]").evaluateAll((nodes) => nodes.map((node) => node.id));
     check("avaliação (tela): só os campos vazios mostram erro, com borda vermelha", errors.join() === "assessment-error-anticoagulantUse,assessment-error-autoimmuneDiseases,assessment-error-previousProcedures,assessment-error-clinicalNotes" && (await field("clinicalNotes").getAttribute("aria-invalid")) === "true" && (await field("clinicalNotes").evaluate((node) => getComputedStyle(node).borderColor)) === "rgb(217, 45, 32)", errors.join());
+    await page.waitForFunction(() => document.activeElement?.id === "assessment-field-anticoagulantUse", null, { timeout: 5000 }).catch(() => {}); // o foco vem depois da volta à etapa clínica
     check("avaliação (tela): foco no primeiro campo inválido", await page.evaluate(() => document.activeElement?.id) === "assessment-field-anticoagulantUse");
     check("avaliação (tela): nada foi concluído com campos faltando", (await prisma.evaluation.count({ where: { patientId: P.id, journeyId: journey.id, status: "Concluída" } })) === 0);
     await field("anticoagulantUse").selectOption("Não");
@@ -774,8 +777,11 @@ async function evaluationRequired() {
     await field("autoimmuneDiseases").selectOption("Sim");
     await field("previousProcedures").selectOption("Não");
     await field("clinicalNotes").fill("Observação clínica");
-    await page.getByRole("button", { name: "Avançar para orçamento" }).click();
-    await page.waitForFunction(() => !document.querySelector("#assessment-field-clinicalNotes"));
+    // Fluxo em duas etapas: a clínica avança para a facial sem validar; a conclusão (e a validação) está em "Concluir e ir ao orçamento".
+    await page.getByRole("button", { name: "Continuar para avaliação facial" }).click();
+    await page.getByRole("button", { name: "Concluir e ir ao orçamento" }).click();
+    // O campo some já ao ir para a etapa facial; espera a conclusão gravada.
+    for (let i = 0; i < 40 && (await prisma.evaluation.count({ where: { patientId: P.id, journeyId: journey.id, status: "Concluída" } })) === 0; i++) await page.waitForTimeout(250);
     const concluded = await prisma.evaluation.findFirst({ where: { patientId: P.id, journeyId: journey.id }, select: { status: true, allergies: true, autoimmuneDiseases: true, clinicalNotes: true } });
     check("avaliação (tela): completa avança e conclui", concluded?.status === "Concluída" && concluded.allergies === "Não" && concluded.autoimmuneDiseases === "Sim" && concluded.clinicalNotes === "Observação clínica", JSON.stringify(concluded));
 
@@ -933,7 +939,7 @@ async function evaluationRequiredGaps() {
       check("avaliação (lacunas): outra clínica recebe 404 (paciente e avaliação) e nada muda", byPatient.status === 404 && byEval.status === 404 && after.clinicalNotes === before.clinicalNotes && +after.updatedAt === +before.updatedAt, `${byPatient.status}/${byEval.status}`);
     } else check("segunda clínica criada para testar a avaliação", false, `registro ${r.status} login ${other?.status}`);
 
-    r = await api("POST", "/api/team", { name: "E2E Atendente Aval", email: staffEmail, password: staffPassword, role: "STAFF" });
+    r = await api("POST", "/api/team", { name: "E2E Atendente Aval", email: staffEmail, password: staffPassword, role: "STAFF", cpf: randomCpf(), address: "Rua Teste, 1", country: "Brasil", state: "SP", city: "São Paulo" });
     team = r.status === 201 ? r.data.member : null;
     const staff = team ? await loginAs(staffEmail, staffPassword) : null;
     if (staff?.status === 200) {
@@ -3368,6 +3374,135 @@ async function activeProcedures() {
   }
 }
 
+// Avaliação facial: observações faciais (facialNotes) e legenda das marcações nas fotos, em /api/patients/[id]/evaluation.
+async function facialEvaluation() {
+  const mk = async (label) => (await api("POST", "/api/patients", { name: `E2E Facial ${label} ${run}`, phone: "11999990031", age: 33, cpf: randomCpf() })).data.patient;
+  const P = await mk("A");
+  const Q = await mk("B");
+  const url = `/api/patients/${P.id}/evaluation`;
+  const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+  const photoWith = (annotations) => ({ name: "frente", imageUrl: png, width: 1, height: 1, category: "Frontal", annotations });
+  const detail = async (id) => (await api("GET", `${url}?evaluationId=${id}`)).data.evaluation;
+  const summary = async (id) => (await api("GET", `${url}?summary=1&evaluationId=${id}`)).data.evaluation;
+  const facialOf = async (id) => (await prisma.evaluation.findUnique({ where: { id }, select: { facialNotes: true } }))?.facialNotes;
+
+  // Caminho feliz: grava (com trim) e volta no detalhe e no resumo.
+  let r = await api("PUT", url, { photos: [], assessment: { ...fullAssessment, facialNotes: "  Assimetria leve do sorriso  " } });
+  const id = r.data.evaluation?.id;
+  check("facial: PUT com facialNotes cria a avaliação (200)", r.status === 200 && Boolean(id), `${r.status} ${r.data.message}`);
+  const d = await detail(id);
+  const s = await summary(id);
+  check("facial: facialNotes volta com trim no GET detalhe e no summary", d?.facialNotes === "Assimetria leve do sorriso" && s?.facialNotes === "Assimetria leve do sorriso", `${JSON.stringify(d?.facialNotes)} / ${JSON.stringify(s?.facialNotes)}`);
+
+  // Sem o campo (app mobile): preserva.
+  r = await api("PUT", url, { evaluationId: id, photos: [], assessment: { clinicalNotes: "Obs 2" } });
+  check("facial: PUT sem facialNotes (app mobile) preserva o valor", r.status === 200 && (await facialOf(id)) === "Assimetria leve do sorriso" && (await detail(id)).clinicalNotes === "Obs 2", `${r.status}`);
+  r = await api("PUT", url, { evaluationId: id, photos: [] });
+  check("facial: PUT sem assessment também preserva", r.status === 200 && (await facialOf(id)) === "Assimetria leve do sorriso", r.status);
+
+  // Esvaziar explicitamente: texto em branco é gravado e volta como string vazia.
+  r = await api("PUT", url, { evaluationId: id, photos: [], assessment: { facialNotes: "   " } });
+  check("facial: facialNotes em branco esvazia e o GET devolve string vazia", r.status === 200 && (await detail(id)).facialNotes === "" && (await summary(id)).facialNotes === "", r.status);
+  const rawNull = await prisma.evaluation.create({ data: { patientId: P.id, clinicId: (await prisma.patient.findUnique({ where: { id: P.id }, select: { clinicId: true } })).clinicId, professional: "Teste", status: "Rascunho" } });
+  check("facial: avaliação antiga com facialNotes nulo devolve string vazia no detalhe e no summary", rawNull.facialNotes === null && (await detail(rawNull.id)).facialNotes === "" && (await summary(rawNull.id)).facialNotes === "", `${rawNull.facialNotes}`);
+
+  // Limites e tipos.
+  r = await api("PUT", url, { evaluationId: id, photos: [], assessment: { facialNotes: "a".repeat(500) } });
+  check("facial: 500 caracteres é aceito", r.status === 200 && (await facialOf(id))?.length === 500, r.status);
+  r = await api("PUT", url, { evaluationId: id, photos: [], assessment: { facialNotes: `  ${"b".repeat(500)}  ` } });
+  check("facial: 500 caracteres mais espaços nas pontas é aceito (limite após trim)", r.status === 200 && (await facialOf(id)) === "b".repeat(500), r.status);
+  for (const [label, value] of [["501 caracteres", "c".repeat(501)], ["número", 42], ["null", null], ["objeto", { a: 1 }], ["lista", ["x"]], ["booleano", true]]) {
+    r = await api("PUT", url, { evaluationId: id, photos: [], assessment: { facialNotes: value } });
+    check(`facial: facialNotes com ${label} devolve 400 e não grava`, r.status === 400 && (await facialOf(id)) === "b".repeat(500), `${r.status} ${r.data.message}`);
+  }
+  const countBefore = await prisma.evaluation.count({ where: { patientId: P.id } });
+  r = await api("PUT", url, { photos: [], assessment: { facialNotes: "d".repeat(501) } });
+  check("facial: 501 caracteres em avaliação nova devolve 400 e não cria nada", r.status === 400 && (await prisma.evaluation.count({ where: { patientId: P.id } })) === countBefore, r.status);
+
+  // Legenda das marcações.
+  const okAnnotations = [{ id: "a1", type: "line", label: "Sulco nasogeniano" }, { id: "a2", type: "line" }, { id: "a3", type: "line", label: "x".repeat(60) }];
+  r = await api("PUT", url, { evaluationId: id, photos: [photoWith(okAnnotations)] });
+  const saved = (await detail(id)).photos?.[0]?.annotations ?? [];
+  check("facial: legenda válida, de 60 caracteres e marcação antiga sem label (200) voltam no GET", r.status === 200 && saved.length === 3 && saved[0].label === "Sulco nasogeniano" && !("label" in saved[1]) && saved[2].label === "x".repeat(60), `${r.status} ${JSON.stringify(saved).slice(0, 150)}`);
+  for (const [label, value] of [["61 caracteres", "y".repeat(61)], ["número", 7], ["null", null], ["objeto", { t: 1 }]]) {
+    r = await api("PUT", url, { evaluationId: id, photos: [photoWith([{ id: "a1", type: "line", label: "ok" }, { id: "a9", type: "line", label: value }])] });
+    const now = (await detail(id)).photos?.[0]?.annotations ?? [];
+    check(`facial: label com ${label} devolve 400 e as marcações gravadas não mudam`, r.status === 400 && now.length === 3 && now[0].label === "Sulco nasogeniano", `${r.status} ${r.data.message}`);
+  }
+  r = await api("PUT", url, { photos: [photoWith([{ id: "z", type: "line", label: "z".repeat(61) }])] });
+  check("facial: label inválido em avaliação nova não cria avaliação (400)", r.status === 400 && (await prisma.evaluation.count({ where: { patientId: P.id } })) === countBefore, r.status);
+
+  // Outro paciente da mesma clínica.
+  const evQ = (await api("PUT", `/api/patients/${Q.id}/evaluation`, { photos: [], assessment: { ...fullAssessment, facialNotes: "Segredo do paciente B" } })).data.evaluation;
+  r = await api("PUT", url, { evaluationId: evQ.id, photos: [], assessment: { facialNotes: "Invasão" } });
+  check("facial: evaluationId de OUTRO paciente devolve 404, sem vazar facialNotes, e não altera", r.status === 404 && !JSON.stringify(r.data).includes("Segredo") && (await facialOf(evQ.id)) === "Segredo do paciente B", `${r.status} ${JSON.stringify(r.data)}`);
+  const cross = await Promise.all([api("GET", `${url}?evaluationId=${evQ.id}`), api("GET", `${url}?summary=1&evaluationId=${evQ.id}`)]);
+  check("facial: GET detalhe e summary com evaluationId de outro paciente não vazam facialNotes", cross.every((x) => x.status === 200 && x.data.evaluation === null && !JSON.stringify(x.data).includes("Segredo")), cross.map((x) => `${x.status}:${JSON.stringify(x.data).slice(0, 60)}`).join(" | "));
+
+  // Concluída: reconcluir esvaziando medicalHistory/contraindications e autosave com status.
+  r = await api("PUT", url, { evaluationId: id, photos: [], assessment: { ...fullAssessment, medicalHistory: "Hipertensão", contraindications: "Nenhuma", facialNotes: "Final" }, status: "Concluída" });
+  check("facial: concluir avaliação completa (200)", r.status === 200 && r.data.evaluation.status === "Concluída", `${r.status} ${r.data.message}`);
+  r = await api("PUT", url, { evaluationId: id, photos: [], assessment: { medicalHistory: "", contraindications: "" }, status: "Concluída" });
+  const afterEmpty = await prisma.evaluation.findUnique({ where: { id }, select: { status: true, medicalHistory: true, contraindications: true, facialNotes: true } });
+  check("facial: reconcluir esvaziando medicalHistory/contraindications (opcionais) devolve 200 e segue Concluída", r.status === 200 && afterEmpty.status === "Concluída" && afterEmpty.medicalHistory === "" && afterEmpty.contraindications === "" && afterEmpty.facialNotes === "Final", `${r.status} ${r.data.message} ${JSON.stringify(afterEmpty)}`);
+  r = await api("PUT", url, { evaluationId: id, photos: [], assessment: { clinicalNotes: "Autosave", facialNotes: "Final 2" }, status: "Concluída" });
+  check("facial: autosave com status Concluída mantém Concluída e grava facialNotes", r.status === 200 && r.data.evaluation.status === "Concluída" && (await facialOf(id)) === "Final 2", `${r.status} ${r.data.message}`);
+  for (const field of ["chiefComplaint", "patientGoal", "allergies", "pregnancyStatus", "anticoagulantUse", "autoimmuneDiseases", "previousProcedures", "clinicalNotes"]) {
+    const before = await prisma.evaluation.findUnique({ where: { id }, select: { [field]: true } });
+    r = await api("PUT", url, { evaluationId: id, photos: [], assessment: { [field]: "  ", facialNotes: "Não deve gravar" }, status: "Concluída" });
+    const after = await prisma.evaluation.findUnique({ where: { id }, select: { [field]: true, facialNotes: true, status: true } });
+    check(`facial: Concluída com ${field} vazio devolve 400 e preserva o valor antigo (inclusive facialNotes)`, r.status === 400 && after[field] === before[field] && after.facialNotes === "Final 2" && after.status === "Concluída", `${r.status} ${r.data.message}`);
+  }
+
+  // Clique duplo: mesma gravação duas vezes ao mesmo tempo.
+  const dbl = await Promise.all([1, 2].map(() => api("PUT", url, { evaluationId: id, photos: [photoWith([{ id: "d1", type: "line", label: "Dupla" }])], assessment: { facialNotes: "Dupla" } })));
+  check("facial: clique duplo dá 200/200, uma foto só e facialNotes gravado", dbl.every((x) => x.status === 200) && (await prisma.evaluationPhoto.count({ where: { evaluationId: id } })) === 1 && (await facialOf(id)) === "Dupla", dbl.map((x) => x.status).join("/"));
+
+  // STAFF: 403 no detalhe e no summary, sem facialNotes; PUT também 403.
+  const staffEmail = `e2e-facial-staff-${run}@example.com`;
+  const staffPassword = `E2e-${run}-Staff9!`;
+  let team = null;
+  try {
+    r = await api("POST", "/api/team", { name: "E2E Atendente Facial", email: staffEmail, password: staffPassword, role: "STAFF", cpf: randomCpf(), address: "Rua Teste, 1", country: "Brasil", state: "SP", city: "São Paulo" });
+    team = r.status === 201 ? r.data.member : null;
+    const staff = team ? await loginAs(staffEmail, staffPassword) : null;
+    if (staff?.status === 200) {
+      const res = await withSession(staff.cookie, async () => [
+        await api("GET", `${url}?summary=1&evaluationId=${id}`),
+        await api("GET", `${url}?evaluationId=${id}`),
+        await api("PUT", url, { evaluationId: id, photos: [], assessment: { facialNotes: "Staff" } }),
+      ]);
+      check("facial: STAFF recebe 403 no summary, no detalhe e no PUT, sem facialNotes na resposta", res.every((x) => x.status === 403 && !JSON.stringify(x.data).includes("facialNotes") && !JSON.stringify(x.data).includes("Dupla")) && (await facialOf(id)) === "Dupla", res.map((x) => x.status).join("/"));
+    } else check("usuário STAFF criado para testar a avaliação facial", false, `team ${r.status} ${JSON.stringify(r.data).slice(0, 100)} login ${staff?.status}`);
+  } finally {
+    if (team) await api("DELETE", "/api/team", { membershipId: team.id });
+    await prisma.user.deleteMany({ where: { email: staffEmail } });
+  }
+
+  // Outra clínica: 404 e nada vaza.
+  const otherEmail = `e2e-facial-outra-${run}@example.com`;
+  const otherPassword = `E2e-${run}-Outra9!`;
+  const otherClinic = `E2E Facial Externa ${run}`;
+  try {
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo Facial", phone: "11999990032", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    if (other?.status === 200) {
+      const res = await withSession(other.cookie, async () => [
+        await api("GET", `${url}?summary=1&evaluationId=${id}`),
+        await api("GET", `${url}?evaluationId=${id}`),
+        await api("PUT", url, { evaluationId: id, photos: [], assessment: { facialNotes: "Invasão externa" } }),
+      ]);
+      check("facial: outra clínica recebe 404 (paciente inexistente para ela), sem facialNotes, e nada muda", res.every((x) => x.status === 404 && !JSON.stringify(x.data).includes("Dupla")) && (await facialOf(id)) === "Dupla" && (await prisma.evaluation.count({ where: { facialNotes: { startsWith: "Invasão externa" } } })) === 0, res.map((x) => x.status).join("/"));
+    } else check("segunda clínica criada para testar a avaliação facial", false, `registro ${r.status} login ${other?.status}`);
+  } finally {
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: otherEmail } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: otherEmail } });
+  }
+  r = await withSession("", () => api("GET", `${url}?summary=1&evaluationId=${id}`));
+  check("facial: sem sessão devolve 401 no summary", r.status === 401, r.status);
+}
+
 // Partes do roteiro, na ordem em que rodam. `needs` lista as partes que criam os dados que esta usa.
 // Conflitos de agenda: o mesmo profissional ou paciente não tem dois atendimentos sobrepostos (criar, remarcar, reativar, concorrência).
 async function scheduleConflicts() {
@@ -5298,6 +5433,7 @@ const suites = {
   login: { needs: [], run: () => loginLockout() },
   fotos: { needs: [], run: async () => { await mobilePhotos(); await mobilePhotosGaps(); } },
   procedimentos_ativos: { needs: [], run: () => activeProcedures() },
+  avaliacao_facial: { needs: [], run: () => facialEvaluation() },
 };
 
 // Sem nomes, roda tudo. Com nomes, roda essas partes e as que elas precisam.
