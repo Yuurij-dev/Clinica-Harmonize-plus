@@ -357,6 +357,7 @@ model Evaluation {
   contraindications  String                    @default("")
   previousProcedures String                    @default("")
   clinicalNotes      String                    @default("")
+  facialNotes        String?
   status             String                    @default("Rascunho")
   createdAt          DateTime                  @default(now()) @db.Timestamptz(6)
   updatedAt          DateTime                  @default(now()) @updatedAt @db.Timestamptz(6)

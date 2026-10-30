@@ -2,32 +2,36 @@ export type EditorTool =
   | "select"
   | "pan"
   | "pen"
-  | "point"
+  | "eraser"
   | "line"
-  | "curve"
   | "arrow"
+  | "rectangle"
   | "ellipse"
-  | "text"
-  | "eraser";
+  | "triangle"
+  | "point"
+  | "text";
 
 export type AnnotationBase = {
   id: string;
   color: string;
   strokeWidth: number;
+  /** Legenda opcional (ex.: "Glabela") desenhada com linha guia; ausente nas marcações antigas. Limite em `maxAnnotationLabelLength`. */
+  label?: string;
 };
 
+/** Pontos em pares [x0, y0, x1, y1, ...] no espaço da imagem. `curve` e `freehand` são traços; `pressure` (opcional, um valor por ponto) vem do Atrament. */
 export type LineAnnotation = AnnotationBase & {
   type: "freehand" | "line" | "curve" | "arrow";
   points: number[];
+  pressure?: number[];
 };
 
-export type EllipseAnnotation = AnnotationBase & {
-  type: "ellipse";
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
+/** Caixa no espaço da imagem (largura/altura podem ser negativas em marcações antigas). */
+type BoxFields = AnnotationBase & { x: number; y: number; width: number; height: number };
+export type EllipseAnnotation = BoxFields & { type: "ellipse" };
+export type RectangleAnnotation = BoxFields & { type: "rectangle" };
+export type TriangleAnnotation = BoxFields & { type: "triangle" };
+export type BoxAnnotation = EllipseAnnotation | RectangleAnnotation | TriangleAnnotation;
 
 export type TextAnnotation = AnnotationBase & {
   type: "text";
@@ -39,7 +43,7 @@ export type TextAnnotation = AnnotationBase & {
 
 export type PointAnnotation = AnnotationBase & { type: "point"; x: number; y: number; radius: number };
 
-export type PhotoAnnotation = LineAnnotation | EllipseAnnotation | TextAnnotation | PointAnnotation;
+export type PhotoAnnotation = LineAnnotation | BoxAnnotation | TextAnnotation | PointAnnotation;
 
 export type EvaluationPhoto = {
   id: string;

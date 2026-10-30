@@ -4,7 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
 import { can } from "@/lib/permissions";
 import { ensurePatientJourney } from "@/lib/patient-journey";
-import { assessmentCompletionError } from "@/lib/evaluation-rules";
+import { assessmentCompletionError, parseFacialNotes } from "@/lib/evaluation-rules";
+import { annotationsHaveInvalidLabel } from "@/lib/photo-annotation-rules";
 import { parseKnownPhotoIds, photosOverLimit, unknownStoredPhotos } from "@/lib/session-after-photo-rules";
 
 type EvaluationPhotoPayload = {
@@ -20,7 +21,7 @@ type EvaluationPhotoPayload = {
 
 const assessmentFields = ["chiefComplaint", "patientGoal", "medicalHistory", "allergies", "pregnancyStatus", "anticoagulantUse", "autoimmuneDiseases", "contraindications", "previousProcedures", "clinicalNotes"] as const;
 type AssessmentField = typeof assessmentFields[number];
-type AssessmentPayload = Partial<Record<AssessmentField, string>>;
+type AssessmentPayload = Partial<Record<AssessmentField, string>> & { facialNotes?: unknown };
 const photoCategories = new Set(["Frontal", "Perfil direito", "Perfil esquerdo", "Sorriso", "Outra"]);
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -51,9 +52,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const evaluation = await prisma.evaluation.findFirst({
       where: { patientId, clinicId: user.clinicId, ...(evaluationId ? { id: evaluationId } : {}), ...(journeyId ? { journeyId } : {}) },
       orderBy: { updatedAt: "desc" },
-      select: { id: true, journeyId: true, professional: true, status: true, createdAt: true, updatedAt: true, chiefComplaint: true, patientGoal: true, medicalHistory: true, allergies: true, pregnancyStatus: true, anticoagulantUse: true, autoimmuneDiseases: true, contraindications: true, previousProcedures: true, clinicalNotes: true },
+      select: { id: true, journeyId: true, professional: true, status: true, createdAt: true, updatedAt: true, chiefComplaint: true, patientGoal: true, medicalHistory: true, allergies: true, pregnancyStatus: true, anticoagulantUse: true, autoimmuneDiseases: true, contraindications: true, previousProcedures: true, clinicalNotes: true, facialNotes: true },
     });
-    return NextResponse.json({ evaluation });
+    return NextResponse.json({ evaluation: evaluation ? { ...evaluation, facialNotes: evaluation.facialNotes ?? "" } : evaluation });
   }
 
   // Checagem barata do editor (fotos enviadas pelo app): só os ids da avaliação pedida, sem base64.
@@ -87,6 +88,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       contraindications: evaluation.contraindications,
       previousProcedures: evaluation.previousProcedures,
       clinicalNotes: evaluation.clinicalNotes,
+      facialNotes: evaluation.facialNotes ?? "",
       photos: evaluation.photos.map((photo) => ({
         id: photo.id,
         name: photo.name,
@@ -116,7 +118,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   const body = await request.json().catch(() => null) as ({ evaluationId?: string; journeyId?: string; photos?: EvaluationPhotoPayload[]; knownPhotoIds?: unknown; assessment?: AssessmentPayload; status?: string } | null);
   const photos = body?.photos;
   if (!Array.isArray(photos)) return NextResponse.json({ message: "Envie as fotos da avaliação." }, { status: 400 });
-  const existingEvaluation = body?.evaluationId ? await prisma.evaluation.findFirst({ where: { id: body.evaluationId, patientId, clinicId: user.clinicId }, select: { id: true, journeyId: true, status: true, chiefComplaint: true, patientGoal: true, allergies: true, pregnancyStatus: true, anticoagulantUse: true, autoimmuneDiseases: true, previousProcedures: true, clinicalNotes: true } }) : null;
+  const existingEvaluation = body?.evaluationId ? await prisma.evaluation.findFirst({ where: { id: body.evaluationId, patientId, clinicId: user.clinicId }, select: { id: true, journeyId: true, status: true, chiefComplaint: true, patientGoal: true, medicalHistory: true, contraindications: true, allergies: true, pregnancyStatus: true, anticoagulantUse: true, autoimmuneDiseases: true, previousProcedures: true, clinicalNotes: true } }) : null;
   if (body?.evaluationId && !existingEvaluation) {
     return NextResponse.json({ message: "Avaliação não encontrada." }, { status: 404 });
   }
@@ -129,11 +131,21 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   if (photos.length > 20 || photos.some((photo) => !photo || typeof photo.name !== "string" || photo.name.length > 180 || typeof photo.imageUrl !== "string" || !/^data:image\/(jpeg|png|webp);base64,/i.test(photo.imageUrl) || photo.imageUrl.length > 8_500_000 || !Number.isInteger(photo.width) || !Number.isInteger(photo.height) || (photo.width ?? 0) < 1 || (photo.height ?? 0) < 1 || (photo.width ?? 0) > 8000 || (photo.height ?? 0) > 8000 || (photo.width ?? 0) * (photo.height ?? 0) > 25_000_000 || (photo.category !== undefined && !photoCategories.has(photo.category)) || (photo.sortOrder !== undefined && !Number.isInteger(photo.sortOrder)) || (photo.annotations !== undefined && (!Array.isArray(photo.annotations) || photo.annotations.length > 1000)))) {
     return NextResponse.json({ message: "Revise as fotos enviadas. Cada avaliação aceita até 20 imagens válidas." }, { status: 400 });
   }
+  if (photos.some((photo) => Array.isArray(photo.annotations) && annotationsHaveInvalidLabel(photo.annotations))) {
+    return NextResponse.json({ message: "Uma legenda de marcação é inválida. Use texto de até 60 caracteres." }, { status: 400 });
+  }
   if (body?.status !== undefined && !["Rascunho", "Concluída"].includes(body.status)) {
     return NextResponse.json({ message: "Status de avaliação inválido." }, { status: 400 });
   }
   const assessment: Partial<Record<AssessmentField, string>> = {};
+  // Opcional e aditivo: quem não envia (app mobile) não altera o valor gravado.
+  let facialNotes: string | undefined;
   if (body?.assessment) {
+    if (body.assessment.facialNotes !== undefined) {
+      const parsed = parseFacialNotes(body.assessment.facialNotes);
+      if (!parsed.ok) return NextResponse.json({ message: parsed.message }, { status: 400 });
+      facialNotes = parsed.value;
+    }
     for (const field of assessmentFields) {
       const value = body.assessment[field];
       if (value !== undefined && (typeof value !== "string" || value.length > 5000)) {
@@ -164,8 +176,8 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
 
     // Sem evaluationId, cria uma nova avaliação em nome do usuário logado.
     const evaluation = body?.evaluationId
-      ? await transaction.evaluation.update({ where: { id: body.evaluationId }, data: { ...assessment, ...(body?.status ? { status: body.status } : {}) } })
-      : await transaction.evaluation.create({ data: { patientId, clinicId: user.clinicId, journeyId: journey?.id, professional: journey?.professional?.trim() || user.name, ...assessment, status: body?.status ?? "Rascunho" } });
+      ? await transaction.evaluation.update({ where: { id: body.evaluationId }, data: { ...assessment, ...(facialNotes !== undefined ? { facialNotes } : {}), ...(body?.status ? { status: body.status } : {}) } })
+      : await transaction.evaluation.create({ data: { patientId, clinicId: user.clinicId, journeyId: journey?.id, professional: journey?.professional?.trim() || user.name, ...assessment, ...(facialNotes !== undefined ? { facialNotes } : {}), status: body?.status ?? "Rascunho" } });
 
     await transaction.evaluationPhoto.deleteMany({ where: { evaluationId: evaluation.id, ...(keep.length ? { id: { notIn: keep } } : {}) } });
     if (validPhotos.length) {

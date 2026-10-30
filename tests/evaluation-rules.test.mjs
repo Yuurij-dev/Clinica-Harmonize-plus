@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assessmentCompletionError, assessmentFieldErrors, missingAssessmentFields } from "../src/lib/evaluation-rules.ts";
+import { assessmentCompletionError, assessmentFieldErrors, facialNotesMaxLength, missingAssessmentFields, parseFacialNotes } from "../src/lib/evaluation-rules.ts";
 import { emptyAnamnesisContent, evaluationFieldsFromAnamnesis, fillEmptyEvaluationFields } from "../src/lib/anamnesis-rules.ts";
 
 const complete = { chiefComplaint: "Rugas", patientGoal: "Suavizar", allergies: "Não", pregnancyStatus: "Não", anticoagulantUse: "Não", autoimmuneDiseases: "Não", previousProcedures: "Sim", clinicalNotes: "Sem intercorrências" };
@@ -69,4 +69,30 @@ test("pré-preenchimento só ocupa campos vazios e devolve o mesmo objeto sem mu
   assert.deepEqual(filled, { ...assessment, patientGoal: "Meta", pregnancyStatus: "Não" });
   assert.equal(fillEmptyEvaluationFields(assessment, {}), assessment);
   assert.equal(fillEmptyEvaluationFields(assessment, { chiefComplaint: "x", allergies: "Não" }), assessment);
+});
+
+test("observações da avaliação facial: texto aparado, até 500 caracteres, nunca obrigatório", () => {
+  assert.deepEqual(parseFacialNotes("  Assimetria leve  "), { ok: true, value: "Assimetria leve" });
+  assert.deepEqual(parseFacialNotes(""), { ok: true, value: "" });
+  assert.deepEqual(parseFacialNotes("   "), { ok: true, value: "" });
+  assert.equal(parseFacialNotes("a".repeat(facialNotesMaxLength)).ok, true);
+  assert.equal(parseFacialNotes(` ${"a".repeat(facialNotesMaxLength)} `).ok, true, "o limite vale depois de aparar");
+  const tooLong = parseFacialNotes("a".repeat(facialNotesMaxLength + 1));
+  assert.equal(tooLong.ok, false);
+  assert.match(tooLong.message, /500 caracteres/);
+});
+
+test("observações da avaliação facial só aceitam texto", () => {
+  for (const value of [null, 12, {}, ["x"], true]) assert.equal(parseFacialNotes(value).ok, false);
+});
+
+test("a avaliação facial não entra na lista de campos obrigatórios para concluir", () => {
+  assert.equal(missingAssessmentFields({ ...complete, facialNotes: "" }).length, 0);
+  assert.equal(assessmentCompletionError({ ...complete }), null);
+});
+
+test("campos fora dos obrigatórios (histórico médico, contraindicações) não bloqueiam concluir nem entram nas pendências", () => {
+  const merged = { ...complete, medicalHistory: "", contraindications: "" };
+  assert.equal(assessmentCompletionError(merged, merged), null);
+  assert.deepEqual(missingAssessmentFields(merged), []);
 });
