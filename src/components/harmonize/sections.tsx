@@ -1359,6 +1359,9 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   const procedureModalOpen = openCreate || Boolean(editingProcedure);
   const [procedureModalMounted, setProcedureModalMounted] = useState(procedureModalOpen);
   const [procedureModalKey, setProcedureModalKey] = useState("new-procedure");
+  const [deletingProcedure, setDeletingProcedure] = useState<ProcedureRow | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const materialOptions = productRows.filter((product): product is Product & { id: string } => Boolean(product.id));
 
   useEffect(() => {
@@ -1415,6 +1418,48 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
     closeProcedureModal();
   }
 
+  function closeDeleteModal() {
+    if (isDeleting) return;
+    setDeletingProcedure(null);
+    setDeleteError("");
+    const opener = openerRef.current;
+    setTimeout(() => { if (opener?.isConnected) opener.focus(); }, 50);
+  }
+
+  async function confirmDeleteProcedure() {
+    if (!deletingProcedure || isDeleting) return;
+    setIsDeleting(true);
+    setDeleteError("");
+    const { id, name } = deletingProcedure;
+    try {
+      const response = await fetch(`/api/procedures/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const data = await response.json().catch(() => ({})) as { message?: string };
+      if (!response.ok) {
+        setDeleteError(data.message ?? "Não foi possível excluir o procedimento.");
+        setIsDeleting(false);
+        return;
+      }
+    } catch {
+      setDeleteError("Não foi possível excluir o procedimento. Tente novamente.");
+      setIsDeleting(false);
+      return;
+    }
+    // Excluído: daqui em diante um erro de recarga não é erro de exclusão.
+    setIsDeleting(false);
+    setDeletingProcedure(null);
+    onSaved?.(`${name} foi excluído.`);
+    // A linha excluída sumiu da tabela; devolve o foco ao botão Novo procedimento.
+    setTimeout(() => Array.from(document.querySelectorAll<HTMLElement>("main button, [data-hp-title] button")).find((button) => button.textContent?.trim() === "Novo procedimento")?.focus(), 50);
+    try {
+      await loadProcedures();
+    } catch {
+      setProcedureRows((rows) => rows.filter((row) => row.id !== id));
+      toast.info("Excluído. Atualize a lista se necessário.");
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
   function editProcedure(procedureId: string) {
     setProcedureModalKey(`edit-${procedureId}`);
     setProcedureModalMounted(true);
@@ -1448,10 +1493,15 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
               )) : <span className="text-xs text-muted-foreground">Sem materiais</span>}
               {procedure.materialsNeedReview ? <Badge variant="amber" title="Convertida automaticamente do texto antigo. Confira as quantidades e salve.">Revisar ficha</Badge> : null}
             </div>,
-            <Button key={`edit-${procedure.id}`} size="sm" variant="secondary" onClick={(event) => { setProcedureModalKey(`edit-${procedure.id}`); setProcedureModalMounted(true); openerRef.current = event.currentTarget; setEditingProcedureId(procedure.id); }}>
-              <PencilLine className="h-3.5 w-3.5" />
-              Editar
-            </Button>,
+            <div className="flex items-center gap-2" key={`actions-${procedure.id}`}>
+              <Button size="sm" variant="secondary" onClick={(event) => { setProcedureModalKey(`edit-${procedure.id}`); setProcedureModalMounted(true); openerRef.current = event.currentTarget; setEditingProcedureId(procedure.id); }}>
+                <PencilLine className="h-3.5 w-3.5" />
+                Editar
+              </Button>
+              <Button size="sm" variant="outline" aria-label="Excluir procedimento" title="Excluir procedimento" className="text-destructive hover:text-destructive" onClick={(event) => { openerRef.current = event.currentTarget; setDeleteError(""); setDeletingProcedure(procedure); }}>
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>,
           ])}
         />}
       </div>
@@ -1468,6 +1518,30 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
           onSaved={handleProcedureSaved}
         />
       ) : null}
+
+      <Modal
+        open={Boolean(deletingProcedure)}
+        title={deletingProcedure ? `Excluir procedimento: ${deletingProcedure.name}` : "Excluir procedimento"}
+        description="Confirme a exclusão deste procedimento do catálogo."
+        onClose={closeDeleteModal}
+        closeOnOverlayClick={!isDeleting}
+      >
+        <div className="space-y-4">
+          <div className="space-y-2 text-sm text-muted-foreground">
+            <p>A exclusão remove o procedimento do catálogo e das opções de <strong className="text-foreground">novos</strong> orçamentos e agendamentos. A ficha técnica de materiais dele também é removida.</p>
+            <p>Atendimentos, orçamentos e agendamentos já registrados <strong className="text-foreground">não são afetados</strong>: eles mantêm o registro.</p>
+            <p className="font-medium text-foreground">Esta ação não pode ser desfeita.</p>
+          </div>
+          {deleteError ? <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{deleteError}</p> : null}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" disabled={isDeleting} onClick={closeDeleteModal}>Cancelar</Button>
+            <Button type="button" variant="destructive" disabled={isDeleting} onClick={confirmDeleteProcedure}>
+              {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {isDeleting ? "Excluindo..." : "Excluir procedimento"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

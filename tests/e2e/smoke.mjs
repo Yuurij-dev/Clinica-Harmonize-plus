@@ -5530,6 +5530,62 @@ async function journeyStageFilter() {
   }
 }
 
+// Excluir procedimento do catálogo: ADMIN exclui, outros papéis não, histórico guarda só o nome.
+async function deleteProcedure() {
+  const name = `zz QN Excluir ${run}`;
+  const staffEmail = `qn-del-staff-${run}@example.com`, staffPassword = `E2e-${run}-Staff9!`;
+  const proEmail = `qn-del-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
+  const members = [];
+  try {
+    let r = await api("POST", "/api/procedures", { name, category: "Facial", price: 250, durationMinutes: 20, margin: 30 });
+    const proc = r.data.procedure;
+    check("procedimento criado para exclusão", r.status === 201 && proc?.id, `${r.status}`);
+    if (!proc?.id) return;
+
+    const patient = (await api("POST", "/api/patients", { name: `zz QN Del ${run}`, phone: "11999990031", cpf: randomCpf() })).data.patient;
+    const quote = (await api("POST", "/api/quotes", { patientId: patient?.id, items: `${name} (1x)`, total: 250, expires: "30/12/2030" })).data.quote;
+    check("orçamento com o nome do procedimento criado", Boolean(quote?.id));
+
+    for (const [role, email, password] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
+      r = await api("POST", "/api/team", { name: `QN ${role} Del`, email, password, role });
+      if (r.status === 201) members.push(r.data.member);
+      const session = r.status === 201 ? await loginAs(email, password) : null;
+      if (session?.status !== 200) { check(`usuário ${role} criado`, false, `team ${r.status} login ${session?.status}`); continue; }
+      await withSession(session.cookie, async () => {
+        const d = await api("DELETE", `/api/procedures/${proc.id}`);
+        check(`${role} não exclui procedimento (403)`, d.status === 403, d.status);
+      });
+    }
+    r = await api("GET", "/api/procedures");
+    check("procedimento segue na lista após tentativas negadas", r.data.procedures?.some((p) => p.id === proc.id));
+
+    r = await withSession("", () => api("DELETE", `/api/procedures/${proc.id}`));
+    check("DELETE sem sessão devolve 401", r.status === 401, r.status);
+
+    const [a, b] = await Promise.all([api("DELETE", `/api/procedures/${proc.id}`), api("DELETE", `/api/procedures/${proc.id}`)]);
+    const statuses = [a.status, b.status].sort();
+    check("exclusão dupla: um 200 e o outro 404", statuses[0] === 200 && statuses[1] === 404, statuses.join(","));
+    check("exclusão devolve ok", (a.status === 200 ? a : b).data.ok === true);
+
+    r = await api("GET", "/api/procedures");
+    check("procedimento excluído some da lista", r.status === 200 && !r.data.procedures?.some((p) => p.id === proc.id));
+    check("procedimento excluído some do banco", await prisma.procedure.count({ where: { id: proc.id } }) === 0);
+
+    r = await api("DELETE", `/api/procedures/${proc.id}`);
+    check("excluir de novo devolve 404", r.status === 404, r.status);
+    r = await api("DELETE", "/api/procedures/naoexiste");
+    check("id inexistente devolve 404", r.status === 404, r.status);
+    r = await api("DELETE", "/api/procedures/%27%20OR%201=1");
+    check("id malformado devolve 404", r.status === 404, r.status);
+
+    const row = quote?.id ? await prisma.quote.findUnique({ where: { id: quote.id }, select: { items: true, total: true } }) : null;
+    check("orçamento antigo mantém o nome e o total após a exclusão", row?.items === `${name} (1x)` && Number(row.total) === 250, JSON.stringify(row));
+  } finally {
+    for (const member of members) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.user.deleteMany({ where: { email: { in: [staffEmail, proEmail] } } });
+  }
+}
+
 const suites = {
   jornadas_etapa: { needs: [], run: () => journeyStageFilter() },
   pacientes: { needs: [], run: async (state) => { Object.assign(state, await patientsAndPayments()); await patientCpfMask(); } },
@@ -5556,6 +5612,7 @@ const suites = {
   fotos: { needs: [], run: async () => { await mobilePhotos(); await mobilePhotosGaps(); } },
   procedimentos_ativos: { needs: [], run: () => activeProcedures() },
   avaliacao_facial: { needs: [], run: () => facialEvaluation() },
+  excluir_procedimento: { needs: [], run: () => deleteProcedure() },
 };
 
 // Sem nomes, roda tudo. Com nomes, roda essas partes e as que elas precisam.
