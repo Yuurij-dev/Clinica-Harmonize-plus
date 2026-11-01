@@ -55,3 +55,18 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     throw error;
   }
 }
+
+// Orçamentos, atendimentos e agendamentos guardam só o nome do procedimento (sem FK); a ficha técnica cai por cascade.
+export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const user = await getCurrentUser({ requireActiveTrial: true });
+  if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  if (!canForUser(user, "procedures:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const id = (await params).id;
+  if (!isValidId(id)) return NextResponse.json({ message: "Procedimento não encontrado." }, { status: 404 });
+  const current = await prisma.procedure.findFirst({ where: { id, clinicId: user.clinicId }, select: { id: true, imageAssetId: true } });
+  if (!current) return NextResponse.json({ message: "Procedimento não encontrado." }, { status: 404 });
+  // deleteMany não lança P2025 se outra aba apagou o registro entre o find e o delete.
+  await prisma.procedure.deleteMany({ where: { id, clinicId: user.clinicId } });
+  await discardAssetIfUnused(user.clinicId, current.imageAssetId);
+  return NextResponse.json({ ok: true });
+}
