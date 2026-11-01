@@ -53,6 +53,7 @@ import { ClinicTimePicker } from "./clinic-time-picker";
 import { clinicDateKey, type EncounterItem } from "@/lib/clinical-record-rules";
 import type { AnamnesisRequest } from "@/lib/anamnesis-rules";
 import { guardDraftNavigation } from "./use-draft-autosave";
+import { draftStatus } from "@/lib/evaluation-photo-rules";
 import { evaluationStepFromParams, paramsWithEvaluationStep, type EvaluationStep } from "@/lib/evaluation-step-rules";
 import { PatientAnamnesis } from "./patient-anamnesis";
 import { PatientClinicalDocuments } from "./patient-clinical-documents";
@@ -476,11 +477,11 @@ export function PatientDetail({
         if (!journey) throw new Error("Não foi possível localizar este tratamento.");
         const evaluations = evaluationData.evaluations ?? [];
         const focusedQuote = focusQuoteId ? quoteData.quotes?.find((item) => item.id === focusQuoteId) : undefined;
-        const focusedEvaluation = focusedQuote?.evaluationId ? evaluations.find((item) => item.id === focusedQuote.evaluationId && item.status !== "Rascunho") : undefined;
-        const evaluation = focusedEvaluation ?? evaluations.find((item) => item.status === "Rascunho") ?? evaluations[0];
+        const focusedEvaluation = focusedQuote?.evaluationId ? evaluations.find((item) => item.id === focusedQuote.evaluationId && item.status !== draftStatus) : undefined;
+        const evaluation = focusedEvaluation ?? evaluations.find((item) => item.status === draftStatus) ?? evaluations[0];
         const approvedQuote = quoteData.quotes?.find((item) => ["Aprovado", "Pago"].includes(item.status));
         // Reabrir a URL da etapa facial só vale quando a jornada ainda está na avaliação; nas demais etapas o `step` sobrando é removido.
-        if ((journey.hasEvaluation && evaluation && evaluation.status !== "Rascunho") && new URLSearchParams(window.location.search).has("step")) {
+        if ((journey.hasEvaluation && evaluation && evaluation.status !== draftStatus) && new URLSearchParams(window.location.search).has("step")) {
           setEncounterStep("clinical");
           writeStepToUrl("clinical", "replace");
         }
@@ -492,7 +493,7 @@ export function PatientDetail({
         setEncounterPostProcedureSessionId(journey.latestCompletedSessionId ?? undefined);
         setJourneyPastProcedure(journey.hasProcedure || Boolean(journey.latestCompletedSessionId));
 
-        if (!journey.hasEvaluation || !evaluation || evaluation.status === "Rascunho") {
+        if (!journey.hasEvaluation || !evaluation || evaluation.status === draftStatus) {
           setEncounterMode(true);
         } else if (focusedQuote) {
           // Vindo do Financeiro: abre a etapa de orçamento (onde o pagamento é registrado) com esse orçamento selecionado.
