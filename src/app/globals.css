@@ -839,6 +839,9 @@ html.dark .hp-skeleton {
   background-size: 220% 100%;
 }
 
+/* Etapa atual (ainda não cumprida) no stepper da lista de tratamentos: no escuro o 50% do primário some contra o fundo. */
+html.dark .hp-stage-current { background-color: #9a92ff; }
+
 @keyframes hp-skeleton-shimmer {
   0% { background-position: 100% 0; }
   100% { background-position: -100% 0; }
