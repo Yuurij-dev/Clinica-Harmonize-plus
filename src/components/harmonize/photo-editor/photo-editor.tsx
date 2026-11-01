@@ -12,6 +12,7 @@ import { appendIncomingPhotos, idsToSkipAfterFailure, pollOutcomeForStatus, unse
 import { usePhotoSyncPoll } from "../use-photo-sync-poll";
 import { evaluationFieldsFromAnamnesis, fillEmptyEvaluationFields } from "@/lib/anamnesis-rules";
 import { assessmentFieldErrors, type RequiredAssessmentField } from "@/lib/evaluation-rules";
+import { pendingSaveAction, pendingSaveCopy, savedVersionCanConclude } from "@/lib/pending-save-rules";
 import { anamnesisKey, type AnamnesisOverview } from "../patient-clinical-data";
 import { LoadingSkeleton } from "../shared";
 import { IncomingPhotoStatus } from "../incoming-photo-status";
@@ -99,6 +100,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   const [future, setFuture] = useState<Record<string, AnnotationSnapshot[]>>({});
   const [notice, setNotice] = useState<Notice>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
+  const [pendingDecision, setPendingDecision] = useState<{ busy: "save" | "discard" | null; error: string } | null>(null);
   const [isLoading, setIsLoading] = useState(Boolean(evaluationCacheKey) && (!cachedEvaluation || Boolean(cachedEvaluation.evaluation?.photos?.length)));
   const [loadError, setLoadError] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -657,7 +659,9 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
 
   function openFilePicker() { fileInputRef.current?.click(); }
 
-  async function saveEvaluation(status: "Rascunho" | "Concluída" = encounter ? "Rascunho" : evaluationStatus, automatic = false) {
+  // `snapshot` grava e mostra uma versão específica (a restaurada ao descartar), sem depender do estado da renderização atual.
+  async function saveEvaluation(status: "Rascunho" | "Concluída" = encounter ? "Rascunho" : evaluationStatus, automatic = false, snapshot?: { photos: EvaluationPhoto[]; assessment: ClinicalAssessment }) {
+    const payload = snapshot ?? { photos, assessment };
     if (!encounter && !photos.length) {
       showNotice("Adicione pelo menos uma foto antes de salvar a avaliação.", "info");
       revealValidationTarget("evaluation-photo-card", "evaluation-notice");
@@ -671,7 +675,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
       const response = await fetch(`/api/patients/${patientId}/evaluation`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ evaluationId: currentEvaluationIdRef.current, journeyId, photos, knownPhotoIds: [...seenPhotoIdsRef.current], assessment, status }),
+        body: JSON.stringify({ evaluationId: currentEvaluationIdRef.current, journeyId, knownPhotoIds: [...seenPhotoIdsRef.current], photos: payload.photos, assessment: payload.assessment, status }),
       });
       const data = await response.json().catch(() => ({})) as { evaluation?: SavedEvaluation; message?: string };
       if (!response.ok || !data.evaluation) throw new Error(data.message ?? "Não foi possível salvar a avaliação.");
@@ -683,7 +687,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
       invalidateClientCache(`/api/patients/${patientId}/evaluation`, `/api/patients/${patientId}/history`, `/api/patients/${patientId}/journeys`, "/api/patients");
       if (startedRevision === editRevisionRef.current) setIsDirty(false);
       if (!automatic) {
-        const previews = await Promise.all(photos.map(async (photo) => ({ photo, dataUrl: await renderExport(photo) })));
+        const previews = await Promise.all(payload.photos.map(async (photo) => ({ photo, dataUrl: await renderExport(photo) })));
         setSavedPreviews(previews);
       }
       if (!encounter) setShowResult(true);
@@ -720,9 +724,68 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   async function continueToQuote() {
     if (readOnly) { if (currentEvaluationIdRef.current) encounter?.onContinue(currentEvaluationIdRef.current); return; }
     if (!validateAssessment()) return;
+    let action = pendingSaveAction(autosave.state);
+    if (action === "settle") action = await autosave.flush() ? "proceed" : "ask";
+    if (action === "ask") { autosave.hold(); setPendingDecision({ busy: null, error: "" }); return; }
     if (!await autosave.flush()) { revealValidationTarget("evaluation-header-card"); return; }
-    const savedEvaluationId = await saveEvaluation("Concluída");
-    if (savedEvaluationId) encounter?.onContinue(savedEvaluationId);
+    await finishEvaluation();
+  }
+
+  async function finishEvaluation(snapshot?: { photos: EvaluationPhoto[]; assessment: ClinicalAssessment }) {
+    const savedEvaluationId = await saveEvaluation("Concluída", false, snapshot);
+    if (!savedEvaluationId) return false;
+    encounter?.onContinue(savedEvaluationId);
+    return true;
+  }
+
+  function cancelPendingDecision() {
+    if (pendingDecision?.busy) return;
+    setPendingDecision(null);
+    autosave.release();
+  }
+
+  async function saveAndContinue() {
+    if (!pendingDecision || pendingDecision.busy) return;
+    setPendingDecision({ busy: "save", error: "" });
+    if (!await autosave.flush()) { setPendingDecision({ busy: null, error: pendingSaveCopy.saveFailed }); return; }
+    // Modal aberto até a conclusão avançar; se ela falhar, libera o autosave e mostra o erro para tentar de novo.
+    if (await finishEvaluation()) { autosave.release(); setPendingDecision(null); return; }
+    autosave.release();
+    setPendingDecision({ busy: null, error: pendingSaveCopy.concludeFailed });
+  }
+
+  // Descartar: busca a última versão salva no servidor, a aplica na tela, dá as edições por salvas (sem regravar) e conclui com ESSA versão.
+  // Se a busca falhar nada muda e o modal continua aberto.
+  async function discardAndContinue() {
+    if (!pendingDecision || pendingDecision.busy) return;
+    const id = currentEvaluationIdRef.current;
+    if (!id) { setPendingDecision({ busy: null, error: pendingSaveCopy.noSavedVersion }); return; }
+    setPendingDecision({ busy: "discard", error: "" });
+    const key = `/api/patients/${patientId}/evaluation?evaluationId=${encodeURIComponent(id)}`;
+    try {
+      invalidateClientCache(key);
+      const data = await getCachedJson<{ evaluation?: ({ photos?: EvaluationPhoto[]; status?: string; professional?: string } & Partial<ClinicalAssessment>) | null }>(key);
+      if (!data.evaluation) throw new Error("not-found");
+      const saved = data.evaluation;
+      const restoredPhotos = saved.photos ?? [];
+      const restoredAssessment = { ...emptyAssessment, ...saved };
+      // A versão salva precisa passar na regra do servidor ANTES de qualquer descarte; senão nada muda.
+      if (!savedVersionCanConclude({ ...restoredAssessment, status: saved.status })) { setPendingDecision({ busy: null, error: pendingSaveCopy.savedIncomplete }); return; }
+      autosave.discard();
+      concludedBaselineRef.current = saved.status !== "Rascunho" ? restoredAssessment : null;
+      setAssessment(restoredAssessment);
+      setPhotos(restoredPhotos);
+      setActivePhotoId((current) => restoredPhotos.some((photo) => photo.id === current) ? current : restoredPhotos[0]?.id ?? null);
+      setSelectedId(null);
+      setPast({});
+      setFuture({});
+      setIsDirty(false);
+      setSaveError("");
+      if (await finishEvaluation({ photos: restoredPhotos, assessment: restoredAssessment })) setPendingDecision(null);
+      else setPendingDecision({ busy: null, error: pendingSaveCopy.discardConcludeFailed });
+    } catch {
+      setPendingDecision({ busy: null, error: pendingSaveCopy.discardFailed });
+    }
   }
 
   // Na avaliação facial o PNG segue as chaves de visibilidade da tela (marcações ocultas = só a foto; legendas desligadas = sem as pílulas).
@@ -778,7 +841,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     onRetryLoad: () => { setLoadError(false); setIsLoading(true); setHydrated(false); setLoadAttempt((value) => value + 1); },
     receivingPhoto, activePhoto, areaRef: canvasWrapRef, scale: displayScale, recenterKey, zoomPercent: Math.round(zoom * 100),
     tool, color, strokeWidth, selectedId, showMarks, showLabels, expanded, canUndo, canRedo, mobile: toolbarProps,
-    onToolChange: changeTool, onUndo: undo, onRedo: redo, onZoomIn: zoomIn, onZoomOut: zoomOut, onToggleExpanded: toggleExpanded, onAddPhotos: openFilePicker, onCapture: () => void openCamera(), onExport: exportImage, onSave: () => void saveNow(), saveDisabled: !hydrated || loadError, saving: isSaving || autosave.state === "saving",
+    onToolChange: changeTool, onUndo: undo, onRedo: redo, onZoomIn: zoomIn, onZoomOut: zoomOut, onToggleExpanded: toggleExpanded, onAddPhotos: openFilePicker, onCapture: () => void openCamera(), onExport: exportImage, onSave: () => void saveNow(), saveDisabled: !hydrated || loadError || autosave.state === "saved", saving: isSaving || autosave.state === "saving",
     onSelect: selectAnnotation, onCommitAnnotations: commitAnnotations, onPreviewAnnotations: updatePhotoAnnotations,
     onPointCreated: (id) => { setShowLabels(true); setLabelFocusId(id); },
     panel: panelProps, photoUploadError, saveError,
@@ -870,6 +933,21 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
             <Button className="border-[#f2c8c3] text-[#b42318] hover:border-[#b42318] hover:bg-[#fff7f7] hover:text-[#b42318]" type="button" variant="secondary" onClick={confirmPendingAction}>
               {confirmAction?.type === "clear" ? "Limpar marcações" : "Excluir imagem"}
             </Button>
+          </div>
+        </div>
+      </Modal>
+      <Modal open={Boolean(pendingDecision)} onClose={cancelPendingDecision} closeOnOverlayClick={!pendingDecision?.busy} title={pendingSaveCopy.title} description={pendingSaveCopy.intro}>
+        <div className="flex flex-col gap-5">
+          <ul className="space-y-2 text-sm leading-6 text-muted-foreground">
+            <li><strong className="text-foreground">{pendingSaveCopy.save.label}:</strong> {pendingSaveCopy.save.effect}</li>
+            <li><strong className="text-foreground">{pendingSaveCopy.discard.label}:</strong> {pendingSaveCopy.discard.effect}</li>
+            <li><strong className="text-foreground">{pendingSaveCopy.cancel.label}:</strong> {pendingSaveCopy.cancel.effect}</li>
+          </ul>
+          {pendingDecision?.error ? <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{pendingDecision.error}</p> : null}
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end [&>button]:min-h-11">
+            <Button type="button" variant="secondary" disabled={Boolean(pendingDecision?.busy)} onClick={cancelPendingDecision}>{pendingSaveCopy.cancel.label}</Button>
+            <Button type="button" variant="secondary" disabled={Boolean(pendingDecision?.busy)} className="border-destructive/40 text-destructive hover:border-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => void discardAndContinue()}>{pendingDecision?.busy === "discard" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}{pendingSaveCopy.discard.label}</Button>
+            <Button type="button" disabled={Boolean(pendingDecision?.busy)} onClick={() => void saveAndContinue()}>{pendingDecision?.busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}{pendingSaveCopy.save.label}</Button>
           </div>
         </div>
       </Modal>

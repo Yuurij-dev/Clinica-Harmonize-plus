@@ -72,7 +72,7 @@ export function FacialWorkspace({ areaRef, ...props }: FacialWorkspaceProps) {
       <IncomingPhotoStatus active={props.receivingPhoto} />
       <FacialToolbar canRedo={props.canRedo} canUndo={props.canUndo} expanded={expanded} marksHidden={!props.showMarks || readOnly} noPhoto={noPhoto} readOnly={readOnly} tool={viewTool} zoomPercent={props.zoomPercent} onAddPhotos={props.onAddPhotos} onExport={props.onExport} onSave={props.onSave} saveDisabled={props.saveDisabled} saving={props.saving} onRedo={props.onRedo} onToggleExpanded={props.onToggleExpanded} onToolChange={props.onToolChange} onUndo={props.onUndo} onZoomIn={props.onZoomIn} onZoomOut={props.onZoomOut} />
       <EditorMobileBar {...props.mobile} tool={viewTool} hasSelection={!readOnly && props.mobile.hasSelection} marksHidden={props.mobile.marksHidden || readOnly} />
-      <EditorMobileActions isSaving={props.mobile.isSaving} readOnly={props.mobile.readOnly} onClear={props.mobile.onClear} onExport={props.mobile.onExport} onSave={props.mobile.onSave} />
+      <EditorMobileActions isSaving={props.saving} saveDisabled={props.saveDisabled} readOnly={props.mobile.readOnly} onClear={props.mobile.onClear} onExport={props.mobile.onExport} onSave={props.mobile.onSave} />
       <div className={cn("grid grid-rows-[minmax(0,1fr)] gap-3", expanded ? "h-[calc(100dvh-15rem)] min-h-[18rem]" : "xl:h-[clamp(26rem,calc(100dvh-15rem),60rem)] xl:grid-cols-[minmax(0,1fr)_22rem]")}>
         <div className={cn("min-w-0", expanded ? "h-full" : "h-[62dvh] min-h-[22rem] xl:h-full xl:min-h-0")} ref={areaRef}>
           {status === "loading" ? (

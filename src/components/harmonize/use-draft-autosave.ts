@@ -29,6 +29,7 @@ export function useDraftAutosave({ scope, revision, enabled, save, canSave = tru
   const activeScope = useRef(scope);
   const initialized = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const holding = useRef(false); // decisão salvar/descartar em curso: o temporizador não agenda gravação
   const firstDirtyAt = useRef<number | null>(null); // primeira alteração ainda não salva (só usada com maxWait)
 
   // Gravações serializadas: dois flush/timer simultâneos nunca enviam a mesma revisão esperada ao servidor.
@@ -83,7 +84,7 @@ export function useDraftAutosave({ scope, revision, enabled, save, canSave = tru
     clearTimer();
     if (!canSave) firstDirtyAt.current = null; // sem poder gravar não há teto correndo; ao voltar a poder, conta de agora
     else if (firstDirtyAt.current === null) firstDirtyAt.current = Date.now();
-    if (canSave) timer.current = setTimeout(() => { void flush(); }, autosaveWaitMs({ now: Date.now(), firstDirtyAt: firstDirtyAt.current, delay, maxWait }));
+    if (canSave && !holding.current) timer.current = setTimeout(() => { void flush(); }, autosaveWaitMs({ now: Date.now(), firstDirtyAt: firstDirtyAt.current, delay, maxWait }));
     return clearTimer;
   }, [scope, revision, enabled, canSave, delay, maxWait, flush, pump]);
 
@@ -109,5 +110,22 @@ export function useDraftAutosave({ scope, revision, enabled, save, canSave = tru
     if (await flush() || window.confirm("As alterações não foram salvas. Deseja sair e perdê-las?")) action();
   }
 
-  return { state, flush, leave };
+  // Enquanto o usuário decide entre salvar e descartar, o temporizador não grava por baixo (flush explícito continua valendo).
+  function hold() { holding.current = true; clearTimer(); }
+  function release() {
+    holding.current = false;
+    if (!latestEnabled.current || !latestCanSave.current || !pump.isDirty() || timer.current) return;
+    if (firstDirtyAt.current === null) firstDirtyAt.current = Date.now();
+    timer.current = setTimeout(() => { void flush(); }, autosaveWaitMs({ now: Date.now(), firstDirtyAt: firstDirtyAt.current, delay, maxWait }));
+  }
+  // Dá as edições atuais por salvas (o chamador acabou de restaurar o estado a partir do servidor): sem gravação, sem aviso de "sujo".
+  function discard() {
+    holding.current = false;
+    clearTimer();
+    pump.markSaved(latestRevision.current);
+    firstDirtyAt.current = null;
+    setState("saved");
+  }
+
+  return { state, flush, leave, hold, release, discard };
 }

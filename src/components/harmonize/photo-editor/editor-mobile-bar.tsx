@@ -1,7 +1,7 @@
 "use client";
 
 import { createPortal } from "react-dom";
-import { Download, Redo2, RotateCcw, Save, Trash2, Undo2, ZoomIn, ZoomOut } from "lucide-react";
+import { Download, Loader2, Redo2, RotateCcw, Save, Trash2, Undo2, ZoomIn, ZoomOut } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollFade } from "@/components/ui/scroll-fade";
@@ -54,11 +54,11 @@ export function EditorMobileBar(props: EditorToolbarProps) {
 }
 
 /** Ações finais fixas acima da barra de navegação. Vai para o body (portal) para não depender de ancestrais com transform. */
-export function EditorMobileActions({ onSave, onExport, onClear, isSaving, readOnly }: Pick<EditorToolbarProps, "onSave" | "onExport" | "onClear" | "isSaving" | "readOnly">) {
+export function EditorMobileActions({ onSave, onExport, onClear, isSaving, saveDisabled, readOnly }: Pick<EditorToolbarProps, "onSave" | "onExport" | "onClear" | "isSaving" | "readOnly"> & { saveDisabled?: boolean }) {
   if (typeof document === "undefined") return null;
   return createPortal(
     <div className="hp-editor-actions fixed inset-x-0 bottom-[calc(var(--hp-nav-h)+env(safe-area-inset-bottom))] z-20 flex gap-2 border-t border-border bg-card p-2 lg:hidden">
-      <Button className="flex-1" disabled={isSaving || readOnly} onClick={onSave}><Save className="h-4 w-4" />{isSaving ? "Salvando..." : "Salvar avaliação"}</Button>
+      <Button className="flex-1" disabled={isSaving || saveDisabled || readOnly} onClick={onSave}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{isSaving ? "Salvando..." : "Salvar avaliação"}</Button>
       <Button aria-label="Exportar imagem" size="icon" variant="secondary" onClick={onExport}><Download className="h-4 w-4" /></Button>
       <Button aria-label="Limpar" className="text-destructive" disabled={readOnly} size="icon" variant="secondary" onClick={onClear}><Trash2 className="h-4 w-4" /></Button>
     </div>,
