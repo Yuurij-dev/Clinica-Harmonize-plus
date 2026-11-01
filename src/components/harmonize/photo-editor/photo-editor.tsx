@@ -778,7 +778,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     onRetryLoad: () => { setLoadError(false); setIsLoading(true); setHydrated(false); setLoadAttempt((value) => value + 1); },
     receivingPhoto, activePhoto, areaRef: canvasWrapRef, scale: displayScale, recenterKey, zoomPercent: Math.round(zoom * 100),
     tool, color, strokeWidth, selectedId, showMarks, showLabels, expanded, canUndo, canRedo, mobile: toolbarProps,
-    onToolChange: changeTool, onUndo: undo, onRedo: redo, onZoomIn: zoomIn, onZoomOut: zoomOut, onToggleExpanded: toggleExpanded, onAddPhotos: openFilePicker, onCapture: () => void openCamera(), onExport: exportImage, onSave: () => void saveNow(), saveDisabled: !hydrated || loadError, saving: isSaving || autosave.state === "saving",
+    onToolChange: changeTool, onUndo: undo, onRedo: redo, onZoomIn: zoomIn, onZoomOut: zoomOut, onToggleExpanded: toggleExpanded, onAddPhotos: openFilePicker, onCapture: () => void openCamera(), onExport: exportImage, onSave: () => void saveNow(), saveDisabled: !hydrated || loadError || autosave.state === "saved", saving: isSaving || autosave.state === "saving",
     onSelect: selectAnnotation, onCommitAnnotations: commitAnnotations, onPreviewAnnotations: updatePhotoAnnotations,
     onPointCreated: (id) => { setShowLabels(true); setLabelFocusId(id); },
     panel: panelProps, photoUploadError, saveError,
