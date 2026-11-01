@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { denyUnless } from "@/lib/api-guards";
 import { appointmentHasPassed, clinicNow } from "@/lib/clinic-time";
 import { approvedProcedureNames, isProcedureAppointmentName, splitCombinedProcedureName } from "@/lib/procedure-session-rules";
+import { draftStatus } from "@/lib/evaluation-photo-rules";
 import { prisma } from "@/lib/prisma";
 
 async function getPatient(patientId: string, clinicId: string) {
@@ -18,7 +19,7 @@ const journeyProgressSelect = {
   createdAt: true,
   updatedAt: true,
   archivedAt: true,
-  evaluations: { orderBy: { createdAt: "asc" }, take: 1, select: { id: true, professional: true } },
+  evaluations: { orderBy: { createdAt: "asc" }, select: { id: true, professional: true, status: true } },
   quotes: { select: { id: true, status: true, createdAt: true, items: true, details: true } },
   appointments: { orderBy: [{ date: "desc" }, { time: "desc" }], select: { id: true, date: true, time: true, procedure: true, professional: true, status: true } },
   procedures: { orderBy: { performedAt: "desc" }, take: 10, select: { id: true, name: true, professional: true, performedAt: true } },
@@ -68,6 +69,8 @@ async function serializeJourneys(patientId: string, clinicId: string, journeys: 
     ].map((name) => name.trim()).filter(Boolean))],
     createdAt: journey.createdAt,
     hasEvaluation: journey.evaluations.length > 0,
+    // Avaliação ainda em rascunho: a jornada abre na avaliação (mesma regra de journey-stage-rules).
+    hasDraftEvaluation: journey.evaluations.some((evaluation) => evaluation.status === draftStatus),
     hasPaidQuote: journey.quotes.some((quote) => ["Pago", "Aprovado"].includes(quote.status)),
     hasProcedure: journey.procedureSessions.some((session) => session.status === "Concluída") || journey.procedures.some((procedure) => !journey.procedureSessions.some((session) => session.procedureId === procedure.id)),
     hasBeforePhoto: beforeIds.has(journey.id),
@@ -103,22 +106,23 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const stage = url.searchParams.get("stage") ?? "Todas";
     const search = url.searchParams.get("search")?.trim();
     const sort = url.searchParams.get("sort") ?? "recent";
-    const hasProcedure: Prisma.PatientJourneyWhereInput[] = [
-      { procedureSessions: { some: { status: "Concluída" } } },
-      { procedures: { some: { sessions: { none: {} } } } },
-    ];
+    // Pós-procedimento e retorno só abrem com sessão concluída (igual ao detalhe); procedimento sem sessão concluída segue em Procedimento.
+    const hasCompletedSession: Prisma.PatientJourneyWhereInput = { procedureSessions: { some: { status: "Concluída" } } };
     const hasReturn: Prisma.PatientJourneyWhereInput = { appointments: { some: { procedure: { contains: "retorno", mode: "insensitive" }, status: { in: ["Agendado", "Em atendimento", "Atendido", "Finalizado"] } } } };
     const hasPaidQuote: Prisma.PatientJourneyWhereInput = { quotes: { some: { status: { in: ["Aprovado", "Pago"] } } } };
+    // Avaliação pendente = sem avaliação ou com alguma em rascunho (a jornada abre na avaliação); as demais etapas exigem avaliação concluída.
+    const draftEvaluation: Prisma.PatientJourneyWhereInput = { evaluations: { some: { status: draftStatus } } };
+    const evaluationDone: Prisma.PatientJourneyWhereInput[] = [{ evaluations: { some: {} } }, { NOT: draftEvaluation }];
     const stageWhere: Prisma.PatientJourneyWhereInput[] = stage === "Avaliação" ? [
-      { evaluations: { none: {} } },
+      { OR: [{ evaluations: { none: {} } }, draftEvaluation] },
     ] : stage === "Orçamento" ? [
-      { evaluations: { some: {} } }, { NOT: hasPaidQuote },
+      ...evaluationDone, { NOT: hasPaidQuote },
     ] : stage === "Procedimento" ? [
-      { evaluations: { some: {} } }, hasPaidQuote, { NOT: { OR: hasProcedure } },
+      ...evaluationDone, hasPaidQuote, { NOT: hasCompletedSession },
     ] : stage === "Pós-procedimento" ? [
-      { evaluations: { some: {} } }, hasPaidQuote, { OR: hasProcedure }, { NOT: hasReturn },
+      ...evaluationDone, hasPaidQuote, hasCompletedSession, { NOT: hasReturn },
     ] : stage === "Retorno" ? [
-      { evaluations: { some: {} } }, hasPaidQuote, { OR: hasProcedure }, hasReturn,
+      ...evaluationDone, hasPaidQuote, hasCompletedSession, hasReturn,
     ] : stage === "Concluído" ? [
       { status: "Concluído" },
     ] : [];

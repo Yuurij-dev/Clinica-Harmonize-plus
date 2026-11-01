@@ -5409,7 +5409,129 @@ async function mobilePhotosGaps() {
   }
 }
 
+// Etapa da jornada na lista de tratamentos: hasDraftEvaluation e o filtro ?stage= (Avaliação inclui rascunho; as demais exigem avaliação concluída).
+async function journeyStageFilter() {
+  const mk = async (label) => (await api("POST", "/api/patients", { name: `E2E Etapa ${label} ${run}`, phone: "11999990041", age: 35, cpf: randomCpf() })).data.patient;
+  const patient = await mk("A");
+  const other = await mk("B");
+  const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
+  const newJourney = async (p, name) => (await api("POST", `/api/patients/${p.id}/journeys`, { name, professionalId: professional?.id })).data.journey;
+  const list = (p, stage) => api("GET", `/api/patients/${p.id}/journeys?page=1&pageSize=50&status=Todos&stage=${encodeURIComponent(stage)}&sort=recent`);
+  const ids = async (p, stage) => ((await list(p, stage)).data.journeys ?? []).map((journey) => journey.id);
+  const rowOf = async (journey) => (await api("GET", `/api/patients/${patient.id}/journeys`)).data.journeys?.find((item) => item.id === journey.id);
+  const evaluate = (journey, status) => api("PUT", `/api/patients/${patient.id}/evaluation`, { journeyId: journey.id, photos: [], assessment: status === "Concluída" ? fullAssessment : { chiefComplaint: "Rascunho" }, status });
+
+  const jNone = await newJourney(patient, `Sem avaliação ${run}`);
+  const jDraft = await newJourney(patient, `Rascunho ${run}`);
+  const jQuote = await newJourney(patient, `Orçamento ${run}`);
+  const jPaid = await newJourney(patient, `Aprovado ${run}`);
+  check("etapa: quatro jornadas criadas", [jNone, jDraft, jQuote, jPaid].every((journey) => journey?.id), JSON.stringify([jNone, jDraft, jQuote, jPaid].map((journey) => journey?.id)));
+
+  // (c) sem avaliação
+  const noneRow = await rowOf(jNone);
+  check("etapa: sem avaliação -> hasEvaluation=false e hasDraftEvaluation=false", noneRow?.hasEvaluation === false && noneRow?.hasDraftEvaluation === false, JSON.stringify(noneRow));
+
+  // (a) avaliação só em rascunho
+  let r = await evaluate(jDraft, "Rascunho");
+  check("etapa: avaliação em rascunho salva", r.status === 200 && r.data.evaluation?.status === "Rascunho", `${r.status} ${r.data.message}`);
+  const draftRow = await rowOf(jDraft);
+  check("etapa: rascunho -> hasEvaluation=true e hasDraftEvaluation=true", draftRow?.hasEvaluation === true && draftRow?.hasDraftEvaluation === true, JSON.stringify(draftRow));
+
+  // (b) avaliação concluída + orçamento pendente (não aprovado)
+  r = await evaluate(jQuote, "Concluída");
+  check("etapa: avaliação concluída salva", r.status === 200 && r.data.evaluation?.status === "Concluída", `${r.status} ${r.data.message}`);
+  r = await api("POST", "/api/quotes", { patientId: patient.id, journeyId: jQuote.id, items: "Botox (1x)", total: 100, expires: "30/12/2030" });
+  check("etapa: orçamento pendente criado", r.status === 201 && !["Aprovado", "Pago"].includes(r.data.quote?.status), `${r.status} ${r.data.quote?.status}`);
+  const quoteRow = await rowOf(jQuote);
+  check("etapa: concluída + orçamento -> hasDraftEvaluation=false e hasPaidQuote=false", quoteRow?.hasEvaluation === true && quoteRow?.hasDraftEvaluation === false && quoteRow?.hasPaidQuote === false, JSON.stringify(quoteRow));
+
+  // (d) avaliação concluída + orçamento aprovado
+  await evaluate(jPaid, "Concluída");
+  const paidQuote = (await api("POST", "/api/quotes", { patientId: patient.id, journeyId: jPaid.id, items: "Botox (1x)", total: 100, expires: "30/12/2030" })).data.quote;
+  r = await api("PATCH", `/api/quotes/${paidQuote?.id}`, { status: "Aprovado" });
+  check("etapa: orçamento aprovado", r.status === 200, `${r.status} ${r.data.message}`);
+  const paidRow = await rowOf(jPaid);
+  check("etapa: aprovado -> hasPaidQuote=true e hasDraftEvaluation=false", paidRow?.hasPaidQuote === true && paidRow?.hasDraftEvaluation === false, JSON.stringify(paidRow));
+
+  const [avaliacao, orcamento, procedimento, pos, retorno, concluido] = await Promise.all(["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento", "Retorno", "Concluído"].map((stage) => ids(patient, stage)));
+  check("etapa: ?stage=Avaliação traz sem avaliação e rascunho, nada mais", avaliacao.length === 2 && avaliacao.includes(jNone.id) && avaliacao.includes(jDraft.id), JSON.stringify(avaliacao));
+  check("etapa: rascunho NÃO aparece em ?stage=Orçamento (nem nas seguintes)", ![orcamento, procedimento, pos, retorno, concluido].some((found) => found.includes(jDraft.id)), JSON.stringify({ orcamento, procedimento, pos }));
+  check("etapa: sem avaliação NÃO aparece em Orçamento nem nas seguintes", ![orcamento, procedimento, pos, retorno].some((found) => found.includes(jNone.id)));
+  check("etapa: concluída + orçamento pendente aparece em Orçamento e NÃO em Avaliação", orcamento.includes(jQuote.id) && !avaliacao.includes(jQuote.id) && ![procedimento, pos, retorno].some((found) => found.includes(jQuote.id)), JSON.stringify({ orcamento, avaliacao }));
+  const afterQuote = procedimento.includes(jPaid.id) || pos.includes(jPaid.id) || retorno.includes(jPaid.id);
+  check("etapa: aprovado sai de Orçamento e Avaliação e cai em etapa seguinte", !orcamento.includes(jPaid.id) && !avaliacao.includes(jPaid.id) && afterQuote, JSON.stringify({ orcamento, procedimento, pos, retorno }));
+  check("etapa: cada jornada aparece em exatamente uma etapa", [jNone, jDraft, jQuote, jPaid].every((journey) => [avaliacao, orcamento, procedimento, pos, retorno].filter((found) => found.includes(journey.id)).length === 1));
+  const all = await ids(patient, "Todas");
+  check("etapa: sem filtro de etapa traz as quatro", [jNone, jDraft, jQuote, jPaid].every((journey) => all.includes(journey.id)), JSON.stringify(all));
+
+  // Procedimento / Pós / Retorno dependem de sessão CONCLUÍDA (não de o procedimento existir).
+  await api("POST", "/api/procedures", { name: `E2E Etapa Proc ${run}`, category: "Facial", price: 500, durationMinutes: 20, margin: 30 });
+  const stageProcedure = (await api("GET", "/api/quotes/options")).data.procedures?.find((item) => item.name === `E2E Etapa Proc ${run}`);
+  const seedSession = async (name, complete) => {
+    const journey = await newJourney(patient, name);
+    const evaluation = (await evaluate(journey, "Concluída")).data.evaluation;
+    const quote = (await api("POST", "/api/quotes", { patientId: patient.id, journeyId: journey.id, evaluationId: evaluation?.id, details: [{ procedureId: stageProcedure?.id, quantity: 1, discountCents: 0 }], paymentMethod: "Pix", installments: 1, notes: "" })).data.quote;
+    for (const status of ["Enviado", "Aprovado"]) await api("PATCH", `/api/quotes/${quote?.id}`, { status, evaluationId: evaluation?.id });
+    const created = await api("POST", `/api/patients/${patient.id}/procedure-sessions`, { journeyId: journey.id, quoteId: quote?.id });
+    const session = await prisma.patientProcedureSession.findFirst({ where: { journeyId: journey.id, patientId: patient.id } });
+    if (complete && session) await prisma.patientProcedureSession.update({ where: { id: session.id }, data: { status: "Concluída" } });
+    return { journey, created: created.status, session };
+  };
+  const jOpen = await seedSession(`Sessão aberta ${run}`, false);
+  const jPost = await seedSession(`Pós ${run}`, true);
+  const jRet = await seedSession(`Retorno ${run}`, true);
+  check("etapa: sessões criadas para as jornadas de procedimento", Boolean(jOpen.session && jPost.session && jRet.session), `${jOpen.created}/${jPost.created}/${jRet.created}`);
+  r = await api("POST", "/api/appointments", { patientId: patient.id, journeyId: jRet.journey.id, procedure: "Retorno", professional: professional?.name ?? "Teste", time: "14:30", date: `${day(7)}T00:00:00` });
+  check("etapa: retorno agendado na jornada", r.status === 201, `${r.status} ${r.data.message}`);
+  const stages = ["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento", "Retorno", "Concluído"];
+  const byStage = Object.fromEntries(await Promise.all(stages.map(async (stage) => [stage, await ids(patient, stage)])));
+  check("etapa (e): orçamento aprovado sem sessão concluída -> Procedimento, nem Pós nem Retorno", [jPaid.id, jOpen.journey.id].every((id) => byStage["Procedimento"].includes(id) && !byStage["Pós-procedimento"].includes(id) && !byStage["Retorno"].includes(id) && !byStage["Orçamento"].includes(id)), JSON.stringify(byStage));
+  check("etapa (f): sessão concluída sem retorno -> Pós-procedimento", byStage["Pós-procedimento"].includes(jPost.journey.id) && !byStage["Procedimento"].includes(jPost.journey.id) && !byStage["Retorno"].includes(jPost.journey.id), JSON.stringify(byStage));
+  check("etapa (g): sessão concluída com retorno agendado -> Retorno", byStage["Retorno"].includes(jRet.journey.id) && !byStage["Procedimento"].includes(jRet.journey.id) && !byStage["Pós-procedimento"].includes(jRet.journey.id), JSON.stringify(byStage));
+  const allJourneys = [jNone, jDraft, jQuote, jPaid, jOpen.journey, jPost.journey, jRet.journey];
+  check("etapa: todas as jornadas caem em exatamente uma etapa", allJourneys.every((journey) => stages.filter((stage) => byStage[stage].includes(journey.id)).length === 1), JSON.stringify(allJourneys.map((journey) => stages.filter((stage) => byStage[stage].includes(journey.id)))));
+
+  // Concluir a avaliação do rascunho move a jornada de Avaliação para Orçamento.
+  const draftEvaluationId = (await api("GET", `/api/patients/${patient.id}/evaluation?list=1&journeyId=${jDraft.id}`)).data.evaluations?.[0]?.id;
+  r = await api("PUT", `/api/patients/${patient.id}/evaluation`, { evaluationId: draftEvaluationId, photos: [], assessment: fullAssessment, status: "Concluída" });
+  check("etapa: rascunho concluído", r.status === 200, `${r.status} ${r.data.message}`);
+  check("etapa: avaliação concluída leva a jornada de Avaliação para Orçamento", !(await ids(patient, "Avaliação")).includes(jDraft.id) && (await ids(patient, "Orçamento")).includes(jDraft.id));
+  // Uma segunda avaliação em rascunho na mesma jornada a devolve para Avaliação.
+  await evaluate(jDraft, "Rascunho");
+  const reopened = await rowOf(jDraft);
+  check("etapa: nova avaliação em rascunho volta a jornada para Avaliação", reopened?.hasDraftEvaluation === true && (await ids(patient, "Avaliação")).includes(jDraft.id) && !(await ids(patient, "Orçamento")).includes(jDraft.id));
+
+  // Isolamento: jornada de outro paciente da mesma clínica e de outra clínica nunca aparece.
+  const jOther = await newJourney(other, `Outro paciente ${run}`);
+  const everyone = (await Promise.all(["Todas", "Avaliação", "Orçamento", "Procedimento", "Pós-procedimento", "Retorno"].map((stage) => ids(patient, stage)))).flat();
+  check("etapa: jornada de outro paciente nunca aparece", jOther?.id && !everyone.includes(jOther.id));
+  const clinicBMail = `e2e-etapa-${run}@example.com`;
+  const clinicBPass = `Etapa-${run}-Aa1!`;
+  const registered = await withSession("", () => api("POST", "/api/auth/register", { clinicName: `zz Etapa ${run}`, name: "Admin Etapa B", phone: "11999990000", profession: "Biomédica", practiceArea: "Estética", hasSecretary: "Sim", email: clinicBMail, password: clinicBPass }));
+  try {
+    const sessionB = await loginAs(clinicBMail, clinicBPass);
+    check("etapa: clínica B criada para isolamento", registered.status === 201 && sessionB.status === 200, `${registered.status}/${sessionB.status}`);
+    const foreign = await withSession(sessionB.cookie, async () => {
+      const foreignPatient = (await api("POST", "/api/patients", { name: `Paciente B ${run}`, phone: "11999990042", age: 40, cpf: randomCpf() })).data.patient;
+      const foreignProfessional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
+      const foreignJourney = (await api("POST", `/api/patients/${foreignPatient.id}/journeys`, { name: `Jornada B ${run}`, professionalId: foreignProfessional?.id })).data.journey;
+      return { patient: foreignPatient, journey: foreignJourney };
+    });
+    const crossList = await list(foreign.patient, "Avaliação");
+    check("etapa: paciente de outra clínica dá 404 e não vaza jornada", foreign.journey?.id && crossList.status === 404 && !JSON.stringify(crossList.data).includes(foreign.journey.id), `${crossList.status}`);
+    const leaked = (await Promise.all(["Todas", "Avaliação", "Orçamento"].map((stage) => ids(patient, stage)))).flat();
+    check("etapa: jornada de outra clínica não aparece na lista do paciente daqui", !leaked.includes(foreign.journey?.id));
+  } finally {
+    const clinicB = await prisma.clinicMembership.findFirst({ where: { user: { email: clinicBMail }, clinic: { name: `zz Etapa ${run}` } }, select: { clinicId: true, userId: true } });
+    if (clinicB) {
+      await prisma.clinic.delete({ where: { id: clinicB.clinicId } }).catch((error) => console.error(`Limpeza da clínica B falhou: ${error.message.slice(0, 120)}`));
+      await prisma.user.deleteMany({ where: { id: clinicB.userId, email: clinicBMail } }).catch(() => {});
+    }
+  }
+}
+
 const suites = {
+  jornadas_etapa: { needs: [], run: () => journeyStageFilter() },
   pacientes: { needs: [], run: async (state) => { Object.assign(state, await patientsAndPayments()); await patientCpfMask(); } },
   orcamentos: { needs: ["pacientes"], run: async (state) => { state.quote = await quotesAndProcedures(state.patient); await quoteCents(); } },
   agenda: { needs: ["pacientes"], run: (state) => appointments(state.patient) },

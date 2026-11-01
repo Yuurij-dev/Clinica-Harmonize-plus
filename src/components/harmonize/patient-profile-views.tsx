@@ -15,6 +15,7 @@ import { useCan } from "./current-user";
 import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 import { ProcedureImage } from "./procedure-image";
+import { JOURNEY_STAGE_LABELS, currentJourneyStage, journeyStagesDone } from "@/lib/journey-stage-rules";
 
 export type PatientJourneySummary = {
   id: string;
@@ -23,6 +24,7 @@ export type PatientJourneySummary = {
   status: string;
   createdAt: string;
   hasEvaluation: boolean;
+  hasDraftEvaluation?: boolean;
   hasPaidQuote: boolean;
   hasProcedure: boolean;
   hasBeforePhoto: boolean;
@@ -108,7 +110,8 @@ export function PatientOverview({ patient, onOpen, onOpenJourney, onNewAppointme
   const pendingEvents = useMemo(() => summary?.events.filter((event) => event.kind === "Material" || (event.kind === "Agendamento" && event.status === "Agendado") || (event.kind === "Orçamento" && ["Pendente", "Aguardando aprovação"].includes(event.status ?? ""))).slice(0, 3) ?? [], [summary]);
   const clinicalAlerts = useMemo(() => summary?.observations.filter((observation) => observation.kind === "clinical").slice(0, 2) ?? [], [summary]);
   const lastVisit = summary?.events.find((event) => event.kind === "Procedimento" || (event.kind === "Agendamento" && ["Atendido", "Finalizado"].includes(event.status ?? "")));
-  const steps = journey ? [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasProcedure, journey.hasReturnScheduled || journey.hasReturn, journey.status === "Concluído"] : [];
+  const steps = journey ? journeyStagesDone(journey) : [];
+  const currentIndex = journey ? JOURNEY_STAGE_LABELS.indexOf(currentJourneyStage(journey)) : -1;
   const progress = steps.length ? Math.round((steps.filter(Boolean).length / steps.length) * 100) : 0;
 
   return <div className="space-y-4">
@@ -123,10 +126,10 @@ export function PatientOverview({ patient, onOpen, onOpenJourney, onNewAppointme
             <ScrollFade className="mt-5 snap-x" aria-label={`Progresso do tratamento: ${progress}%`}><div className="grid grid-cols-6 gap-1 max-sm:min-w-[32rem]">
               {["Avaliação", "Orçamento", "Procedimento", "Pós", "Retorno", "Concluído"].map((step, index) => {
                 const done = steps[index];
-                const current = !done && index < 5 && (index === 0 || steps[index - 1]);
+                const current = index === currentIndex;
                 return <div className="relative min-w-0 snap-start text-center" key={step}>
                   {index < 5 ? <span aria-hidden="true" className={`absolute left-1/2 top-3.5 h-0.5 w-full ${done ? "bg-primary" : "bg-border"}`} /> : null}
-                  <span className={`relative mx-auto grid h-7 w-7 place-items-center rounded-full border text-xs font-bold ${done ? "border-primary bg-primary text-primary-foreground" : current ? "border-primary bg-background text-primary ring-4 ring-primary/10" : "border-border bg-background text-muted-foreground"}`}>{done ? <Check className="h-3.5 w-3.5" /> : index + 1}</span>
+                  <span className={`relative mx-auto grid h-7 w-7 place-items-center rounded-full border text-xs font-bold ${done ? "border-primary bg-primary text-primary-foreground" : current ? "border-primary bg-background text-primary" : "border-border bg-background text-muted-foreground"} ${current ? "ring-4 ring-primary/30" : ""}`}>{done ? <Check className="h-3.5 w-3.5" /> : index + 1}</span>
                   <span className={`relative mt-2 block truncate text-xs font-medium ${current || done ? "text-foreground" : "text-muted-foreground"}`}>{step}</span>
                 </div>;
               })}
@@ -381,8 +384,9 @@ export function PatientTreatments({ onBeforeNewTreatment, newTreatmentRequest = 
     {actionError ? <p role="alert" className="text-xs text-destructive">{actionError}</p> : null}
     {!visibleJourneys.length ? <Card className="p-6"><EmptyState title={procedureSearch.trim() ? "Nenhum procedimento encontrado" : journeyCounts.total ? "Nenhum tratamento neste filtro" : "Nenhum tratamento cadastrado"} description={procedureSearch.trim() ? "Tente pesquisar por outro nome de procedimento." : journeyCounts.total ? "Ajuste os filtros para ver outras jornadas." : "Crie um tratamento para organizar avaliações, orçamentos e atendimentos."} /></Card> : <div className="space-y-3">{visibleJourneys.map((journey) => {
       const expanded = expandedJourneyId === journey.id;
-      const stages = [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasProcedure, journey.hasReturnScheduled || journey.hasReturn, journey.status === "Concluído"];
-      const stageLabels = ["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento", "Retorno", "Concluído"];
+      const stages = journeyStagesDone(journey);
+      const stageLabels = JOURNEY_STAGE_LABELS;
+      const currentStage = currentJourneyStage(journey);
       const procedureInProgress = Boolean(journey.activeProcedureStartedAt);
       return <Card className={`overflow-hidden border p-0 ${procedureInProgress ? "border-amber-300 bg-amber-50/70" : ""}`} key={journey.id}>
         <div className="flex items-center gap-3 p-3 sm:p-4">
@@ -390,6 +394,7 @@ export function PatientTreatments({ onBeforeNewTreatment, newTreatmentRequest = 
           <button className="min-w-0 flex-1 text-left" type="button" aria-expanded={expanded} onClick={() => setExpandedJourneyId(expanded ? null : journey.id)}>
             <span className="flex flex-wrap items-center gap-2"><span className="truncate text-sm font-bold">{journey.name}</span><Badge variant={statusTone(journey.status)}>{journey.status}</Badge></span>
             <span className="mt-1 block truncate text-xs text-muted-foreground">{journey.professional} · Iniciado em {dateLabel(journey.createdAt)}</span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">Etapa atual: <strong className="font-semibold text-foreground">{currentStage}</strong></span>
             {procedureInProgress ? <span className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs font-semibold text-amber-800"><Clock3 className="h-3.5 w-3.5" /><span>Realizando procedimento</span><ElapsedProcedureTimer startedAt={journey.activeProcedureStartedAt!} /></span> : null}
           </button>
           <ProgressSteps journey={journey} />
@@ -403,7 +408,7 @@ export function PatientTreatments({ onBeforeNewTreatment, newTreatmentRequest = 
             <p><span className="text-muted-foreground">Fotos vinculadas</span><strong className="ml-2">{journey.photoCount}</strong></p>
             <p><span className="text-muted-foreground">Próximo retorno</span><strong className="ml-2">{journey.nextAppointment ? dateLabel(journey.nextAppointment.date) : "Não agendado"}</strong></p>
           </div>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6" aria-label="Etapas do tratamento">{stageLabels.map((label, index) => <div className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-2" key={label}><span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs font-bold ${stages[index] ? "bg-primary text-primary-foreground" : "border border-border bg-background text-muted-foreground"}`}>{stages[index] ? <Check className="h-3.5 w-3.5" /> : index + 1}</span><span className="truncate text-xs font-medium">{label}</span></div>)}</div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6" aria-label="Etapas do tratamento">{stageLabels.map((label, index) => <div className="flex items-center gap-2 rounded-md bg-muted/50 px-2.5 py-2" key={label}><span className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs font-bold ${stages[index] ? "bg-primary text-primary-foreground" : label === currentStage ? "border border-primary bg-background text-primary" : "border border-border bg-background text-muted-foreground"} ${label === currentStage ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""}`}>{stages[index] ? <Check className="h-3.5 w-3.5" /> : index + 1}</span><span className={`truncate text-xs ${label === currentStage ? "font-bold" : "font-medium"}`}>{label}</span></div>)}</div>
           <div className="mt-3 flex justify-end sm:hidden"><Button size="sm" variant="outline" onClick={() => onSelect(journey.id)}>Abrir jornada <ChevronRight className="h-3.5 w-3.5" /></Button></div>
         </div> : null}
       </Card>;
@@ -460,7 +465,7 @@ function JourneyDetail({ patient, journey, onBack, onOpenClinical, onOpenEvaluat
   const [loadError, setLoadError] = useState(false);
   const [photoFilter, setPhotoFilter] = useState("Antes");
   const [activeStage, setActiveStage] = useState(() => {
-    const completedStages = [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturnScheduled || journey.hasReturn, journey.hasReturn];
+    const completedStages = [journey.hasEvaluation && !journey.hasDraftEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasReturnScheduled || journey.hasReturn, journey.hasReturn];
     const firstIncomplete = completedStages.findIndex((done) => !done);
     return firstIncomplete < 0 ? completedStages.length - 1 : firstIncomplete;
   });
@@ -523,7 +528,7 @@ function JourneyDetail({ patient, journey, onBack, onOpenClinical, onOpenEvaluat
 
   const appointment = journey.nextAppointment;
   const stages = [
-    { title: "Avaliação", subtitle: "Queixa, anamnese e fotos iniciais", done: journey.hasEvaluation, icon: HeartPulse, detail: data?.evaluation ? `${data.evaluation.status} · ${data.evaluation.professional} · ${dateLabel(data.evaluation.createdAt)}` : "Avaliação ainda não registrada." },
+    { title: "Avaliação", subtitle: "Queixa, anamnese e fotos iniciais", done: journey.hasEvaluation && !journey.hasDraftEvaluation, icon: HeartPulse, detail: data?.evaluation ? `${data.evaluation.status} · ${data.evaluation.professional} · ${dateLabel(data.evaluation.createdAt)}` : "Avaliação ainda não registrada." },
     { title: "Orçamento", subtitle: "Proposta e condições de pagamento", done: quotes.some((quote) => ["Aprovado", "Pago"].includes(quote.status)), icon: FileText, detail: quotes.length ? `${quotes.length} proposta(s) · ${quotes[0].status} · ${currency(quotes[0].total)}` : "Nenhum orçamento vinculado a este tratamento." },
     { title: "Procedimento", subtitle: "Sessões clínicas realizadas", done: journey.hasProcedure, icon: Syringe, detail: [records.length ? records.map((record) => `${record.name} · ${dateLabel(record.performedAt)}`).join("; ") : "Nenhuma sessão registrada.", journey.scheduledProcedure ? `Procedimento agendado: ${dateLabel(journey.scheduledProcedure.date)} às ${journey.scheduledProcedure.time}` : ""].filter(Boolean).join(" · ") },
     { title: "Pós-procedimento", subtitle: "Acompanhamento e orientações", done: journey.hasReturnScheduled || journey.hasReturn, icon: Clock3, detail: journey.hasProcedure ? "Acompanhamento clínico e orientações após a sessão." : "Acompanhamento será disponibilizado após uma sessão." },
@@ -568,8 +573,9 @@ function JourneyDetail({ patient, journey, onBack, onOpenClinical, onOpenEvaluat
 }
 
 function ProgressSteps({ journey }: { journey: PatientJourneySummary }) {
-  const labels = ["Avaliação", "Orçamento", "Procedimento", "Pós-procedimento", "Retorno", "Concluído"];
-  const flags = [journey.hasEvaluation, journey.hasPaidQuote, journey.hasProcedure, journey.hasProcedure, journey.hasReturnScheduled || journey.hasReturn, journey.status === "Concluído"];
+  const labels = JOURNEY_STAGE_LABELS;
+  const flags = journeyStagesDone(journey);
+  const current = currentJourneyStage(journey);
   const [hoveredStage, setHoveredStage] = useState<{ label: string; x: number; y: number } | null>(null);
 
   function showTooltip(event: React.MouseEvent<HTMLSpanElement> | React.FocusEvent<HTMLSpanElement>, label: string) {
@@ -578,7 +584,7 @@ function ProgressSteps({ journey }: { journey: PatientJourneySummary }) {
   }
 
   return <>
-    <div className="hidden items-center gap-1 sm:flex" aria-label="Etapas do tratamento">{flags.map((done, index) => <span key={labels[index]} aria-label={labels[index]} tabIndex={0} onMouseEnter={(event) => showTooltip(event, labels[index])} onMouseLeave={() => setHoveredStage(null)} onFocus={(event) => showTooltip(event, labels[index])} onBlur={() => setHoveredStage(null)} className={`h-1.5 w-6 rounded-full transition-transform duration-150 ease-out hover:z-10 hover:scale-150 focus-visible:z-10 focus-visible:scale-150 ${done ? "bg-primary" : "bg-muted"}`} />)}</div>
+    <div className="hidden items-center gap-1 sm:flex" aria-label="Etapas do tratamento">{flags.map((done, index) => <span key={labels[index]} aria-label={labels[index] === current ? `${labels[index]} (etapa atual)` : labels[index]} tabIndex={0} onMouseEnter={(event) => showTooltip(event, labels[index])} onMouseLeave={() => setHoveredStage(null)} onFocus={(event) => showTooltip(event, labels[index])} onBlur={() => setHoveredStage(null)} className={`w-6 rounded-full transition-transform duration-150 ease-out hover:z-10 hover:scale-150 focus-visible:z-10 focus-visible:scale-150 ${labels[index] === current ? "h-2.5 ring-2 ring-primary/40" : "h-1.5"} ${done ? "bg-primary" : labels[index] === current ? "hp-stage-current bg-primary/50" : "bg-muted"}`} />)}</div>
     {hoveredStage && typeof document !== "undefined" ? createPortal(<div role="tooltip" className="pointer-events-none fixed z-[2000] -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md bg-foreground px-2.5 py-1.5 text-xs font-medium text-background shadow-lg" style={{ left: hoveredStage.x, top: hoveredStage.y }}>{hoveredStage.label}</div>, document.body) : null}
   </>;
 }
