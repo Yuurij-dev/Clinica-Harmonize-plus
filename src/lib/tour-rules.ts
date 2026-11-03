@@ -36,8 +36,8 @@ export const TOUR_STEPS: readonly TourStep[] = [
   { key: "pagamentos", title: "Pagamentos: acompanhe os recebimentos", text: "Registre os pagamentos dos pacientes, acompanhe parcelas e consulte os valores recebidos e pendentes. Tenha mais controle sobre os compromissos financeiros de cada atendimento.", section: "pagamentos", pose: "nod" },
   { key: "financeiro", title: "Financeiro: controle os resultados da clínica", text: "Acompanhe receitas, despesas e movimentações financeiras. Visualize o fluxo financeiro e tenha uma visão clara dos resultados da sua clínica.", section: "financeiro", pose: "think" },
   { key: "relatorios", title: "Relatórios: transforme dados em decisões", text: "Consulte indicadores e relatórios sobre o desempenho da clínica. Analise os resultados e identifique oportunidades para melhorar a gestão e o crescimento do negócio.", section: "relatorios", pose: "peek" },
-  { key: "configuracoes", title: "Configurações", text: "Dados da clínica, preferências e tema. Aqui você também pode rever este tour quando quiser.", section: "configuracoes", pose: "wink" },
-  { key: "fim", title: "Tudo pronto!", text: "Para rever o tour, abra Configurações e clique em “Rever o tour guiado”. Bom trabalho!", pose: "cheer" },
+  { key: "configuracoes", title: "Configurações", text: "Dados da clínica, preferências e tema, tudo no seu lugar.", section: "configuracoes", pose: "wink" },
+  { key: "fim", title: "Tudo pronto!", text: "Para rever o tour, clique no “?” lá em cima, ao lado do tema. Bom trabalho!", pose: "cheer" },
 ];
 
 /** Chave do localStorage por usuário. */
@@ -51,12 +51,10 @@ export function shouldShowTour(raw: string | null | undefined, readFailed = fals
   return raw !== TOUR_SEEN;
 }
 
-const FIM_SEM_CONFIGURACOES = "Bom trabalho!";
-
 /** Passos que o usuário pode ver: abertura e fim sempre; os demais só se a seção for permitida. Sem nenhum passo de seção, não há tour. */
 export function visibleTourSteps(allowedSections: readonly SectionId[], canReadClinical = true): TourStep[] {
+  // O "fim" não depende mais de permissão: o botão que reabre o tour fica na topbar, visível para todos.
   const steps = TOUR_STEPS.filter((step) => !step.section || allowedSections.includes(step.section)).map((step) => {
-    if (step.key === "fim" && !allowedSections.includes("configuracoes")) return { ...step, text: FIM_SEM_CONFIGURACOES };
     if (!canReadClinical) return { ...step, title: step.plainTitle ?? step.title, text: step.plainText ?? step.text };
     return step;
   });
