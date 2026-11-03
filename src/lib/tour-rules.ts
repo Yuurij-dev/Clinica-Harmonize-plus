@@ -42,7 +42,12 @@ export const TOUR_STEPS: readonly TourStep[] = [
 
 /** Chave do localStorage por usuário. */
 export function tourKey(userId: string): string {
-  return KEY_PREFIX + (userId.replace(/[^A-Za-z0-9._-]/g, "_") || "anon");
+  return tourKeyWithPrefix(KEY_PREFIX, userId);
+}
+
+/** Chave por usuário com prefixo próprio: o tour da ficha da paciente guarda a sua marca separada da do tour geral. */
+export function tourKeyWithPrefix(prefix: string, userId: string): string {
+  return prefix + (userId.replace(/[^A-Za-z0-9._-]/g, "_") || "anon");
 }
 
 /** Mostra o tour só quando a leitura funcionou e o usuário ainda não viu (falha de leitura não repete o tour a cada abertura). */

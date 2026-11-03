@@ -285,7 +285,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   }
 
   return (
-    <CurrentRoleProvider value={currentUser ? { role: currentUser.role, isOwner: currentUser.isOwner, rolePermissions: currentUser.rolePermissions } : null}>
+    <CurrentRoleProvider value={currentUser ? { id: currentUser.id, tourEnabled: startup.status === "ready" && !trialExpired, role: currentUser.role, isOwner: currentUser.isOwner, rolePermissions: currentUser.rolePermissions } : null}>
     <div className="harmonize-app min-h-screen bg-background text-foreground">
       <Sidebar
         active={active}
