@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { Bell, ChevronDown, Loader2, LogOut, Moon, Search, Settings2, Sparkles, Sun } from "lucide-react";
+import { ArrowRight, Bell, ChevronDown, HelpCircle, Loader2, LogOut, Moon, Search, Settings2, Sparkles, Sun } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { THEME_CHANGE_EVENT, isDarkTheme, resolveStoredDark, toggleThemeWithReveal } from "@/lib/theme-transition";
@@ -12,6 +12,9 @@ import { invalidateClientCache } from "@/lib/client-cache";
 import { StockAlertGroups, useStockAlerts } from "./stock-alerts";
 import { TrialStatus } from "./trial-status";
 import { useCan } from "./current-user";
+import { Modal } from "@/components/ui/modal";
+import { tourReplayEvent } from "@/lib/section-events";
+import { GuideMascot } from "./illustrations/guide-mascot";
 
 type TopbarProps = {
   onDashboard: () => void;
@@ -43,6 +46,8 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, 
   const canAccessSettings = useCan("settings:access");
   const canAccessStock = useCan("stock:access");
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  // Confirmação antes de iniciar o tour: o Harmo se apresenta e o usuário decide.
+  const [tourAskOpen, setTourAskOpen] = useState(false);
   const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
   const [stockNotificationsEnabled, setStockNotificationsEnabled] = useState(true);
   const [appointmentNotificationSoundEnabled, setAppointmentNotificationSoundEnabled] = useState(true);
@@ -238,6 +243,12 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, 
             {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
           </span>
         </Button>
+        <span className="group/tour relative inline-flex">
+          <Button variant="secondary" size="icon" aria-label="Tour guiado" onClick={() => setTourAskOpen(true)}>
+            <HelpCircle className="h-5 w-5" />
+          </Button>
+          <span role="tooltip" className="pointer-events-none invisible absolute right-0 top-full z-50 mt-2 rounded-md border border-border bg-card px-2 py-1 text-xs font-semibold text-foreground opacity-0 shadow-lg transition-opacity duration-150 group-hover/tour:visible group-hover/tour:opacity-100 group-focus-within/tour:visible group-focus-within/tour:opacity-100">Tour</span>
+        </span>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="hp-pressable hidden items-center gap-2 border-l border-border pl-4 lg:flex" disabled={isLoggingOut}>
@@ -260,6 +271,25 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, 
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      {/* Mesmo desenho do cartão do tour (guided-tour.tsx): mascote sobreposto, cartão arredondado e a mesma barra de ações. */}
+      <Modal open={tourAskOpen} title="Deseja iniciar o tour?" hideHeader panelClassName="max-w-sm border-0 bg-transparent shadow-none" bodyClassName="p-0 sm:p-0" overlayClassName="modal-overlay-tour" onClose={() => setTourAskOpen(false)}>
+        <div className="flex flex-col items-center">
+          <div className="relative z-10 -mb-10">
+            <GuideMascot pose="wave" size={100} />
+          </div>
+          <div className="w-full rounded-2xl border border-border bg-card px-5 pb-4 pt-[52px] text-center text-card-foreground shadow-2xl">
+            <h2 className="text-lg font-black tracking-tight text-foreground">Deseja iniciar o tour?</h2>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">Sou o Harmo e apresento o Harmonize+ em menos de 1 minuto, passando por cada área do sistema. Dá para pular a qualquer momento.</p>
+            <div className="mt-4 flex items-center gap-2">
+              <Button type="button" variant="ghost" size="sm" className="shrink-0 text-muted-foreground" onClick={() => setTourAskOpen(false)}>Agora não</Button>
+              <Button type="button" variant="primary" size="sm" className="ml-auto" onClick={() => { setTourAskOpen(false); window.dispatchEvent(new Event(tourReplayEvent)); }}>
+                Iniciar tour
+                <ArrowRight aria-hidden="true" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </header>
   );
 }

@@ -23,6 +23,7 @@ import {
   PencilLine,
   Plus,
   Search,
+  Compass,
   ShieldCheck,
   Trash2,
   PlugZap,
@@ -76,7 +77,7 @@ import { ClinicTimePicker } from "./clinic-time-picker";
 import { latestAppointmentStart } from "@/lib/clinic-time";
 import { appointmentProcedureDuration } from "@/lib/procedure-session-rules";
 import { toast } from "sonner";
-import { clientsHomeEvent } from "@/lib/section-events";
+import { clientsHomeEvent, tourReplayEvent } from "@/lib/section-events";
 import { ProcedureImage } from "./procedure-image";
 import type { Appointment, JourneyStageId, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
 
@@ -2469,10 +2470,16 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
           <h1 className="text-2xl font-black tracking-tight text-foreground">Configurações</h1>
           <p className="mt-1 text-sm text-muted-foreground">Personalize a experiência e o funcionamento da sua clínica.</p>
         </div>
-        <label className="relative block w-full lg:max-w-xs">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <input className={cn(fieldClassName, "pl-9")} type="search" aria-label={searchLabel} placeholder={searchLabel} value={settingsSearch} onChange={(event) => setSettingsSearch(event.target.value)} />
-        </label>
+        <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
+          <Button type="button" variant="outline" className="shrink-0" onClick={() => window.dispatchEvent(new Event(tourReplayEvent))}>
+            <Compass aria-hidden="true" />
+            Rever o tour guiado
+          </Button>
+          <label className="relative block w-full lg:w-72">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <input className={cn(fieldClassName, "pl-9")} type="search" aria-label={searchLabel} placeholder={searchLabel} value={settingsSearch} onChange={(event) => setSettingsSearch(event.target.value)} />
+          </label>
+        </div>
       </header>
 
       <div className="grid gap-4 lg:grid-cols-[248px_minmax(0,1fr)]">

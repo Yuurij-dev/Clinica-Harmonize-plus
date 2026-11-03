@@ -716,6 +716,16 @@ html.hp-theme-fading *::after {
   backdrop-filter: blur(2px);
 }
 
+/* Mesmo escurecimento do tour guiado (DIM em guided-tour.tsx): roxo profundo e sem desfoque.
+   A cor é igual nos dois temas, como no tour, por isso a regra se repete para html.dark
+   (que tem um .modal-overlay mais específico logo abaixo). */
+.modal-overlay.modal-overlay-tour,
+html.dark .modal-overlay.modal-overlay-tour {
+  background-color: rgb(18 14 48 / 78%);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 .modal-content[data-state="open"] {
   animation: hp-modal-stage-in 420ms ease-out both;
 }
@@ -1272,3 +1282,60 @@ body:has(input:not([type="checkbox"], [type="radio"], [type="button"], [type="su
 
 /* Texto pequeno em roxo: o primario do escuro (#766cf0) fica abaixo de 4,5:1; esta classe usa um tom mais claro so onde for aplicada. */
 html.dark .hp-accent-text { color: #b4aeff; }
+
+/* Tour guiado (Harmo): entrada do overlay e do cartão, anel pulsante, mascote. */
+@keyframes hp-tour-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes hp-tour-card-in {
+  from { opacity: 0; transform: translateX(28px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes hp-tour-card-in-back {
+  from { opacity: 0; transform: translateX(-28px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes hp-tour-mascot-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.85); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes hp-tour-ring {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.5); }
+  50% { transform: scale(1.03); box-shadow: 0 0 0 8px rgba(255, 255, 255, 0); }
+}
+@keyframes hp-mascot-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(calc(var(--hp-float, 2px) * -1)); }
+}
+@keyframes hp-mascot-arm {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(var(--hp-swing)); }
+  75% { transform: rotate(calc(var(--hp-swing) * -1)); }
+}
+@keyframes hp-mascot-blink {
+  0%, 94%, 100% { transform: scaleY(1); }
+  97% { transform: scaleY(0.08); }
+}
+
+.hp-tour-dim { animation: hp-tour-fade 260ms ease-out; }
+.hp-tour-slot { transition: top 420ms cubic-bezier(0.2, 0.8, 0.2, 1), left 420ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.hp-tour-card { animation: hp-tour-card-in 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.hp-tour-card-back { animation-name: hp-tour-card-in-back; }
+.hp-tour-mascot { animation: hp-tour-mascot-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1) 160ms both; }
+.hp-tour-ring { animation: hp-tour-ring 1600ms ease-in-out infinite; }
+.hp-mascot-eyes { transform-box: view-box; transform-origin: 80px 88px; animation: hp-mascot-blink 3700ms ease-in-out infinite; }
+.hp-mascot-arm { transform-origin: 0 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hp-tour-dim,
+  .hp-tour-card,
+  .hp-tour-mascot,
+  .hp-tour-ring,
+  .hp-mascot-eyes,
+  .hp-mascot-arm,
+  .hp-mascot g {
+    animation: none !important;
+  }
+  .hp-tour-slot { transition: none; }
+}
