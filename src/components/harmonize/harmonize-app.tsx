@@ -15,6 +15,7 @@ import { PurchasesSection, type PurchasesTab } from "./purchases-section";
 import { FinanceSection } from "./finance-section";
 import { stockAlertSection } from "./stock-alerts";
 import { Topbar } from "./topbar";
+import { GuidedTour } from "./guided-tour";
 import {
   ClientsSection,
   PaymentsSection,
@@ -36,7 +37,7 @@ import { clientsHomeEvent } from "@/lib/section-events";
 import { agendaPeriodKey, agendaPeriodRange } from "@/lib/agenda-period-rules";
 import { clinicToday } from "@/lib/clinic-time";
 import { patientListKey } from "@/lib/patient-list-rules";
-import { guardDraftNavigation } from "./use-draft-autosave";
+import { guardDraftNavigation, hasDraftGuard } from "./use-draft-autosave";
 
 type CurrentUser = { id: string; clinicId: string; name: string; role: string; isOwner?: boolean; trialExpired?: boolean; rolePermissions?: RolePermissionMatrix; clinic?: { name: string; trialEndsAt?: string | null } };
 type AgendaFocus = { date: string; time: string };
@@ -135,7 +136,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     return () => { window.clearTimeout(leaveTimer); window.clearTimeout(dismissTimer); };
   }, [activeUndoNoticeId]);
 
-  async function selectSection(section: SectionId, focus?: AgendaFocus, tab: PurchasesTab = "purchases") {
+  async function selectSection(section: SectionId, focus?: AgendaFocus, tab: PurchasesTab = "purchases", replace = false) {
     if (!allowedSections.includes(section)) {
       return;
     }
@@ -146,7 +147,8 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     setCreateDialog(null);
     // Já em Clientes: a tela está montada e guarda o paciente aberto; avisa para voltar à lista (a URL sozinha não limpa o estado).
     if (section === "clientes" && active === "clientes") window.dispatchEvent(new Event(clientsHomeEvent));
-    router.push(sectionPaths[section]);
+    if (replace) router.replace(sectionPaths[section]);
+    else router.push(sectionPaths[section]);
   }
 
   // Saídas e conferências pendentes abrem Compras já na aba Pendências; avisos de lote e saldo abrem o Estoque.
@@ -318,6 +320,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       <MobileNav active={active} sections={mobileSections.bar} moreActive={mobileSections.more.includes(active)} moreOpen={moreOpen} onSelect={selectSection} onOpenMore={() => setMoreOpen(true)} moreButtonRef={moreButtonRef} />
       <MobileMoreSheet open={moreOpen} onOpenChange={setMoreOpen} active={active} sections={mobileSections.more} onSelect={selectSection} onLogout={logout} onCloseAutoFocus={(event) => { event.preventDefault(); moreButtonRef.current?.focus(); }} user={currentUser} />
       <QuickCreateFab sections={allowedSections} onCreate={(target) => { const section = { appointment: "agenda", client: "clientes", quote: "orcamentos", payment: "pagamentos" }[target] as SectionId; void openCreate(section, target); }} />
+      {currentUser && startup.status === "ready" && !trialExpired ? <GuidedTour allowedSections={allowedSections} userId={currentUser.id} activeSection={active} suppressAutoOpen={createDialog !== null || hasDraftGuard()} onSelectSection={(section, replace) => selectSection(section, undefined, "purchases", replace)} /> : null}
       <AppToaster />
       {undoNotice ? <div className={`${undoNotice.leaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-[calc(8.5rem+env(safe-area-inset-bottom))] left-1/2 lg:bottom-6 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] border border-border bg-card px-4 py-3 text-xs font-bold text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.18)]`} role="status"><div className="flex items-center gap-3"><span className="min-w-0 flex-1">{undoNotice.message}</span><button className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-[11px] font-black text-foreground transition hover:bg-muted/80" onClick={() => { const undo = undoNotice.undo; setUndoNotice(null); undo(); }}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-success" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
     </div>
