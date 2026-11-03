@@ -4792,6 +4792,74 @@ async function patientCpfMask() {
   }
 }
 
+// Cadastro completo do cliente (POST /api/patients reescrito): validação no servidor, CPF único, menor, convênio, saúde por papel.
+async function patientRegistration() {
+  const ptBr = (d) => `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+  const now = new Date();
+  const adultBirth = new Date(now.getFullYear() - 30, now.getMonth(), now.getDate() - 10);
+  const minorBirth = new Date(now.getFullYear() - 8, now.getMonth(), now.getDate() - 10);
+  const future = new Date(now.getFullYear() + 1, 0, 10);
+  const name = (s) => `zz QN ${s} ${run}`;
+  const base = { phone: "11999990101", birthDate: ptBr(adultBirth), privacyConsent: true };
+  const mineWhere = { name: { startsWith: "zz QN ", endsWith: ` ${run}` } };
+  try {
+    // 1. adulto completo
+    const cpf = randomCpf();
+    let r = await api("POST", "/api/patients", { ...base, name: name("adulto"), cpf });
+    const adult = r.data.patient;
+    check("Cadastro: adulto completo responde 201 com CPF", r.status === 201 && adult?.cpf === cpf, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
+    check("Cadastro: age derivada da data de nascimento (30)", adult?.age === 30, adult?.age);
+    r = await api("GET", `/api/patients?q=${encodeURIComponent(name("adulto"))}`);
+    check("Cadastro: paciente aparece na lista", r.data.patients?.some((p) => p.id === adult?.id));
+
+    // 2. validação no servidor
+    const before = await prisma.patient.count({ where: mineWhere });
+    const bad = {
+      "CPF com dígito verificador errado": { cpf: cpf.slice(0, 10) + String((Number(cpf[10]) + 1) % 10) },
+      "CPF sequência repetida": { cpf: "111.111.111-11" },
+      "telefone com DDD inexistente": { phone: "00999990101" },
+      "data inexistente 31/02": { birthDate: "31/02/1990" },
+      "data futura": { birthDate: ptBr(future) },
+    };
+    for (const [label, extra] of Object.entries(bad)) {
+      r = await api("POST", "/api/patients", { ...base, name: name("invalido"), ...extra });
+      check(`Cadastro: ${label} recusado (400)`, r.status === 400, `${r.status} ${r.data?.message}`);
+    }
+    check("Cadastro: entradas inválidas não criaram paciente", (await prisma.patient.count({ where: mineWhere })) === before);
+
+    // 3. CPF duplicado
+    r = await api("POST", "/api/patients", { ...base, name: name("dup"), cpf });
+    check("Cadastro: CPF duplicado responde 409 com existingPatientId", r.status === 409 && r.data.existingPatientId === adult?.id, `${r.status} ${JSON.stringify(r.data)}`);
+    const existing = r.data.existingPatientId ? await prisma.patient.findUnique({ where: { id: r.data.existingPatientId }, select: { clinicId: true } }) : null;
+    const mine = await prisma.patient.findUnique({ where: { id: adult.id }, select: { clinicId: true } });
+    check("Cadastro: existingPatientId pertence à clínica de teste", !!existing && existing.clinicId === mine.clinicId);
+
+    // 4. menor
+    const guardian = { legalGuardianName: "zz QN Responsavel", legalGuardianCpf: randomCpf(), legalGuardianPhone: "11999990102", legalGuardianRelationship: "Mãe" };
+    const minor = { privacyConsent: true, birthDate: ptBr(minorBirth) };
+    r = await api("POST", "/api/patients", { ...minor, name: name("menor1"), ...guardian });
+    check("Cadastro: menor sem CPF/telefone próprios, com responsável, responde 201", r.status === 201 && r.data.patient?.age === 8, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
+    r = await api("POST", "/api/patients", { ...minor, name: name("menor2"), ...guardian });
+    check("Cadastro: dois menores sem CPF coexistem (CPF vira NULL)", r.status === 201, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
+    const nulls = await prisma.patient.count({ where: { name: { in: [name("menor1"), name("menor2")] }, cpf: null } });
+    check("Cadastro: CPF vazio do menor gravado como NULL", nulls === 2, nulls);
+    r = await api("POST", "/api/patients", { ...minor, name: name("menor3") });
+    check("Cadastro: menor sem responsável recusado (400)", r.status === 400, r.status);
+    r = await api("POST", "/api/patients", { ...minor, name: name("menor4"), ...guardian, legalGuardianCpf: "" });
+    check("Cadastro: menor com responsável sem CPF recusado (400)", r.status === 400, r.status);
+
+    // 5. convênio
+    r = await api("POST", "/api/patients", { ...base, name: name("conv1"), careType: "Convênio" });
+    check("Cadastro: Convênio sem operadora/carteirinha recusado (400)", r.status === 400, r.status);
+    r = await api("POST", "/api/patients", { ...base, name: name("conv2"), careType: "Convênio", insuranceProvider: "Operadora E2E", insuranceCardNumber: "123456" });
+    check("Cadastro: Convênio com operadora e carteirinha responde 201", r.status === 201, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
+    const conv = await prisma.patient.findFirst({ where: { name: name("conv2") }, select: { insuranceProvider: true, insuranceCardNumber: true, careType: true } });
+    check("Cadastro: dados do convênio gravados", conv?.careType === "Convênio" && conv.insuranceProvider === "Operadora E2E" && conv.insuranceCardNumber === "123456", JSON.stringify(conv));
+  } finally {
+    await prisma.patient.deleteMany({ where: mineWhere });
+  }
+}
+
 // Preço com centavos no catálogo e no orçamento (Procedure.price é Float): ida e volta, vírgula pt-BR, multiplicação, desconto.
 async function quoteCents() {
   const patient = (await api("POST", "/api/patients", { name: `Centavos ${run}`, phone: "11999990066", age: 29 })).data.patient;
@@ -5588,6 +5656,7 @@ async function deleteProcedure() {
 
 const suites = {
   jornadas_etapa: { needs: [], run: () => journeyStageFilter() },
+  cadastro_cliente: { needs: [], run: () => patientRegistration() },
   pacientes: { needs: [], run: async (state) => { Object.assign(state, await patientsAndPayments()); await patientCpfMask(); } },
   orcamentos: { needs: ["pacientes"], run: async (state) => { state.quote = await quotesAndProcedures(state.patient); await quoteCents(); } },
   agenda: { needs: ["pacientes"], run: (state) => appointments(state.patient) },

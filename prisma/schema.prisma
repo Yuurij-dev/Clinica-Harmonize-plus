@@ -112,6 +112,36 @@ model Patient {
   cpf                 String?
   phone               String
   age                 Int
+  birthDate           DateTime?                  @db.Date
+  email               String?
+  socialName          String?
+  sex                 String?
+  profession          String?
+  referralSource      String?
+  postalCode          String?
+  address             String?
+  addressNumber       String?
+  addressComplement   String?
+  neighborhood        String?
+  city                String?
+  state               String?
+  emergencyContactName String?
+  emergencyContactPhone String?
+  emergencyContactRelationship String?
+  legalGuardianName   String?
+  legalGuardianCpf    String?
+  legalGuardianPhone  String?
+  legalGuardianRelationship String?
+  careType            String                     @default("Particular")
+  insuranceProvider   String?
+  insuranceCardNumber String?
+  allergies           String?
+  currentMedications  String?
+  healthNotes         String?
+  privacyConsentAt    DateTime?                  @db.Timestamptz(6)
+  privacyConsentVersion String?
+  whatsappReminders   Boolean                    @default(false)
+  auditLog            String                     @default("[]")
   status              String                     @default("Ativa")
   manualJourneyStage  String?
   lastVisit           DateTime?                  @db.Timestamptz(6)

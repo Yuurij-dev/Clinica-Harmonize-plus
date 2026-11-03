@@ -80,3 +80,9 @@ export async function withCurrentStage<T extends StagePatient>(clinicId: string,
     return { ...patient, currentStage: stages.get(patient.id) ?? "evaluation" };
   });
 }
+
+// Resposta do cadastro e da edição: campos da lista + data de nascimento (sem auditLog nem dados do responsável).
+export const patientCreatedSelect = {
+  id: true, name: true, cpf: true, phone: true, age: true, birthDate: true, status: true, manualJourneyStage: true,
+  lastVisit: true, nextReturn: true, totalValue: true, createdAt: true,
+} satisfies Prisma.PatientSelect;
