@@ -49,7 +49,7 @@ export function Modal({ open, title, description, children, onClose, overlayCont
           {/* O mascote entra como irmão acima do painel e o puxa para cima (-mb-10), então o painel abre espaço
               com pt-10 e cede altura máxima para o conjunto não estourar a tela. */}
           <div className="pointer-events-none flex w-full flex-col items-center">
-          {mascot ? <div aria-hidden="true" className="relative z-10 -mb-10"><GuideMascot pose={isMascotPose(mascot) ? mascot : poseForKey(title)} size={100} /></div> : null}
+          {mascot ? <div aria-hidden="true" className="hp-modal-mascot relative z-10 -mb-10"><GuideMascot pose={isMascotPose(mascot) ? mascot : poseForKey(title)} size={100} /></div> : null}
           <section className={cn("modal-panel pointer-events-auto my-3 max-h-[calc(100dvh-1.5rem)] w-full overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden rounded-lg border border-border bg-card text-card-foreground shadow-[0_24px_80px_rgba(32,33,54,0.24)] sm:my-4 sm:max-h-[calc(100dvh-2rem)]", panelClassName, !hideHeader && "modal-panel-sheet max-lg:my-0 max-lg:max-h-[92dvh] max-lg:max-w-none max-lg:rounded-b-none max-lg:rounded-t-2xl max-lg:border-b-0", mascot && cn("max-h-[calc(100dvh-7rem)] sm:max-h-[calc(100dvh-7.5rem)]", !hideHeader && "pt-10 max-lg:max-h-[84dvh]"))}>
             {hideHeader ? (
               <div className="sr-only">

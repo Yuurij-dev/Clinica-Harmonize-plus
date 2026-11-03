@@ -723,7 +723,8 @@ html.hp-theme-fading *::after {
 }
 
 .modal-content[data-state="closed"] {
-  animation: hp-modal-stage-out 280ms ease-in both;
+  /* Igual à saída do painel: com 280ms sobrava um rabicho de palco depois de o painel já ter saído. */
+  animation: hp-modal-stage-out 200ms ease-in both;
 }
 
 .modal-content[data-state="open"] .modal-panel {
@@ -731,6 +732,16 @@ html.hp-theme-fading *::after {
 }
 
 .modal-content[data-state="closed"] .modal-panel {
+  animation: hp-modal-panel-out 200ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+/* O mascote entra e sai junto com o painel. Sem isto ele só acompanharia o fade do palco (mais
+   demorado) e pareceria ficar para trás depois que o painel já saiu. */
+.modal-content[data-state="open"] .hp-modal-mascot {
+  animation: hp-modal-panel-in 520ms cubic-bezier(0.2, 1.18, 0.35, 1) both;
+}
+
+.modal-content[data-state="closed"] .hp-modal-mascot {
   animation: hp-modal-panel-out 200ms cubic-bezier(0.4, 0, 1, 1) both;
 }
 
