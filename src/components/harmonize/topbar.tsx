@@ -15,6 +15,7 @@ import { useCan } from "./current-user";
 import { Modal } from "@/components/ui/modal";
 import { tourReplayEvent } from "@/lib/section-events";
 import { GuideMascot } from "./illustrations/guide-mascot";
+import { ModalMascotDemo } from "./modal-mascot-demo"; // TEMPORÁRIO: remover junto com o arquivo da demonstração.
 
 type TopbarProps = {
   onDashboard: () => void;
@@ -243,6 +244,7 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, 
             {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
           </span>
         </Button>
+        <ModalMascotDemo />
         <span className="group/tour relative inline-flex">
           <Button variant="secondary" size="icon" aria-label="Tour guiado" onClick={() => setTourAskOpen(true)}>
             <HelpCircle className="h-5 w-5" />
