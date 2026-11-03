@@ -59,11 +59,14 @@ test("texto sem acesso clínico não cita avaliação, fotos nem documentos", ()
   assert.match(visibleTourSteps(visibleSections("ADMIN"), true).find((s) => s.key === "clientes").text, /fotos/);
 });
 
-test("fim só manda rever o tour em Configurações quando a seção existe", () => {
-  const sem = visibleTourSteps(["agenda"]).at(-1);
-  assert.doesNotMatch(sem.text, /Configura/);
-  const com = visibleTourSteps(["agenda", "configuracoes"]).at(-1);
-  assert.match(com.text, /Configura/);
+test("fim manda rever o tour pelo botão da topbar, com ou sem Configurações", () => {
+  // O botão que reabre o tour fica na topbar, então o texto não depende mais da permissão.
+  for (const secoes of [["agenda"], ["agenda", "configuracoes"]]) {
+    const fim = visibleTourSteps(secoes).at(-1);
+    assert.equal(fim.key, "fim");
+    assert.doesNotMatch(fim.text, /Configura/);
+    assert.match(fim.text, /\?/);
+  }
 });
 
 test("texto de configurações não promete equipe nem permissões", () => {
