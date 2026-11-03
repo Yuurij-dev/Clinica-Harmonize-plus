@@ -84,6 +84,7 @@ export function Sidebar({
           return (
             <button
               key={item.id}
+              data-tour={item.id}
               aria-current={isActive ? "page" : undefined}
               className={cn(
                 "hp-pressable relative flex h-10 w-full items-center justify-between rounded-md px-3 text-left text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",

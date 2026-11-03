@@ -129,3 +129,7 @@ export function useDraftAutosave({ scope, revision, enabled, save, canSave = tru
 
   return { state, flush, leave, hold, release, discard };
 }
+
+export function hasDraftGuard() {
+  return activeDraftGuard !== null;
+}

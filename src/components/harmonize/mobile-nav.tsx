@@ -29,7 +29,7 @@ export function MobileNav({ active, sections, moreActive, moreOpen, onSelect, on
         const Icon = item.icon;
         const isActive = active === item.id;
         return (
-          <button key={item.id} type="button" aria-current={isActive ? "page" : undefined} className={cn(itemClass, isActive ? "text-accent-foreground" : "text-muted-foreground")} onClick={() => onSelect(item.id)}>
+          <button key={item.id} data-tour={item.id} type="button" aria-current={isActive ? "page" : undefined} className={cn(itemClass, isActive ? "text-accent-foreground" : "text-muted-foreground")} onClick={() => onSelect(item.id)}>
             <Icon aria-hidden="true" className="h-5 w-5" />
             <span className="whitespace-nowrap text-xs font-medium">{item.label}</span>
           </button>
