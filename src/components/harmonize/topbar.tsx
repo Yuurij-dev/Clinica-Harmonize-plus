@@ -14,7 +14,6 @@ import { TrialStatus } from "./trial-status";
 import { useCan } from "./current-user";
 import { Modal } from "@/components/ui/modal";
 import { tourReplayEvent } from "@/lib/section-events";
-import { GuideMascot } from "./illustrations/guide-mascot";
 
 type TopbarProps = {
   onDashboard: () => void;
@@ -272,11 +271,9 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, 
         </DropdownMenu>
       </div>
       {/* Mesmo desenho do cartão do tour (guided-tour.tsx): mascote sobreposto, cartão arredondado e a mesma barra de ações. */}
-      <Modal open={tourAskOpen} title="Deseja iniciar o tour?" hideHeader panelClassName="max-w-sm border-0 bg-transparent shadow-none" bodyClassName="p-0 sm:p-0" overlayClassName="modal-overlay-tour" onClose={() => setTourAskOpen(false)}>
+      <Modal open={tourAskOpen} title="Deseja iniciar o tour?" hideHeader panelClassName="max-w-sm border-0 bg-transparent shadow-none" bodyClassName="p-0 sm:p-0" onClose={() => setTourAskOpen(false)}>
         <div className="flex flex-col items-center">
-          <div className="relative z-10 -mb-10">
-            <GuideMascot pose="wave" size={100} />
-          </div>
+          {/* O mascote sobreposto vem do próprio Modal. */}
           <div className="w-full rounded-2xl border border-border bg-card px-5 pb-4 pt-[52px] text-center text-card-foreground shadow-2xl">
             <h2 className="text-lg font-black tracking-tight text-foreground">Deseja iniciar o tour?</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">Sou o Harmo e apresento o Harmonize+ em menos de 1 minuto, passando por cada área do sistema. Dá para pular a qualquer momento.</p>

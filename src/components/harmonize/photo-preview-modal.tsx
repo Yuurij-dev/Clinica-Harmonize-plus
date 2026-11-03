@@ -13,6 +13,7 @@ export function PhotoPreviewModal({ photo, onClose }: { photo: { name: string; i
       description="Fotografia clínica ampliada."
       onClose={onClose}
       hideHeader
+      mascot={false}
       overlayClassName="modal-overlay-photo"
       panelClassName="max-w-[92vw] border-0 bg-transparent shadow-none"
       bodyClassName="p-0"
