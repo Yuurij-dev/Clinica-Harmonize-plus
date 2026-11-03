@@ -55,6 +55,8 @@ import type { AnamnesisRequest } from "@/lib/anamnesis-rules";
 import { guardDraftNavigation } from "./use-draft-autosave";
 import { draftStatus } from "@/lib/evaluation-photo-rules";
 import { evaluationStepFromParams, paramsWithEvaluationStep, type EvaluationStep } from "@/lib/evaluation-step-rules";
+import { patientTourTarget } from "@/lib/patient-tour-rules";
+import { PatientTour } from "./patient-tour";
 import { PatientAnamnesis } from "./patient-anamnesis";
 import { PatientClinicalDocuments } from "./patient-clinical-documents";
 import { PatientClinicalPhotos } from "./patient-clinical-photos";
@@ -588,7 +590,7 @@ export function PatientDetail({
 
       <Card className={cn("grid overflow-hidden p-0", pinnedJourney && "lg:grid-cols-[350px_minmax(0,1fr)]")}>
         <div className={cn("flex min-w-0 flex-wrap items-center justify-between gap-4 p-4", pinnedJourney && "border-b border-[#ececf2] lg:border-b-0 lg:border-r")}>
-          <div className="flex min-w-0 items-center gap-4">
+          <div className="flex min-w-0 items-center gap-4" data-tour-patient="cabecalho">
           <div className="grid h-16 w-16 shrink-0 place-items-center rounded-full border-4 border-[#f2f0ff] bg-[#e8e5ff] text-base font-black text-[#5147dc]">{initials}</div>
           <div className="min-w-0">
             <h2 className="truncate text-lg sm:text-xl font-bold text-[#242538]">{currentPatient.name}</h2>
@@ -629,6 +631,7 @@ export function PatientDetail({
               )}
               key={label}
               role="tab"
+              data-tour-patient={patientTourTarget(label, "tab")}
               aria-selected={activeTab === label}
               type="button"
               onClick={() => void changeMainTab(label)}
@@ -645,7 +648,7 @@ export function PatientDetail({
       {activeTab === "Visão geral" ? <PatientOverview patient={currentPatient} onOpen={(area, tab) => { if (tab === "Dados") { setEditPatientOpen(true); return; } selectTab(area); if (tab) selectRecordTab(tab); }} onOpenJourney={(journeyId) => openJourney(journeyId)} onNewAppointment={openNewAppointment} onOpenFollowUp={(journey, sessionId) => { openJourney(journey.id); setEncounterPostProcedureSessionId(sessionId); setEncounterPostProcedureInitialView("return"); setEncounterPostProcedureMode(true); }} /> : null}
       {activeTab === "Tratamentos" ? <PatientTreatments patient={currentPatient} onBeforeNewTreatment={(proceed) => startGate.requestStart(proceed, { skipLabel: initialEvaluationLabel })} newTreatmentRequest={treatmentRequest} onNewTreatmentRequestHandled={() => setTreatmentRequest(0)} selectedJourneyId={selectedJourneyId} onSelect={openJourney} onJourneyLabelChange={setSelectedJourneyLabel} onBack={() => openJourney(null)} onOpenClinical={(tab) => { if (tab === "Financeiro") selectTab(tab); else if (tab === "Fotos" || tab === "Arquivos e fotos") openPhotos({ journeyId: selectedJourneyId ?? "" }); else { selectTab("Prontuário"); selectRecordTab(tab); } }} onOpenEvaluation={openJourneyEvaluation} onNewSession={(journey) => openAppointmentDialog({ name: journey.name, professional: journey.professional, kind: "procedure", journeyId: journey.id })} onScheduleReturn={(journey) => openAppointmentDialog({ name: journey.name, professional: journey.professional, kind: "return", journeyId: journey.id })} onOpenFollowUp={(journey, sessionId) => { openJourney(journey.id); setEncounterPostProcedureInitialView("post"); setEncounterPostProcedureSessionId(sessionId); setEncounterPostProcedureMode(true); }} /> : null}
       {activeTab === "Prontuário" ? <div className="space-y-4">
-        <ScrollFade className="flex snap-x gap-1 border-b border-border" role="tablist" aria-label="Seções do prontuário">{visibleRecordTabs.map(({ label, icon: Icon }) => <button className={cn("flex shrink-0 snap-start items-center gap-2 border-b-2 border-transparent px-4 py-2.5 text-sm font-semibold transition-colors max-lg:min-h-11", recordTab === label ? "text-primary" : "text-muted-foreground hover:text-foreground")} type="button" key={label} role="tab" aria-selected={recordTab === label} onClick={() => void changeRecordTab(label)}><Icon className="h-4 w-4 shrink-0" aria-hidden="true" />{label}</button>)}<SlidingIndicator /></ScrollFade>
+        <ScrollFade className="flex snap-x gap-1 border-b border-border" role="tablist" aria-label="Seções do prontuário">{visibleRecordTabs.map(({ label, icon: Icon }) => <button className={cn("flex shrink-0 snap-start items-center gap-2 border-b-2 border-transparent px-4 py-2.5 text-sm font-semibold transition-colors max-lg:min-h-11", recordTab === label ? "text-primary" : "text-muted-foreground hover:text-foreground")} type="button" key={label} role="tab" data-tour-patient={patientTourTarget(label, "record")} aria-selected={recordTab === label} onClick={() => void changeRecordTab(label)}><Icon className="h-4 w-4 shrink-0" aria-hidden="true" />{label}</button>)}<SlidingIndicator /></ScrollFade>
         <AnimatedPage routeKey={recordTab} skipInitial className="space-y-4">
         {recordTab === "Resumo clínico" ? <PatientClinicalSummary patientId={currentPatient.id ?? ""} onStart={() => requestPrimaryStart()} onOpenEncounter={openEncounter} onGoToAppointments={() => selectRecordTab("Agendamentos")} onGoToAnamnesis={() => openAnamnesis("view")} onGoToDocuments={() => setRecordTab("Documentos clínicos")} onGoToTreatments={() => selectTab("Tratamentos")} onReschedule={(next) => openAppointmentDialog({ name: next?.procedure ?? "", professional: next?.professional ?? "", kind: "return", journeyId: next?.journeyId ?? selectedJourneyId ?? undefined })} observations={<ObservationsTab patientId={currentPatient.id ?? ""} />} /> : null}
         {recordTab === "Agendamentos" && currentPatient.id ? <AppointmentsTab requestStart={startGate.requestStart} patientId={currentPatient.id} history={history} loading={historyLoading} error={historyError} onRetry={retryAppointmentsHistory} journeyNames={Object.fromEntries((journeysResource.data?.journeys ?? []).map((journey) => [journey.id, journey.name]))} onNew={openNewAppointment} onOpenJourney={(journeyId) => openJourney(journeyId)} returnAppointmentTarget={returnAppointmentTarget} onReturnAppointmentClose={() => setReturnAppointmentTarget(null)} /> : null}
@@ -658,6 +661,7 @@ export function PatientDetail({
       {activeTab === "Financeiro" ? <PatientFinance patientId={currentPatient.id ?? ""} onOpenJourney={(journeyId) => openJourney(journeyId)} onRegisterPayment={openJourneyAtQuote} /> : null}
       </AnimatedPage>
       {startGate.gate}
+      <PatientTour enabled={!selectedJourneyId} suppressAutoOpen={editPatientOpen || returnAppointmentTarget !== null || summaryEvaluationId !== null} activeTab={activeTab} recordTab={recordTab} onShow={(tab, record) => { selectTab(tab); if (record) selectRecordTab(record); }} />
       <PatientEditModal patient={currentPatient} open={editPatientOpen} onClose={() => setEditPatientOpen(false)} onUpdated={setCurrentPatient} />
     </div>
   );

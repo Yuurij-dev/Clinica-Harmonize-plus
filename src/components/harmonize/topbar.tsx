@@ -13,7 +13,8 @@ import { StockAlertGroups, useStockAlerts } from "./stock-alerts";
 import { TrialStatus } from "./trial-status";
 import { useCan } from "./current-user";
 import { Modal } from "@/components/ui/modal";
-import { tourReplayEvent } from "@/lib/section-events";
+import { patientTourReplayEvent, tourReplayEvent } from "@/lib/section-events";
+import { hasPatientTour } from "./tour-presence";
 
 type TopbarProps = {
   onDashboard: () => void;
@@ -47,6 +48,8 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, 
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   // Confirmação antes de iniciar o tour: o Harmo se apresenta e o usuário decide.
   const [tourAskOpen, setTourAskOpen] = useState(false);
+  // Com uma ficha de paciente aberta, o box também oferece o tour da ficha (lido ao abrir o box).
+  const [pageTourOffered, setPageTourOffered] = useState(false);
   const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
   const [stockNotificationsEnabled, setStockNotificationsEnabled] = useState(true);
   const [appointmentNotificationSoundEnabled, setAppointmentNotificationSoundEnabled] = useState(true);
@@ -243,7 +246,7 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, 
           </span>
         </Button>
         <span className="group/tour relative inline-flex">
-          <Button variant="secondary" size="icon" aria-label="Tour guiado" onClick={() => setTourAskOpen(true)}>
+          <Button variant="secondary" size="icon" aria-label="Tour guiado" onClick={() => { setPageTourOffered(hasPatientTour()); setTourAskOpen(true); }}>
             <HelpCircle className="h-5 w-5" />
           </Button>
           <span role="tooltip" className="pointer-events-none invisible absolute right-0 top-full z-50 mt-2 rounded-md border border-border bg-card px-2 py-1 text-xs font-semibold text-foreground opacity-0 shadow-lg transition-opacity duration-150 group-hover/tour:visible group-hover/tour:opacity-100 group-focus-within/tour:visible group-focus-within/tour:opacity-100">Tour</span>
@@ -276,13 +279,20 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, 
           {/* O mascote sobreposto vem do próprio Modal. */}
           <div className="w-full rounded-2xl border border-border bg-card px-5 pb-4 pt-[52px] text-center text-card-foreground shadow-2xl">
             <h2 className="text-lg font-black tracking-tight text-foreground">Deseja iniciar o tour?</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">Sou o Harmo e apresento o Harmonize+ em menos de 1 minuto, passando por cada área do sistema. Dá para pular a qualquer momento.</p>
-            <div className="mt-4 flex items-center gap-2">
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">Sou o Harmo e apresento o Harmonize+ em menos de 1 minuto, passando por cada área do sistema. Dá para pular a qualquer momento.{pageTourOffered ? " Você também pode ver só o tour desta página." : ""}</p>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
               <Button type="button" variant="ghost" size="sm" className="shrink-0 text-muted-foreground" onClick={() => setTourAskOpen(false)}>Agora não</Button>
-              <Button type="button" variant="primary" size="sm" className="ml-auto" onClick={() => { setTourAskOpen(false); window.dispatchEvent(new Event(tourReplayEvent)); }}>
-                Iniciar tour
-                <ArrowRight aria-hidden="true" />
-              </Button>
+              <div className="ml-auto flex flex-wrap justify-end gap-2">
+                {pageTourOffered ? (
+                  <Button type="button" variant="outline" size="sm" onClick={() => { setTourAskOpen(false); window.dispatchEvent(new Event(patientTourReplayEvent)); }}>
+                    Tour desta página
+                  </Button>
+                ) : null}
+                <Button type="button" variant="primary" size="sm" onClick={() => { setTourAskOpen(false); window.dispatchEvent(new Event(tourReplayEvent)); }}>
+                  {pageTourOffered ? "Tour do sistema" : "Iniciar tour"}
+                  <ArrowRight aria-hidden="true" />
+                </Button>
+              </div>
             </div>
           </div>
         </div>
