@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { duplicateCpfResponse, rejectInvalidCpf } from "@/lib/patient-cpf";
 import { canSeeFullCpf, cpfForRole, isMaskedCpf } from "@/lib/patient-cpf-mask";
-import { patientListSelect, withCurrentStage } from "@/lib/patient-list-server";
+import { patientCreatedSelect, patientListSelect, withCurrentStage } from "@/lib/patient-list-server";
 import { isPatientIdFormat } from "@/lib/patient-list-rules";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
@@ -55,6 +55,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (patient instanceof NextResponse) return patient;
   if (!patient.count) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
 
-  const updated = await prisma.patient.findFirst({ where: { id, clinicId: user.clinicId } });
+  // Select enxuto: nunca devolve auditLog nem CPF do responsável.
+  const updated = await prisma.patient.findFirst({ where: { id, clinicId: user.clinicId }, select: patientCreatedSelect });
   return NextResponse.json({ patient: cpfForRole(user.role, updated, user.rolePermissions) });
 }

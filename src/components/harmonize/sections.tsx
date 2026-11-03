@@ -46,15 +46,13 @@ import {
   StatusBadge,
 } from "./shared";
 import { useCan } from "./current-user";
+import { NewPatientForm, type NewPatientResult } from "./new-patient-form";
 import { PatientDetail } from "./patient-detail";
 import { useAnamnesisStartGate, type AnamnesisOpenMode } from "./anamnesis-start-gate";
 import { buildCustomerJourney } from "@/lib/customer-journey";
 import {
   formatCurrency,
-  formatCpf,
   formatDate,
-  formatInteger,
-  formatPhone,
   parseCurrency,
   parseInteger,
 } from "@/lib/input-masks";
@@ -334,7 +332,6 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
   const isFetching = list.key !== listKey && !listError;
   const [reloadToken, setReloadToken] = useState(0);
   const [retainedPatient, setRetainedPatient] = useState<Patient | null>(null);
-  const [saveError, setSaveError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const patientRows = useMemo(() => listData?.patients.map(mapApiPatient) ?? [], [listData]);
   // Depois do cadastro, quem pode preencher anamnese decide se começa agora ou depois (não é obrigatória).
@@ -430,27 +427,18 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
     router.push(`/clientes?patient=${encodeURIComponent(key)}`);
   }
 
-  async function savePatient(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    setSaveError("");
+  async function savePatient(payload: Record<string, unknown>): Promise<NewPatientResult> {
     setIsSaving(true);
     try {
       const response = await fetch("/api/patients", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: String(form.get("name") || ""),
-          cpf: String(form.get("cpf") || ""),
-          phone: String(form.get("phone") || ""),
-          age: parseInteger(form.get("age")),
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
-        const data = await response.json().catch(() => null) as { message?: string } | null;
-        setSaveError(data?.message ?? "Não foi possível salvar o cliente.");
-        return;
+        const data = await response.json().catch(() => null) as { message?: string; fields?: Record<string, string>; existingPatientId?: string } | null;
+        return { ok: false, message: data?.message ?? "Não foi possível salvar o cliente.", fields: data?.fields, existingPatientId: data?.existingPatientId };
       }
 
       const data = await response.json() as { patient: ApiPatient };
@@ -469,8 +457,9 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
       onCreateClose();
       onSaved?.(`${savedPatient.name} foi adicionado aos clientes.`);
       if (canFillAnamnesis) setJustCreated(savedPatient);
+      return { ok: true };
     } catch {
-      setSaveError("Não foi possível conectar ao servidor.");
+      return { ok: false, message: "Não foi possível conectar ao servidor." };
     } finally {
       setIsSaving(false);
     }
@@ -538,15 +527,8 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
           <div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="secondary" onClick={() => continueAfterCreate(false)}>Fazer depois</Button><Button type="button" onClick={() => continueAfterCreate(true)}>Preencher anamnese</Button></div>
         </div>
       </Modal>
-      <Modal open={openCreate} onClose={onCreateClose} title="Novo cliente" description="Cadastre os dados essenciais. O perfil poderá ser completado depois.">
-        <form className="grid gap-4 sm:grid-cols-2" onSubmit={savePatient}>
-          <div className="sm:col-span-2"><FormField label="Nome completo"><input className={fieldClassName} name="name" required /></FormField></div>
-          <FormField label="CPF"><MaskedInput className={fieldClassName} formatter={formatCpf} name="cpf" inputMode="numeric" maxLength={14} placeholder="000.000.000-00" required /></FormField>
-          <FormField label="Telefone"><MaskedInput className={fieldClassName} formatter={formatPhone} name="phone" inputMode="tel" maxLength={15} placeholder="(00) 00000-0000" required /></FormField>
-          <FormField label="Idade"><MaskedInput className={fieldClassName} formatter={(value) => formatInteger(value, 3)} name="age" inputMode="numeric" maxLength={3} placeholder="00" required /></FormField>
-          {saveError ? <p className="sm:col-span-2 rounded-[7px] border border-[#ffd7d7] bg-[#fff7f7] px-3 py-2 text-xs font-semibold text-[#b42318]">{saveError}</p> : null}
-          <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving} type="submit">{isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : "Salvar cliente"}</Button></div>
-        </form>
+      <Modal open={openCreate} onClose={onCreateClose} title="Novo cliente" description="Cadastre o cliente. O perfil poderá ser completado depois." panelClassName="max-w-2xl flex flex-col overflow-hidden" bodyClassName="flex min-h-0 flex-1 flex-col p-0 sm:p-0">
+        {openCreate ? <NewPatientForm saving={isSaving} onSubmit={savePatient} onCancel={onCreateClose} onOpenExisting={(id) => { onCreateClose(); setSelectedPatientName(id); router.push(`/clientes?patient=${encodeURIComponent(id)}`); }} /> : null}
       </Modal>
     </div>
   );
