@@ -1397,3 +1397,23 @@ html.dark .hp-accent-text { color: #b4aeff; }
   }
   .hp-tour-slot { transition: none; }
 }
+
+/* Tremor de campo invalido (cadastro de cliente): ~6px decrescente em 420ms; redisparado por JS ao reaplicar a classe. */
+@keyframes hp-field-shake {
+  0%, 100% { transform: translateX(0); }
+  15% { transform: translateX(-6px); }
+  30% { transform: translateX(6px); }
+  45% { transform: translateX(-4px); }
+  60% { transform: translateX(4px); }
+  80% { transform: translateX(-2px); }
+}
+
+.hp-field-shake {
+  animation: hp-field-shake 420ms ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hp-field-shake {
+    animation: none;
+  }
+}
