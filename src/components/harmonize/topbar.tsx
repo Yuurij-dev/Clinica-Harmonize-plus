@@ -272,7 +272,7 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, 
         </DropdownMenu>
       </div>
       {/* Mesmo desenho do cartão do tour (guided-tour.tsx): mascote sobreposto, cartão arredondado e a mesma barra de ações. */}
-      <Modal open={tourAskOpen} title="Deseja iniciar o tour?" hideHeader panelClassName="max-w-sm border-0 bg-transparent shadow-none" bodyClassName="p-0 sm:p-0" overlayClassName="modal-overlay-tour" onClose={() => setTourAskOpen(false)}>
+      <Modal open={tourAskOpen} title="Deseja iniciar o tour?" hideHeader panelClassName="max-w-sm border-0 bg-transparent shadow-none" bodyClassName="p-0 sm:p-0" onClose={() => setTourAskOpen(false)}>
         <div className="flex flex-col items-center">
           <div className="relative z-10 -mb-10">
             <GuideMascot pose="wave" size={100} />

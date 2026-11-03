@@ -699,10 +699,10 @@ html.hp-theme-fading *::after {
   to { opacity: 0; transform: translateY(14px); }
 }
 
+/* Escurecimento padrão de todo modal e sheet: o mesmo do tour guiado (DIM em guided-tour.tsx),
+   roxo profundo e sem desfoque. Vale igual nos dois temas, como no tour. */
 .modal-overlay {
-  background-color: rgb(32 33 54 / 48%);
-  -webkit-backdrop-filter: blur(4px);
-  backdrop-filter: blur(4px);
+  background-color: rgb(18 14 48 / 78%);
   animation: hp-modal-fade-in 180ms ease-out both;
 }
 
@@ -710,20 +710,12 @@ html.hp-theme-fading *::after {
   animation: hp-modal-stage-out 220ms ease-in both;
 }
 
+/* Exceção: o visualizador de fotos clínicas segue quase preto, para a foto e as marcações
+   aparecerem bem. A regra vale nos dois temas (antes o tema escuro a sobrepunha sem querer). */
 .modal-overlay.modal-overlay-photo {
   background-color: rgb(0 0 0 / 82%);
   -webkit-backdrop-filter: blur(2px);
   backdrop-filter: blur(2px);
-}
-
-/* Mesmo escurecimento do tour guiado (DIM em guided-tour.tsx): roxo profundo e sem desfoque.
-   A cor é igual nos dois temas, como no tour, por isso a regra se repete para html.dark
-   (que tem um .modal-overlay mais específico logo abaixo). */
-.modal-overlay.modal-overlay-tour,
-html.dark .modal-overlay.modal-overlay-tour {
-  background-color: rgb(18 14 48 / 78%);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
 }
 
 .modal-content[data-state="open"] {
@@ -782,9 +774,6 @@ html.dark .modal-overlay.modal-overlay-tour {
   animation: hp-sheet-bottom-out 240ms cubic-bezier(0.4, 0, 1, 1) both;
 }
 
-html.dark .modal-overlay {
-  background-color: rgb(0 0 0 / 56%);
-}
 
 @media (prefers-reduced-motion: reduce) {
   *,
