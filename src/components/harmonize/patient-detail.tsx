@@ -15,6 +15,7 @@ import {
   FileText,
   Loader2,
   LayoutDashboard,
+  HelpCircle,
   PencilLine,
   Plus,
   Phone,
@@ -42,6 +43,7 @@ import { PhotoEditor } from "./photo-editor/photo-editor";
 import { EmptyState, LoadingSkeleton } from "./shared";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { observationKindsFor, type ObservationKind } from "@/lib/permissions";
+import { patientTourReplayEvent } from "@/lib/section-events";
 import { useCan, useCurrentRole } from "./current-user";
 import { appointmentSlotError, appointmentWithinStartWindow, canRequestAppointmentStart, clinicNow, latestAppointmentStart, matchesProcedureAppointment } from "@/lib/clinic-time";
 import { mergePatientAppointments } from "@/lib/patient-appointments";
@@ -607,6 +609,13 @@ export function PatientDetail({
           <div className="flex w-full flex-wrap items-center gap-2 max-lg:[&>button]:flex-auto lg:w-auto">
             <Button type="button" variant="outline" onClick={() => guarded(() => setEditPatientOpen(true))}><PencilLine className="h-4 w-4" />Editar dados</Button>
             {canWriteClinical && anamnesisUnfilled ? <Button type="button" onClick={() => guarded(() => openAnamnesis("fill"))}><ClipboardList className="h-4 w-4" />Preencher anamnese</Button> : null}
+            {/* Reabre o tour desta página. Fica aqui, no canto, e não no box do "?" da topbar. */}
+            <span className="group/ptour relative inline-flex max-lg:flex-none">
+              <Button type="button" variant="secondary" size="icon" aria-label="Rever o tour desta página" onClick={() => window.dispatchEvent(new Event(patientTourReplayEvent))}>
+                <HelpCircle className="h-5 w-5" />
+              </Button>
+              <span role="tooltip" className="pointer-events-none invisible absolute right-0 top-full z-50 mt-2 whitespace-nowrap rounded-md border border-border bg-card px-2 py-1 text-xs font-semibold text-foreground opacity-0 shadow-lg transition-opacity duration-150 group-hover/ptour:visible group-hover/ptour:opacity-100 group-focus-within/ptour:visible group-focus-within/ptour:opacity-100">Tour desta página</span>
+            </span>
           </div>
         </div>
 

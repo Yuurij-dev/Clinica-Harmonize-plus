@@ -7,7 +7,6 @@ import { TOUR_SEEN, shouldShowTour } from "@/lib/tour-rules";
 import { useCan, useTourUserId } from "./current-user";
 import { TourOverlay, useTourStepper } from "./tour-overlay";
 import { hasDraftGuard } from "./use-draft-autosave";
-import { markPatientTour } from "./tour-presence";
 
 const OPEN_DELAY_MS = 800;
 
@@ -47,12 +46,6 @@ export function PatientTour({ enabled, suppressAutoOpen = false, activeTab, reco
     openRef.current = open;
   });
 
-  // A topbar só oferece "Tour desta página" enquanto há uma ficha com tour disponível.
-  useEffect(() => {
-    if (!available) return;
-    markPatientTour(true);
-    return () => markPatientTour(false);
-  }, [available]);
 
   // Primeira ficha aberta: lê a marca do usuário e abre o tour pouco depois.
   useEffect(() => {

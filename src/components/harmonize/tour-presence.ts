@@ -2,7 +2,6 @@
 // topbar e os dois tours saibam, sem prop drilling, o que está na tela.
 
 let overlayReserved = false;
-let patientTours = 0;
 
 /** Há um tour aberto (ou reservado): outro tour não abre sozinho por cima. */
 export function isTourOverlayOpen(): boolean {
@@ -23,11 +22,3 @@ export function releaseTourOverlay() {
   overlayReserved = false;
 }
 
-/** Há uma ficha de paciente aberta com tour disponível: o "?" da topbar oferece "Tour desta página". */
-export function hasPatientTour(): boolean {
-  return patientTours > 0;
-}
-
-export function markPatientTour(available: boolean) {
-  patientTours = Math.max(0, patientTours + (available ? 1 : -1));
-}
