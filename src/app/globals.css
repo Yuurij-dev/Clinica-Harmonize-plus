@@ -1306,6 +1306,55 @@ html.dark .hp-accent-text { color: #b4aeff; }
   0%, 94%, 100% { transform: scaleY(1); }
   97% { transform: scaleY(0.08); }
 }
+/* Piscadela: só um olho, e mais demorada que o piscar normal. */
+@keyframes hp-mascot-wink {
+  0%, 74%, 100% { transform: scaleY(1); }
+  82%, 88% { transform: scaleY(0.08); }
+}
+/* Pupilas olhando de um lado para o outro. */
+@keyframes hp-mascot-look {
+  0%, 100% { transform: translateX(0); }
+  30% { transform: translateX(-4px); }
+  70% { transform: translateX(4px); }
+}
+/* Pulinho curto, com uma segunda batida menor. */
+@keyframes hp-mascot-hop {
+  0%, 100% { transform: translateY(0); }
+  20% { transform: translateY(-10px); }
+  42% { transform: translateY(0); }
+  58% { transform: translateY(-4px); }
+  76% { transform: translateY(0); }
+}
+/* Comemoração: sobe e volta com uma leve deformação. */
+@keyframes hp-mascot-bounce {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  30% { transform: translateY(-7px) scaleY(1.03); }
+  62% { transform: translateY(0) scaleY(0.97); }
+}
+/* Concordar com a cabeça (duas descidas). */
+@keyframes hp-mascot-nod {
+  0%, 100% { transform: translateY(0); }
+  25% { transform: translateY(4px); }
+  50% { transform: translateY(0); }
+  75% { transform: translateY(3px); }
+}
+/* Balanço do corpo para os dois lados, girando sobre os pés. */
+@keyframes hp-mascot-sway {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(3deg); }
+  75% { transform: rotate(-3deg); }
+}
+/* Curiosidade: inclina para um lado e volta. */
+@keyframes hp-mascot-tilt {
+  0%, 100% { transform: rotate(0deg); }
+  40%, 62% { transform: rotate(-7deg); }
+}
+/* Antena balançando. */
+@keyframes hp-mascot-antenna {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(12deg); }
+  75% { transform: rotate(-12deg); }
+}
 
 .hp-tour-dim { animation: hp-tour-fade 260ms ease-out; }
 .hp-tour-slot { transition: top 420ms cubic-bezier(0.2, 0.8, 0.2, 1), left 420ms cubic-bezier(0.2, 0.8, 0.2, 1); }
@@ -1313,15 +1362,24 @@ html.dark .hp-accent-text { color: #b4aeff; }
 .hp-tour-card-back { animation-name: hp-tour-card-in-back; }
 .hp-tour-mascot { animation: hp-tour-mascot-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1) 160ms both; }
 .hp-tour-ring { animation: hp-tour-ring 1600ms ease-in-out infinite; }
-.hp-mascot-eyes { transform-box: view-box; transform-origin: 80px 88px; animation: hp-mascot-blink 3700ms ease-in-out infinite; }
 .hp-mascot-arm { transform-origin: 0 0; }
+/* O corpo gira apoiado nos pés; a antena, na base dela. Cada olho e cada par de pupilas usa a própria origem (inline). */
+.hp-mascot-body { transform-box: view-box; transform-origin: 80px 166px; }
+.hp-mascot-antenna { transform-box: view-box; transform-origin: 80px 24px; }
+.hp-mascot-blink { transform-box: view-box; animation: hp-mascot-blink 3700ms ease-in-out infinite; }
+.hp-mascot-wink { transform-box: view-box; animation: hp-mascot-wink 2600ms ease-in-out 2; }
+.hp-mascot-look { transform-box: view-box; animation: hp-mascot-look 2800ms ease-in-out 2; }
 
 @media (prefers-reduced-motion: reduce) {
   .hp-tour-dim,
   .hp-tour-card,
   .hp-tour-mascot,
   .hp-tour-ring,
-  .hp-mascot-eyes,
+  .hp-mascot-blink,
+  .hp-mascot-wink,
+  .hp-mascot-look,
+  .hp-mascot-body,
+  .hp-mascot-antenna,
   .hp-mascot-arm,
   .hp-mascot g {
     animation: none !important;
