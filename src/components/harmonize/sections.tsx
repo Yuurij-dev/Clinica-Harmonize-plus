@@ -121,7 +121,7 @@ type PatientListResponse = {
 const patientSearchDebounceMs = 300;
 
 // Dados estáticos e leves da agenda; os agendamentos vêm por período (GET /api/agenda?from&to).
-type AgendaBootstrap = { procedures: ApiProcedureOption[]; members: Array<{ role: string; user: { name: string } }>; settings?: { appointmentToleranceMinutes: number; openingTime: string; closingTime: string; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoCompleteAppointmentsEnabled: boolean; allowAppointmentsOutsideHours: boolean } };
+type AgendaBootstrap = { procedures: ApiProcedureOption[]; members: Array<{ role: string; user: { name: string } }>; settings?: { appointmentToleranceMinutes: number; openingTime: string; closingTime: string; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; allowAppointmentsOutsideHours: boolean } };
 type ShownPeriod = { key: string; date: Date; view: CalendarView };
 type AgendaPeriodResponse = { appointments: ApiAppointment[]; range: AgendaRange; total: number };
 const agendaBootstrapKey = "/api/agenda/bootstrap";
@@ -1348,6 +1348,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   const [deletingProcedure, setDeletingProcedure] = useState<ProcedureRow | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const canReadProducts = useCan("stock:access");
   const materialOptions = productRows.filter((product): product is Product & { id: string } => Boolean(product.id));
 
   useEffect(() => {
@@ -1380,11 +1381,13 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   }, []);
 
   useEffect(() => {
+    // Carrega na montagem (o editor da ficha técnica calcula o tipo das linhas ao abrir), mas só com acesso a estoque (GET /api/products exige stock:access).
+    if (!canReadProducts) return;
     // Inclui arquivados para mostrar na ficha técnica os materiais que já estavam nela.
     getCachedJson<{ products?: Product[] }>("/api/products?archived=1")
       .then((data) => setProductRows(data.products ?? []))
       .catch(() => setProductRows([]));
-  }, []);
+  }, [canReadProducts]);
 
   function closeProcedureModal() {
     setProcedureModalMounted(true);
@@ -1991,7 +1994,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const [rolePermissionsSaving, setRolePermissionsSaving] = useState(false);
   const [rolePermissionsDirty, setRolePermissionsDirty] = useState(false);
   const [rolePermissionsError, setRolePermissionsError] = useState("");
-  const cachedCostSettings = canManageSettings ? readClientCache<{ settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoCompleteAppointmentsEnabled: boolean; autoAdvancePatientJourneyEnabled: boolean; allowAppointmentsOutsideHours: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings") : undefined;
+  const cachedCostSettings = canManageSettings ? readClientCache<{ settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoAdvancePatientJourneyEnabled: boolean; allowAppointmentsOutsideHours: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings") : undefined;
   const [costSettings, setCostSettings] = useState(() => ({
     laborCost: cachedCostSettings?.settings?.laborCost ?? 0,
     facilityCost: cachedCostSettings?.settings?.facilityCost ?? 0,
@@ -2020,7 +2023,6 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const [stockNotificationsEnabled, setStockNotificationsEnabled] = useState(cachedCostSettings?.settings?.stockNotificationsEnabled ?? true);
   const [requireCancellationReason, setRequireCancellationReason] = useState(cachedCostSettings?.settings?.requireCancellationReason ?? false);
   const [autoMarkMissedAppointmentsEnabled, setAutoMarkMissedAppointmentsEnabled] = useState(cachedCostSettings?.settings?.autoMarkMissedAppointmentsEnabled ?? true);
-  const [autoCompleteAppointmentsEnabled, setAutoCompleteAppointmentsEnabled] = useState(cachedCostSettings?.settings?.autoCompleteAppointmentsEnabled ?? true);
   const [autoAdvancePatientJourneyEnabled, setAutoAdvancePatientJourneyEnabled] = useState(cachedCostSettings?.settings?.autoAdvancePatientJourneyEnabled ?? true);
   const [allowAppointmentsOutsideHours, setAllowAppointmentsOutsideHours] = useState(cachedCostSettings?.settings?.allowAppointmentsOutsideHours ?? false);
   const [savingPreference, setSavingPreference] = useState("");
@@ -2118,7 +2120,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   useEffect(() => {
     if (!canManageSettings) return;
     let active = true;
-    getCachedJson<{ settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoCompleteAppointmentsEnabled: boolean; autoAdvancePatientJourneyEnabled: boolean; allowAppointmentsOutsideHours: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings")
+    getCachedJson<{ settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoAdvancePatientJourneyEnabled: boolean; allowAppointmentsOutsideHours: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings")
       .then((data) => {
         if (!active) return;
         const settings = data.settings ?? {
@@ -2128,7 +2130,6 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
           stockNotificationsEnabled: true,
           requireCancellationReason: false,
           autoMarkMissedAppointmentsEnabled: true,
-          autoCompleteAppointmentsEnabled: true,
           autoAdvancePatientJourneyEnabled: true,
           allowAppointmentsOutsideHours: false,
           laborCost: 0,
@@ -2157,7 +2158,6 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
         setStockNotificationsEnabled(settings.stockNotificationsEnabled ?? true);
         setRequireCancellationReason(settings.requireCancellationReason ?? false);
         setAutoMarkMissedAppointmentsEnabled(settings.autoMarkMissedAppointmentsEnabled ?? true);
-        setAutoCompleteAppointmentsEnabled(settings.autoCompleteAppointmentsEnabled ?? true);
         setAutoAdvancePatientJourneyEnabled(settings.autoAdvancePatientJourneyEnabled ?? true);
         setAllowAppointmentsOutsideHours(settings.allowAppointmentsOutsideHours ?? false);
       })
@@ -2395,7 +2395,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const displayedSettingsSection = permittedSettingsNavigation.some((item) => item.label === activeSettingsSection) ? activeSettingsSection : permittedSettingsNavigation[0]?.label ?? "";
   const isSearchingClinicPreferences = displayedSettingsSection === "Dados da clínica" && Boolean(normalizedSettingsSearch);
   const matchesClinicPreference = (text: string) => !isSearchingClinicPreferences || normalizeSettingsSearch(text).includes(normalizedSettingsSearch);
-  const clinicPreferenceLabels = ["Alertas de agendamentos", "Alertas de estoque", "Exigir motivo ao cancelar", "Marcar faltas automaticamente", "Finalizar atendimentos automaticamente", "Avançar etapas do paciente automaticamente", "Permitir agendamentos fora do funcionamento"];
+  const clinicPreferenceLabels = ["Alertas de agendamentos", "Alertas de estoque", "Exigir motivo ao cancelar", "Marcar faltas automaticamente", "Avançar etapas do paciente automaticamente", "Permitir agendamentos fora do funcionamento"];
   const matchingClinicPreferenceCount = clinicPreferenceLabels.filter(matchesClinicPreference).length;
   const isSearchingTeam = displayedSettingsSection === "Profissionais e equipe" && Boolean(normalizedSettingsSearch);
   const filteredTeamMembers = members.filter((member) => {
@@ -2479,7 +2479,6 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
                     <SettingsToggle hidden={!matchesClinicPreference("Alertas de estoque")} label="Alertas de estoque" description="Mostra avisos de estoque baixo, vencimentos e pendências para a equipe agir antes que falte material." checked={stockNotificationsEnabled} saving={savingPreference === "stockNotificationsEnabled"} onChange={(next) => { setStockNotificationsEnabled(next); void persistClinicPreference("stockNotificationsEnabled", next).then((ok) => { if (!ok) setStockNotificationsEnabled(!next); }); }} />
                     <SettingsToggle hidden={!matchesClinicPreference("Exigir motivo ao cancelar")} label="Exigir motivo ao cancelar" description="Antes de cancelar um agendamento, a equipe precisa registrar o motivo, ajudando a clínica a entender cancelamentos e manter o histórico completo." checked={requireCancellationReason} saving={savingPreference === "requireCancellationReason"} onChange={(next) => { setRequireCancellationReason(next); void persistClinicPreference("requireCancellationReason", next).then((ok) => { if (!ok) setRequireCancellationReason(!next); }); }} />
                     <SettingsToggle hidden={!matchesClinicPreference("Marcar faltas automaticamente")} label="Marcar faltas automaticamente" description="Após o horário e a tolerância definidos, agendamentos que continuam marcados são atualizados para Faltou." checked={autoMarkMissedAppointmentsEnabled} saving={savingPreference === "autoMarkMissedAppointmentsEnabled"} onChange={(next) => { setAutoMarkMissedAppointmentsEnabled(next); void persistClinicPreference("autoMarkMissedAppointmentsEnabled", next).then((ok) => { if (!ok) setAutoMarkMissedAppointmentsEnabled(!next); }); }} />
-                    <SettingsToggle hidden={!matchesClinicPreference("Finalizar atendimentos automaticamente")} label="Finalizar atendimentos automaticamente" description="Quando o horário previsto do atendimento termina, a agenda altera Em atendimento para Atendido." checked={autoCompleteAppointmentsEnabled} saving={savingPreference === "autoCompleteAppointmentsEnabled"} onChange={(next) => { setAutoCompleteAppointmentsEnabled(next); void persistClinicPreference("autoCompleteAppointmentsEnabled", next).then((ok) => { if (!ok) setAutoCompleteAppointmentsEnabled(!next); }); }} />
                     <SettingsToggle hidden={!matchesClinicPreference("Avançar etapas do paciente automaticamente")} label="Avançar etapas do paciente automaticamente" description="A etapa exibida na lista de pacientes acompanha avaliações, orçamentos, procedimentos e retornos registrados no sistema." checked={autoAdvancePatientJourneyEnabled} saving={savingPreference === "autoAdvancePatientJourneyEnabled"} onChange={(next) => { setAutoAdvancePatientJourneyEnabled(next); void persistClinicPreference("autoAdvancePatientJourneyEnabled", next).then((ok) => { if (!ok) setAutoAdvancePatientJourneyEnabled(!next); }); }} />
                     <SettingsToggle hidden={!matchesClinicPreference("Permitir agendamentos fora do funcionamento")} label="Permitir agendamentos fora do funcionamento" description="Libera horários fora da abertura e fechamento configurados, mantendo as validações de data, conflitos e duração do atendimento." checked={allowAppointmentsOutsideHours} saving={savingPreference === "allowAppointmentsOutsideHours"} onChange={(next) => { setAllowAppointmentsOutsideHours(next); void persistClinicPreference("allowAppointmentsOutsideHours", next).then((ok) => { if (!ok) setAllowAppointmentsOutsideHours(!next); }); }} />
                     {isSearchingClinicPreferences && matchingClinicPreferenceCount === 0 ? <p className="py-4 text-sm text-muted-foreground">Nenhuma preferência geral encontrada.</p> : null}

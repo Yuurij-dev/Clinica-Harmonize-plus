@@ -25,11 +25,38 @@ export function appendUnseenById<T extends { id: string }>(current: readonly T[]
 }
 
 // ---- Backoff, parada e reconciliação do polling de fotos do app ----
-export type PollOutcome = "ok" | "retry" | "stop";
+// "ok" = houve atividade/mudança; "idle" = checou e nada mudou; "retry" = falha (backoff); "stop" = parar.
+export type PollOutcome = "ok" | "idle" | "retry" | "stop";
 const backoffSteps = [syncIntervalMs, 10_000, 20_000, 60_000];
 
 // Atraso até a próxima checagem: 5 s normal; 10 s, 20 s e 60 s (teto) a cada falha seguida.
 export const nextPollDelay = (failures: number) => backoffSteps[Math.min(Math.max(0, failures), backoffSteps.length - 1)];
+
+// Espaçamento por ociosidade (separado do backoff de falha), limitado pelo teto de cada consumidor:
+// teto <= 15 s: 5 -> 10 -> 15 s; teto maior: 5 -> 15 -> 30 -> 60 s (cortado no teto).
+const shortIdleSteps = [syncIntervalMs, 10_000, 15_000];
+const longIdleSteps = [syncIntervalMs, 15_000, 30_000, 60_000];
+export const nextIdleDelay = (idle: number, maxMs = 60_000) => {
+  const cap = Math.max(syncIntervalMs, maxMs);
+  const ladder = (cap <= 15_000 ? shortIdleSteps : longIdleSteps).filter((step) => step <= cap);
+  return ladder[Math.min(Math.max(0, idle), ladder.length - 1)];
+};
+
+export type PollState = { failures: number; idle: number };
+
+// Falha manda o atraso (backoff antigo); sem falha, vale a ociosidade.
+export const pollDelay = (state: PollState, maxIdleMs = 60_000) => state.failures > 0 ? nextPollDelay(state.failures) : nextIdleDelay(state.idle, maxIdleMs);
+
+// Próximo estado após uma checagem: atividade zera tudo; ociosidade sobe só o contador de ociosidade; falha sobe só as falhas.
+export function advancePollState(state: PollState, outcome: PollOutcome): PollState {
+  if (outcome === "ok") return { failures: 0, idle: 0 };
+  if (outcome === "idle") return { failures: 0, idle: state.idle + 1 };
+  if (outcome === "retry") return { failures: state.failures + 1, idle: state.idle };
+  return state;
+}
+
+// Foco, aba visível ou outro "acordar": volta ao ritmo de 5 s (a falha em curso não é apagada).
+export const wakePollState = (state: PollState): PollState => ({ failures: state.failures, idle: 0 });
 
 // Resposta HTTP -> ação: ok segue; 5xx tenta de novo com backoff; 401/403/404 (e demais 4xx, exceto 408/429) param, pois repetir não resolve.
 export function pollOutcomeForStatus(status: number): PollOutcome {
