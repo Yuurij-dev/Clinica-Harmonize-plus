@@ -11,7 +11,8 @@ const baseUrl = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const testClinicName = "Clínica Teste Auditoria";
 const email = process.env.TEST_ACCOUNT_EMAIL;
 const password = process.env.TEST_ACCOUNT_PASSWORD;
-const run = Date.now().toString(36);
+// Só letras (a-z): nomes de cliente não aceitam números. Dígitos de base 26 viram q-z, então continua único.
+const run = Date.now().toString(26).replace(/[0-9]/g, (d) => "qrstuvwxyz"[d]);
 const results = [];
 const prisma = new PrismaClient();
 // Avaliação completa: para CONCLUIR, a API exige queixa, objetivo, os 5 campos da anamnese rápida e observações.
@@ -40,7 +41,24 @@ function check(name, ok, detail = "") {
 }
 
 const day = (offset) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date(Date.now() + offset * 86_400_000));
-const randomCpf = () => Array.from({ length: 11 }, () => Math.floor(Math.random() * 10)).join("");
+// CPF válido (dígitos verificadores corretos) no formato gravado pelo servidor (000.000.000-00).
+const randomCpf = () => {
+  const d = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10));
+  if (d.every((x) => x === d[0])) d[8] = (d[8] + 1) % 10;
+  const dv = (a) => { const sum = a.reduce((t, x, k) => t + x * (a.length + 1 - k), 0); const r = (sum * 10) % 11; return r === 10 ? 0 : r; };
+  d.push(dv(d)); d.push(dv(d));
+  const t = d.join("");
+  return `${t.slice(0, 3)}.${t.slice(3, 6)}.${t.slice(6, 9)}-${t.slice(9)}`;
+};
+// Corpo válido de POST /api/patients a partir do formato antigo { name, phone, age, cpf, ... }: nome sem números,
+// birthDate dd/mm/aaaa de quem tem "age" anos, CPF válido (adulto) e consentimento de privacidade.
+const ptBrDate = (d) => `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+const newPatientPayload = ({ name, age = 35, cpf, ...rest }) => {
+  const now = new Date();
+  const birth = new Date(now.getFullYear() - age, now.getMonth(), now.getDate() - 10);
+  const safeName = name.replace(/[0-9]/g, (x) => "abcdefghij"[x]);
+  return { name: safeName, birthDate: ptBrDate(birth), cpf: cpf === undefined ? randomCpf() : cpf, privacyConsent: true, ...rest };
+};
 
 async function login() {
   const response = await api("POST", "/api/auth/login", { login: email, password });
@@ -50,18 +68,19 @@ async function login() {
 }
 
 async function patientsAndPayments() {
-  let r = await api("POST", "/api/patients", { name: `Paciente ${run}`, phone: "11999990000", age: 30, cpf: "123" });
+  let r = await api("POST", "/api/patients", newPatientPayload({ name: `Paciente ${run}`, phone: "11999990000", age: 30, cpf: "123" }));
   check("CPF inválido no cadastro é recusado", r.status === 400, r.status);
   const cpf = randomCpf();
-  r = await api("POST", "/api/patients", { name: `Paciente ${run}`, phone: "11999990000", age: 30, cpf });
+  r = await api("POST", "/api/patients", newPatientPayload({ name: `Paciente ${run}`, phone: "11999990000", age: 30, cpf }));
   const patient = r.data.patient;
   check("cadastro de paciente", r.status === 201, r.status);
-  r = await api("POST", "/api/patients", { name: `Outro ${run}`, phone: "11999990001", age: 31, cpf });
+  r = await api("POST", "/api/patients", newPatientPayload({ name: `Outro ${run}`, phone: "11999990001", age: 31, cpf }));
   check("CPF repetido devolve 409", r.status === 409, r.status);
   const sameCpf = randomCpf();
-  const pair = await Promise.all([1, 2].map((n) => api("POST", "/api/patients", { name: `CPF Simultâneo ${n} ${run}`, phone: "11999990004", age: 30, cpf: sameCpf })));
+  const pair = await Promise.all([1, 2].map((n) => api("POST", "/api/patients", newPatientPayload({ name: `CPF Simultâneo ${n} ${run}`, phone: "11999990004", age: 30, cpf: sameCpf }))));
   check("dois cadastros simultâneos com o mesmo CPF: um 201 e um 409, nunca 500", pair.map((res) => res.status).sort().join() === "201,409", pair.map((res) => res.status).join("/"));
-  r = await api("POST", "/api/patients", { name: `Paciente ${run}`, phone: "11999990002", age: 40 });
+  // Homônimo sem CPF: adulto sem CPF é recusado pelo cadastro novo, então é um menor (CPF vazio vira NULL) com responsável.
+  r = await api("POST", "/api/patients", newPatientPayload({ name: `Paciente ${run}`, phone: "11999990002", age: 10, cpf: "", legalGuardianName: "Responsavel Homonimo", legalGuardianCpf: randomCpf(), legalGuardianPhone: "11999990002", legalGuardianRelationship: "Mãe" }));
   const homonym = r.data.patient;
 
   const before = (await api("GET", "/api/finance/summary?period=month")).data.totals?.receivedCents ?? 0;
@@ -89,7 +108,7 @@ async function patientsAndPayments() {
   r = await api("GET", "/api/dashboard/bootstrap");
   check("dashboard traz total de atendimentos e valores em reais", typeof r.data.appointmentCount === "number" && r.data.payments?.some((payment) => payment.value === 150.5), r.status);
   // Paciente sem jornada recebendo registros ao mesmo tempo: uma só "Jornada 1".
-  const fresh = (await api("POST", "/api/patients", { name: `Sem Jornada ${run}`, phone: "11999990003", age: 28 })).data.patient;
+  const fresh = (await api("POST", "/api/patients", newPatientPayload({ name: `Sem Jornada ${run}`, phone: "11999990003", age: 28 }))).data.patient;
   const burst = await Promise.all([
     api("POST", "/api/payments", { patientId: fresh?.id, value: 5, method: "Pix", status: "Pago", installments: "A vista" }),
     api("POST", "/api/payments", { patientId: fresh?.id, value: 6, method: "Pix", status: "Pago", installments: "A vista" }),
@@ -174,7 +193,7 @@ async function journeyDeletePermissions() {
   const proEmail = `e2e-jd-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
   const otherEmail = `e2e-jd-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E JornadaDel Externa ${run}`;
   const members = [];
-  const mkPatient = async (label) => (await api("POST", "/api/patients", { name: `JD ${label} ${run}`, phone: "11999990077", age: 30, cpf: randomCpf() })).data.patient;
+  const mkPatient = async (label) => (await api("POST", "/api/patients", newPatientPayload({ name: `JD ${label} ${run}`, phone: "11999990077", age: 30, cpf: randomCpf() }))).data.patient;
   const mkJourney = async (pid, label) => (await api("POST", `/api/patients/${pid}/journeys`, { name: `JD ${label} ${run}`, professionalId: professional?.id })).data.journey;
   const file = { mimeType: "application/pdf", sizeBytes: 3, sha256: "x", uploadedBy: "e2e", uploadedByName: "E2E" };
   const addPayment = (pid, jid) => prisma.payment.create({ data: { clinicId, patientId: pid, journeyId: jid, valueCents: 1000, method: "Pix", installments: "A vista" } });
@@ -193,7 +212,7 @@ async function journeyDeletePermissions() {
     if (!clinicId) { check("clínica de teste encontrada para o gate de exclusão de jornada", false); return; }
     const sessions = {};
     for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
-      const r = await api("POST", "/api/team", { name: `E2E ${role} JD`, email: memberEmail, password: memberPassword, role });
+      const r = await api("POST", "/api/team", { name: `E2E ${role} JD`, email: memberEmail, password: memberPassword, role , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
       if (r.status === 201) members.push(r.data.member);
       sessions[role] = r.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
       if (sessions[role]?.status !== 200) check(`usuário ${role} criado para o gate de exclusão de jornada`, false, `team ${r.status}`);
@@ -293,7 +312,7 @@ async function journeyDeleteGaps() {
   const members = [];
   const file = { mimeType: "application/pdf", sizeBytes: 3, sha256: "x", uploadedBy: "e2e", uploadedByName: "E2E" };
   const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
-  const mkPatient = async (label) => (await api("POST", "/api/patients", { name: `JDG ${label} ${run}`, phone: "11999990078", age: 30, cpf: randomCpf() })).data.patient;
+  const mkPatient = async (label) => (await api("POST", "/api/patients", newPatientPayload({ name: `JDG ${label} ${run}`, phone: "11999990078", age: 30, cpf: randomCpf() }))).data.patient;
   const mkJourney = async (pid, label) => (await api("POST", `/api/patients/${pid}/journeys`, { name: `JDG ${label} ${run}`, professionalId: professional?.id })).data.journey;
   const del = (pid, jid) => api("DELETE", `/api/patients/${pid}/journeys/${jid}`);
   const addPayment = (pid, jid) => prisma.payment.create({ data: { clinicId, patientId: pid, journeyId: jid, valueCents: 1000, method: "Pix", installments: "A vista" } });
@@ -304,7 +323,7 @@ async function journeyDeleteGaps() {
   const raw = (token, method, path) => fetch(`${baseUrl}${path}`, { method, headers: token ? { Authorization: `Bearer ${token}` } : {}, redirect: "manual" }).then(async (response) => ({ status: response.status, data: await response.json().catch(() => null) }));
   try {
     if (!clinicId) { check("jornada excluída (lacunas): clínica de teste encontrada", false); return; }
-    const created = await api("POST", "/api/team", { name: "E2E PRO JDG", email: proEmail, password: proPassword, role: "PROFESSIONAL" });
+    const created = await api("POST", "/api/team", { name: "E2E PRO JDG", email: proEmail, password: proPassword, role: "PROFESSIONAL" , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
     if (created.status === 201) members.push(created.data.member);
     const pro = created.status === 201 ? await loginAs(proEmail, proPassword) : null;
     if (pro?.status !== 200) { check("jornada excluída (lacunas): PROFESSIONAL criado", false, `team ${created.status}`); return; }
@@ -543,6 +562,8 @@ async function withPage(fn) {
   try {
     const context = await instance.newContext({ timezoneId: "America/Sao_Paulo", locale: "pt-BR" });
     await context.addCookies([{ name: "harmonize_session", value: cookie.split("=")[1], url: baseUrl }]);
+    // Tour de boas-vindas (marca em localStorage por usuário) cobriria a tela e bloquearia cliques: marca como visto só neste navegador de teste.
+    await context.addInitScript(() => { const get = Storage.prototype.getItem; Storage.prototype.getItem = function (key) { return String(key).startsWith("harmonize_tour") ? "1" : get.call(this, key); }; });
     const page = await context.newPage();
     const pageErrors = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -697,7 +718,7 @@ async function loginAs(loginName, secret) {
 
 // Avaliação: campos obrigatórios ao concluir (API) e dados da anamnese que alimentam o pré-preenchimento (tela).
 async function evaluationRequired() {
-  const created = await api("POST", "/api/patients", { name: `E2E Avaliação ${run}`, phone: "11999990011", age: 35, cpf: randomCpf() });
+  const created = await api("POST", "/api/patients", newPatientPayload({ name: `E2E Avaliação ${run}`, phone: "11999990011", age: 35, cpf: randomCpf() }));
   const P = created.data.patient ?? created.data;
   const url = `/api/patients/${P.id}/evaluation`;
   const conclude = (assessment, extra = {}) => api("PUT", url, { photos: [], assessment, status: "Concluída", ...extra });
@@ -799,9 +820,9 @@ async function evaluationRequired() {
 
 // Lacunas da exigência de campos ao concluir: campo a campo, tipos, avaliação antiga, jornadas, isolamento e STAFF.
 async function evaluationRequiredGaps() {
-  const created = await api("POST", "/api/patients", { name: `E2E Aval Lacunas ${run}`, phone: "11999990012", age: 35, cpf: randomCpf() });
+  const created = await api("POST", "/api/patients", newPatientPayload({ name: `E2E Aval Lacunas ${run}`, phone: "11999990012", age: 35, cpf: randomCpf() }));
   const P = created.data.patient ?? created.data;
-  const created2 = await api("POST", "/api/patients", { name: `E2E Aval Outro ${run}`, phone: "11999990013", age: 36, cpf: randomCpf() });
+  const created2 = await api("POST", "/api/patients", newPatientPayload({ name: `E2E Aval Outro ${run}`, phone: "11999990013", age: 36, cpf: randomCpf() }));
   const Q = created2.data.patient ?? created2.data;
   const url = `/api/patients/${P.id}/evaluation`;
   const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
@@ -964,7 +985,7 @@ async function evaluationRequiredGaps() {
 async function anamnesis() {
   const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
   const newPatient = async (label) => {
-    const created = await api("POST", "/api/patients", { name: `E2E ${label} ${run}`, phone: "11999990010", age: 35, cpf: randomCpf() });
+    const created = await api("POST", "/api/patients", newPatientPayload({ name: `E2E ${label} ${run}`, phone: "11999990010", age: 35, cpf: randomCpf() }));
     if (created.status !== 201) throw new Error(`Paciente "${label}" não criado (${created.status})`);
     return created.data.patient ?? created.data;
   };
@@ -1184,7 +1205,7 @@ async function anamnesis() {
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const probe = await withSession(other.cookie, async () => {
-        const created = await api("POST", "/api/patients", { name: `E2E Externo ${run}`, phone: "11999990021", age: 40, cpf: randomCpf() });
+        const created = await api("POST", "/api/patients", newPatientPayload({ name: `E2E Externo ${run}`, phone: "11999990021", age: 40, cpf: randomCpf() }));
         return {
           foreign: created.data.patient ?? created.data,
           overview: await api("GET", `${base(A)}/anamnesis`),
@@ -1207,7 +1228,7 @@ async function anamnesis() {
 
     const staffEmail = `e2e-staff-${run}@example.com`;
     const staffPassword = `E2e-${run}-Staff9!`;
-    r = await api("POST", "/api/team", { name: "E2E Atendente", email: staffEmail, password: staffPassword, role: "STAFF" });
+    r = await api("POST", "/api/team", { name: "E2E Atendente", email: staffEmail, password: staffPassword, role: "STAFF" , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
     team = r.status === 201 ? r.data.member : null;
     const staff = team ? await loginAs(staffEmail, staffPassword) : null;
     if (staff?.status === 200) {
@@ -1276,7 +1297,7 @@ async function clinicalFiles() {
     try { data = JSON.parse(text); } catch { data = text.slice(0, 200); }
     return { status: response.status, data };
   };
-  const created = await api("POST", "/api/patients", { name: `E2E Arquivos ${run}`, phone: "11999990030", age: 33, cpf: randomCpf() });
+  const created = await api("POST", "/api/patients", newPatientPayload({ name: `E2E Arquivos ${run}`, phone: "11999990030", age: 33, cpf: randomCpf() }));
   if (created.status !== 201) throw new Error(`Paciente de arquivos não criado (${created.status})`);
   const P = (created.data.patient ?? created.data).id;
   const docs = `/api/patients/${P}/documents`;
@@ -1433,7 +1454,7 @@ async function clinicalFiles() {
       check("segunda clínica criada para testar isolamento de arquivos", false, `registro ${r.status} login ${other?.status}`);
     }
 
-    r = await api("POST", "/api/team", { name: "E2E Atendente Arquivos", email: staffEmail, password: staffPassword, role: "STAFF" });
+    r = await api("POST", "/api/team", { name: "E2E Atendente Arquivos", email: staffEmail, password: staffPassword, role: "STAFF" , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
     team = r.status === 201 ? r.data.member : null;
     const staff = team ? await loginAs(staffEmail, staffPassword) : null;
     if (staff?.status === 200) {
@@ -1516,7 +1537,7 @@ async function consentGate() {
     await api("POST", "/api/procedures", { name: `E2E Botox ${run}`, category: "Facial", price: 900, durationMinutes: 30, margin: 30 });
     procedure = (await api("GET", "/api/quotes/options")).data.procedures?.[0];
   }
-  const P = (await api("POST", "/api/patients", { name: `E2E Termo ${run}`, phone: "11999990040", age: 35, cpf: randomCpf() })).data.patient.id;
+  const P = (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Termo ${run}`, phone: "11999990040", age: 35, cpf: randomCpf() }))).data.patient.id;
   const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
   const mkJourney = async (name) => (await api("POST", `/api/patients/${P}/journeys`, { name, professionalId: professional?.id })).data.journey;
   const J1 = await mkJourney(`E2E Termo A ${run}`);
@@ -1616,7 +1637,7 @@ async function consentGate() {
   const mk = async (roleName, tag) => {
     const login = `e2e-termo-${tag}-${run}@example.com`;
     const secret = `E2e-${run}-${tag}9!`;
-    const created = await api("POST", "/api/team", { name: `E2E ${roleName} Termo`, email: login, password: secret, role: roleName });
+    const created = await api("POST", "/api/team", { name: `E2E ${roleName} Termo`, email: login, password: secret, role: roleName , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
     const session = created.status === 201 ? await loginAs(login, secret) : null;
     return { login, member: created.data.member, session, status: created.status };
   };
@@ -1682,8 +1703,8 @@ async function sessionPerQuote() {
   const pc = await mkProc(nameC, 10);
   check("sessão única: procedimentos criados", pa && pb && pc, JSON.stringify([pa?.id, pb?.id, pc?.id]));
   if (!pa || !pb || !pc) return;
-  const P = (await api("POST", "/api/patients", { name: `E2E Sessao Unica ${run}`, phone: "11999990050", age: 35, cpf: randomCpf() })).data.patient.id;
-  const P2 = (await api("POST", "/api/patients", { name: `E2E Sessao Outro ${run}`, phone: "11999990051", age: 35, cpf: randomCpf() })).data.patient.id;
+  const P = (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Sessao Unica ${run}`, phone: "11999990050", age: 35, cpf: randomCpf() }))).data.patient.id;
+  const P2 = (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Sessao Outro ${run}`, phone: "11999990051", age: 35, cpf: randomCpf() }))).data.patient.id;
   const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
   const J = (await api("POST", `/api/patients/${P}/journeys`, { name: `E2E Sessao J ${run}`, professionalId: professional?.id })).data.journey;
   const ev = (await api("PUT", `/api/patients/${P}/evaluation`, { journeyId: J.id, photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
@@ -1778,7 +1799,7 @@ async function quoteStatusKeepsSessions() {
   const created = await api("POST", "/api/procedures", { name, category: "Facial", price: 300, durationMinutes: 15, margin: 30 });
   const proc = (await api("GET", "/api/quotes/options")).data.procedures?.find((item) => item.name === name);
   if (!proc) { check("status do orçamento: procedimento de teste criado", false, `${created.status} ${JSON.stringify(created.data).slice(0, 150)}`); return; }
-  const P = (await api("POST", "/api/patients", { name: `E2E Status Orc ${run}`, phone: "11999990060", age: 35, cpf: randomCpf() })).data.patient?.id;
+  const P = (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Status Orc ${run}`, phone: "11999990060", age: 35, cpf: randomCpf() }))).data.patient?.id;
   const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
   const J = (await api("POST", `/api/patients/${P}/journeys`, { name: `E2E Status J ${run}`, professionalId: professional?.id })).data.journey;
   const ev = (await api("PUT", `/api/patients/${P}/evaluation`, { journeyId: J?.id, photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
@@ -1812,8 +1833,8 @@ async function scheduledProcedure() {
   const proc = (await api("GET", "/api/quotes/options")).data.procedures?.find((item) => item.name === name);
   check("agenda do procedimento: procedimento criado", Boolean(proc), proc?.id);
   if (!proc) return;
-  const P = (await api("POST", "/api/patients", { name: `E2E Agenda Proc ${run}`, phone: "11999990060", age: 35, cpf: randomCpf() })).data.patient.id;
-  const P2 = (await api("POST", "/api/patients", { name: `E2E Agenda Outro ${run}`, phone: "11999990061", age: 35, cpf: randomCpf() })).data.patient.id;
+  const P = (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Agenda Proc ${run}`, phone: "11999990060", age: 35, cpf: randomCpf() }))).data.patient.id;
+  const P2 = (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Agenda Outro ${run}`, phone: "11999990061", age: 35, cpf: randomCpf() }))).data.patient.id;
   const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
   const mkJourney = async (patientId, label) => {
     const j = (await api("POST", `/api/patients/${patientId}/journeys`, { name: `E2E ${label} ${run}`, professionalId: professional?.id })).data.journey;
@@ -1945,7 +1966,7 @@ async function scheduledProcedure() {
   check("agenda do procedimento: nome combinado vira itens sem duplicata", !names5.some((n) => n.includes(" + ")) && names5.length === new Set(names5).size && names5.includes(name) && names5.includes(`${name} B`), JSON.stringify(names5));
 
   // Jornada padrão (sem journeyId no corpo)
-  const P5 = (await api("POST", "/api/patients", { name: `E2E Agenda Padrao ${run}`, phone: "11999990062", age: 35, cpf: randomCpf() })).data.patient.id;
+  const P5 = (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Agenda Padrao ${run}`, phone: "11999990062", age: 35, cpf: randomCpf() }))).data.patient.id;
   const noJ = (extra = {}) => ({ patientId: P5, procedure: procName, professional: `Prof ${P5}`, time: "10:00", date: day(2), ...extra });
   r = await api("POST", "/api/appointments", noJ());
   check("agenda do procedimento: POST sem journeyId cria na jornada padrão (201)", r.status === 201, `${r.status} ${r.data.message}`);
@@ -1989,7 +2010,7 @@ async function startMovesAppointment() {
   check("início move agendamento: procedimento criado", Boolean(proc), proc?.id);
   if (!proc) return;
   const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
-  const mkPatient = async (label, phone) => (await api("POST", "/api/patients", { name: `E2E Inicio ${label} ${run}`, phone, age: 35, cpf: randomCpf() })).data.patient.id;
+  const mkPatient = async (label, phone) => (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Inicio ${label} ${run}`, phone, age: 35, cpf: randomCpf() }))).data.patient.id;
   const P = await mkPatient("A", "11999990070");
   const P2 = await mkPatient("B", "11999990071");
   const upload = async (patientId, journeyId, signatureStatus) => {
@@ -2341,7 +2362,7 @@ async function procedureCatalog() {
     }
 
     for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
-      r = await api("POST", "/api/team", { name: `E2E ${role} Catalogo`, email: memberEmail, password: memberPassword, role });
+      r = await api("POST", "/api/team", { name: `E2E ${role} Catalogo`, email: memberEmail, password: memberPassword, role , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
       if (r.status === 201) members.push(r.data.member);
       const session = r.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
       if (session?.status !== 200) { check(`usuário ${role} criado para testar permissões do catálogo`, false, `team ${r.status} login ${session?.status}`); continue; }
@@ -2748,7 +2769,7 @@ async function procedureCatalogGaps() {
     check("sem sessão: POST/PATCH/GET de procedimentos, DELETE de imagem, quotes/options e agenda devolvem 401", anon.every((item) => item.status === 401), anon.map((item) => item.status).join());
     const kept = (await call("POST", "/api/procedures/images", form(png, "k.png", "image/png"))).data;
     for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
-      r = await api("POST", "/api/team", { name: `E2E ${role} Catalogo2`, email: memberEmail, password: memberPassword, role });
+      r = await api("POST", "/api/team", { name: `E2E ${role} Catalogo2`, email: memberEmail, password: memberPassword, role , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
       if (r.status === 201) members.push(r.data.member);
       const session = r.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
       if (session?.status !== 200) { check(`usuário ${role} criado para as lacunas de permissão`, false, `team ${r.status} login ${session?.status}`); continue; }
@@ -2789,7 +2810,7 @@ async function procedureCatalogGaps() {
       ["renomeado", renamedProc],
     ];
     for (const [label, proc] of integrationProcs) {
-      const patientId = (await api("POST", "/api/patients", { name: `E2E Cat Int ${label} ${run}`, phone: "11999990081", age: 35, cpf: randomCpf() })).data.patient?.id;
+      const patientId = (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Cat Int ${label} ${run}`, phone: "11999990081", age: 35, cpf: randomCpf() }))).data.patient?.id;
       const journey = (await api("POST", `/api/patients/${patientId}/journeys`, { name: `E2E Cat ${label} ${run}`, professionalId: professional?.id })).data.journey;
       const evaluation = (await api("PUT", `/api/patients/${patientId}/evaluation`, { journeyId: journey.id, photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
       const quote = await api("POST", "/api/quotes", { patientId, journeyId: journey.id, evaluationId: evaluation.id, details: [{ procedureId: proc.id, quantity: 1, discountCents: 0 }], paymentMethod: "Pix", installments: 1, notes: "" });
@@ -2825,7 +2846,14 @@ async function procedureCatalogGaps() {
 // Paginação e carregamento sob demanda: lista de clientes paginada no servidor, busca limitada para seletores e agenda por período.
 async function paginationSuite() {
   const tag = `Pg${run}`;
-  const mk = (name, phone, extra = {}) => api("POST", "/api/patients", { name, phone, age: 30, cpf: randomCpf(), ...extra });
+  // A API só aceita nome e sobrenome sem números/símbolos; os nomes do roteiro (com "01", "50%") testam a BUSCA, então
+  // o cliente é criado com nome/telefone válidos (os de 10 dígitos começando com 9 também são recusados) e o valor de busca é gravado direto no banco (clínica de teste).
+  const mk = async (name, phone, extra = {}) => {
+    const r = await api("POST", "/api/patients", newPatientPayload({ name: name.replace(/[^\p{L}\p{M}.'’ -]/gu, "x"), phone: phone.length === 10 ? "11999990000" : phone, age: 30, cpf: randomCpf(), ...extra }));
+    if (r.data.patient) await prisma.patient.update({ where: { id: r.data.patient.id }, data: { name, phone } });
+    if (r.data.patient) r.data.patient.name = name;
+    return r;
+  };
   const baseline = (await api("GET", "/api/patients?pageSize=1")).data.summary;
   const N = baseline.total + 30;
   const baseInativa = baseline.byStatus?.Inativa ?? 0, baseAtiva = baseline.byStatus?.Ativa ?? 0;
@@ -2962,7 +2990,8 @@ async function paginationSuite() {
   check("agenda sem atendimentos no período: lista vazia", r.status === 200 && r.data.appointments.length === 0 && r.data.total === 0, `${r.status}`);
   r = await period("2031-02-28", "2031-02-28");
   const row = r.data.appointments?.[0];
-  check("agenda: item enxuto {id,patientId,date,time,procedure,professional,status,patient:{name}}, sem observações", row && Object.keys(row).sort().join() === "date,id,patient,patientId,procedure,professional,status,time" && Object.keys(row.patient).join() === "name" && String(row.date).slice(0, 10) === "2031-02-28", JSON.stringify(row));
+  // Contrato: a lista da agenda traz `notes` (a tela usa na edição/cancelamento) e nada além do que a tela usa: sem materiais, imagens nem histórico.
+  check("agenda: item enxuto {id,patientId,date,time,procedure,professional,status,patient:{name}} + notes, sem materiais", row && Object.keys(row).sort().join() === "date,id,notes,patient,patientId,procedure,professional,status,time" && Object.keys(row.patient).join() === "name" && String(row.date).slice(0, 10) === "2031-02-28", JSON.stringify(row));
   const bad = [[null, null], ["2031-02-01", null], [null, "2031-02-01"], ["2031-02-30", "2031-03-01"], ["2031-13-01", "2031-13-02"], ["20310201", "20310202"], ["2031-02-10", "2031-02-01"], ["2031-01-01", "2031-12-31"], ["abc", "def"]];
   const badStatuses = [];
   for (const [from, to] of bad) badStatuses.push((await api("GET", `/api/agenda?${[from && `from=${from}`, to && `to=${to}`].filter(Boolean).join("&")}`)).status);
@@ -3010,7 +3039,7 @@ async function paginationSuite() {
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const probe = await withSession(other.cookie, async () => {
-        const mine = (await api("POST", "/api/patients", { name: `${tag} Externo`, phone: "11977770000", age: 40, cpf: randomCpf() })).data.patient;
+        const mine = (await api("POST", "/api/patients", newPatientPayload({ name: `${tag} Externo`, phone: "11977770000", age: 40, cpf: randomCpf() }))).data.patient;
         const otherClinicId = (await prisma.patient.findUnique({ where: { id: mine.id }, select: { clinicId: true } })).clinicId;
         await prisma.appointment.create({ data: { clinicId: otherClinicId, patientId: mine.id, date: instant("2031-02-10"), time: "11:00", procedure: "Retorno", professional: "Externo", status: "Agendado", notes: "" } });
         return {
@@ -3032,7 +3061,7 @@ async function paginationSuite() {
     } else check("paginação: outra clínica criada", false, `register ${r.status}`);
 
     for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
-      const made = await api("POST", "/api/team", { name: `E2E ${role} Pg`, email: memberEmail, password: memberPassword, role });
+      const made = await api("POST", "/api/team", { name: `E2E ${role} Pg`, email: memberEmail, password: memberPassword, role , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
       if (made.status === 201) members.push(made.data.member);
       const session = made.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
       if (session?.status !== 200) { check(`paginação: usuário ${role} criado`, false, `team ${made.status} login ${session?.status}`); continue; }
@@ -3091,10 +3120,10 @@ async function paginationGaps() {
       check("clínica vazia: agenda do período vazia e bootstrap sem agendamentos nem pacientes", r.status === 200 && r.data.total === 0 && (await api("GET", "/api/agenda/bootstrap")).status === 200, `${r.status}`);
 
       // 1 e 2 pacientes.
-      const one = (await api("POST", "/api/patients", { name: `${tag} Unico`, phone: "11988880001", age: 30 })).data.patient;
+      const one = (await api("POST", "/api/patients", newPatientPayload({ name: `${tag} Unico`, phone: "11988880001", age: 30 }))).data.patient;
       r = await list();
       check("1 paciente: total 1, pageCount 1, resumo 1", r.data.patients.length === 1 && r.data.pagination.total === 1 && r.data.pagination.pageCount === 1 && r.data.summary.total === 1 && r.data.summary.byStatus.Ativa === 1, JSON.stringify(r.data.pagination));
-      await api("POST", "/api/patients", { name: `${tag} Segundo`, phone: "11988880002", age: 31 });
+      await api("POST", "/api/patients", newPatientPayload({ name: `${tag} Segundo`, phone: "11988880002", age: 31 }));
       r = await list("pageSize=1&page=2");
       check("2 pacientes com pageSize=1: pageCount 2 e a página 2 traz o último por nome (Unico depois de Segundo)", r.data.pagination.pageCount === 2 && r.data.patients.length === 1 && r.data.patients[0].id === one.id && r.data.summary.total === 2, JSON.stringify(r.data.pagination));
       await prisma.patient.deleteMany({ where: { clinicId } });
@@ -3147,7 +3176,7 @@ async function paginationGaps() {
 
       // Mutação entre páginas: criar e excluir mudam total/resumo e a ordem continua sem duplicar dentro de uma página.
       const before = await list("pageSize=10&page=1");
-      const created = (await api("POST", "/api/patients", { name: `${tag} AAA Novo`, phone: "11988889999", age: 33 })).data.patient;
+      const created = (await api("POST", "/api/patients", newPatientPayload({ name: `${tag} AAA Novo`, phone: "11988889999", age: 33 }))).data.patient;
       const after1 = await list("pageSize=10&page=1");
       const after2 = await list("pageSize=10&page=2");
       check("criar paciente entre páginas: total e resumo sobem em 1, o novo (nome menor) abre a página 1 e o 10º vai para a página 2 (sem perder ninguém)", after1.data.pagination.total === 201 && after1.data.summary.total === 201 && after1.data.patients[0].id === created.id && after2.data.patients[0].id === before.data.patients[9].id, `${after1.data.pagination.total} ${after1.data.patients[0]?.name}`);
@@ -3208,7 +3237,7 @@ async function paginationGaps() {
       check("lookup: uma letra devolve vazio (mínimo 2 caracteres), 2 letras pesquisam, só espaços e vazio devolvem lista vazia, q enorme não quebra", (await api("GET", "/api/patients/lookup?q=l")).data.patients.length === 0 && (await api("GET", "/api/patients/lookup?q=lo")).data.patients.length === 8 && (await api("GET", "/api/patients/lookup?q=%20%20")).data.patients.length === 0 && (await api("GET", `/api/patients/lookup?q=${"z".repeat(3000)}`)).status === 200, "");
 
       // Agenda: extremos, domingo, viradas, bissexto, status, ordenação, outro paciente.
-      const patient = (await api("POST", "/api/patients", { name: `${tag} Agenda`, phone: "11977111111", age: 30 })).data.patient;
+      const patient = (await api("POST", "/api/patients", newPatientPayload({ name: `${tag} Agenda`, phone: "11977111111", age: 30 }))).data.patient;
       const noon = (d) => new Date(`${d}T12:00:00-03:00`);
       const slot = (key, d, time, extra = {}) => prisma.appointment.create({ data: { clinicId, patientId: patient.id, date: noon(d), time, procedure: "Retorno", professional: `Prof ${key}`, status: "Agendado", notes: "", ...extra } });
       const s = {
@@ -3243,7 +3272,7 @@ async function paginationGaps() {
       check("agenda: 2032-2-3, mês 13, 30/02, invertido, com hora, vazio e ausente => 400", edge.every((x) => x.status === 400 && typeof x.data.message === "string"), edge.map((x) => x.status).join());
       const farFuture = await api("GET", "/api/agenda?from=9999-12-30&to=9999-12-31");
       check("agenda: ano 9999 (fora de 1970 a 2100) => 400, nunca 5xx", farFuture.status === 400, `${farFuture.status}`);
-      check("agenda: item enxuto e sem observações/materiais mesmo com notas no banco", await (async () => { await prisma.appointment.update({ where: { id: s.leap.id }, data: { notes: "nota clínica secreta", materialsCheck: "ok" } }); const x = (await rows("2032-02-29", "2032-02-29")).find((row) => row.id === s.leap.id); return x && !JSON.stringify(x).includes("secreta") && Object.keys(x).sort().join() === "date,id,patient,patientId,procedure,professional,status,time"; })(), "");
+      check("agenda: item enxuto: notes sim, materiais não, mesmo com dados no banco", await (async () => { await prisma.appointment.update({ where: { id: s.leap.id }, data: { notes: "nota da agenda", materialsCheck: "segredo-materiais" } }); const x = (await rows("2032-02-29", "2032-02-29")).find((row) => row.id === s.leap.id); return x && !JSON.stringify(x).includes("segredo-materiais") && x.notes === "nota da agenda" && Object.keys(x).sort().join() === "date,id,notes,patient,patientId,procedure,professional,status,time"; })(), "");
 
       // Agendamento criado pela API no último dia do período e à meia-noite.
       const apiDay = day(20);
@@ -3257,7 +3286,7 @@ async function paginationGaps() {
       const adminBootstrap = await api("GET", "/api/agenda/bootstrap");
       const options = await api("GET", "/api/quotes/options");
       for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
-        const made = await api("POST", "/api/team", { name: `E2E ${role} Pgx`, email: memberEmail, password: memberPassword, role });
+        const made = await api("POST", "/api/team", { name: `E2E ${role} Pgx`, email: memberEmail, password: memberPassword, role , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
         if (made.status === 201) members.push(made.data.member);
         const session = made.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
         if (session?.status !== 200) { check(`paginação (lacunas): usuário ${role} criado`, false, `team ${made.status}`); continue; }
@@ -3297,7 +3326,7 @@ async function activeProcedures() {
     const procName = `E2E AP Proc ${label} ${run}`;
     await api("POST", "/api/procedures", { name: procName, category: "Facial", price: 500, durationMinutes: 30, margin: 30 });
     const proc = (await api("GET", "/api/quotes/options")).data.procedures?.find((item) => item.name === procName);
-    const patient = (await api("POST", "/api/patients", { name: `E2E AP Paciente ${label} ${run}`, phone: "11999990060", age: 33, cpf: randomCpf() })).data.patient;
+    const patient = (await api("POST", "/api/patients", newPatientPayload({ name: `E2E AP Paciente ${label} ${run}`, phone: "11999990060", age: 33, cpf: randomCpf() }))).data.patient;
     const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
     const journey = (await api("POST", `/api/patients/${patient.id}/journeys`, { name: `E2E AP Jornada ${label} ${run}`, professionalId: professional?.id })).data.journey;
     const ev = (await api("PUT", `/api/patients/${patient.id}/evaluation`, { journeyId: journey.id, photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
@@ -3332,7 +3361,7 @@ async function activeProcedures() {
     const itemA = r.data.sessions?.find((x) => x.id === A.session.id);
     check("procedimentos ativos: valores de A (paciente, jornada, procedimento)", itemA?.patientId === A.patient.id && itemA.journeyId === A.journey.id && itemA.procedureName === A.procName && itemA.patientName === A.patient.name && itemA.journeyName === A.journey.name, JSON.stringify(itemA));
     const allowed = ["id", "patientId", "journeyId", "procedureName", "patientName", "journeyName"].sort().join();
-    check("procedimentos ativos: só os 6 campos enxutos (sem fotos, materiais, histórico)", r.data.sessions.every((x) => Object.keys(x).sort().join() === allowed) && Object.keys(r.data).join() === "sessions" && !JSON.stringify(r.data).includes("data:image") && !JSON.stringify(r.data).includes("auditLog"), JSON.stringify(Object.keys(itemA ?? {})));
+    check("procedimentos ativos: só os 6 campos enxutos (sem fotos, materiais, histórico)", r.data.sessions.every((x) => Object.keys(x).sort().join() === allowed) && Object.keys(r.data).join() === "viewer,sessions" && !JSON.stringify(r.data).includes("data:image") && !JSON.stringify(r.data).includes("auditLog"), JSON.stringify(Object.keys(itemA ?? {})));
 
     await prisma.patientProcedureSession.update({ where: { id: C.session.id }, data: { status: "Concluída" } });
     r = await api("GET", url);
@@ -3376,7 +3405,7 @@ async function activeProcedures() {
 
 // Avaliação facial: observações faciais (facialNotes) e legenda das marcações nas fotos, em /api/patients/[id]/evaluation.
 async function facialEvaluation() {
-  const mk = async (label) => (await api("POST", "/api/patients", { name: `E2E Facial ${label} ${run}`, phone: "11999990031", age: 33, cpf: randomCpf() })).data.patient;
+  const mk = async (label) => (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Facial ${label} ${run}`, phone: "11999990031", age: 33, cpf: randomCpf() }))).data.patient;
   const P = await mk("A");
   const Q = await mk("B");
   const url = `/api/patients/${P.id}/evaluation`;
@@ -3507,7 +3536,7 @@ async function facialEvaluation() {
 // Conflitos de agenda: o mesmo profissional ou paciente não tem dois atendimentos sobrepostos (criar, remarcar, reativar, concorrência).
 async function scheduleConflicts() {
   const D = day(10);
-  const mk = async (label, n) => (await api("POST", "/api/patients", { name: `E2E Conflito ${label} ${run}`, phone: `1199999${String(7000 + n)}`, age: 30, cpf: randomCpf() })).data.patient;
+  const mk = async (label, n) => (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Conflito ${label} ${run}`, phone: `1199999${String(7000 + n)}`, age: 30, cpf: randomCpf() }))).data.patient;
   const [Pa, Pb, Pc] = [await mk("A", 1), await mk("B", 2), await mk("C", 3)];
   const X = `Prof X ${run}`, Y = `Prof Y ${run}`;
   const post = (patient, professional, time, extra = {}) => api("POST", "/api/appointments", { patientId: patient.id, procedure: "Retorno", professional, time, date: D, ...extra });
@@ -3619,7 +3648,7 @@ async function scheduleConflicts() {
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const result = await withSession(other.cookie, async () => {
-        const patient = (await api("POST", "/api/patients", { name: `E2E Conflito Ext ${run}`, phone: "11999997100", age: 30, cpf: randomCpf() })).data.patient;
+        const patient = (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Conflito Ext ${run}`, phone: "11999997100", age: 30, cpf: randomCpf() }))).data.patient;
         return api("POST", "/api/appointments", { patientId: patient.id, procedure: "Retorno", professional: X, time: "10:00", date: D });
       });
       check("conflitos: outra clínica agenda o mesmo profissional/horário sem conflito", result.status === 201, `${result.status} ${result.data.message}`);
@@ -3639,7 +3668,7 @@ async function scheduleConflictGaps() {
   let off = 100;
   const nd = () => day(off++);
   let seq = 0;
-  const mkP = async (label) => (await api("POST", "/api/patients", { name: `E2E ConfG ${label} ${run}`, phone: `119${Math.floor(10000000 + Math.random() * 89999999)}`, age: 30, cpf: randomCpf() })).data.patient;
+  const mkP = async (label) => (await api("POST", "/api/patients", newPatientPayload({ name: `E2E ConfG ${label} ${run}`, phone: `119${Math.floor(10000000 + Math.random() * 89999999)}`, age: 30, cpf: randomCpf() }))).data.patient;
   const fresh = () => mkP(`P${seq++}`);
   const pool = []; for (let i = 0; i < 5; i += 1) pool.push(await fresh());
   const clinicId = (await prisma.patient.findUnique({ where: { id: pool[0].id }, select: { clinicId: true } })).clinicId;
@@ -3745,30 +3774,22 @@ async function scheduleConflictGaps() {
     check("lacunas(b): 'Retorno - X' de 90 min também ocupa 90 min (11:15 => 409)", b2.status === 201 && i2.status === 409, `${b2.status}/${i2.status}`);
   }
 
-  // Faixas que atravessam a meia-noite e 23:30+60 (só existem como dado legado: a API de criação respeita o expediente).
+  // Faixa legada que passa do fechamento (17:30 + 60 = 18:30). A virada de meia-noite deixou de ser testável pela API:
+  // remarcar só aceita horários dentro do expediente (08:00 às 18:00), então o candidato não alcança 23:30/00:00.
   {
-    const M = day(off), M1 = day(off + 1); off += 2;
-    const pro = `Meia ${run}`, pro2 = `Meia2 ${run}`;
-    const s = await fresh(), q = await fresh(), t = await fresh(), rr = await fresh();
-    await seed(s, M, "23:30", "Retorno", pro);
-    const Q = (await post(q, pro, "09:00", M1)).data.appointment;
-    let r = await patch(Q?.id, { time: "00:15" });
-    check("lacunas(b): 23:30+60 atravessa a meia-noite: remarcar para 00:15 do dia seguinte => 409", r.status === 409 && (await rowOf(Q.id)).time === "09:00", msg(r));
-    r = await patch(Q.id, { time: "00:30" });
-    check("lacunas(b): remarcar para 00:30 (adjacente ao fim 00:30) => 200", r.status === 200, msg(r));
-    r = await patch(Q.id, { time: "00:29" });
-    check("lacunas(b): remarcar para 00:29 (1 minuto dentro) => 409", r.status === 409, msg(r));
-    await seed(t, M1, "00:00", "Retorno", pro2);
-    const R = (await post(rr, pro2, "09:00", M)).data.appointment;
-    r = await patch(R.id, { time: "23:30" });
-    check("lacunas(b): 23:30 de hoje (até 00:30) contra 00:00 de amanhã => 409", r.status === 409, msg(r));
-    r = await patch(R.id, { time: "23:00" });
-    check("lacunas(b): 23:00 (até 00:00) contra 00:00 de amanhã => 200 (adjacente)", r.status === 200, msg(r));
-    const pro3 = `Meia3 ${run}`, u = await fresh(), v = await fresh();
-    await seed(u, M, "23:30", "Retorno", pro3);
-    const V = (await post(v, pro3, "09:00", M)).data.appointment;
-    const codes = [(await patch(V.id, { time: "23:45" })).status, (await patch(V.id, { time: "23:00" })).status, (await patch(V.id, { time: "22:30" })).status];
-    check("lacunas(b): contra 23:30–00:30: 23:45 => 409, 23:00 => 409, 22:30 => 200", codes.join() === "409,409,200", codes.join());
+    const M = day(off); off += 1;
+    const pro = `Meia ${run}`;
+    const s0 = await fresh(), q = await fresh();
+    await seed(s0, M, "17:30", "Retorno", pro);
+    const Q = (await post(q, pro, "09:00", M)).data.appointment;
+    let r = await patch(Q?.id, { time: "17:00" });
+    check("lacunas(b): legado 17:30+60 (passa do fechamento): remarcar 17:00–18:00 sobrepõe => 409", r.status === 409 && (await rowOf(Q.id)).time === "09:00", msg(r));
+    r = await patch(Q.id, { time: "16:29" });
+    check("lacunas(b): legado 17:30: remarcar 16:29–17:29 (1 minuto de folga) => 200", r.status === 200, msg(r));
+    r = await patch(Q.id, { time: "16:31" });
+    check("lacunas(b): legado 17:30: remarcar 16:31–17:31 (1 minuto dentro) => 409", r.status === 409, msg(r));
+    r = await patch(Q.id, { time: "16:30" });
+    check("lacunas(b): legado 17:30: remarcar 16:30–17:30 (adjacente) => 200", r.status === 200, msg(r));
   }
 
   // (c) Status que ocupam ou liberam a faixa.
@@ -3999,7 +4020,7 @@ async function scheduleConflictGaps() {
       const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
       if (other?.status === 200) {
         const theirs = await withSession(other.cookie, async () => {
-          const patient = (await api("POST", "/api/patients", { name: `E2E ConfG Ext ${run}`, phone: "11999997201", age: 30, cpf: randomCpf() })).data.patient;
+          const patient = (await api("POST", "/api/patients", newPatientPayload({ name: `E2E ConfG Ext ${run}`, phone: "11999997201", age: 30, cpf: randomCpf() }))).data.patient;
           const a = await post(patient, pro, "10:00", d);
           const b = await post(patient, pro, "10:30", d);
           const foreign = await patch(Z.id, { time: "13:00" });
@@ -4063,7 +4084,7 @@ async function scheduleConflictGaps() {
     const proEmail = `e2e-confg-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
     try {
       for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
-        const created = await api("POST", "/api/team", { name: `E2E ${role} ConfG`, email: memberEmail, password: memberPassword, role });
+        const created = await api("POST", "/api/team", { name: `E2E ${role} ConfG`, email: memberEmail, password: memberPassword, role , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
         if (created.status === 201) members.push(created.data.member);
         const session = created.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
         if (session?.status !== 200) { check(`lacunas(h): usuário ${role} criado`, false, `team ${created.status} login ${session?.status}`); continue; }
@@ -4126,7 +4147,7 @@ async function sessionMaterials() {
   if (!(p1 && p2 && p3)) return;
   await prisma.product.update({ where: { id: archived.id }, data: { archivedAt: new Date() } });
 
-  const P = (await api("POST", "/api/patients", { name: `E2E Mat Sessao ${run}`, phone: "11999990060", age: 35, cpf: randomCpf() })).data.patient.id;
+  const P = (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Mat Sessao ${run}`, phone: "11999990060", age: 35, cpf: randomCpf() }))).data.patient.id;
   const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
   const J = (await api("POST", `/api/patients/${P}/journeys`, { name: `E2E Mat J ${run}`, professionalId: professional?.id })).data.journey;
   const ev = (await api("PUT", `/api/patients/${P}/evaluation`, { journeyId: J.id, photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
@@ -4295,8 +4316,8 @@ async function sessionMaterialsGaps() {
     for (const [productId, quantity] of rows) await prisma.procedureMaterial.create({ data: { procedureId: procedure.id, productId, quantity } });
     return procedure;
   };
-  const P = (await api("POST", "/api/patients", { name: `E2E Mat Lacunas ${run}`, phone: "11999990061", age: 35, cpf: randomCpf() })).data.patient.id;
-  const P2 = (await api("POST", "/api/patients", { name: `E2E Mat Outro Pac ${run}`, phone: "11999990062", age: 35, cpf: randomCpf() })).data.patient.id;
+  const P = (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Mat Lacunas ${run}`, phone: "11999990061", age: 35, cpf: randomCpf() }))).data.patient.id;
+  const P2 = (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Mat Outro Pac ${run}`, phone: "11999990062", age: 35, cpf: randomCpf() }))).data.patient.id;
   const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
   const mkJourney = async (patientId, label) => {
     const j = (await api("POST", `/api/patients/${patientId}/journeys`, { name: `E2E Mat ${label} ${run}`, professionalId: professional?.id })).data.journey;
@@ -4540,7 +4561,7 @@ async function sessionMaterialsGaps() {
   try {
     for (const [role, login] of [["STAFF", `e2e-mg-staff-${run}@example.com`], ["PROFESSIONAL", `e2e-mg-prof-${run}@example.com`]]) {
       const secret = `E2e-${run}-${role}9!`;
-      const created = await api("POST", "/api/team", { name: `E2E ${role} MG`, email: login, password: secret, role });
+      const created = await api("POST", "/api/team", { name: `E2E ${role} MG`, email: login, password: secret, role , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
       if (created.status === 201) members.push(created.data.member);
       const session = created.status === 201 ? await loginAs(login, secret) : null;
       if (session?.status !== 200) { check(`lacunas materiais: usuário ${role} criado`, false, `${created.status} ${session?.status}`); continue; }
@@ -4653,7 +4674,7 @@ async function pendingStock(patient) {
   try {
     for (const role of ["STAFF", "PROFESSIONAL"]) {
       const login = `e2e-pend-${role.toLowerCase()}-${run}@example.com`, secret = `E2e-${run}-Pend9!`;
-      const created = await api("POST", "/api/team", { name: `E2E ${role} Pend`, email: login, password: secret, role });
+      const created = await api("POST", "/api/team", { name: `E2E ${role} Pend`, email: login, password: secret, role , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
       if (created.status === 201) members.push(created.data.member);
       const s = created.status === 201 ? await loginAs(login, secret) : null;
       const res = s?.status === 200 ? await withSession(s.cookie, async () => [await api("GET", "/api/stock/pending"), await api("POST", `/api/stock/pending/${out.id}`, {})]) : [];
@@ -4732,7 +4753,7 @@ async function patientCpfMask() {
   const masked = `***.***.***-${cpf.slice(-2)}`;
   const nameKey = `Mascara ${run}`;
   let team = null;
-  let r = await api("POST", "/api/patients", { name: nameKey, phone: "11999990077", age: 33, cpf });
+  let r = await api("POST", "/api/patients", newPatientPayload({ name: nameKey, phone: "11999990077", age: 33, cpf }));
   const target = r.data.patient;
   check("CPF (máscara): ADMIN cadastra e recebe o CPF completo", r.status === 201 && target?.cpf === cpf, `${r.status} ${target?.cpf}`);
   r = await api("GET", `/api/patients?q=${encodeURIComponent(nameKey)}`);
@@ -4740,7 +4761,7 @@ async function patientCpfMask() {
   r = await api("GET", `/api/patients/lookup?q=${cpf.slice(0, 5)}`);
   check("CPF (máscara): ADMIN busca CPF parcial (5 dígitos) no lookup e vê completo", r.data.patients?.find((p) => p.id === target.id)?.cpf === cpf, JSON.stringify(r.data).slice(0, 120));
   try {
-    r = await api("POST", "/api/team", { name: "E2E Atendente CPF", email: staffEmail, password: staffPassword, role: "STAFF" });
+    r = await api("POST", "/api/team", { name: "E2E Atendente CPF", email: staffEmail, password: staffPassword, role: "STAFF" , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
     team = r.status === 201 ? r.data.member : null;
     const staff = team ? await loginAs(staffEmail, staffPassword) : null;
     if (staff?.status !== 200) { check("usuário STAFF criado para testar o CPF mascarado", false, `team ${r.status} login ${staff?.status}`); return; }
@@ -4756,7 +4777,7 @@ async function patientCpfMask() {
       out.exact = await api("GET", `/api/patients/lookup?q=${cpf}`);
       out.byName = await api("GET", `/api/patients/lookup?q=${encodeURIComponent(nameKey)}`);
       out.quotes = await api("GET", "/api/quotes");
-      out.maskedPost = await api("POST", "/api/patients", { name: `Mascarado ${run}`, phone: "11999990078", age: 30, cpf: "***.***.***-12" });
+      out.maskedPost = await api("POST", "/api/patients", newPatientPayload({ name: `Mascarado ${run}`, phone: "11999990078", age: 30, cpf: "***.***.***-12" }));
       out.patchAbsent = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} B`, phone: "11999990077", age: 34 });
       out.patchMasked = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} C`, phone: "11999990077", age: 35, cpf: masked });
       out.patchEmpty = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36, cpf: "" });
@@ -4837,23 +4858,23 @@ async function patientRegistration() {
     // 4. menor
     const guardian = { legalGuardianName: "zz QN Responsavel", legalGuardianCpf: randomCpf(), legalGuardianPhone: "11999990102", legalGuardianRelationship: "Mãe" };
     const minor = { privacyConsent: true, birthDate: ptBr(minorBirth) };
-    r = await api("POST", "/api/patients", { ...minor, name: name("menor1"), ...guardian });
+    r = await api("POST", "/api/patients", { ...minor, name: name("menor a"), ...guardian });
     check("Cadastro: menor sem CPF/telefone próprios, com responsável, responde 201", r.status === 201 && r.data.patient?.age === 8, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
-    r = await api("POST", "/api/patients", { ...minor, name: name("menor2"), ...guardian });
+    r = await api("POST", "/api/patients", { ...minor, name: name("menor b"), ...guardian });
     check("Cadastro: dois menores sem CPF coexistem (CPF vira NULL)", r.status === 201, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
-    const nulls = await prisma.patient.count({ where: { name: { in: [name("menor1"), name("menor2")] }, cpf: null } });
+    const nulls = await prisma.patient.count({ where: { name: { in: [name("menor a"), name("menor b")] }, cpf: null } });
     check("Cadastro: CPF vazio do menor gravado como NULL", nulls === 2, nulls);
-    r = await api("POST", "/api/patients", { ...minor, name: name("menor3") });
+    r = await api("POST", "/api/patients", { ...minor, name: name("menor c") });
     check("Cadastro: menor sem responsável recusado (400)", r.status === 400, r.status);
-    r = await api("POST", "/api/patients", { ...minor, name: name("menor4"), ...guardian, legalGuardianCpf: "" });
+    r = await api("POST", "/api/patients", { ...minor, name: name("menor d"), ...guardian, legalGuardianCpf: "" });
     check("Cadastro: menor com responsável sem CPF recusado (400)", r.status === 400, r.status);
 
     // 5. convênio
-    r = await api("POST", "/api/patients", { ...base, name: name("conv1"), careType: "Convênio" });
+    r = await api("POST", "/api/patients", { ...base, name: name("conv a"), careType: "Convênio" });
     check("Cadastro: Convênio sem operadora/carteirinha recusado (400)", r.status === 400, r.status);
-    r = await api("POST", "/api/patients", { ...base, name: name("conv2"), careType: "Convênio", insuranceProvider: "Operadora E2E", insuranceCardNumber: "123456" });
+    r = await api("POST", "/api/patients", { ...base, cpf: randomCpf(), name: name("conv b"), careType: "Convênio", insuranceProvider: "Operadora E2E", insuranceCardNumber: "123456" });
     check("Cadastro: Convênio com operadora e carteirinha responde 201", r.status === 201, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
-    const conv = await prisma.patient.findFirst({ where: { name: name("conv2") }, select: { insuranceProvider: true, insuranceCardNumber: true, careType: true } });
+    const conv = await prisma.patient.findFirst({ where: { name: name("conv b") }, select: { insuranceProvider: true, insuranceCardNumber: true, careType: true } });
     check("Cadastro: dados do convênio gravados", conv?.careType === "Convênio" && conv.insuranceProvider === "Operadora E2E" && conv.insuranceCardNumber === "123456", JSON.stringify(conv));
   } finally {
     await prisma.patient.deleteMany({ where: mineWhere });
@@ -4862,7 +4883,7 @@ async function patientRegistration() {
 
 // Preço com centavos no catálogo e no orçamento (Procedure.price é Float): ida e volta, vírgula pt-BR, multiplicação, desconto.
 async function quoteCents() {
-  const patient = (await api("POST", "/api/patients", { name: `Centavos ${run}`, phone: "11999990066", age: 29 })).data.patient;
+  const patient = (await api("POST", "/api/patients", newPatientPayload({ name: `Centavos ${run}`, phone: "11999990066", age: 29 }))).data.patient;
   const mk = (name, price) => api("POST", "/api/procedures", { custom: true, name: `E2E Cent ${name} ${run}`, category: "Teste", price, durationMinutes: 30, margin: 30 });
   let r = await mk("a", "349,90");
   const a = r.data.procedure;
@@ -4948,7 +4969,7 @@ async function mobilePhotos() {
   const cookieMe = await api("GET", "/api/auth/me");
   check("cookie continua funcionando em /api/auth/me", cookieMe.status === 200 && cookieMe.data.user?.id === r.data.user?.id, cookieMe.status);
 
-  const patient = (await api("POST", "/api/patients", { name: `Foto App ${run}`, phone: "11999990101", age: 33 })).data.patient;
+  const patient = (await api("POST", "/api/patients", newPatientPayload({ name: `Foto App ${run}`, phone: "11999990101", age: 33 }))).data.patient;
   r = await callJson(token, "GET", `/api/patients/lookup?q=${encodeURIComponent(`Foto App ${run}`)}`);
   check("Bearer: GET /api/patients/lookup?q= encontra o paciente", r.status === 200 && JSON.stringify(r.data).includes(patient.id), `${r.status} ${JSON.stringify(r.data).slice(0, 100)}`);
 
@@ -5023,7 +5044,7 @@ async function mobilePhotos() {
   check("miniatura e original continuam auditados como VIEW (uma vez na janela)", viewAudit === 1, viewAudit);
 
   // --- Avaliação concluída nunca é reaberta ---
-  const closedPatient = (await api("POST", "/api/patients", { name: `Foto Concluída ${run}`, phone: "11999990102", age: 40 })).data.patient;
+  const closedPatient = (await api("POST", "/api/patients", newPatientPayload({ name: `Foto Concluída ${run}`, phone: "11999990102", age: 40 }))).data.patient;
   const closed = (await api("PUT", `/api/patients/${closedPatient.id}/evaluation`, { photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
   r = await upload(token, closedPatient.id, small, { evaluationId: closed.id });
   const closedRow = await prisma.evaluation.findUnique({ where: { id: closed.id }, select: { status: true, _count: { select: { photos: true } } } });
@@ -5034,7 +5055,7 @@ async function mobilePhotos() {
   check("upload: com concluída e rascunho novo, usa o rascunho", r.status === 201 && r.data.evaluation.created === false && r.data.evaluation.photoCount === 2, JSON.stringify(r.data.evaluation));
 
   // --- Limite de 20 fotos ---
-  const fullPatient = (await api("POST", "/api/patients", { name: `Foto Cheia ${run}`, phone: "11999990103", age: 41 })).data.patient;
+  const fullPatient = (await api("POST", "/api/patients", newPatientPayload({ name: `Foto Cheia ${run}`, phone: "11999990103", age: 41 }))).data.patient;
   const tiny = `data:image/jpeg;base64,${small.toString("base64")}`;
   const nineteen = Array.from({ length: 19 }, (_, index) => ({ name: `f${index}`, imageUrl: tiny, width: 400, height: 300, category: "Outra", sortOrder: index }));
   const draft19 = (await api("PUT", `/api/patients/${fullPatient.id}/evaluation`, { photos: nineteen })).data.evaluation;
@@ -5043,7 +5064,7 @@ async function mobilePhotos() {
   check("upload: a foto 20 entra (sortOrder 19) e a 21 devolve 409 sem gravar", twentieth.status === 201 && twentieth.data.photo.sortOrder === 19 && twentyFirst.status === 409 && (await prisma.evaluationPhoto.count({ where: { evaluationId: draft19.id } })) === 20, `${twentieth.status}/${twentyFirst.status}`);
 
   // --- Concorrência: paciente novo (sem jornada), 5 envios simultâneos ---
-  const racePatient = (await api("POST", "/api/patients", { name: `Foto Corrida ${run}`, phone: "11999990104", age: 29 })).data.patient;
+  const racePatient = (await api("POST", "/api/patients", newPatientPayload({ name: `Foto Corrida ${run}`, phone: "11999990104", age: 29 }))).data.patient;
   const race = await Promise.all(Array.from({ length: 5 }, (_, index) => upload(token, racePatient.id, small, { name: `r${index}` })));
   const raceEvals = await prisma.evaluation.findMany({ where: { patientId: racePatient.id }, select: { id: true, photos: { select: { sortOrder: true } } } });
   const orders = raceEvals.flatMap((evaluation) => evaluation.photos.map((photo) => photo.sortOrder)).sort();
@@ -5070,9 +5091,9 @@ async function mobilePhotos() {
       check("isolamento: outra clínica recebe 404 no upload (paciente e avaliação) e na imagem, e nada é gravado", crossPatient.status === 404 && crossEval.status === 404 && crossImage.status === 404 && (await prisma.evaluationPhoto.count({ where: { evaluation: { patientId: patient.id } } })) === before, `${crossPatient.status}/${crossEval.status}/${crossImage.status}`);
     } else check("segunda clínica criada para testar o app", false, `registro ${r.status}`);
 
-    r = await api("POST", "/api/team", { name: "E2E Atendente App", email: staffEmail, password: staffPassword, role: "STAFF" });
+    r = await api("POST", "/api/team", { name: "E2E Atendente App", email: staffEmail, password: staffPassword, role: "STAFF" , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
     staffTeam = r.status === 201 ? r.data.member : null;
-    r = await api("POST", "/api/team", { name: "E2E Profissional App", email: proEmail, password: proPassword, role: "PROFESSIONAL" });
+    r = await api("POST", "/api/team", { name: "E2E Profissional App", email: proEmail, password: proPassword, role: "PROFESSIONAL" , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
     proTeam = r.status === 201 ? r.data.member : null;
     if (staffTeam && proTeam) {
       const first403 = await mobileLogin(staffEmail, staffPassword);
@@ -5123,7 +5144,7 @@ async function mobilePhotosGaps() {
     return form;
   };
   const up = (token, patientId, buffer, fields, options) => raw(bearer(token), "POST", `/api/patients/${patientId}/evaluation/photos`, makeForm(buffer, fields, options));
-  const newPatient = async (label, n) => (await api("POST", "/api/patients", { name: `${label} ${run}`, phone: `1199999${String(n).padStart(4, "0")}`, age: 30 })).data.patient;
+  const newPatient = async (label, n) => (await api("POST", "/api/patients", newPatientPayload({ name: `${label} ${run}`, phone: `1199999${String(n).padStart(4, "0")}`, age: 30 }))).data.patient;
   const imgUrl = (patientId, photoId, query = "") => `/api/patients/${patientId}/photos/${encodeURIComponent(`evaluation:${photoId}`)}/image${query}`;
   const small = await jpg(400, 300);
   const ownerToken = (await mobileLogin(email, password)).data.token;
@@ -5150,8 +5171,8 @@ async function mobilePhotosGaps() {
     const wrongKnown = await mobileLogin(email, "senha-errada-x");
     check("login mobile: usuário inexistente e senha errada têm a mesma resposta (401, mesma mensagem, no-store)", unknown.status === 401 && wrongKnown.status === 401 && unknown.data.message === wrongKnown.data.message && /no-store/.test(unknown.headers.get("cache-control") ?? ""), `${unknown.status}/${wrongKnown.status}`);
     check("login mobile: sucesso traz Cache-Control no-store; GET na rota devolve 405", /no-store/.test(r.headers.get("cache-control") ?? "") && (await raw({}, "GET", "/api/mobile/auth/login")).status === 405);
-    r = await api("POST", "/api/team", { name: "E2E Gap Pro", email: proEmail, password: proPass, role: "PROFESSIONAL" }); proTeam = r.status === 201 ? r.data.member : null;
-    r = await api("POST", "/api/team", { name: "E2E Gap Staff", email: staffEmail, password: staffPass, role: "STAFF" }); staffTeam = r.status === 201 ? r.data.member : null;
+    r = await api("POST", "/api/team", { name: "E2E Gap Pro", email: proEmail, password: proPass, role: "PROFESSIONAL" , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" }); proTeam = r.status === 201 ? r.data.member : null;
+    r = await api("POST", "/api/team", { name: "E2E Gap Staff", email: staffEmail, password: staffPass, role: "STAFF" , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" }); staffTeam = r.status === 201 ? r.data.member : null;
     if (!proTeam || !staffTeam) { check("equipe de teste criada", false, r.status); return; }
     const firstPro = await mobileLogin(proEmail, proPass);
     const firstProWrong = await mobileLogin(proEmail, "errada");
@@ -5479,7 +5500,7 @@ async function mobilePhotosGaps() {
 
 // Etapa da jornada na lista de tratamentos: hasDraftEvaluation e o filtro ?stage= (Avaliação inclui rascunho; as demais exigem avaliação concluída).
 async function journeyStageFilter() {
-  const mk = async (label) => (await api("POST", "/api/patients", { name: `E2E Etapa ${label} ${run}`, phone: "11999990041", age: 35, cpf: randomCpf() })).data.patient;
+  const mk = async (label) => (await api("POST", "/api/patients", newPatientPayload({ name: `E2E Etapa ${label} ${run}`, phone: "11999990041", age: 35, cpf: randomCpf() }))).data.patient;
   const patient = await mk("A");
   const other = await mk("B");
   const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
@@ -5580,7 +5601,7 @@ async function journeyStageFilter() {
     const sessionB = await loginAs(clinicBMail, clinicBPass);
     check("etapa: clínica B criada para isolamento", registered.status === 201 && sessionB.status === 200, `${registered.status}/${sessionB.status}`);
     const foreign = await withSession(sessionB.cookie, async () => {
-      const foreignPatient = (await api("POST", "/api/patients", { name: `Paciente B ${run}`, phone: "11999990042", age: 40, cpf: randomCpf() })).data.patient;
+      const foreignPatient = (await api("POST", "/api/patients", newPatientPayload({ name: `Paciente B ${run}`, phone: "11999990042", age: 40, cpf: randomCpf() }))).data.patient;
       const foreignProfessional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
       const foreignJourney = (await api("POST", `/api/patients/${foreignPatient.id}/journeys`, { name: `Jornada B ${run}`, professionalId: foreignProfessional?.id })).data.journey;
       return { patient: foreignPatient, journey: foreignJourney };
@@ -5610,12 +5631,12 @@ async function deleteProcedure() {
     check("procedimento criado para exclusão", r.status === 201 && proc?.id, `${r.status}`);
     if (!proc?.id) return;
 
-    const patient = (await api("POST", "/api/patients", { name: `zz QN Del ${run}`, phone: "11999990031", cpf: randomCpf() })).data.patient;
+    const patient = (await api("POST", "/api/patients", newPatientPayload({ name: `zz QN Del ${run}`, phone: "11999990031", cpf: randomCpf() }))).data.patient;
     const quote = (await api("POST", "/api/quotes", { patientId: patient?.id, items: `${name} (1x)`, total: 250, expires: "30/12/2030" })).data.quote;
     check("orçamento com o nome do procedimento criado", Boolean(quote?.id));
 
     for (const [role, email, password] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
-      r = await api("POST", "/api/team", { name: `QN ${role} Del`, email, password, role });
+      r = await api("POST", "/api/team", { name: `QN ${role} Del`, email, password, role , cpf: randomCpf().replace(/D/g, ""), address: "Rua E2E 1", country: "Brasil", state: "SP", city: "São Paulo" });
       if (r.status === 201) members.push(r.data.member);
       const session = r.status === 201 ? await loginAs(email, password) : null;
       if (session?.status !== 200) { check(`usuário ${role} criado`, false, `team ${r.status} login ${session?.status}`); continue; }
@@ -5646,8 +5667,8 @@ async function deleteProcedure() {
     r = await api("DELETE", "/api/procedures/%27%20OR%201=1");
     check("id malformado devolve 404", r.status === 404, r.status);
 
-    const row = quote?.id ? await prisma.quote.findUnique({ where: { id: quote.id }, select: { items: true, total: true } }) : null;
-    check("orçamento antigo mantém o nome e o total após a exclusão", row?.items === `${name} (1x)` && Number(row.total) === 250, JSON.stringify(row));
+    const row = quote?.id ? await prisma.quote.findUnique({ where: { id: quote.id }, select: { items: true, totalCents: true } }) : null;
+    check("orçamento antigo mantém o nome e o total após a exclusão", row?.items === `${name} (1x)` && row.totalCents === 25000, JSON.stringify(row));
   } finally {
     for (const member of members) await api("DELETE", "/api/team", { membershipId: member.id });
     await prisma.user.deleteMany({ where: { email: { in: [staffEmail, proEmail] } } });
