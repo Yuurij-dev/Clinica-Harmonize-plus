@@ -151,7 +151,7 @@ function LoginForm({ error, isSubmitting, login, onLoginChange, onPasswordChange
     <>
       <header className="mb-7 text-center"><h2 className="text-2xl font-black tracking-[0] text-[#211960]">Bem-vindo!</h2><p className="mt-2 text-[13px] leading-5 text-[#7783a8]">Acesse sua conta para continuar na Harmonize+.</p></header>
       <div className="mb-6 border-b border-[#e6e8f1]"><div className="w-fit border-b-[3px] border-[#4938f4] px-2 pb-2 text-[13px] font-bold text-[#4938f4]">Login</div></div>
-      <form className="hp-list-stagger" onSubmit={onSubmit}>
+      <form className="hp-list-stagger" onSubmit={onSubmit} suppressHydrationWarning>
         <TextField compact icon={Mail} label="seu e-mail" onChange={onLoginChange} placeholder="nome@dominio.com" value={login} autoComplete="username" />
         <div className="mt-4">
           <PasswordField compact label="sua senha" onChange={onPasswordChange} password={password} setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="current-password" />
@@ -182,7 +182,7 @@ function RegisterForm({ error, isSubmitting, onBack, onChange, onSubmit, values,
     <>
       <header className="mb-6 text-center"><h2 className="text-2xl font-black tracking-[0] text-[#211960]">Teste grátis por 3 dias</h2><p className="mt-2 text-[13px] leading-5 text-[#7783a8]">Crie sua conta e organize a rotina da sua clínica.</p></header>
       <div className="mb-4 border-b border-[#e6e8f1]"><div className="w-fit border-b-[3px] border-[#4938f4] px-2 pb-2 text-[11px] font-bold text-[#4938f4]">Criar conta</div></div>
-      <form className="grid gap-x-3 gap-y-3 sm:grid-cols-2" onSubmit={onSubmit}>
+      <form className="grid gap-x-3 gap-y-3 sm:grid-cols-2" onSubmit={onSubmit} suppressHydrationWarning>
         <div className="sm:col-span-2"><TextField compact label="Nome da clínica" onChange={(value) => onChange("clinicName", value)} placeholder="Ex.: Clínica Harmonia" value={values.clinicName} autoComplete="organization" maxLength={100} /></div>
         <TextField compact label="Nome" onChange={(value) => onChange("name", value)} placeholder="Nome e sobrenome" value={values.name} autoComplete="name" />
         <TextField compact icon={Phone} label="Celular" onChange={(value) => onChange("phone", formatPhone(value))} placeholder="(00) 00000-0000" type="tel" value={values.phone} autoComplete="tel" />
@@ -234,7 +234,7 @@ function FirstAccessPasswordForm({ onSubmit }: { onSubmit: (password: string) =>
 
   return <>
     <div className="mb-7"><div className="mb-5 grid h-11 w-11 place-items-center rounded-[8px] bg-[#eff4ff] text-[#5947ee]"><KeyRound className="h-5 w-5" /></div><p className="text-xs font-black uppercase text-[#18a9c6]">Primeiro acesso</p><h2 className="mt-2 text-3xl font-black tracking-[0] text-[#161d38]">Defina sua senha</h2><p className="mt-3 text-sm leading-6 text-[#6b7285]">Para continuar, troque a senha inicial por uma senha pessoal.</p></div>
-    <form className="space-y-4" onSubmit={handleSubmit}>
+    <form className="space-y-4" onSubmit={handleSubmit} suppressHydrationWarning>
       <PasswordField label="Nova senha" onChange={(value) => { setPassword(value); setError(""); }} password={password} placeholder="Crie uma senha com pelo menos 8 caracteres" setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="new-password" minLength={8} />
       <PasswordField label="Confirmar nova senha" onChange={(value) => { setConfirmation(value); setError(""); }} password={confirmation} placeholder="Digite a senha novamente" setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="new-password" minLength={8} />
       {error ? <ErrorMessage>{error}</ErrorMessage> : null}
