@@ -11,7 +11,7 @@ import {
   Users,
   WalletCards,
 } from "lucide-react";
-import type { NavItem } from "@/types/clinic";
+import type { NavItem } from "../types/clinic";
 
 export const navItems: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },

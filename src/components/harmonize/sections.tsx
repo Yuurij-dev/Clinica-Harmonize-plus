@@ -1954,13 +1954,23 @@ function Time24Input({ name, label, value, onChange }: { name: string; label: st
   );
 }
 
-export function SettingsSection({ isOwner = false, clinicName, onClinicNameChange, onRolePermissionsChange }: { isOwner?: boolean; clinicName?: string; onClinicNameChange?: (name: string) => void; onRolePermissionsChange?: (matrix: RolePermissionMatrix) => void }) {
+export const SETTINGS_SECTION_FOCUS_EVENT = "harmonize:settings-section-focus";
+
+export function SettingsSection({ isOwner = false, clinicName, onClinicNameChange, onRolePermissionsChange, initialSection }: { isOwner?: boolean; clinicName?: string; onClinicNameChange?: (name: string) => void; onRolePermissionsChange?: (matrix: RolePermissionMatrix) => void; initialSection?: string | null }) {
   const canManageRolePermissions = useCan("settings:permissions");
   const canManageTeam = useCan("settings:team");
   const canManageSettings = useCan("settings:manage");
   const [editing, setEditing] = useState<string | null>(null);
   const [settingsSearch, setSettingsSearch] = useState("");
-  const [activeSettingsSection, setActiveSettingsSection] = useState(canManageSettings ? "Dados da clínica" : canManageTeam ? "Custos e orçamento" : "Segurança e permissões");
+  const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection ?? (canManageSettings ? "Dados da clínica" : canManageTeam ? "Custos e orçamento" : "Segurança e permissões"));
+  useEffect(() => {
+    const focusSection = (event: Event) => {
+      const section = (event as CustomEvent<string>).detail;
+      if (section) setActiveSettingsSection(section);
+    };
+    window.addEventListener(SETTINGS_SECTION_FOCUS_EVENT, focusSection);
+    return () => window.removeEventListener(SETTINGS_SECTION_FOCUS_EVENT, focusSection);
+  }, []);
   const cachedTeam = canManageTeam ? readClientCache<{ members?: TeamMember[] }>("/api/team") : undefined;
   const [members, setMembers] = useState<TeamMember[]>(cachedTeam?.members ?? []);
   const [teamLoading, setTeamLoading] = useState(!cachedTeam);
