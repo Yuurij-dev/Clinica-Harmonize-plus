@@ -66,7 +66,7 @@ export function PatientClinicalPhotos({ patientId, initialFilters }: { patientId
   const canWrite = data?.access.canWrite ?? false;
   const ownRefreshAtRef = useRef(0);
   const refresh = useCallback(() => { ownRefreshAtRef.current = Date.now(); invalidateClientCache(key); }, [key]);
-  // Fotos enviadas pelo app mobile não passam por este navegador. Com a aba visível (5 s, espaçando até 30 s se ocioso; backoff em falha) consulta só a assinatura da galeria
+  // Fotos enviadas pelo app mobile não passam por este navegador. A cada ~5 s (aba visível, com backoff em falha) consulta só a assinatura da galeria
   // (4 agregados, sem fotos); o índice completo só é refeito quando ela muda. O spinner dura até a lista chegar (mínimo ~600 ms).
   const seenIdsRef = useRef<Set<string> | null>(null);
   const stampRef = useRef<string | null>(null);
@@ -81,16 +81,14 @@ export function PatientClinicalPhotos({ patientId, initialFilters }: { patientId
     const stamp = (await response.json() as { stamp?: string }).stamp ?? null;
     // A base de comparação é a assinatura da lista carregada (data.stamp), não o primeiro poll: envio logo após o carregamento é detectado.
     // Enquanto a lista nova não chega (pendingRef) não refaz o pedido.
-    // Lista inicial ainda não chegou ou aguardando a lista nova: não conta como ociosidade.
-    if (pendingRef.current || stampRef.current === null) return "ok";
-    if (stamp === null || stamp === stampRef.current) return "idle";
+    if (stampRef.current === null || stamp === null || stamp === stampRef.current || pendingRef.current) return "ok";
     const own = Date.now() - ownRefreshAtRef.current < 10_000; // mudança causada por esta própria tela: atualiza sem anunciar
     pendingRef.current = true;
     window.setTimeout(() => { pendingRef.current = false; }, 10_000);
     invalidateClientCache(key);
     if (!own) { receivingRef.current = true; setReceiving(true); window.setTimeout(() => { receivingRef.current = false; setReceiving(false); }, 10_000); }
     return "ok";
-  }, 30_000, key);
+  });
   // Id nunca visto que chegou na lista = foto nova: encerra o spinner e avisa uma vez (só se a mudança veio da checagem, não de upload daqui).
   useEffect(() => {
     if (!data) return;

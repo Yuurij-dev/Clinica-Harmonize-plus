@@ -25,7 +25,6 @@ export async function GET() {
   ]);
 
   return NextResponse.json({
-    viewer: { userId: user.id, clinicId: user.clinicId },
     appointments: settings?.appointmentNotificationsEnabled === false ? [] : appointments,
     settings: {
       appointmentNotificationsEnabled: settings?.appointmentNotificationsEnabled ?? true,

@@ -256,7 +256,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   useEffect(() => { skippedPhotoIdsRef.current = new Set(); fetchFailuresRef.current = new Map(); }, [evaluationId]);
   usePhotoSyncPoll(isEncounterMode && hydrated && !loadError && evaluationStatus === "Rascunho", async () => {
     const id = currentEvaluationIdRef.current;
-    if (!id) return "idle";
+    if (!id) return "ok";
     const base = `/api/patients/${patientId}/evaluation?evaluationId=${encodeURIComponent(id)}`;
     const head = await fetch(`${base}&photoIds=1`, { cache: "no-store" });
     const headOutcome = pollOutcomeForStatus(head.status);
@@ -265,17 +265,17 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
     if (headBody.evaluation === null) return "stop"; // avaliação não encontrada (200 com null): não adianta repetir
     const ids = headBody.evaluation?.photoIds ?? [];
     const fresh = unseenPhotoIds(new Set([...seenPhotoIdsRef.current, ...skippedPhotoIdsRef.current]), ids, photosRef.current.length);
-    if (!fresh.length) return "idle";
+    if (!fresh.length) return "ok";
     setReceivingPhoto(true);
     try {
       const full = await fetch(`${base}&only=${fresh.join(",")}`, { cache: "no-store" });
       const fullOutcome = pollOutcomeForStatus(full.status);
       if (fullOutcome !== "ok") { for (const failed of idsToSkipAfterFailure(fetchFailuresRef.current, fresh)) skippedPhotoIdsRef.current.add(failed); return fullOutcome; }
       const incoming = (await full.json() as { evaluation?: { photos?: EvaluationPhoto[] } | null }).evaluation?.photos ?? [];
-      if (currentEvaluationIdRef.current !== id) return "idle";
+      if (currentEvaluationIdRef.current !== id) return "ok";
       const got = new Set(incoming.map((photo) => photo.id));
       for (const missing of fresh) if (!got.has(missing)) skippedPhotoIdsRef.current.add(missing);
-      if (!incoming.length) return "idle";
+      if (!incoming.length) return "ok";
       setPhotos((current) => appendIncomingPhotos(current, incoming));
       // Marca como edição: o autosave regrava o estado atual e a foto não fica só aqui caso um PUT em andamento a tenha apagado.
       if (!readOnly) markDirty();
@@ -287,7 +287,7 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
       for (const failed of idsToSkipAfterFailure(fetchFailuresRef.current, fresh)) skippedPhotoIdsRef.current.add(failed);
       throw error;
     } finally { setReceivingPhoto(false); }
-  }, 15_000, evaluationId);
+  });
 
   useEffect(() => {
     if (!notice) return;

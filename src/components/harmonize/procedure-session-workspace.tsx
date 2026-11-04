@@ -151,14 +151,14 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
     if (headOutcome !== "ok") return headOutcome;
     const body = await head.json() as { changed?: boolean; status?: string; updatedAt?: string; photoIds?: string[] };
     if (body.status === "Concluída") return "stop";
-    if (body.changed === false) return "idle";
+    if (body.changed === false) return "ok";
     // updatedAt só avança quando o ciclo termina bem: numa falha, o próximo ciclo lista os ids de novo.
-    const done = (outcome: "ok" | "idle" = "ok") => { sinceRef.current = body.updatedAt ?? null; return outcome; };
+    const done = () => { sinceRef.current = body.updatedAt ?? null; return "ok" as const; };
     const current = draftRef.current;
-    if (!current || current.id !== sessionId) return "idle";
+    if (!current || current.id !== sessionId) return "ok";
     const seen = new Set([...current.photos.map((photo) => photo.id), ...removedPhotoIdsRef.current, ...skippedPhotoIdsRef.current]);
     const fresh = unseenPhotoIds(seen, body.photoIds ?? [], current.photos.length);
-    if (!fresh.length) return done("idle");
+    if (!fresh.length) return done();
     setReceivingPhoto(true);
     try {
       const full = await fetch(`${base}?only=${fresh.join(",")}`, { cache: "no-store" });
@@ -168,9 +168,9 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
       const got = new Set(incoming.map((photo) => photo.id));
       for (const id of fresh) if (!got.has(id)) skippedPhotoIdsRef.current.add(id); // id que não gerou foto exibível: não refaz a busca
       const latest = draftRef.current;
-      if (!latest || latest.id !== sessionId) return "idle";
+      if (!latest || latest.id !== sessionId) return "ok";
       const photos = appendUnseenById(latest.photos, incoming); // o teto de 20 é aplicado aqui, sobre o estado exibido
-      if (photos.length === latest.photos.length) return done("idle");
+      if (photos.length === latest.photos.length) return done();
       draftRef.current = { ...latest, photos };
       setDraft(draftRef.current);
       invalidateClientCache(key);
@@ -181,7 +181,7 @@ export function ProcedureSessionWorkspace({ patient, patientId, journeyId, quote
       for (const failed of idsToSkipAfterFailure(fetchFailuresRef.current, fresh)) skippedPhotoIdsRef.current.add(failed);
       throw error;
     } finally { setReceivingPhoto(false); }
-  }, 15_000, sessionId);
+  });
   useEffect(() => {
     if (!cameraOpen) { stopCamera(); return; }
     let active = true;
