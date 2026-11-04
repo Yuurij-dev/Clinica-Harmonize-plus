@@ -14,7 +14,7 @@ export type Permission =
   | "payments:access" | "payments:manage" | "payments:delete"
   | "finance:access" | "finance:manage"
   | "reports:access"
-  | "settings:access" | "settings:manage" | "settings:team" | "settings:permissions" | "settings:own-cost";
+  | "settings:access" | "settings:manage" | "settings:team" | "settings:permissions";
 export type RolePermissionMatrix = Record<Role, Record<Permission, boolean>>;
 export type ObservationKind = "clinical" | "administrative";
 
@@ -63,7 +63,6 @@ export const permissionGroups: Array<{ label: string; permissions: Array<{ key: 
     { key: "settings:manage", label: "Alterar configurações da clínica", description: "Editar dados, horários, preferências e notificações.", defaultRoles: ["ADMIN"] },
     { key: "settings:team", label: "Gerenciar equipe", description: "Cadastrar colaboradores e alterar cargos e custos.", defaultRoles: ["ADMIN"] },
     { key: "settings:permissions", label: "Gerenciar permissões por cargo", description: "Alterar esta matriz de acesso.", defaultRoles: ["ADMIN"] },
-    { key: "settings:own-cost", label: "Alterar próprio valor de mão de obra", description: "Consultar e alterar somente o próprio valor de mão de obra, sem acessar custos dos colegas.", defaultRoles: ["ADMIN", "PROFESSIONAL"] },
   ] },
 ];
 

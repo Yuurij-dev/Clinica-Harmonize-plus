@@ -20,7 +20,7 @@ export async function PATCH(request: Request) {
   const openingMinutes = parseClockMinutes(openingTime);
   const closingMinutes = parseClockMinutes(closingTime);
 
-  if (name.length < 2 || name.length > 120 || cnpj.length > 24 || phone.length > 32 || email.length > 254 || (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) || address.length > 240 || openingMinutes === null || closingMinutes === null || closingMinutes <= openingMinutes) {
+  if (name.length < 2 || name.length > 30 || cnpj.length > 18 || phone.length > 15 || email.length > 254 || (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) || address.length > 240 || openingMinutes === null || closingMinutes === null || closingMinutes <= openingMinutes) {
     return NextResponse.json({ message: "Confira os dados e os horários informados." }, { status: 400 });
   }
 

@@ -1,10 +1,18 @@
 import { NextResponse } from "next/server";
 import { createPasswordChangeSession, createSession, sessionCookieName } from "@/lib/auth";
-import { authenticateLogin } from "@/lib/login";
+import { authenticateLogin, type LoginResult } from "@/lib/login";
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as { login?: string; password?: string } | null;
-  const result = await authenticateLogin(body?.login, body?.password);
+  let result: LoginResult;
+  try {
+    result = await authenticateLogin(body?.login, body?.password);
+  } catch (error) {
+    if (error instanceof Error && (error.message.includes("P1001") || error.message.includes("Can't reach database server"))) {
+      return NextResponse.json({ message: "Não foi possível conectar ao banco de dados configurado. Verifique a conexão em DATABASE_URL." }, { status: 503 });
+    }
+    throw error;
+  }
   if (!result.ok) return NextResponse.json({ message: result.message }, { status: result.status });
 
   const { user } = result;
