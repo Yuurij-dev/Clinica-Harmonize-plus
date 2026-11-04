@@ -43,6 +43,21 @@ test("deduplicates requests, serves fresh data, and refreshes after the TTL", as
   assert.equal(requests, 2);
 });
 
+test("revalidates global search results on each query instead of serving stale cached matches", async () => {
+  let now = 1_000;
+  Date.now = () => now;
+  let requests = 0;
+  globalThis.fetch = async () => new Response(JSON.stringify({ requests: ++requests }), { status: 200 });
+  setClientCacheScope("user-a:clinic-a");
+
+  const key = "/api/search?q=laser";
+  assert.deepEqual(await getCachedJson(key), { requests: 1 });
+  now += 1;
+  assert.deepEqual(readClientCache(key), { requests: 1 });
+  assert.deepEqual(await getCachedJson(key), { requests: 2 });
+  assert.equal(requests, 2);
+});
+
 test("invalidates only affected keys, including query-string variants", async () => {
   let requests = 0;
   globalThis.fetch = async (url) => {

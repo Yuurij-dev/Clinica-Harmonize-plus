@@ -19,6 +19,7 @@ import {
   QuotesSection,
   ReportsSection,
   ScheduleSection,
+  SETTINGS_SECTION_FOCUS_EVENT,
   SettingsSection,
 } from "./sections";
 import type { SectionId } from "@/types/clinic";
@@ -114,6 +115,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const [startup, setStartup] = useState<StartupState>({ status: "checking-session", sessionConfirmed: false, message: "Validando seu acesso..." });
   const [startupAttempt, setStartupAttempt] = useState(0);
   const [agendaFocus, setAgendaFocus] = useState<AgendaFocus | null>(null);
+  const [settingsFocusSection, setSettingsFocusSection] = useState<string | null>(null);
   const [purchasesTab, setPurchasesTab] = useState<PurchasesTab>("purchases");
   const [undoNotice, setUndoNotice] = useState<UndoNotice>(null);
   const undoNoticeId = useRef(0);
@@ -134,6 +136,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       return;
     }
     if (!await guardDraftNavigation()) return;
+    if (section !== "configuracoes") setSettingsFocusSection(null);
     setAgendaFocus(section === "agenda" ? focus ?? null : null);
     if (section === "compras") setPurchasesTab(tab);
     setMobileOpen(false);
@@ -141,6 +144,19 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     // Já em Clientes: a tela está montada e guarda o paciente aberto; avisa para voltar à lista (a URL sozinha não limpa o estado).
     if (section === "clientes" && active === "clientes") window.dispatchEvent(new Event(clientsHomeEvent));
     router.push(sectionPaths[section]);
+  }
+
+  async function openSettingsSearchSection(section: string) {
+    if (!allowedSections.includes("configuracoes") || !await guardDraftNavigation()) return;
+    setSettingsFocusSection(section);
+    setMobileOpen(false);
+    setCreateDialog(null);
+    if (active === "configuracoes") {
+      window.dispatchEvent(new CustomEvent(SETTINGS_SECTION_FOCUS_EVENT, { detail: section }));
+      return;
+    }
+    setAgendaFocus(null);
+    router.push(sectionPaths.configuracoes);
   }
 
   // Saídas e conferências pendentes abrem Compras já na aba Pendências; avisos de lote e saldo abrem o Estoque.
@@ -285,7 +301,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
         rolePermissions={currentUser?.rolePermissions}
       />
       <div className="lg:pl-[220px]">
-        <Topbar user={currentUser} onMenu={() => setMobileOpen(true)} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onOpenStockAlert={openStockAlert} onLogout={logout} />
+        <Topbar user={currentUser} onMenu={() => setMobileOpen(true)} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onQuickCreate={openCreate} onOpenSettingsSection={openSettingsSearchSection} onOpenStockAlert={openStockAlert} onLogout={logout} />
         <main className={`mx-auto w-full ${active === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-10 pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
           <AnimatedPage routeKey={active}>
           {currentUser && allowedSections.includes("dashboard") && active === "dashboard" ? <Dashboard userName={currentUser?.name} onAction={(action) => {
@@ -301,7 +317,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
           {currentUser && allowedSections.includes("pagamentos") && active === "pagamentos" ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => openCreate("pagamentos", "payment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && allowedSections.includes("financeiro") && active === "financeiro" ? <FinanceSection /> : null}
           {currentUser && allowedSections.includes("relatorios") && active === "relatorios" ? <ReportsSection /> : null}
-          {currentUser && allowedSections.includes("configuracoes") && active === "configuracoes" ? <SettingsSection isOwner={currentUser.isOwner} clinicName={currentUser.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} onRolePermissionsChange={(rolePermissions) => {
+          {currentUser && allowedSections.includes("configuracoes") && active === "configuracoes" ? <SettingsSection initialSection={settingsFocusSection} isOwner={currentUser.isOwner} clinicName={currentUser.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} onRolePermissionsChange={(rolePermissions) => {
             setClientCacheScope(`${currentUser.id}:${currentUser.clinicId}:${JSON.stringify(rolePermissions)}`);
             setCurrentUser((current) => current ? { ...current, rolePermissions } : current);
           }} /> : null}

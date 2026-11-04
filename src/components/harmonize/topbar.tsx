@@ -1,5 +1,5 @@
-import { Bell, ChevronDown, Clock3, Loader2, LogOut, Menu, Moon, Search, Settings2, Sparkles, Sun } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ArrowDown, ArrowUp, Bell, ChevronDown, Clock3, CornerDownLeft, Loader2, LogOut, Menu, Moon, Search, Settings2, Sparkles, Sun, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { flushSync } from "react-dom";
 import { THEME_CHANGE_EVENT, isDarkTheme, resolveStoredDark, toggleThemeWithReveal } from "@/lib/theme-transition";
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,9 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Input } from "@/components/ui/input";
 import type { SectionId } from "@/types/clinic";
 import type { StockAlert } from "@/lib/stock-rules";
-import { invalidateClientCache } from "@/lib/client-cache";
+import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
+import { patientListKey } from "@/lib/patient-list-rules";
+import { collectFeatureSearchResults, collectSearchQuickActions, groupSearchResults, mergeSearchResults, navigateToSearchResult, normalizeSearchText, previewSearchResults, searchKeyboardAction, splitSearchHighlight, suggestFeatureSearchTerms, type GlobalSearchResult, type SearchAccess, type SearchQuickAction } from "@/lib/global-search-rules";
 import { StockAlertGroups, useStockAlerts } from "./stock-alerts";
 import { useCan } from "./current-user";
 
@@ -16,10 +18,66 @@ type TopbarProps = {
   onDashboard: () => void;
   onSettings: () => void;
   onNavigate: (section: SectionId) => void;
+  onQuickCreate: (section: SectionId, dialog: "appointment" | "client" | "procedure" | "quote" | "payment") => Promise<void>;
+  onOpenSettingsSection: (section: string) => void;
   onOpenStockAlert: (alert: StockAlert) => void;
   onLogout: () => Promise<void>;
   user?: { id: string; name: string; role: string; clinic?: { trialEndsAt?: string | null } } | null;
 };
+
+type GlobalSearchResponse = { results: GlobalSearchResult[]; partial?: boolean };
+
+function collectCachedSearchResults(query: string, access: SearchAccess) {
+  const normalizedQuery = normalizeSearchText(query);
+  const matches: GlobalSearchResult[] = [];
+  const add = (result: GlobalSearchResult, fields: Array<string | null | undefined>) => {
+    if (fields.some((field) => field && normalizeSearchText(field).includes(normalizedQuery))) matches.push(result);
+  };
+  const dashboard = readClientCache<{
+    patients?: Array<{ id: string; name: string; status?: string }>;
+    appointments?: Array<{ id: string; date: string; time: string; procedure: string; status: string; patient?: { name?: string } | null }>;
+    quotes?: Array<{ id: string; items: string; status: string; patient?: { name?: string } | null }>;
+  }>("/api/dashboard/bootstrap");
+  if (access.patients) {
+    for (const patient of dashboard?.patients ?? []) add({ id: patient.id, title: patient.name, description: patient.status ?? "", section: "clientes", kind: "Paciente" }, [patient.name, patient.status]);
+    const patientPage = readClientCache<{ patients?: Array<{ id: string; name: string; phone?: string; status?: string }> }>(patientListKey());
+    for (const patient of patientPage?.patients ?? []) add({ id: patient.id, title: patient.name, description: [patient.phone, patient.status].filter(Boolean).join(" · "), section: "clientes", kind: "Paciente" }, [patient.name, patient.phone, patient.status]);
+  }
+  if (access.agenda) for (const item of dashboard?.appointments ?? []) add({ id: item.id, title: `${item.patient?.name ?? "Paciente"} · ${item.procedure}`, description: `${item.date} ${item.time} · ${item.status}`, section: "agenda", kind: "Agendamento" }, [item.patient?.name, item.procedure, item.status]);
+  if (access.quotes) for (const item of dashboard?.quotes ?? []) add({ id: item.id, title: item.patient?.name ?? "Orçamento", description: `${item.items} · ${item.status}`, section: "orcamentos", kind: "Orçamento" }, [item.patient?.name, item.items, item.status]);
+  if (access.quotes) {
+    const data = readClientCache<{ quotes?: Array<{ id: string; items: string; status: string; patient?: string | { name?: string } | null }> }>("/api/quotes");
+    for (const item of data?.quotes ?? []) {
+      const patient = typeof item.patient === "string" ? item.patient : item.patient?.name;
+      add({ id: item.id, title: patient ?? "Orçamento", description: `${item.items} · ${item.status}`, section: "orcamentos", kind: "Orçamento" }, [patient, item.items, item.status]);
+    }
+  }
+
+  if (access.procedures) {
+    const data = readClientCache<{ procedures?: Array<{ id: string; name: string; category?: string; materials?: string }> }>("/api/procedures");
+    for (const item of data?.procedures ?? []) add({ id: item.id, title: item.name, description: item.category ?? "", section: "procedimentos", kind: "Procedimento" }, [item.name, item.category, item.materials]);
+  }
+  if (access.stock) {
+    const data = readClientCache<{ products?: Array<{ id: string; name: string; category?: string; supplier?: string; unit?: string }> }>("/api/products");
+    for (const item of data?.products ?? []) add({ id: item.id, title: item.name, description: [item.category, item.supplier, item.unit].filter(Boolean).join(" · "), section: "estoque", kind: "Estoque" }, [item.name, item.category, item.supplier, item.unit]);
+  }
+  if (access.purchases) {
+    const data = readClientCache<{ purchases?: Array<{ id: string; supplier: string; invoiceNumber?: string | null; purchasedOn: string; items?: Array<{ name: string; lotCode: string }> }> }>("/api/purchases");
+    for (const item of data?.purchases ?? []) add({ id: item.id, title: item.supplier, description: [item.invoiceNumber, item.purchasedOn].filter(Boolean).join(" · "), section: "compras", kind: "Compra" }, [item.supplier, item.invoiceNumber, item.purchasedOn, ...(item.items ?? []).flatMap((line) => [line.name, line.lotCode])]);
+  }
+  if (access.payments) {
+    const data = readClientCache<{ payments?: Array<{ id: string; patient?: string | { name?: string } | null; method: string; status: string; date: string }> }>("/api/payments");
+    for (const item of data?.payments ?? []) {
+      const patient = typeof item.patient === "string" ? item.patient : item.patient?.name;
+      add({ id: item.id, title: patient ?? "Pagamento", description: `${item.method} · ${item.status}`, section: "pagamentos", kind: "Pagamento" }, [patient, item.method, item.status, item.date]);
+    }
+  }
+  return [...new Map(matches.map((result) => [`${result.kind}:${result.id}`, result])).values()].slice(0, 30);
+}
+
+function HighlightedSearchText({ value, query }: { value: string; query: string }) {
+  return <>{splitSearchHighlight(value, query).map((part, index) => part.match ? <mark key={index} className="rounded-sm bg-primary/15 text-inherit">{part.text}</mark> : <span key={index}>{part.text}</span>)}</>;
+}
 
 function clinicNow() {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date());
@@ -46,10 +104,41 @@ function formatTrialRemaining(milliseconds: number) {
   return `${days}d ${String(hours).padStart(2, "0")}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
 }
 
-export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStockAlert, onLogout, user }: TopbarProps) {
+export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onQuickCreate, onOpenSettingsSection, onOpenStockAlert, onLogout, user }: TopbarProps) {
   const canAccessDashboard = useCan("dashboard:access");
   const canAccessSettings = useCan("settings:access");
   const canAccessStock = useCan("stock:access");
+  const canSearchPatients = useCan("patients:access");
+  const canSearchAgenda = useCan("agenda:access");
+  const canSearchProcedures = useCan("procedures:access");
+  const canSearchPurchases = useCan("purchases:access");
+  const canSearchQuotes = useCan("quotes:access");
+  const canSearchPayments = useCan("payments:access");
+  const canSearchFinance = useCan("finance:access");
+  const canSearchReports = useCan("reports:access");
+  const canSearchSettingsPermissions = useCan("settings:permissions");
+  const canSearchSettingsTeam = useCan("settings:team");
+  const canSearchClinical = useCan("clinical:read");
+  const canSearchAnamnesis = useCan("anamnesis:read");
+  const canSearchAppointmentRun = useCan("appointment:run");
+  const searchAccess = useMemo<SearchAccess>(() => ({
+    dashboard: canAccessDashboard,
+    patients: canSearchPatients,
+    agenda: canSearchAgenda,
+    appointmentRun: canSearchAppointmentRun,
+    procedures: canSearchProcedures,
+    stock: canAccessStock,
+    purchases: canSearchPurchases,
+    quotes: canSearchQuotes,
+    payments: canSearchPayments,
+    finance: canSearchFinance,
+    reports: canSearchReports,
+    settings: canAccessSettings,
+    settingsPermissions: canSearchSettingsPermissions,
+    settingsTeam: canSearchSettingsTeam,
+    clinical: canSearchClinical,
+    anamnesis: canSearchAnamnesis,
+  }), [canAccessDashboard, canAccessSettings, canAccessStock, canSearchAgenda, canSearchAnamnesis, canSearchAppointmentRun, canSearchClinical, canSearchFinance, canSearchPatients, canSearchPayments, canSearchProcedures, canSearchPurchases, canSearchQuotes, canSearchReports, canSearchSettingsPermissions, canSearchSettingsTeam]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
   const [stockNotificationsEnabled, setStockNotificationsEnabled] = useState(true);
@@ -57,7 +146,17 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [trialRemaining, setTrialRemaining] = useState<number | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [remoteSearch, setRemoteSearch] = useState<{ query: string; scope: string; results: GlobalSearchResult[]; partial: boolean } | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [searchRetry, setSearchRetry] = useState(0);
+  const [activeSearchIndex, setActiveSearchIndex] = useState(-1);
+  const [expandedSearchGroups, setExpandedSearchGroups] = useState<string[]>([]);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const pendingSearchKeyRef = useRef<string | null>(null);
   const previousAlertIdsRef = useRef<string[] | null>(null);
   const previousStockAlertIdsRef = useRef<string[] | null>(null);
   const notificationSoundEnabledRef = useRef(appointmentNotificationSoundEnabled);
@@ -72,6 +171,27 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
 
   const stockAlerts = useStockAlerts(canAccessStock && stockNotificationsEnabled, handleStockAlertsLoaded);
   const notificationCount = appointmentAlerts.length + stockAlerts.length;
+  const normalizedQuery = searchQuery.trim();
+  const searchDataScope = `${user?.id ?? "anonymous"}:${JSON.stringify(searchAccess)}`;
+  const immediateSearchResults = useMemo(() => normalizedQuery.length < 2 ? [] : mergeSearchResults(
+    collectFeatureSearchResults(normalizedQuery, searchAccess), collectCachedSearchResults(normalizedQuery, searchAccess),
+  ), [normalizedQuery, searchAccess]);
+  const currentRemoteSearch = remoteSearch?.query === normalizedQuery && remoteSearch.scope === searchDataScope ? remoteSearch : null;
+  const searchResults = useMemo(() => mergeSearchResults(immediateSearchResults, currentRemoteSearch?.results ?? []), [currentRemoteSearch, immediateSearchResults]);
+  const searchPartial = currentRemoteSearch?.partial ?? false;
+  const searchGroups = useMemo(() => groupSearchResults(searchResults), [searchResults]);
+  const visibleSearchGroups = useMemo(() => searchGroups.map((group) => ({ ...group, ...previewSearchResults(group.results, expandedSearchGroups.includes(group.id)) })), [expandedSearchGroups, searchGroups]);
+  const quickActions = useMemo(() => collectSearchQuickActions(searchQuery, searchAccess), [searchAccess, searchQuery]);
+  const searchSuggestions = useMemo(() => suggestFeatureSearchTerms(searchQuery, searchAccess), [searchAccess, searchQuery]);
+  const showSearchSuggestions = !searchLoading && !searchError && !searchResults.length && !quickActions.length;
+  const selectableSearchItems = useMemo<Array<{ type: "action"; value: SearchQuickAction } | { type: "result"; value: GlobalSearchResult } | { type: "expand"; value: { id: string; label: string } } | { type: "suggestion"; value: string }>>(() => [
+    ...quickActions.map((action) => ({ type: "action" as const, value: action })),
+    ...visibleSearchGroups.flatMap((group) => [
+      ...group.results.map((result) => ({ type: "result" as const, value: result })),
+      ...(group.hiddenCount && !expandedSearchGroups.includes(group.id) ? [{ type: "expand" as const, value: { id: group.id, label: group.label } }] : []),
+    ]),
+    ...(showSearchSuggestions ? searchSuggestions.map((suggestion) => ({ type: "suggestion" as const, value: suggestion })) : []),
+  ], [expandedSearchGroups, quickActions, searchSuggestions, showSearchSuggestions, visibleSearchGroups]);
 
   function primeNotificationAudio() {
     if (!audioContextRef.current) audioContextRef.current = new AudioContext();
@@ -97,16 +217,6 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
     };
     if (context.state === "suspended") void context.resume().then(play);
     else play();
-  }
-
-  function search(value: string) {
-    const normalized = value.toLowerCase();
-    if (normalized.includes("client") || normalized.includes("pacient")) onNavigate("clientes");
-    else if (normalized.includes("proced")) onNavigate("procedimentos");
-    else if (normalized.includes("orça") || normalized.includes("orca")) onNavigate("orcamentos");
-    else if (normalized.includes("pag") || normalized.includes("finance")) onNavigate("pagamentos");
-    else if (normalized.includes("relat")) onNavigate("relatorios");
-    else onNavigate("agenda");
   }
 
   const userName = user?.name ?? "Usuário";
@@ -151,6 +261,57 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
       window.clearInterval(timer);
     };
   }, [trialEndsAt]);
+
+  useEffect(() => {
+    const onShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        setSearchFocused(true);
+      }
+    };
+    window.addEventListener("keydown", onShortcut);
+    return () => window.removeEventListener("keydown", onShortcut);
+  }, []);
+
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (query.length < 2) return;
+    let active = true;
+    let timeout: number;
+    const requestTimer = window.setTimeout(() => {
+      setSearchLoading(true);
+      setSearchError(false);
+      const key = `/api/search?q=${encodeURIComponent(query)}`;
+      const cached = readClientCache<GlobalSearchResponse>(key);
+      if (cached && active) setRemoteSearch({ query, scope: searchDataScope, results: cached.results, partial: Boolean(cached.partial) });
+      pendingSearchKeyRef.current = key;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeout = window.setTimeout(() => {
+          if (!active) return;
+          invalidateClientCache(key);
+          reject(new Error("A busca demorou mais do que o esperado."));
+        }, 4_000);
+      });
+      void Promise.race([getCachedJson<GlobalSearchResponse>(key), timeoutPromise]).then((data) => {
+        if (active) setRemoteSearch({ query, scope: searchDataScope, results: data.results, partial: Boolean(data.partial) });
+      }).catch(() => {
+        if (active) setSearchError(true);
+      }).finally(() => {
+        window.clearTimeout(timeout);
+        if (pendingSearchKeyRef.current === key) pendingSearchKeyRef.current = null;
+        if (active) setSearchLoading(false);
+      });
+    }, 35);
+    return () => {
+      active = false;
+      window.clearTimeout(requestTimer);
+      if (pendingSearchKeyRef.current) {
+        invalidateClientCache(pendingSearchKeyRef.current);
+        pendingSearchKeyRef.current = null;
+      }
+    };
+  }, [searchAccess, searchDataScope, searchQuery, searchRetry]);
 
   useEffect(() => {
     const primeOnInteraction = () => primeNotificationAudio();
@@ -213,6 +374,55 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
     await onLogout();
   }
 
+  function openSearchResult(result: GlobalSearchResult) {
+    setSearchFocused(false);
+    updateSearchQuery("");
+    navigateToSearchResult(result, onNavigate, onOpenSettingsSection);
+  }
+
+  function updateSearchQuery(query: string) {
+    setSearchQuery(query);
+    setSearchLoading(query.trim().length >= 2);
+    setSearchError(false);
+    setActiveSearchIndex(-1);
+    setExpandedSearchGroups([]);
+  }
+
+  function handleSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    const keyboardAction = searchKeyboardAction(event.key, activeSearchIndex, selectableSearchItems.length, searchError);
+    if (keyboardAction?.type === "close") {
+      event.preventDefault();
+      if (searchFocused) {
+        setSearchFocused(false);
+        setActiveSearchIndex(-1);
+      } else updateSearchQuery("");
+      return;
+    }
+    if (keyboardAction?.type === "move") {
+      event.preventDefault();
+      setSearchFocused(true);
+      setActiveSearchIndex(keyboardAction.index);
+      return;
+    }
+    if (keyboardAction?.type === "retry") {
+      event.preventDefault();
+      setSearchRetry((attempt) => attempt + 1);
+      return;
+    }
+    if (keyboardAction?.type === "select") {
+      event.preventDefault();
+      const selected = selectableSearchItems[keyboardAction.index];
+      if (!selected) return;
+      if (selected.type === "result") openSearchResult(selected.value);
+      else if (selected.type === "action") {
+        setSearchFocused(false);
+        updateSearchQuery("");
+        void onQuickCreate(selected.value.section, selected.value.dialog);
+      } else if (selected.type === "expand") setExpandedSearchGroups((current) => [...current, selected.value.id]);
+      else updateSearchQuery(selected.value);
+    }
+  }
+
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-background/95 px-4 py-3 text-foreground backdrop-blur-xl sm:px-7 lg:px-9">
       <div className="flex items-center gap-3">
@@ -227,15 +437,71 @@ export function Topbar({ onMenu, onDashboard, onSettings, onNavigate, onOpenStoc
         </Button>
         <div className="min-w-0 flex-1" />
 
-        <label className="hidden h-9 min-w-[230px] items-center gap-2 rounded-full border border-border bg-muted px-4 text-xs text-muted-foreground transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-ring focus-within:bg-background focus-within:shadow-[0_0_0_4px_color-mix(in_srgb,var(--ring)_12%,transparent)] xl:flex">
-          <Search className="h-4 w-4" />
-          <Input
-            className="h-auto text-sm border-0 bg-transparent p-0 shadow-none focus-visible:border-0 focus-visible:ring-0"
-            placeholder="Buscar no Harmonize+"
-            onKeyDown={(event) => { if (event.key === "Enter") search(event.currentTarget.value); }}
-            aria-label="Buscar no Harmonize+"
-          />
-        </label>
+        <div className="relative hidden xl:block">
+          <label className="flex h-9 min-w-[230px] items-center gap-2 rounded-full border border-border bg-muted px-4 text-xs text-muted-foreground transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-ring focus-within:bg-background focus-within:shadow-[0_0_0_4px_color-mix(in_srgb,var(--ring)_12%,transparent)] xl:w-[min(28vw,330px)]">
+            <Search className="h-4 w-4" />
+            <Input
+              ref={searchInputRef}
+              className="h-auto text-sm border-0 bg-transparent p-0 shadow-none focus-visible:border-0 focus-visible:ring-0"
+              placeholder="Buscar no Harmonize+"
+              value={searchQuery}
+              onChange={(event) => updateSearchQuery(event.target.value)}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => { setSearchFocused(false); setActiveSearchIndex(-1); }}
+              onKeyDown={handleSearchKeyDown}
+              aria-label="Buscar no Harmonize+"
+              aria-expanded={searchFocused && searchQuery.trim().length >= 2}
+              aria-controls="global-search-options"
+              aria-activedescendant={activeSearchIndex >= 0 ? `global-search-option-${activeSearchIndex}` : undefined}
+              aria-describedby="global-search-shortcut"
+              role="combobox"
+              aria-autocomplete="list"
+            />
+            {searchQuery ? <button type="button" className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="Limpar busca" onMouseDown={(event) => event.preventDefault()} onClick={() => { updateSearchQuery(""); searchInputRef.current?.focus(); }}><X className="h-3.5 w-3.5" /></button> : <kbd id="global-search-shortcut" className="hidden shrink-0 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground 2xl:inline">Ctrl K</kbd>}
+          </label>
+          {searchFocused && searchQuery.trim().length >= 2 ? <div id="global-search-results" role="region" aria-label="Busca no Harmonize+" className="absolute right-0 top-full z-[1100] mt-2 max-h-[min(70vh,560px)] w-[min(480px,calc(100vw-2rem))] overflow-y-auto rounded-xl border border-border bg-popover p-2 text-popover-foreground shadow-xl">
+            <div className="flex items-center justify-between gap-3 px-3 pb-2 pt-1">
+              <p className="text-xs font-semibold text-foreground">Resultados da busca</p>
+              <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground" role="status" aria-live="polite">{searchLoading ? <><Loader2 className="h-3 w-3 animate-spin" />{searchResults.length ? "Atualizando" : "Buscando"}</> : searchError ? "Busca indisponível" : `${searchResults.length} ${searchResults.length === 1 ? "resultado" : "resultados"}`}</span>
+            </div>
+            {searchLoading && !searchResults.length ? <p className="px-3 py-5 text-center text-sm text-muted-foreground" role="status">Buscando no conteúdo da clínica…</p> : null}
+            {searchError ? <div className="px-3 py-5 text-center" role="alert"><p className="text-sm text-muted-foreground">Não foi possível carregar todo o conteúdo agora.</p><button type="button" tabIndex={-1} className="mt-2 text-xs font-semibold text-primary underline-offset-4 hover:underline" onMouseDown={(event) => event.preventDefault()} onClick={() => setSearchRetry((attempt) => attempt + 1)}>Tentar novamente</button><span className="sr-only">Pressione Enter para tentar novamente.</span></div> : null}
+            <div id="global-search-options" role="listbox" aria-label="Opções da busca">
+            {showSearchSuggestions ? <div role="group" aria-label="Nenhum resultado encontrado" className="px-3 py-5"><p className="text-center text-sm font-medium">Nenhum resultado para “{searchQuery.trim()}”</p><p className="mt-1 text-center text-xs text-muted-foreground">Confira a escrita ou escolha um termo parecido.</p>{searchSuggestions.length ? <div className="mt-3 flex flex-wrap justify-center gap-2" aria-label="Sugestões de busca">{searchSuggestions.map((suggestion) => {
+              const optionIndex = selectableSearchItems.findIndex((item) => item.type === "suggestion" && item.value === suggestion);
+              return <button key={suggestion} id={`global-search-option-${optionIndex}`} type="button" role="option" aria-selected={activeSearchIndex === optionIndex} tabIndex={-1} className={`rounded-full border border-border px-2.5 py-1 text-xs font-medium transition-colors ${activeSearchIndex === optionIndex ? "bg-accent" : "hover:bg-accent"}`} onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActiveSearchIndex(optionIndex)} onClick={() => updateSearchQuery(suggestion)}>{suggestion}</button>;
+            })}</div> : null}</div> : null}
+            {quickActions.length ? <section role="group" aria-label="Ações rápidas" className="border-b border-border pb-2">
+              <p className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Ações rápidas</p>
+              {quickActions.map((action) => {
+                const optionIndex = selectableSearchItems.findIndex((item) => item.type === "action" && item.value.id === action.id);
+                return <button key={action.id} id={`global-search-option-${optionIndex}`} type="button" role="option" aria-selected={activeSearchIndex === optionIndex} tabIndex={-1} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors ${activeSearchIndex === optionIndex ? "bg-accent" : "hover:bg-accent"}`} onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActiveSearchIndex(optionIndex)} onClick={() => { setSearchFocused(false); updateSearchQuery(""); void onQuickCreate(action.section, action.dialog); }}>
+                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-primary/10 text-primary"><Sparkles className="h-3.5 w-3.5" /></span>
+                  <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{action.title}</span><span className="block truncate text-xs text-muted-foreground">{action.description}</span></span>
+                  <CornerDownLeft className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                </button>;
+              })}
+            </section> : null}
+            {visibleSearchGroups.map((group) => <section key={group.id} role="group" aria-label={group.label} className="py-1">
+              <p className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{group.label}</p>
+              {group.results.map((result) => {
+                const optionIndex = selectableSearchItems.findIndex((item) => item.type === "result" && item.value.id === result.id && item.value.kind === result.kind);
+                return <button key={`${result.kind}:${result.id}`} id={`global-search-option-${optionIndex}`} type="button" role="option" aria-selected={activeSearchIndex === optionIndex} tabIndex={-1} className={`flex w-full flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left transition-colors ${activeSearchIndex === optionIndex ? "bg-accent" : "hover:bg-accent"}`} onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActiveSearchIndex(optionIndex)} onClick={() => openSearchResult(result)}>
+                  <span className="w-full truncate text-sm font-medium"><HighlightedSearchText value={result.title} query={searchQuery.trim()} /></span>
+                  <span className="w-full truncate text-xs text-muted-foreground">{result.kind}{result.description ? <> · <HighlightedSearchText value={result.description} query={searchQuery.trim()} /></> : ""}</span>
+                  <span className="w-full truncate text-[10px] text-muted-foreground">Abrir em {result.settingsSection ? `Configurações › ${result.settingsSection}` : ({ dashboard: "Dashboard", agenda: "Agenda", clientes: "Clientes", procedimentos: "Procedimentos", estoque: "Estoque", compras: "Compras", orcamentos: "Orçamentos", pagamentos: "Pagamentos", financeiro: "Financeiro", relatorios: "Relatórios", configuracoes: "Configurações" } as Record<SectionId, string>)[result.section]}</span>
+                </button>;
+              })}
+              {group.hiddenCount && !expandedSearchGroups.includes(group.id) ? (() => {
+                const optionIndex = selectableSearchItems.findIndex((item) => item.type === "expand" && item.value.id === group.id);
+                return <button id={`global-search-option-${optionIndex}`} type="button" role="option" aria-selected={activeSearchIndex === optionIndex} tabIndex={-1} className={`ml-3 mt-1 rounded px-2 py-1 text-xs font-medium text-primary ${activeSearchIndex === optionIndex ? "bg-accent" : "hover:bg-accent"}`} onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActiveSearchIndex(optionIndex)} onClick={() => setExpandedSearchGroups((current) => [...current, group.id])}>Ver mais {group.hiddenCount} {group.hiddenCount === 1 ? "resultado" : "resultados"} em {group.label.toLocaleLowerCase("pt-BR")}</button>;
+              })() : null}
+            </section>)}
+            </div>
+            {searchPartial && searchResults.length ? <p className="px-3 py-2 text-xs text-muted-foreground" role="status">Alguns resultados podem estar indisponíveis no momento.</p> : null}
+            <div className="sticky bottom-[-8px] -mx-2 mt-1 flex items-center gap-3 border-t border-border bg-popover px-3 py-2 text-[10px] text-muted-foreground"><span className="flex items-center gap-1"><ArrowUp className="h-3 w-3" /><ArrowDown className="h-3 w-3" /> navegar</span><span className="flex items-center gap-1"><CornerDownLeft className="h-3 w-3" /> abrir</span><span>Esc fechar</span></div>
+          </div> : null}
+        </div>
 
         {canAccessDashboard ? <Button className="hidden lg:inline-flex" size="sm" onClick={onDashboard}>
           <Sparkles className="h-3.5 w-3.5" />
