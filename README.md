@@ -2,15 +2,16 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Banco de dados
 
-O desenvolvimento e os testes usam PostgreSQL local. Inicie Docker Desktop e então prepare a base:
+O desenvolvimento e os testes usam PostgreSQL. As variáveis de `.env.local` sobrescrevem as de `.env`; confira `DATABASE_URL` e `DIRECT_URL` para garantir que apontam para o banco que você pretende usar. Para Supabase, configure `DATABASE_URL` com o pooler de transações (6543) e `DIRECT_URL` com conexão direta ou pooler de sessão (5432). O PostgreSQL local via Docker é opcional:
 
 ```bash
 npm run db:local:up
 npm run db:migrate:deploy
 npm run db:generate
+npm run dev
 ```
 
-As URLs locais estão no `.env.example`. Para integrar recursos hospedados no Supabase, use `DATABASE_URL` com pooler de transações (6543) e `DIRECT_URL` com conexão direta ou pooler de sessão (5432). `SHADOW_DATABASE_URL` deve apontar para um banco separado e descartável para criar migrations com `prisma migrate dev`.
+As URLs locais estão no `.env.example`. `SHADOW_DATABASE_URL` deve apontar para um banco separado e descartável para criar migrations com `prisma migrate dev`.
 
 Gere valores aleatórios distintos para `AUTH_SECRET` e `SEED_ADMIN_PASSWORD` com `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`. A aplicação exige pelo menos 32 bytes para `AUTH_SECRET` e não usa uma chave padrão.
 Antes de executar `npm run db:seed`, defina `SEED_ADMIN_PASSWORD` com uma senha única de pelo menos 12 caracteres. O seed cria ou atualiza a senha da conta `admin`; as contas opcionais `teste` e `pro` só são criadas quando `SEED_TEST_PASSWORD` e `SEED_PRO_PASSWORD` também forem definidas com senhas únicas. O script não imprime as senhas.

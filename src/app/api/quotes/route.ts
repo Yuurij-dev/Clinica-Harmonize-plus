@@ -3,8 +3,8 @@ import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { listLimit, listPeriodFilter, serializeQuote, toCents } from "@/lib/finance";
 import { ensurePatientJourney } from "@/lib/patient-journey";
-import type { QuoteLineInput } from "@/lib/quote-rules";
-import { quoteDetails, quotePaymentMethods } from "@/lib/quote-server";
+import { calculateQuote, type QuoteLineInput } from "@/lib/quote-rules";
+import { quoteCostSnapshot } from "@/lib/quote-cost-snapshot";
 import { cpfForRole } from "@/lib/patient-cpf-mask";
 import { matchPaymentQuotes } from "@/lib/patient-finance-rules";
 import { denyUnless } from "@/lib/api-guards";
@@ -77,11 +77,15 @@ export async function POST(request: Request) {
   let totalCents = Number.isFinite(total) ? toCents(total) : 0;
   let details = "[]";
   if (body?.details !== undefined) {
-    const calculated = await quoteDetails(body.details, user.clinicId);
+    const [procedures, costSnapshot] = await Promise.all([
+      prisma.procedure.findMany({ where: { clinicId: user.clinicId }, select: { id: true, name: true, price: true } }),
+      quoteCostSnapshot(user.clinicId, user.id, user.role),
+    ]);
+    const calculated = calculateQuote(body.details, procedures.map((procedure) => ({ id: procedure.id, name: procedure.name, priceCents: toCents(procedure.price) })), costSnapshot);
     if (!calculated) return NextResponse.json({ message: "Revise os procedimentos, quantidades e descontos do orçamento." }, { status: 400 });
     items = calculated.items.map((item) => `${item.name} (${item.quantity}x)`).join(", ");
     totalCents = calculated.totalCents;
-    details = JSON.stringify(calculated);
+    details = JSON.stringify({ ...calculated, costs: costSnapshot });
   }
   if (!items || (body?.details === undefined && !Number.isFinite(total))) return NextResponse.json({ message: "Selecione ao menos um procedimento e preencha o orçamento." }, { status: 400 });
   const notes = typeof body?.notes === "string" ? body.notes.trim() : "";
@@ -92,7 +96,7 @@ export async function POST(request: Request) {
 }
 
 function validPaymentMethod(value?: string) {
-  return quotePaymentMethods.includes(value ?? "") ? value! : "Cartão de crédito";
+  return ["Cartão de crédito", "Cartão de débito", "Pix", "Dinheiro", "Boleto", "Transferência"].includes(value ?? "") ? value! : "Cartão de crédito";
 }
 
 function parseDate(value?: string) {
