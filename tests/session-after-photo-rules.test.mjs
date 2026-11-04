@@ -121,3 +121,26 @@ test("408 e 429 são retry; edição do usuário preserva foto anexada pelo poll
   // usuário adicionou c (estava só em edited): permanece.
   assert.deepEqual(applyPhotoEdit([{ id: "a" }], [{ id: "a" }, { id: "c" }], [{ id: "a" }]).photos.map((p) => p.id), ["a", "c"]);
 });
+
+test("polling por ociosidade: 5/15/30/60 s com teto por consumidor, reset em atividade/foco e falha separada", async () => {
+  const { advancePollState, nextIdleDelay, pollDelay, wakePollState, nextPollDelay } = await import("../src/lib/evaluation-photo-sync-rules.ts");
+  let state = { failures: 0, idle: 0 };
+  const sequence = (max) => { const delays = []; let current = { failures: 0, idle: 0 }; for (let index = 0; index < 5; index += 1) { delays.push(pollDelay(current, max)); current = advancePollState(current, "idle"); } return delays; };
+  assert.deepEqual(sequence(60_000), [5_000, 15_000, 30_000, 60_000, 60_000]);
+  assert.deepEqual(sequence(30_000), [5_000, 15_000, 30_000, 30_000, 30_000]);
+  assert.deepEqual(sequence(15_000), [5_000, 10_000, 15_000, 15_000, 15_000]);
+  assert.equal(nextIdleDelay(3, 1_000), 5_000);
+  assert.deepEqual(advancePollState({ failures: 2, idle: 1 }, "stop"), { failures: 2, idle: 1 });
+  state = advancePollState(advancePollState(state, "idle"), "idle");
+  assert.equal(pollDelay(state, 60_000), 30_000);
+  assert.deepEqual(advancePollState(state, "ok"), { failures: 0, idle: 0 });
+  assert.deepEqual(wakePollState(state), { failures: 0, idle: 0 });
+  assert.equal(pollDelay(wakePollState(state)), 5_000);
+  // falha usa o backoff antigo e não mexe na ociosidade
+  const failed = advancePollState(state, "retry");
+  assert.deepEqual(failed, { failures: 1, idle: 2 });
+  assert.equal(pollDelay(failed, 30_000), nextPollDelay(1));
+  assert.equal(pollDelay(advancePollState(failed, "retry")), nextPollDelay(2));
+  assert.deepEqual(wakePollState(failed), { failures: 1, idle: 0 });
+  assert.deepEqual(advancePollState(failed, "idle"), { failures: 0, idle: 3 });
+});

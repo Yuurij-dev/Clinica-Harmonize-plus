@@ -4,6 +4,7 @@ import {
   clearClientCache,
   getCachedJson,
   invalidateClientCache,
+  primeClientCache,
   readClientCache,
   setClientCacheScope,
 } from "../src/lib/client-cache.ts";
@@ -321,4 +322,37 @@ test("a failed period request leaves other cached agenda periods intact", async 
   await assert.rejects(getCachedJson("/api/agenda?from=2026-11-01&to=2026-11-30"));
   assert.deepEqual(readClientCache(key), { url: key });
   assert.equal(readClientCache("/api/agenda?from=2026-11-01&to=2026-11-30"), undefined);
+});
+
+test("pendências de estoque, agendamentos e agenda também invalidam os alertas de estoque", async () => {
+  globalThis.fetch = async (url) => new Response(JSON.stringify({ url }), { status: 200 });
+  setClientCacheScope("user-a:clinic-a");
+  for (const changed of ["/api/stock/pending", "/api/appointments", "/api/appointments/a1", "/api/agenda?day=2026-10-15"]) {
+    await getCachedJson("/api/stock/alerts");
+    await getCachedJson("/api/products");
+    invalidateClientCache(changed);
+    assert.equal(readClientCache("/api/stock/alerts"), undefined, changed);
+    assert.notEqual(readClientCache("/api/products"), undefined, changed);
+  }
+  await getCachedJson("/api/stock/alerts");
+  invalidateClientCache("/api/patients");
+  assert.notEqual(readClientCache("/api/stock/alerts"), undefined);
+});
+
+test("primeClientCache grava em memória e respeita a política de active-procedures", async () => {
+  let now = 1_000;
+  Date.now = () => now;
+  let requests = 0;
+  globalThis.fetch = async () => { requests += 1; return new Response(JSON.stringify({ sessions: [] }), { status: 200 }); };
+  setClientCacheScope("user-a:clinic-a");
+  primeClientCache("/api/patients/active-procedures", { sessions: [{ id: "s0" }] }, "other-user:clinic-b:{}");
+  assert.equal(readClientCache("/api/patients/active-procedures"), undefined);
+  primeClientCache("/api/patients/active-procedures", { sessions: [{ id: "s1" }] }, "user-a:clinic-a");
+  assert.deepEqual(await getCachedJson("/api/patients/active-procedures"), { sessions: [{ id: "s1" }] });
+  assert.equal(requests, 0);
+  now += 15_001;
+  await getCachedJson("/api/patients/active-procedures");
+  assert.equal(requests, 1);
+  now += 119_000;
+  assert.notEqual(readClientCache("/api/patients/active-procedures"), undefined);
 });
