@@ -78,7 +78,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       const conflict = await scheduleConflictError(tx, user.clinicId, { day: next.day, time: next.time, professional: next.professional, patientId: current.patientId, procedure: next.procedure, excludeId: id });
       if (conflict) return { conflict };
     }
-    return tx.appointment.updateMany({ where: { id, clinicId: user.clinicId, ...(can(user.role, "appointment:run", user.rolePermissions) ? {} : { status: { notIn: [...runningAppointmentStatuses] } }) }, data: {
+    const updatedRows = await tx.appointment.updateMany({ where: { id, clinicId: user.clinicId, ...(can(user.role, "appointment:run", user.rolePermissions) ? {} : { status: { notIn: [...runningAppointmentStatuses] } }) }, data: {
       ...(body.status ? { status: body.status } : {}),
       ...(day ? { date: appointmentInstant(day) } : {}),
       ...(body.time ? { time: body.time } : {}),
@@ -86,14 +86,15 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       ...(cleanProfessionalName(body.professional) ? { professional: cleanProfessionalName(body.professional) } : {}),
       ...(body.notes !== undefined || cancellationReason ? { notes: cancellationReason ? [body.notes?.trim() ?? fresh.notes?.trim() ?? "", `Motivo do cancelamento: ${cancellationReason}`].filter(Boolean).join("\n\n") : body.notes!.trim() } : {}),
     } });
+    // Atendido nunca existe sem a conferência de materiais pendente: gravada na mesma transação.
+    if (updatedRows.count > 0 && body.status === "Atendido") await tx.appointment.updateMany({ where: { id, clinicId: user.clinicId, materialsCheck: null }, data: { materialsCheck: "pending" } });
+    return updatedRows;
   }, appointmentTransactionOptions);
   if (result === "missing") return NextResponse.json({ message: "Agendamento não encontrado." }, { status: 404 });
   if (result === "stale") return NextResponse.json({ message: "O agendamento foi alterado por outra pessoa. Atualize a agenda e tente novamente." }, { status: 409 });
   if (result === "duplicate") return NextResponse.json({ message: DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE }, { status: 409 });
   if ("conflict" in result) return NextResponse.json({ message: result.conflict }, { status: 409 });
   if (result.count === 0) return NextResponse.json({ message: "O atendimento já foi iniciado." }, { status: 409 });
-  // Todo atendimento finalizado (na tela ou automaticamente pela agenda) fica com a conferência de materiais pendente.
-  if (body.status === "Atendido") await prisma.appointment.updateMany({ where: { id, clinicId: user.clinicId, materialsCheck: null }, data: { materialsCheck: "pending" } });
   const appointment = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, include: { patient: { select: { name: true } } } });
   return NextResponse.json({ appointment });
 }

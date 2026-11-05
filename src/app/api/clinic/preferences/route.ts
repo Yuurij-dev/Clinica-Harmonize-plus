@@ -9,7 +9,6 @@ const preferenceKeys = [
   "stockNotificationsEnabled",
   "requireCancellationReason",
   "autoMarkMissedAppointmentsEnabled",
-  "autoCompleteAppointmentsEnabled",
   "autoAdvancePatientJourneyEnabled",
   "allowAppointmentsOutsideHours",
 ] as const;
