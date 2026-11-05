@@ -1,4 +1,3 @@
-import { viewerMatchesScope } from "./tab-leader-rules.ts";
 type CacheEntry = {
   data?: unknown;
   updatedAt?: number;
@@ -15,8 +14,7 @@ let scope: string | null = null;
 let generation = 0;
 
 function policyFor(key: string): CachePolicy {
-  if (key === "/api/patients/active-procedures") return { freshFor: 15_000, retainFor: 120_000 };
-  if (key === "/api/stock/alerts") return { freshFor: 120_000, retainFor: 300_000 };
+  if (key === "/api/patients/active-procedures") return { freshFor: 0, retainFor: 10_000 };
   if (key.startsWith("/api/agenda")) return { freshFor: 20_000, retainFor: 90_000 };
   if (key.startsWith("/api/dashboard/bootstrap")) return { freshFor: 45_000, retainFor: 180_000 };
   if (key.includes("/history?")) return { freshFor: 30_000, retainFor: 120_000 };
@@ -72,14 +70,6 @@ export function readClientCache<T>(key: string) {
   }
   remember(key, entry);
   return entry.data as T;
-}
-
-// Grava um dado já obtido (ex.: recebido de outra aba) como se tivesse vindo de getCachedJson. Só em memória.
-export function primeClientCache<T>(key: string, data: T, expectedScope: string | null) {
-  if (!expectedScope || expectedScope !== scope) return;
-  const current = cache.get(key);
-  if (current?.promise) return;
-  remember(key, { data, updatedAt: Date.now() });
 }
 
 export async function getCachedJson<T>(key: string, url = key) {
@@ -159,24 +149,9 @@ export function invalidateClientCache(...keys: string[]) {
   if (keys.some((key) => key.startsWith("/api/agenda") || key.startsWith("/api/appointments") || key.startsWith("/api/stock/pending"))) {
     for (const cachedKey of cache.keys()) { const match = cachedKey.match(/^(\/api\/patients\/[^/?]+\/encounters)(?:\?|$)/); if (match) affected.add(match[1]); }
   }
-  // Atendimento concluído/ajustado e conferência de materiais mudam os alertas de estoque.
-  if (keys.some((key) => key.startsWith("/api/stock/pending") || key.startsWith("/api/appointments") || key.startsWith("/api/agenda"))) affected.add("/api/stock/alerts");
   for (const cachedKey of cache.keys()) {
     // /photos também derruba /photos/<ref> (marcações por foto), que são derivadas dos mesmos registros.
     if ([...affected].some((key) => cachedKey === key || cachedKey.startsWith(`${key}?`) || (key.endsWith("/photos") && cachedKey.startsWith(`${key}/`)))) remove(cachedKey);
   }
   if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent<string[]>(CLIENT_CACHE_INVALIDATED_EVENT, { detail: [...affected] }));
-}
-
-export function getClientCacheScope() {
-  return scope;
-}
-
-// Confere o viewer devolvido pela API com o escopo desta aba. Se o cookie passou a ser de outra conta
-// (login em outra aba), descarta tudo pelo mesmo caminho do 401 e devolve false.
-export function acceptViewer(viewer: unknown) {
-  if (viewerMatchesScope(viewer, scope)) return true;
-  setClientCacheScope(null);
-  if (typeof window !== "undefined") window.dispatchEvent(new Event(CLIENT_CACHE_UNAUTHORIZED_EVENT));
-  return false;
 }
