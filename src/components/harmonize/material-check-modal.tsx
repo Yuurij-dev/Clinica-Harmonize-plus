@@ -10,11 +10,12 @@ import { sendJson } from "@/lib/send-json";
 import { allocateLots, attendanceKindLabels, formatQuantity, parseQuantity, roundQuantity, validateQuantity, type AttendanceKind, type StockKind } from "@/lib/stock-rules";
 import { KindOptionGroups } from "./stock-kind";
 import { formatDateOnly, invalidateStockCache } from "./stock-shared";
+import { PatientAvatar } from "./patient-avatar";
 
 type Lot = { id: string; code: string; expiresOn: string; balance: number };
 type Material = { id: string; name: string; kind: StockKind; unit: string; lots: Lot[] };
 type CheckData = {
-  appointment: { id: string; kind: AttendanceKind; name: string; date: string; status: string; materialsCheck: string | null; patientName: string };
+  appointment: { id: string; patientId: string; kind: AttendanceKind; name: string; date: string; status: string; materialsCheck: string | null; patientName: string };
   suggestions: Array<{ productId: string; quantity: number }>;
   materials: Material[];
 };
@@ -105,9 +106,10 @@ export function MaterialCheckModal({ appointmentId, onClose, onDone }: { appoint
 
   const kind = data?.appointment.kind;
   return (
-    <Modal open onClose={onClose} closeOnOverlayClick={false} title="Conferência de materiais e produtos" description={data ? `${attendanceKindLabels[data.appointment.kind]} · ${data.appointment.name} · ${data.appointment.patientName}` : undefined}>
+    <Modal open onClose={onClose} closeOnOverlayClick={false} title="Conferência de materiais e produtos" description={data ? `${attendanceKindLabels[data.appointment.kind]} · ${data.appointment.name}` : undefined}>
       {!data ? (error ? <p className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{error}</p> : <div className="grid place-items-center py-10"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>) : (
         <div className="space-y-4">
+          <div className="flex items-center gap-2"><PatientAvatar patientId={data.appointment.patientId} name={data.appointment.patientName} /><strong className="text-sm text-foreground">{data.appointment.patientName}</strong></div>
           <p className="text-xs text-muted-foreground">{kind === "procedure" ? "Confira os itens da ficha técnica: ajuste quantidades, lotes ou adicione o que mais foi usado." : "Se usou algum material ou produto (por exemplo, num retoque), adicione abaixo. Caso contrário, pule."}</p>
           {rows.map((row) => {
             const material = materialOf(row.productId);

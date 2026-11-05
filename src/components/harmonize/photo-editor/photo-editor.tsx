@@ -26,6 +26,7 @@ import { renderExport } from "./photo-export";
 import { EvaluationResult } from "./evaluation-result";
 import { PhotoGallery } from "./photo-gallery";
 import { EncounterBreadcrumb, type EncounterBreadcrumbActions } from "../encounter-breadcrumb";
+import { PatientAvatar } from "../patient-avatar";
 import { useDraftAutosave } from "../use-draft-autosave";
 import { ReadOnlyStageNotice } from "../readonly-stage-notice";
 import { revealValidationTarget } from "../reveal-validation-target";
@@ -850,11 +851,11 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
   return (
     <div data-hide-fab className={cn("max-lg:pb-24", encounter && "space-y-4")}>
       {encounter ? <>
-        <EncounterBreadcrumb patientName={patientName} journeyName={encounterLabel} stage={step === "facial" ? "Avaliação facial" : "Avaliação clínica"} onClients={() => void autosave.leave(encounter.onClients)} onPatient={() => void autosave.leave(encounter.onPatient)} onJourney={() => void autosave.leave(encounter.onJourney)} />
+        <EncounterBreadcrumb patientId={patientId} patientName={patientName} journeyName={encounterLabel} stage={step === "facial" ? "Avaliação facial" : "Avaliação clínica"} onClients={() => void autosave.leave(encounter.onClients)} onPatient={() => void autosave.leave(encounter.onPatient)} onJourney={() => void autosave.leave(encounter.onJourney)} />
         {step === "facial" ? <FacialTitle /> : <button type="button" onClick={() => void autosave.leave(encounter.onJourney)} className="flex items-center gap-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-primary max-lg:min-h-11"><ArrowLeft className="h-4 w-4" />Voltar aos tratamentos</button>}
         <Card id="evaluation-header-card" tabIndex={-1} className="flex scroll-mt-24 flex-wrap items-center justify-between gap-4 p-4">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[#efedff] text-sm font-black text-[#5147dc]">{patientName.split(" ").map((part) => part[0]).slice(0, 2).join("")}</div>
+            <PatientAvatar patientId={encounter.patient.id} name={patientName} size="md" />
             <div className="min-w-0"><h2 className="truncate text-base font-bold">{patientName}</h2><p className="mt-1 flex flex-wrap gap-x-3 text-xs text-muted-foreground"><span>{encounter.patient.age ? `${encounter.patient.age} anos` : "Idade não informada"}</span><span>{encounter.patient.phone || "Telefone não informado"}</span></p><div className="mt-1.5 flex flex-wrap gap-2"><span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">{encounter.patient.status}</span><span className="rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">Paciente desde {encounter.patient.createdAt ? new Date(encounter.patient.createdAt).toLocaleDateString("pt-BR") : "data indisponível"}</span></div></div>
           </div>
           {step === "facial" ? <FacialCardActions autosaveState={autosave.state} finishLabel={readOnly ? "Avançar para orçamento" : "Concluir e ir ao orçamento"} finishing={isSaving} hasRecord={Boolean(currentEvaluationId)} isSaving={isSaving} lastSavedAt={lastSavedAt} readOnly={readOnly} onBack={() => void backToClinical()} onFinish={() => void continueToQuote()} onRetry={() => void autosave.flush()} /> : <div className="flex flex-wrap items-center gap-2"><span role="status" className={cn("text-xs", autosave.state === "error" ? "text-destructive" : "text-muted-foreground")}>{readOnly ? "Somente leitura" : autosave.state === "saving" ? "Salvando..." : autosave.state === "pending" ? "Alterações pendentes" : autosave.state === "error" ? "Não foi possível salvar" : "Rascunho salvo"}</span>{autosave.state === "error" && !readOnly ? <Button size="sm" variant="outline" onClick={() => void autosave.flush()}>Tentar novamente</Button> : null}</div>}

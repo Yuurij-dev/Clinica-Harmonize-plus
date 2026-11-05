@@ -16,6 +16,7 @@ import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 import { ProcedureImage } from "./procedure-image";
 import { JOURNEY_STAGE_LABELS, currentJourneyStage, journeyStagesDone } from "@/lib/journey-stage-rules";
+import { PatientAvatar } from "./patient-avatar";
 
 export type PatientJourneySummary = {
   id: string;
@@ -540,7 +541,7 @@ function JourneyDetail({ patient, journey, onBack, onOpenClinical, onOpenEvaluat
 
   return <div className="space-y-3">
     <Card className="flex flex-wrap items-center justify-between gap-4 p-4 sm:p-5">
-      <div className="flex min-w-0 items-center gap-3"><ProcedureImage name={journey.procedureNames?.[0] ?? journey.name} decorative className="h-14 w-14 rounded-lg" /><div className="min-w-0"><p className="truncate text-base font-bold">{journey.name}</p><div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"><span>{patient.name}</span><span>·</span><span>{journey.professional}</span><span>·</span><span>Desde {dateLabel(journey.createdAt)}</span><Badge variant={statusTone(journey.status)}>{journey.status}</Badge></div></div></div>
+      <div className="flex min-w-0 items-center gap-3"><ProcedureImage name={journey.procedureNames?.[0] ?? journey.name} decorative className="h-14 w-14 rounded-lg" /><div className="min-w-0"><p className="truncate text-base font-bold">{journey.name}</p><div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"><span className="inline-flex items-center gap-1.5"><PatientAvatar patientId={patientId} name={patient.name} size="xs" />{patient.name}</span><span>·</span><span>{journey.professional}</span><span>·</span><span>Desde {dateLabel(journey.createdAt)}</span><Badge variant={statusTone(journey.status)}>{journey.status}</Badge></div></div></div>
       <div className="flex flex-wrap gap-2">{canWriteClinical && journey.status === "Em andamento" ? <Button size="sm" variant="outline" onClick={() => { setName(journey.name); setEditError(""); setEditOpen(true); }}><Pencil className="h-4 w-4" />Editar jornada</Button> : null}<Button size="sm" variant="outline" onClick={() => onNewSession(journey)}><FileText className="h-4 w-4" />Nova sessão</Button>{journey.status === "Em andamento" && canWriteClinical ? <><Button size="sm" variant="outline" disabled={busy} onClick={onCancel}>Cancelar tratamento</Button><Button size="sm" onClick={() => setCompleteOpen(true)}><Check className="h-4 w-4" />Finalizar tratamento</Button></> : journey.status === "Cancelado" && canWriteClinical ? <Button size="sm" variant="outline" disabled={busy} onClick={onRestore}>Reativar</Button> : null}</div>
     </Card>
     {actionError || loadError ? <p role="alert" className="rounded-md bg-destructive/10 p-3 text-xs text-destructive">{actionError || "Alguns dados do tratamento não puderam ser atualizados."}</p> : null}

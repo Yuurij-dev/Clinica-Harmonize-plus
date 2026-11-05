@@ -36,7 +36,7 @@ export async function attendanceCheckData(clinicId: string, appointmentId: strin
   }
 
   return {
-    appointment: { id: attendance.id, kind: attendance.kind, name: attendance.procedure, date: attendance.date, status: attendance.status, materialsCheck: attendance.materialsCheck, patientName: attendance.patient.name },
+    appointment: { id: attendance.id, patientId: attendance.patientId, kind: attendance.kind, name: attendance.procedure, date: attendance.date, status: attendance.status, materialsCheck: attendance.materialsCheck, patientName: attendance.patient.name },
     suggestions: [...suggestionQuantities].filter(([productId]) => products.some((product) => product.id === productId)).map(([productId, quantity]) => ({ productId, quantity })),
     materials: products.map((product) => ({
       id: product.id, name: product.name, kind: product.kind, unit: product.unit,

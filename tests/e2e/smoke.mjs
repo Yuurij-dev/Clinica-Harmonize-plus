@@ -6,6 +6,7 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { chromium } from "playwright-core";
+import sharp from "sharp";
 
 const baseUrl = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const testClinicName = "Clínica Teste Auditoria";
@@ -538,10 +539,10 @@ async function loginLockout() {
 
 // Telas: os valores aparecem formatados e o pagamento registrado pela tela vai para o paciente escolhido.
 // Abre o navegador já logado na conta de teste. pageErrors junta os erros de JavaScript da página.
-async function withPage(fn) {
-  const instance = await chromium.launch({ channel: process.env.E2E_BROWSER ?? "msedge", headless: true });
+async function withPage(fn, { fakeCamera = false } = {}) {
+  const instance = await chromium.launch({ channel: process.env.E2E_BROWSER ?? "msedge", headless: true, ...(fakeCamera ? { args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] } : {}) });
   try {
-    const context = await instance.newContext({ timezoneId: "America/Sao_Paulo", locale: "pt-BR" });
+    const context = await instance.newContext({ timezoneId: "America/Sao_Paulo", locale: "pt-BR", ...(fakeCamera ? { permissions: ["camera"] } : {}) });
     await context.addCookies([{ name: "harmonize_session", value: cookie.split("=")[1], url: baseUrl }]);
     const page = await context.newPage();
     const pageErrors = [];
@@ -551,6 +552,136 @@ async function withPage(fn) {
   } finally {
     await instance.close();
   }
+}
+
+async function patientProfilePhotos(patient) {
+  const path = `/api/patients/${patient.id}/profile-photo`;
+  const clinicId = (await prisma.patient.findUnique({ where: { id: patient.id }, select: { clinicId: true } }))?.clinicId;
+  let response = await fetch(`${baseUrl}${path}`);
+  check("foto de perfil exige autenticação", response.status === 401, response.status);
+  let r = await api("GET", path);
+  check("paciente sem foto retorna resposta vazia", r.status === 204, r.status);
+  r = await api("GET", "/api/patients/id-inexistente/profile-photo");
+  check("foto de perfil não revela paciente inexistente", r.status === 404, r.status);
+
+  const png = await sharp({ create: { width: 320, height: 240, channels: 4, background: { r: 81, g: 71, b: 220, alpha: 1 } } }).png().toBuffer();
+  const jpeg = await sharp({ create: { width: 240, height: 320, channels: 3, background: { r: 230, g: 100, b: 70 } } }).jpeg().toBuffer();
+  const webp = await sharp({ create: { width: 150, height: 150, channels: 3, background: { r: 70, g: 180, b: 120 } } }).webp().toBuffer();
+  const upload = async (bytes, name, mime, width = 320, height = 240, phase = "OUTRA") => {
+    const form = new FormData();
+    form.set("file", new Blob([bytes], { type: mime }), name);
+    form.set("phase", phase); form.set("category", "Outra"); form.set("width", String(width)); form.set("height", String(height));
+    form.set("name", name); form.set("takenAt", new Date().toISOString());
+    const raw = await fetch(`${baseUrl}/api/patients/${patient.id}/photos`, { method: "POST", headers: { cookie }, body: form });
+    return { status: raw.status, data: await raw.json().catch(() => null) };
+  };
+
+  const emptyForm = new FormData();
+  emptyForm.set("phase", "OUTRA"); emptyForm.set("category", "Outra"); emptyForm.set("width", "1"); emptyForm.set("height", "1");
+  const missing = await fetch(`${baseUrl}/api/patients/${patient.id}/photos`, { method: "POST", headers: { cookie }, body: emptyForm });
+  check("upload sem arquivo é recusado", missing.status === 400, missing.status);
+  let invalid = await upload(Buffer.from("texto"), "avatar.png", "image/png");
+  check("upload rejeita conteúdo que não é imagem mesmo com extensão PNG", invalid.status === 415, invalid.status);
+  invalid = await upload(png, "avatar.png", "image/jpeg");
+  check("upload rejeita MIME que não corresponde aos bytes", invalid.status === 415, invalid.status);
+  invalid = await upload(png, "avatar.png", "image/png", 8001, 1);
+  check("upload rejeita dimensões acima do limite", invalid.status === 400, invalid.status);
+  invalid = await upload(Buffer.alloc(4 * 1024 * 1024 + 1), "grande.png", "image/png");
+  check("upload rejeita imagem acima de 4 MB", invalid.status === 413, invalid.status);
+
+  const uploadedRefs = [];
+  for (const [bytes, name, mime, width, height] of [[png, "avatar.png", "image/png", 320, 240], [jpeg, "avatar.jpg", "image/jpeg", 240, 320], [webp, "avatar.webp", "image/webp", 150, 150]]) {
+    const result = await upload(bytes, name, mime, width, height);
+    check(`upload ${mime} cria foto clínica`, result.status === 201 && typeof result.data?.id === "string", `${result.status} ${JSON.stringify(result.data)}`);
+    if (result.status === 201) uploadedRefs.push(`gallery:${result.data.id}`);
+  }
+  const misdeclared = await upload(png, "dimensoes-incorretas.png", "image/png", 1, 1);
+  const measured = misdeclared.data?.id ? await prisma.clinicalPhoto.findUnique({ where: { id: misdeclared.data.id }, select: { width: true, height: true } }) : null;
+  check("servidor grava dimensões medidas na imagem, não as informadas pelo cliente", misdeclared.status === 201 && measured?.width === 320 && measured?.height === 240, `${misdeclared.status} ${JSON.stringify(measured)}`);
+
+  const beforePhoto = await upload(await sharp({ create: { width: 64, height: 64, channels: 3, background: { r: 55, g: 85, b: 220 } } }).png().toBuffer(), "antes.png", "image/png", 64, 64, "ANTES");
+  const afterPhoto = await upload(await sharp({ create: { width: 64, height: 64, channels: 3, background: { r: 225, g: 65, b: 60 } } }).png().toBuffer(), "depois.png", "image/png", 64, 64, "DEPOIS");
+  check("fotos Antes e Depois são aceitas para escolha automática", beforePhoto.status === 201 && afterPhoto.status === 201, `${beforePhoto.status}/${afterPhoto.status}`);
+  const averageColor = async (response) => {
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return sharp(bytes).resize(1, 1).removeAlpha().raw().toBuffer();
+  };
+  const autoAfter = await fetch(`${baseUrl}${path}`, { headers: { cookie } });
+  const autoAfterColor = autoAfter.status === 200 ? await averageColor(autoAfter) : Buffer.alloc(0);
+  check("sem foto manual, Depois tem prioridade sobre Antes", autoAfter.status === 200 && autoAfterColor[0] > 150 && autoAfterColor[0] > autoAfterColor[2], `${autoAfter.status} ${[...autoAfterColor]}`);
+
+  let other = await api("POST", "/api/patients", { name: `Paciente foto cruzada ${run}`, phone: "11999990003", age: 24 });
+  check("cadastro do paciente de teste para isolamento", other.status === 201 && Boolean(other.data.patient?.id), other.status);
+  if (uploadedRefs.length && other.data.patient?.id) {
+    r = await api("PATCH", `/api/patients/${other.data.patient.id}/profile-photo`, { photoRef: uploadedRefs[0] });
+    check("não permite vincular foto de outro paciente", r.status === 404, `${r.status} ${r.data?.message}`);
+  }
+
+  let chosenRef = "";
+  for (const ref of uploadedRefs) {
+    r = await api("PATCH", path, { photoRef: ref });
+    check("seleção manual de foto valida e salva a referência", r.status === 200 && r.data?.ok === true, `${r.status} ${r.data?.message ?? ""}`);
+    chosenRef = ref;
+    const imageResponse = await fetch(`${baseUrl}${path}`, { headers: { cookie } });
+    const bytes = new Uint8Array(await imageResponse.arrayBuffer());
+    check("perfil serve miniatura JPEG decodificável para cada formato", imageResponse.status === 200 && imageResponse.headers.get("content-type") === "image/jpeg" && bytes[0] === 0xff && bytes[1] === 0xd8, `${imageResponse.status} ${imageResponse.headers.get("content-type")}`);
+  }
+  const manualImage = await fetch(`${baseUrl}${path}`, { headers: { cookie } });
+  const manualColor = manualImage.status === 200 ? await averageColor(manualImage) : Buffer.alloc(0);
+  check("foto manual permanece prioritária sobre Antes e Depois", manualImage.status === 200 && manualColor[1] > manualColor[0] && manualColor[1] > manualColor[2], `${manualImage.status} ${[...manualColor]}`);
+  const photoId = chosenRef.split(":")[1];
+  check("visualização da miniatura registra auditoria clínica", Boolean(await prisma.clinicalFileAudit.findFirst({ where: { clinicId, patientId: patient.id, fileId: photoId, action: "VIEW" } })), photoId);
+  r = await api("PATCH", path, { photoRef: "gallery:foto-inexistente" });
+  check("referência inexistente não é aceita", r.status === 404, r.status);
+  r = await api("PATCH", path, { photoRef: 42 });
+  check("referência com tipo inválido é recusada", r.status === 400, r.status);
+  r = await api("PATCH", path, { photoRef: null });
+  check("limpar foto manual restaura seleção automática", r.status === 200, r.status);
+  const fallbackAfter = await fetch(`${baseUrl}${path}`, { headers: { cookie } });
+  const fallbackAfterColor = fallbackAfter.status === 200 ? await averageColor(fallbackAfter) : Buffer.alloc(0);
+  check("ao limpar foto manual, perfil volta à foto Depois", fallbackAfter.status === 200 && fallbackAfterColor[0] > 150 && fallbackAfterColor[0] > fallbackAfterColor[2], `${fallbackAfter.status} ${[...fallbackAfterColor]}`);
+  const afterRef = encodeURIComponent(`gallery:${afterPhoto.data.id}`);
+  r = await api("PATCH", `/api/patients/${patient.id}/photos/${afterRef}`, { archived: true });
+  check("foto Depois pode ser arquivada para testar o fallback", r.status === 200, r.status);
+  const fallbackBefore = await fetch(`${baseUrl}${path}`, { headers: { cookie } });
+  const fallbackBeforeColor = fallbackBefore.status === 200 ? await averageColor(fallbackBefore) : Buffer.alloc(0);
+  check("sem Depois disponível, perfil usa a foto Antes", fallbackBefore.status === 200 && fallbackBeforeColor[2] > fallbackBeforeColor[0] && fallbackBeforeColor[2] > fallbackBeforeColor[1], `${fallbackBefore.status} ${[...fallbackBeforeColor]}`);
+  r = await api("PATCH", `/api/patients/${patient.id}/photos/${afterRef}`, { archived: false });
+  check("foto Depois pode ser restaurada", r.status === 200, r.status);
+}
+
+async function patientProfilePhotoScreen(patient) {
+  const clinicId = (await prisma.patient.findUnique({ where: { id: patient.id }, select: { clinicId: true } }))?.clinicId;
+  const png = await sharp({ create: { width: 2400, height: 1700, channels: 4, background: { r: 81, g: 71, b: 220, alpha: 1 } } }).png().toBuffer();
+  await withPage(async (page, pageErrors) => {
+    await page.goto(`${baseUrl}/clientes?patient=${patient.id}`);
+    await page.getByRole("button", { name: "Adicionar foto do paciente" }).waitFor();
+    await page.getByRole("button", { name: "Adicionar foto do paciente" }).click();
+    const dialog = page.getByRole("dialog", { name: "Adicionar foto do paciente" });
+    await dialog.waitFor();
+    await dialog.locator('input[type="file"]').setInputFiles({ name: "perfil-de-teste.png", mimeType: "image/png", buffer: png });
+    await dialog.waitFor({ state: "detached" });
+    const stored = await prisma.clinicalPhoto.findFirst({ where: { patientId: patient.id, clinicId }, orderBy: { createdAt: "desc" }, select: { width: true, height: true, sizeBytes: true, mimeType: true } });
+    check("imagem grande é reduzida no navegador antes do envio", stored?.width <= 1600 && stored?.height <= 1600 && stored?.mimeType === "image/jpeg" && stored?.sizeBytes < png.length, JSON.stringify(stored));
+    const image = await fetch(`${baseUrl}/api/patients/${patient.id}/profile-photo`, { headers: { cookie } });
+    check("tela permite escolher um arquivo e atualiza a foto de perfil", image.status === 200 && image.headers.get("content-type") === "image/jpeg", `${image.status} ${image.headers.get("content-type")}`);
+    check("upload de foto de perfil não gera erros de JavaScript", pageErrors.length === 0, pageErrors.join(" | "));
+  });
+
+  await withPage(async (page, pageErrors) => {
+    await page.goto(`${baseUrl}/clientes?patient=${patient.id}`);
+    await page.getByRole("button", { name: "Adicionar foto do paciente" }).click();
+    const dialog = page.getByRole("dialog", { name: "Adicionar foto do paciente" });
+    await dialog.getByRole("button", { name: "Tirar foto na hora" }).click();
+    const video = dialog.locator("video");
+    await video.waitFor();
+    await page.waitForFunction(() => { const video = document.querySelector("[role=dialog] video"); return video instanceof HTMLVideoElement && video.videoWidth > 0 && video.videoHeight > 0; });
+    await dialog.getByRole("button", { name: "Tirar foto", exact: true }).click();
+    await dialog.waitFor({ state: "detached" });
+    const image = await fetch(`${baseUrl}/api/patients/${patient.id}/profile-photo`, { headers: { cookie } });
+    check("câmera autorizada captura, envia e define a foto do perfil", image.status === 200 && image.headers.get("content-type") === "image/jpeg", `${image.status} ${image.headers.get("content-type")}`);
+    check("captura pela câmera não gera erros de JavaScript", pageErrors.length === 0, pageErrors.join(" | "));
+  }, { fakeCamera: true });
 }
 
 async function browser(homonym) {
@@ -5679,9 +5810,11 @@ const suites = {
   telas: { needs: ["orcamentos"], run: (state) => browser(state.homonym) },
   login: { needs: [], run: () => loginLockout() },
   fotos: { needs: [], run: async () => { await mobilePhotos(); await mobilePhotosGaps(); } },
+
   procedimentos_ativos: { needs: [], run: () => activeProcedures() },
   avaliacao_facial: { needs: [], run: () => facialEvaluation() },
   excluir_procedimento: { needs: [], run: () => deleteProcedure() },
+perfil_foto: { needs: ["pacientes"], run: async (state) => { await patientProfilePhotos(state.patient); await patientProfilePhotoScreen(state.patient); } },
 };
 
 // Sem nomes, roda tudo. Com nomes, roda essas partes e as que elas precisam.

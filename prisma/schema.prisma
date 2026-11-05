@@ -144,6 +144,7 @@ model Patient {
   auditLog            String                     @default("[]")
   status              String                     @default("Ativa")
   manualJourneyStage  String?
+  profilePhotoRef    String?
   lastVisit           DateTime?                  @db.Timestamptz(6)
   nextReturn          DateTime?                  @db.Timestamptz(6)
   totalValue          Int                        @default(0)

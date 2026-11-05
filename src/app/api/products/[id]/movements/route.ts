@@ -23,12 +23,12 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     select: {
       id: true, type: true, quantity: true, reason: true, notes: true, userName: true, createdAt: true,
       attendanceKind: true, attendanceName: true, attendanceDate: true,
-      lot: { select: { code: true } }, patient: { select: { name: true } }, reversedBy: { select: { id: true } },
+      lot: { select: { code: true } }, patient: { select: { id: true, name: true } }, reversedBy: { select: { id: true } },
     },
   });
   return NextResponse.json({
     hasMore: movements.length > pageSize,
-    movements: movements.slice(0, pageSize).map(({ lot, patient, reversedBy, ...movement }) => ({ ...movement, lotCode: lot.code, patientName: patient?.name ?? null, reversed: Boolean(reversedBy) })),
+    movements: movements.slice(0, pageSize).map(({ lot, patient, reversedBy, ...movement }) => ({ ...movement, lotCode: lot.code, patientId: patient?.id ?? null, patientName: patient?.name ?? null, reversed: Boolean(reversedBy) })),
   });
 }
 

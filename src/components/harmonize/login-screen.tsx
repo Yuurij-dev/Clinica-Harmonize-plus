@@ -151,8 +151,8 @@ function LoginForm({ error, isSubmitting, login, onLoginChange, onPasswordChange
     <>
       <header className="mb-7 text-center"><h2 className="text-2xl font-black tracking-[0] text-[#211960]">Bem-vindo!</h2><p className="mt-2 text-[13px] leading-5 text-[#7783a8]">Acesse sua conta para continuar na Harmonize+.</p></header>
       <div className="mb-6 border-b border-[#e6e8f1]"><div className="w-fit border-b-[3px] border-[#4938f4] px-2 pb-2 text-[13px] font-bold text-[#4938f4]">Login</div></div>
-      <form className="hp-list-stagger" onSubmit={onSubmit} suppressHydrationWarning>
-        <TextField compact icon={Mail} label="seu e-mail" onChange={onLoginChange} placeholder="nome@dominio.com" value={login} autoComplete="username" />
+      <form autoComplete="off" className="hp-list-stagger" onSubmit={onSubmit} suppressHydrationWarning>
+        <TextField compact icon={Mail} label="seu e-mail" onChange={onLoginChange} placeholder="nome@dominio.com" value={login} autoComplete="username" suppressHydrationWarning />
         <div className="mt-4">
           <PasswordField compact label="sua senha" onChange={onPasswordChange} password={password} setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="current-password" />
           <button className="mt-2 text-left text-xs font-medium text-[#4938f4] hover:underline" onClick={() => setHelpMessage("Para redefinir sua senha, entre em contato com o administrador da clínica.")} type="button">Esqueceu sua senha?</button>
@@ -198,8 +198,8 @@ function RegisterForm({ error, isSubmitting, onBack, onChange, onSubmit, values,
   );
 }
 
-function TextField({ compact = false, icon: Icon, label, onChange, placeholder, type = "text", value, autoComplete, maxLength }: { compact?: boolean; icon?: typeof Mail; label: string; onChange: (value: string) => void; placeholder: string; type?: string; value: string; autoComplete?: string; maxLength?: number }) {
-  return <label className="block"><span className={`block font-bold text-[#2d3654] ${compact ? "mb-1 text-[11px]" : "mb-2 text-xs"}`}>{label}</span><span className={`flex ${compact ? "h-9 gap-2 px-3 text-xs" : "h-12 gap-3 px-4 text-sm"} items-center rounded-[8px] border border-[#dfe7f2] bg-[#f5f8ff] text-[#68728a] transition focus-within:border-[#5947ee] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(89,71,238,0.08)]`}>{Icon ? <Icon className="h-4 w-4 shrink-0 text-[#7885ab]" /> : null}<input className="w-full bg-transparent font-semibold text-[#172033] outline-none placeholder:text-[#9aa5b8]" autoComplete={autoComplete} maxLength={maxLength} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} required type={type} value={value} /></span></label>;
+function TextField({ compact = false, icon: Icon, label, onChange, placeholder, type = "text", value, autoComplete, maxLength, suppressHydrationWarning = false }: { compact?: boolean; icon?: typeof Mail; label: string; onChange: (value: string) => void; placeholder: string; type?: string; value: string; autoComplete?: string; maxLength?: number; suppressHydrationWarning?: boolean }) {
+  return <label className="block"><span className={`block font-bold text-[#2d3654] ${compact ? "mb-1 text-[11px]" : "mb-2 text-xs"}`}>{label}</span><span className={`flex ${compact ? "h-9 gap-2 px-3 text-xs" : "h-12 gap-3 px-4 text-sm"} items-center rounded-[8px] border border-[#dfe7f2] bg-[#f5f8ff] text-[#68728a] transition focus-within:border-[#5947ee] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(89,71,238,0.08)]`}>{Icon ? <Icon className="h-4 w-4 shrink-0 text-[#7885ab]" /> : null}<input className="w-full bg-transparent font-semibold text-[#172033] outline-none placeholder:text-[#9aa5b8]" autoComplete={autoComplete} maxLength={maxLength} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} required suppressHydrationWarning={suppressHydrationWarning} type={type} value={value} /></span></label>;
 }
 
 function SelectField({ label, onChange, options, value }: { label: string; onChange: (value: string) => void; options: string[]; value: string }) {

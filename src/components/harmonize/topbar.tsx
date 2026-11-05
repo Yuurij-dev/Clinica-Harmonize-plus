@@ -16,6 +16,7 @@ import { TrialStatus } from "./trial-status";
 import { useCan } from "./current-user";
 import { Modal } from "@/components/ui/modal";
 import { tourReplayEvent } from "@/lib/section-events";
+import { PatientAvatar } from "./patient-avatar";
 
 type TopbarProps = {
   onDashboard: () => void;
@@ -455,7 +456,7 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onQuickCreate, onO
               {group.results.map((result) => {
                 const optionIndex = selectableSearchItems.findIndex((item) => item.type === "result" && item.value.id === result.id && item.value.kind === result.kind);
                 return <button key={`${result.kind}:${result.id}`} id={`global-search-option-${optionIndex}`} type="button" role="option" aria-selected={activeSearchIndex === optionIndex} tabIndex={-1} className={`flex w-full flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left transition-colors ${activeSearchIndex === optionIndex ? "bg-accent" : "hover:bg-accent"}`} onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActiveSearchIndex(optionIndex)} onClick={() => openSearchResult(result)}>
-                  <span className="w-full truncate text-sm font-medium"><HighlightedSearchText value={result.title} query={searchQuery.trim()} /></span>
+                  <span className="flex w-full min-w-0 items-center gap-2 truncate text-sm font-medium">{result.kind === "Paciente" && result.section === "clientes" ? <PatientAvatar patientId={result.id} name={result.title} size="xs" /> : null}<span className="truncate"><HighlightedSearchText value={result.title} query={searchQuery.trim()} /></span></span>
                   <span className="w-full truncate text-xs text-muted-foreground">{result.kind}{result.description ? <> · <HighlightedSearchText value={result.description} query={searchQuery.trim()} /></> : ""}</span>
                   <span className="w-full truncate text-[10px] text-muted-foreground">Abrir em {result.settingsSection ? `Configurações › ${result.settingsSection}` : ({ dashboard: "Dashboard", agenda: "Agenda", clientes: "Clientes", procedimentos: "Procedimentos", estoque: "Estoque", compras: "Compras", orcamentos: "Orçamentos", pagamentos: "Pagamentos", financeiro: "Financeiro", relatorios: "Relatórios", configuracoes: "Configurações" } as Record<SectionId, string>)[result.section]}</span>
                 </button>;

@@ -16,16 +16,17 @@ export async function GET() {
       where: { clinicId: user.clinicId, status: "pending" },
       orderBy: { createdAt: "asc" },
       select: {
-        id: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, patient: { select: { name: true } },
+        id: true, quantity: true, attendanceKind: true, attendanceName: true, attendanceDate: true, patient: { select: { id: true, name: true } },
         product: { select: { id: true, name: true, kind: true, unit: true, lots: { where: { expiresOn: { gte: today } }, orderBy: { expiresOn: "asc" }, select: { id: true, code: true, expiresOn: true } } } },
       },
     }),
-    prisma.appointment.findMany({ where: { clinicId: user.clinicId, status: "Atendido", materialsCheck: "pending" }, orderBy: { date: "desc" }, take: 100, select: { id: true, procedure: true, date: true, time: true, patient: { select: { name: true } } } }),
+    prisma.appointment.findMany({ where: { clinicId: user.clinicId, status: "Atendido", materialsCheck: "pending" }, orderBy: { date: "desc" }, take: 100, select: { id: true, patientId: true, procedure: true, date: true, time: true, patient: { select: { name: true } } } }),
     lotBalances(user.clinicId),
   ]);
   return NextResponse.json({
     outputs: outputs.map(({ product, patient, ...output }) => ({
       ...output,
+      patientId: patient?.id ?? null,
       patientName: patient?.name ?? null,
       product: { id: product.id, name: product.name, kind: product.kind, unit: product.unit },
       lots: product.lots.map((lot) => ({ id: lot.id, code: lot.code, expiresOn: dateOnly(lot.expiresOn), balance: balances.get(lot.id) ?? 0 })).filter((lot) => lot.balance > 0),

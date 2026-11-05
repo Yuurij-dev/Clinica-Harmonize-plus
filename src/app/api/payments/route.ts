@@ -19,7 +19,7 @@ export async function GET(request: Request) {
     where: { clinicId: user.clinicId, date },
     orderBy: [{ date: "desc" }, { id: "asc" }],
     take: listLimit + 1,
-    select: { id: true, valueCents: true, method: true, date: true, status: true, installments: true, patientId: true, patient: { select: { name: true } } },
+    select: { id: true, valueCents: true, method: true, date: true, status: true, installments: true, patientId: true, patient: { select: { id: true, name: true } } },
   });
   return NextResponse.json({ payments: payments.slice(0, listLimit).map(serializePayment), hasMore: payments.length > listLimit });
 }
@@ -39,6 +39,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ message: "Tratamento não encontrado." }, { status: 404 });
   }
   const journey = await ensurePatientJourney(patient.id, user.clinicId, body.journeyId);
-  const payment = await prisma.payment.create({ data: { clinicId: user.clinicId, patientId: patient.id, journeyId: journey.id, valueCents: toCents(value), method: body.method, status, installments: body.installments }, include: { patient: { select: { name: true } } } });
+  const payment = await prisma.payment.create({ data: { clinicId: user.clinicId, patientId: patient.id, journeyId: journey.id, valueCents: toCents(value), method: body.method, status, installments: body.installments }, include: { patient: { select: { id: true, name: true } } } });
   return NextResponse.json({ payment: serializePayment(payment) }, { status: 201 });
 }
