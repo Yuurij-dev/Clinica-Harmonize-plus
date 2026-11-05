@@ -9,71 +9,29 @@ import { cn } from "@/lib/utils";
 import { visibleSections, type RolePermissionMatrix } from "@/lib/permissions";
 import { useCan } from "./current-user";
 import { SectionWarning } from "./stock-alerts";
-import { CLIENT_CACHE_INVALIDATED_EVENT, acceptViewer, getCachedJson, primeClientCache, readClientCache } from "@/lib/client-cache";
-import { acquireTabCoordinator } from "@/lib/tab-leader";
-import { useCacheScopeVersion } from "./use-cache-scope-version";
+import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, readClientCache } from "@/lib/client-cache";
 
 type ActiveSession = { id: string; patientId: string; journeyId: string; procedureName: string; patientName: string; journeyName: string };
 const activeSessionsKey = "/api/patients/active-procedures";
 
 function ActiveProcedureWarning({ enabled }: { enabled: boolean }) {
   const [sessions, setSessions] = useState<ActiveSession[]>(() => readClientCache<{ sessions: ActiveSession[] }>(activeSessionsKey)?.sessions ?? []);
-  // No celular a sidebar fica montada, mas escondida por CSS: só carrega no desktop.
-  const [desktop, setDesktop] = useState(() => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches);
-  useEffect(() => {
-    const query = window.matchMedia("(min-width: 1024px)");
-    const onChange = () => setDesktop(query.matches);
-    onChange();
-    query.addEventListener("change", onChange);
-    return () => query.removeEventListener("change", onChange);
-  }, []);
-  const eligible = enabled && desktop;
-  // Troca de usuário/clínica recria o coordenador (o antigo é fechado pelo escopo do cache).
-  const scopeVersion = useCacheScopeVersion();
-  // Roda com permissão clínica mesmo em tela estreita: a líder pode ter de buscar para uma seguidora desktop.
   useEffect(() => {
     if (!enabled) return;
     let active = true;
-    const coordinator = acquireTabCoordinator();
-    coordinator.setSessionsEligible(eligible);
-    // Qualquer aba que buscou dado novo (líder ou ação do próprio usuário) o transmite às demais.
-    const load = (force = false) => getCachedJson<{ viewer?: unknown; sessions: ActiveSession[] }>(activeSessionsKey).then((data) => {
-      // Sem viewer só no dado vindo do canal da própria aba (já validado por escopo); o da API sempre traz.
-      if (!active || (data.viewer !== undefined && !acceptViewer(data.viewer))) return;
-      setSessions(data.sessions);
-      if (force || coordinator.isLeader()) coordinator.post({ kind: "sessions", sessions: data.sessions });
-    }).catch(() => undefined);
-    const leaderLoad = () => { if (coordinator.isLeader() && coordinator.shouldRunSessions()) void load(); };
-    const unsubscribe = coordinator.subscribe((message) => {
-      if (!active) return;
-      if (message.kind === "sessions" && enabled) {
-        primeClientCache(activeSessionsKey, { sessions: message.sessions }, coordinator.scope);
-        setSessions(message.sessions);
-      } else if (message.kind === "refresh") leaderLoad();
-    });
-    const unsubscribeLeader = coordinator.onLeaderChange((leader) => { if (leader) leaderLoad(); });
-    if (coordinator.isLeader()) leaderLoad();
-    else if (eligible) coordinator.post({ kind: "refresh" });
-    const timer = window.setInterval(leaderLoad, 60_000);
-    const onVisible = () => { if (document.visibilityState === "visible") leaderLoad(); };
+    const load = () => getCachedJson<{ sessions: ActiveSession[] }>(activeSessionsKey).then((data) => { if (active) setSessions(data.sessions); }).catch(() => undefined);
+    void load();
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const timer = window.setInterval(() => { if (desktop.matches && document.visibilityState === "visible") void load(); }, 10_000);
+    const onVisible = () => { if (document.visibilityState === "visible") void load(); };
     document.addEventListener("visibilitychange", onVisible);
-    // Ações do próprio usuário invalidam a chave: recarrega na hora, em qualquer aba.
     const refreshAfterSessionChange = (event: Event) => {
-      if ((event as CustomEvent<string[]>).detail?.includes(activeSessionsKey)) void load(true);
+      if ((event as CustomEvent<string[]>).detail?.includes(activeSessionsKey)) void load();
     };
     window.addEventListener(CLIENT_CACHE_INVALIDATED_EVENT, refreshAfterSessionChange);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener(CLIENT_CACHE_INVALIDATED_EVENT, refreshAfterSessionChange);
-      unsubscribe();
-      unsubscribeLeader();
-      coordinator.setSessionsEligible(false);
-      coordinator.release();
-    };
-  }, [enabled, eligible, scopeVersion]);
-  if (!eligible || !sessions.length) return null;
+    return () => { active = false; window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); window.removeEventListener(CLIENT_CACHE_INVALIDATED_EVENT, refreshAfterSessionChange); };
+  }, [enabled]);
+  if (!enabled || !sessions.length) return null;
   return <span className="group/warning relative inline-flex"><span role="button" tabIndex={0} aria-label={`Abrir jornada ${sessions[0].journeyName}; procedimento em andamento`} onClick={(event) => { event.stopPropagation(); window.location.assign(`/clientes?patient=${encodeURIComponent(sessions[0].patientId)}&journey=${encodeURIComponent(sessions[0].journeyId)}`); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); window.location.assign(`/clientes?patient=${encodeURIComponent(sessions[0].patientId)}&journey=${encodeURIComponent(sessions[0].journeyId)}`); } }} className="grid h-6 w-6 cursor-pointer place-items-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><span aria-hidden="true" className="stock-alert-dot block h-1.5 w-1.5 rounded-full" /></span><span role="tooltip" className="pointer-events-none invisible absolute left-full top-1/2 z-50 ml-2 w-72 -translate-y-1/2 rounded-md border border-border bg-card p-3 text-left opacity-0 shadow-lg transition-opacity duration-150 group-hover/warning:visible group-hover/warning:opacity-100 group-focus-within/warning:visible group-focus-within/warning:opacity-100"><span className="block text-xs font-semibold text-foreground">Procedimentos em andamento</span>{sessions.map((session) => <span key={session.id} className="mt-2 block text-xs text-muted-foreground">{session.journeyName}: procedimento em andamento ({session.procedureName})</span>)}</span></span>;
 }
 

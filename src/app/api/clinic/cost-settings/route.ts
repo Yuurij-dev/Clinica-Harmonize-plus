@@ -15,6 +15,7 @@ type ClinicSettings = {
   stockNotificationsEnabled: boolean;
   requireCancellationReason: boolean;
   autoMarkMissedAppointmentsEnabled: boolean;
+  autoCompleteAppointmentsEnabled: boolean;
   autoAdvancePatientJourneyEnabled: boolean;
   allowAppointmentsOutsideHours: boolean;
   laborCost: number;
@@ -41,6 +42,7 @@ async function loadClinicSettings(clinicId: string): Promise<ClinicSettings | nu
       'stockNotificationsEnabled', to_jsonb(c)->'stockNotificationsEnabled',
       'requireCancellationReason', COALESCE(to_jsonb(c)->'requireCancellationReason', 'false'::jsonb),
       'autoMarkMissedAppointmentsEnabled', COALESCE(to_jsonb(c)->'autoMarkMissedAppointmentsEnabled', 'true'::jsonb),
+      'autoCompleteAppointmentsEnabled', COALESCE(to_jsonb(c)->'autoCompleteAppointmentsEnabled', 'true'::jsonb),
       'autoAdvancePatientJourneyEnabled', COALESCE(to_jsonb(c)->'autoAdvancePatientJourneyEnabled', 'true'::jsonb),
       'allowAppointmentsOutsideHours', COALESCE(to_jsonb(c)->'allowAppointmentsOutsideHours', 'false'::jsonb),
       'laborCost', to_jsonb(c)->'laborCost',

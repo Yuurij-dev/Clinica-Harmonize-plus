@@ -8,10 +8,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Input } from "@/components/ui/input";
 import type { SectionId } from "@/types/clinic";
 import type { StockAlert } from "@/lib/stock-rules";
-import { acceptViewer, getClientCacheScope, invalidateClientCache } from "@/lib/client-cache";
-import { acquireTabCoordinator } from "@/lib/tab-leader";
-import { useCacheScopeVersion } from "./use-cache-scope-version";
-import { cycleThrottleAllows, viewerMatchesScope, type AutomaticUpdateMessage } from "@/lib/tab-leader-rules";
+import { invalidateClientCache } from "@/lib/client-cache";
 import { StockAlertGroups, useStockAlerts } from "./stock-alerts";
 import { TrialStatus } from "./trial-status";
 import { useCan } from "./current-user";
@@ -24,7 +21,7 @@ type TopbarProps = {
   onNavigate: (section: SectionId) => void;
   onOpenStockAlert: (alert: StockAlert) => void;
   onLogout: () => Promise<void>;
-  user?: { id: string; clinicId?: string; name: string; role: string; clinic?: { trialEndsAt?: string | null } } | null;
+  user?: { id: string; name: string; role: string; clinic?: { trialEndsAt?: string | null } } | null;
 };
 
 function clinicNow() {
@@ -43,57 +40,10 @@ function appointmentMinutesFromTime(time: string) {
   return (hours || 0) * 60 + (minutes || 0);
 }
 
-type AlertsData = { viewer?: unknown; appointments?: Array<{ id: string; date: string; time: string; status: string; patient?: { name?: string } }>; settings?: { appointmentNotificationsEnabled?: boolean; appointmentNotificationSoundEnabled?: boolean; stockNotificationsEnabled?: boolean } };
-type CycleResult = { alerts: AlertsData | null; updated: AutomaticUpdateMessage[] };
-
-// Mesmas invalidações para quem rodou o auto-process e para as abas que recebem o resultado da líder.
-function applyAutomaticUpdates(updated: AutomaticUpdateMessage[]) {
-  if (!updated.length) return;
-  invalidateClientCache("/api/agenda", "/api/dashboard/bootstrap", "/api/patients", ...updated.map(({ patientId }) => `/api/patients/${patientId}/history`));
-  window.dispatchEvent(new Event("harmonize-auto-appointments-updated"));
-}
-
-// Guarda em nível de módulo: Strict Mode, remontagem e eventos nunca disparam dois ciclos ao mesmo tempo,
-// e ciclos a menos de ~10 s do anterior reaproveitam o último resultado. Alertas e auto-process ficam
-// sem cache (notificação sensível ao tempo).
-let cycleScope: string | null = null;
-let cycleAt = 0;
-let cycleLast: AlertsData | null = null;
-let cycleInFlight: Promise<CycleResult> | null = null;
-
-function loadAppointmentCycle(force: boolean): Promise<CycleResult> {
-  const scope = getClientCacheScope();
-  if (scope !== cycleScope) { cycleScope = scope; cycleAt = 0; cycleLast = null; cycleInFlight = null; }
-  if (cycleInFlight) return force ? cycleInFlight.then(() => loadAppointmentCycle(true)) : cycleInFlight;
-  if (cycleLast && !cycleThrottleAllows(cycleAt, Date.now(), force)) return Promise.resolve({ alerts: cycleLast, updated: [] });
-  const promise: Promise<CycleResult> = (async (): Promise<CycleResult> => {
-    let updated: AutomaticUpdateMessage[] = [];
-    const automationResponse = await fetch("/api/appointments/auto-process", { method: "POST", cache: "no-store" }).catch(() => null);
-    if (automationResponse?.ok) {
-      const automation = await automationResponse.json().catch(() => null) as { updated?: AutomaticUpdateMessage[] } | null;
-      updated = automation?.updated ?? [];
-    }
-    const response = await fetch("/api/agenda/alerts", { cache: "no-store" }).catch(() => null);
-    if (!response?.ok) return { alerts: null, updated: [] };
-    const alerts = await response.json().catch(() => null) as AlertsData | null;
-    // O cookie pode ter passado a ser de outra conta (login em outra aba) ou o escopo mudou durante o ciclo:
-    // nada é aplicado nem transmitido. O viewer do alerts vale também para o auto-process que o precedeu.
-    if (!alerts || getClientCacheScope() !== scope) return { alerts: null, updated: [] };
-    if (!acceptViewer(alerts.viewer)) return { alerts: null, updated: [] };
-    cycleLast = alerts;
-    cycleAt = Date.now();
-    applyAutomaticUpdates(updated);
-    return { alerts, updated };
-  })().finally(() => { if (cycleInFlight === promise) cycleInFlight = null; });
-  cycleInFlight = promise;
-  return promise;
-}
-
 export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, onLogout, user }: TopbarProps) {
   const canAccessDashboard = useCan("dashboard:access");
   const canAccessSettings = useCan("settings:access");
   const canAccessStock = useCan("stock:access");
-  const scopeVersion = useCacheScopeVersion();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   // Confirmação antes de iniciar o tour: o Harmo se apresenta e o usuário decide.
   const [tourAskOpen, setTourAskOpen] = useState(false);
@@ -184,10 +134,22 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, 
   useEffect(() => {
     if (!user?.id) return;
     let active = true;
-    const coordinator = acquireTabCoordinator();
 
-    // Cada aba usa os próprios IDs anteriores para o som e só toca se estiver visível.
-    function applyAlerts(data: AlertsData) {
+    async function loadAppointmentAlerts() {
+      if (document.visibilityState === "visible") {
+        const automationResponse = await fetch("/api/appointments/auto-process", { method: "POST", cache: "no-store" }).catch(() => null);
+        if (automationResponse?.ok) {
+          const automation = await automationResponse.json().catch(() => null) as { updated?: Array<{ id: string; patientId: string; date: string }> } | null;
+          if (active && automation?.updated?.length) {
+            invalidateClientCache("/api/agenda", "/api/dashboard/bootstrap", "/api/patients", ...automation.updated.map(({ patientId }) => `/api/patients/${patientId}/history`));
+            window.dispatchEvent(new Event("harmonize-auto-appointments-updated"));
+          }
+        }
+      }
+      const response = await fetch("/api/agenda/alerts", { cache: "no-store" }).catch(() => null);
+      if (!response?.ok) return;
+      const data = await response.json() as { appointments?: Array<{ id: string; date: string; time: string; status: string; patient?: { name?: string } }>; settings?: { appointmentNotificationsEnabled?: boolean; appointmentNotificationSoundEnabled?: boolean; stockNotificationsEnabled?: boolean } };
+      if (!active) return;
       setStockNotificationsEnabled(data.settings?.stockNotificationsEnabled ?? true);
       setAppointmentNotificationSoundEnabled(data.settings?.appointmentNotificationSoundEnabled ?? true);
 
@@ -206,54 +168,18 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, 
         })
         .map((appointment) => ({ id: appointment.id, message: `É hora do atendimento de ${appointment.patient?.name ?? "um cliente"}.` }));
       const previousAlertIds = previousAlertIdsRef.current;
-      const soundEnabled = data.settings?.appointmentNotificationSoundEnabled ?? notificationSoundEnabledRef.current;
-      if (soundEnabled && previousAlertIds && document.visibilityState === "visible" && alerts.some((alert) => !previousAlertIds.includes(alert.id))) playNotificationSound();
+      const soundEnabled = data.settings?.appointmentNotificationSoundEnabled ?? appointmentNotificationSoundEnabled;
+      if (soundEnabled && previousAlertIds && alerts.some((alert) => !previousAlertIds.includes(alert.id))) playNotificationSound();
       previousAlertIdsRef.current = alerts.map((alert) => alert.id);
       setAppointmentAlerts(alerts);
     }
 
-    // Só a líder busca (se ela ou alguma aba estiver visível) e transmite o resultado às seguidoras.
-    async function runCycle(force: boolean) {
-      if (!coordinator.isLeader() || (!force && !coordinator.shouldRunCycle())) return;
-      const scopeAtStart = getClientCacheScope();
-      const result = await loadAppointmentCycle(force);
-      if (!active || getClientCacheScope() !== scopeAtStart || (!result.alerts && !result.updated.length)) return;
-      if (result.alerts) applyAlerts(result.alerts);
-      coordinator.post({ kind: "cycle", alerts: result.alerts as Record<string, unknown> | null, updated: result.updated });
-    }
-
-    const unsubscribe = coordinator.subscribe((message) => {
-      if (!active) return;
-      if (message.kind === "cycle") {
-        if (!message.alerts || !viewerMatchesScope((message.alerts as AlertsData).viewer, getClientCacheScope())) return;
-        applyAutomaticUpdates(message.updated);
-        applyAlerts(message.alerts as AlertsData);
-      } else if (message.kind === "refresh") {
-        void runCycle(Boolean(message.force));
-      }
-    });
-    const unsubscribeLeader = coordinator.onLeaderChange((leader) => { if (leader) void runCycle(false); });
-    if (coordinator.isLeader()) void runCycle(false);
-    else coordinator.post({ kind: "refresh" });
-
-    const timer = window.setInterval(() => { void runCycle(false); }, 30_000);
-    const handleVisibility = () => { if (document.visibilityState === "visible") void runCycle(false); };
-    const handleSettingsChange = () => {
-      if (coordinator.isLeader()) void runCycle(true);
-      else coordinator.post({ kind: "refresh", force: true });
-    };
-    document.addEventListener("visibilitychange", handleVisibility);
+    void loadAppointmentAlerts();
+    const timer = window.setInterval(() => { void loadAppointmentAlerts(); }, 30_000);
+    const handleSettingsChange = () => { void loadAppointmentAlerts(); };
     window.addEventListener("harmonize-notification-settings-updated", handleSettingsChange);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", handleVisibility);
-      window.removeEventListener("harmonize-notification-settings-updated", handleSettingsChange);
-      unsubscribe();
-      unsubscribeLeader();
-      coordinator.release();
-    };
-  }, [user?.id, user?.clinicId, scopeVersion]);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener("harmonize-notification-settings-updated", handleSettingsChange); };
+  }, [user?.id, appointmentNotificationSoundEnabled]);
 
   async function handleLogout() {
     setIsLoggingOut(true);
