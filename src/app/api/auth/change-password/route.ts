@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { createSession, invalidateUserAuthCache, sessionCookieName } from "@/lib/auth";
 import { getAuthSecret } from "@/lib/auth-secret";
 import { prisma } from "@/lib/prisma";
+import { pickMembership } from "@/lib/active-clinic-rules";
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as { password?: string } | null;
@@ -30,9 +31,10 @@ export async function POST(request: Request) {
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, passwordHash: true, mustChangePassword: true, memberships: { take: 1, orderBy: { id: "asc" }, select: { clinic: { select: { name: true } } } } },
+    select: { id: true, passwordHash: true, mustChangePassword: true, activeClinicId: true, memberships: { orderBy: { id: "asc" }, select: { clinic: { select: { id: true, name: true } } } } },
   });
-  if (!user?.mustChangePassword || !user.memberships[0]) {
+  const membership = user ? pickMembership(user.memberships, user.activeClinicId) : undefined;
+  if (!user?.mustChangePassword || !membership) {
     return NextResponse.json({ message: "Não foi possível validar este acesso." }, { status: 403 });
   }
   if (await compare(password, user.passwordHash)) {
@@ -43,7 +45,7 @@ export async function POST(request: Request) {
   await prisma.user.update({ where: { id: user.id }, data: { passwordHash, mustChangePassword: false } });
   invalidateUserAuthCache(user.id);
 
-  const response = NextResponse.json({ success: true, clinicName: user.memberships[0].clinic.name });
+  const response = NextResponse.json({ success: true, clinicName: membership.clinic.name });
   response.cookies.set({
     name: sessionCookieName,
     value: await createSession(user.id),

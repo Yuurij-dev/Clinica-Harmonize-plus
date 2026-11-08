@@ -21,6 +21,8 @@ export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "l
 
     const data = await response.json().catch(() => null) as { message?: string; passwordChangeRequired?: boolean; user?: { id?: string; clinic?: { id?: string; name?: string } } } | null;
     if (!response.ok) return { error: data?.message ?? "Usuário ou senha inválidos." };
+    // Login novo: com 2+ clínicas a tela de escolha volta a aparecer.
+    try { window.sessionStorage.removeItem("harmonize-clinic-chosen"); } catch { /* ignora */ }
     setClientCacheScope(data?.user?.id && data.user.clinic?.id ? `${data.user.id}:${data.user.clinic.id}` : null);
     window.localStorage.setItem("harmonize-session-change", String(Date.now()));
     if (data?.passwordChangeRequired) return { passwordChangeRequired: true };

@@ -36,6 +36,11 @@ model User {
   identities                 UserIdentity[]
   invitationsSent            ClinicInvitation[] @relation("InvitationInvitedBy")
   invitationsAccepted        ClinicInvitation[] @relation("InvitationAcceptedBy")
+  // Clínica ativa de quem pertence a 2+ clínicas; null ou sem membership cai na mais antiga (ver pickMembership).
+  activeClinicId             String?
+  activeClinic               Clinic?            @relation("UserActiveClinic", fields: [activeClinicId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([activeClinicId])
 }
 
 model Clinic {
@@ -70,6 +75,7 @@ model Clinic {
   createdAt                   DateTime                   @default(now()) @db.Timestamptz(6)
   updatedAt                   DateTime                   @default(now()) @updatedAt @db.Timestamptz(6)
   memberships                 ClinicMembership[]
+  activeUsers                 User[]                     @relation("UserActiveClinic")
   invitations                 ClinicInvitation[]
   patients                    Patient[]
   appointments                Appointment[]

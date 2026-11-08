@@ -5945,7 +5945,89 @@ async function invitations() {
   }
 }
 
+// Etapa 5b: clínica ativa (POST /api/auth/active-clinic e clinics em GET /api/auth/me).
+async function activeClinic() {
+  const me = await prisma.user.findUnique({ where: { email: email.toLowerCase() }, select: { id: true } });
+  const home = (await prisma.clinicMembership.findFirst({ where: { userId: me.id, clinic: { name: testClinicName } }, select: { clinicId: true } })).clinicId;
+  const nameB = `E2E Clinica Ativa B ${run}`, nameC = `E2E Clinica Ativa Alheia ${run}`;
+  const activeInDb = async () => (await prisma.user.findUnique({ where: { id: me.id }, select: { activeClinicId: true } })).activeClinicId;
+  const freshLogin = async () => { const r = await api("POST", "/api/auth/login", { login: email, password }); if (r.status !== 200) throw new Error(`login ${r.status}`); return r; };
+  const sessionClinic = async () => (await api("GET", "/api/auth/me")).data.user?.clinic?.id;
+  let clinicB, clinicC;
+  try {
+    // 4) uma clínica só.
+    await prisma.user.update({ where: { id: me.id }, data: { activeClinicId: null } });
+    await freshLogin();
+    let r = await api("GET", "/api/auth/me");
+    check("clínica ativa: com 1 clínica, /me lista 1 e a sessão segue nela", r.status === 200 && r.data.clinics?.length === 1 && r.data.clinics[0].id === home && r.data.clinics[0].name === testClinicName && r.data.user?.clinic?.id === home, `${r.status} ${JSON.stringify(r.data.clinics)}`);
+    const pa = { status: 201 }; await prisma.patient.create({ data: { clinicId: home, name: `Paciente Ativa A ${run}`, phone: "11999990090", age: 30 } });
+    check("clínica ativa: paciente de A criado", pa.status === 201, `${pa.status} ${JSON.stringify(pa.data)}`);
+
+    // Fixture: 2ª clínica com membership do usuário de teste, e uma 3ª sem vínculo.
+    clinicB = await prisma.clinic.create({ data: { name: nameB, slug: `e2e-ativa-b-${run}`, memberships: { create: { userId: me.id, role: "ADMIN" } } } });
+    clinicC = await prisma.clinic.create({ data: { name: nameC, slug: `e2e-ativa-c-${run}` } });
+    await prisma.patient.create({ data: { clinicId: clinicB.id, name: `Paciente Ativa B ${run}`, phone: "11999990091", age: 30 } });
+    await prisma.patient.create({ data: { clinicId: clinicC.id, name: `Paciente Ativa C ${run}`, phone: "11999990092", age: 30 } });
+
+    // 3) activeClinicId nulo: cai na 1ª membership (id asc).
+    const firstId = (await prisma.clinicMembership.findFirst({ where: { userId: me.id }, orderBy: { id: "asc" }, select: { clinicId: true } })).clinicId;
+    await prisma.user.update({ where: { id: me.id }, data: { activeClinicId: null } });
+    await freshLogin();
+    check("clínica ativa: activeClinicId nulo cai na 1ª membership (id asc)", await sessionClinic() === firstId, `${await sessionClinic()} vs ${firstId}`);
+    await prisma.user.update({ where: { id: me.id }, data: { activeClinicId: clinicC.id } });
+    await freshLogin();
+    check("clínica ativa: activeClinicId apontando para clínica sem membership cai na 1ª", await sessionClinic() === firstId, `${await sessionClinic()} vs ${firstId}`);
+    await prisma.user.update({ where: { id: me.id }, data: { activeClinicId: null } });
+    await freshLogin();
+
+    // 1) duas clínicas.
+    r = await api("GET", "/api/auth/me");
+    const ids = (r.data.clinics ?? []).map((c) => c.id).sort().join();
+    check("clínica ativa: /me lista as 2 clínicas do usuário e nenhuma alheia", r.data.clinics?.length === 2 && ids === [home, clinicB.id].sort().join() && !JSON.stringify(r.data).includes(clinicC.id), JSON.stringify(r.data.clinics));
+    const entryB = r.data.clinics?.find((c) => c.id === clinicB.id);
+    check("clínica ativa: /me traz nome, papel e isOwner da membership", entryB?.name === nameB && entryB?.role === "ADMIN" && entryB?.isOwner === false, JSON.stringify(entryB));
+
+    // 2) segurança.
+    await prisma.user.update({ where: { id: me.id }, data: { activeClinicId: home } });
+    const anon = await withSession("", () => api("POST", "/api/auth/active-clinic", { clinicId: clinicB.id }));
+    check("clínica ativa: sem sessão devolve 401 e nada é gravado", anon.status === 401 && await activeInDb() === home, anon.status);
+    for (const [label, body] of [["sem clinicId", {}], ["clinicId numérico", { clinicId: 5 }], ["clinicId vazio", { clinicId: "" }]]) {
+      r = await api("POST", "/api/auth/active-clinic", body);
+      check(`clínica ativa: ${label} devolve 400`, r.status === 400 && await activeInDb() === home, r.status);
+    }
+    r = await api("POST", "/api/auth/active-clinic", { clinicId: clinicC.id });
+    check("clínica ativa: clínica onde NÃO é membro devolve 403 e activeClinicId não muda", r.status === 403 && await activeInDb() === home && await sessionClinic() === home, `${r.status} ativa=${await activeInDb()}`);
+    r = await api("POST", "/api/auth/active-clinic", { clinicId: `inexistente-${run}` });
+    check("clínica ativa: clínica inexistente devolve 403 e nada muda", r.status === 403 && await activeInDb() === home, r.status);
+
+    // 1) troca e re-escopo.
+    r = await api("POST", "/api/auth/active-clinic", { clinicId: clinicB.id });
+    check("clínica ativa: troca para clínica onde é membro (200) grava activeClinicId", r.status === 200 && r.data.clinicId === clinicB.id && await activeInDb() === clinicB.id, r.status);
+    r = await api("GET", "/api/auth/me");
+    check("clínica ativa: /me reflete a outra clínica logo após a troca", r.data.user?.clinic?.id === clinicB.id && r.data.user?.clinic?.name === nameB && r.data.clinics?.length === 2, JSON.stringify(r.data.user?.clinic));
+    r = await api("GET", "/api/patients");
+    const txt = JSON.stringify(r.data);
+    check("clínica ativa: dados re-escopados (vê paciente de B, não vê o de A nem o da clínica C)", r.status === 200 && txt.includes(`Paciente Ativa B ${run}`) && !txt.includes(`Paciente Ativa A ${run}`) && !txt.includes(`Paciente Ativa C ${run}`), r.status);
+    r = await api("POST", "/api/auth/active-clinic", { clinicId: home });
+    r = await api("GET", "/api/patients");
+    check("clínica ativa: voltando para A, vê o paciente de A e não o de B", r.status === 200 && JSON.stringify(r.data).includes(`Paciente Ativa A ${run}`) && !JSON.stringify(r.data).includes(`Paciente Ativa B ${run}`), r.status);
+    const dbl = await Promise.all([1, 2].map(() => api("POST", "/api/auth/active-clinic", { clinicId: clinicB.id })));
+    check("clínica ativa: clique duplo na troca devolve 200 nas duas e estado consistente", dbl.every((x) => x.status === 200) && await activeInDb() === clinicB.id, dbl.map((x) => x.status).join("/"));
+  } finally {
+    await prisma.user.update({ where: { id: me.id }, data: { activeClinicId: null } }).catch(() => {});
+    const created = [clinicB?.id, clinicC?.id].filter(Boolean);
+    if (created.length) {
+      await prisma.patient.deleteMany({ where: { clinicId: { in: created } } });
+      await prisma.clinicMembership.deleteMany({ where: { clinicId: { in: created } } });
+      await prisma.clinic.deleteMany({ where: { id: { in: created } } });
+    }
+    await prisma.patient.deleteMany({ where: { clinicId: home, name: { contains: `Ativa A ${run}` } } });
+    await freshLogin().catch(() => {});
+  }
+}
+
 const suites = {
+  clinica_ativa: { needs: [], run: () => activeClinic() },
   convites: { needs: [], run: () => invitations() },
   cadastro_google: { needs: [], run: () => googleSignup() },
   jornadas_etapa: { needs: [], run: () => journeyStageFilter() },

@@ -3,6 +3,7 @@ import { cookies, headers } from "next/headers";
 import { parseBearerToken } from "./bearer-rules";
 import { getAuthSecret } from "./auth-secret";
 import { prisma } from "./prisma";
+import { pickMembership } from "./active-clinic-rules";
 import { canForUser, normalizeRolePermissionMatrix, type Permission, type RolePermissionMatrix } from "./permissions";
 
 export const sessionCookieName = "harmonize_session";
@@ -92,14 +93,14 @@ export async function getCurrentUser({ requireActiveTrial = false }: CurrentUser
         name: true,
         email: true,
         role: true,
+        activeClinicId: true,
         memberships: {
-          take: 1,
           orderBy: { id: "asc" },
           select: { role: true, isOwner: true, clinic: { select: { id: true, name: true, slug: true, trialEndsAt: true, rolePermissions: true } } },
         },
       },
     }).then((user): AuthenticatedUser | null => {
-    const membership = user?.memberships[0];
+    const membership = user ? pickMembership(user.memberships, user.activeClinicId) : undefined;
     if (!user || !membership) return null;
     return {
       id: user.id,

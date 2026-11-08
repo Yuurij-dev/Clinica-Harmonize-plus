@@ -33,6 +33,7 @@ import { visibleSections } from "@/lib/permissions";
 import { splitMobileSections } from "@/lib/mobile-nav-rules";
 import { CurrentRoleProvider } from "./current-user";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
+import { ClinicChooser, type UserClinic } from "./clinic-chooser";
 import { clientsHomeEvent } from "@/lib/section-events";
 import { agendaPeriodKey, agendaPeriodRange } from "@/lib/agenda-period-rules";
 import { clinicToday } from "@/lib/clinic-time";
@@ -77,13 +78,24 @@ async function leaveToLogin(replace: (path: string) => void) {
   replace("/login");
 }
 
-type SessionCheck = { status: number; user?: CurrentUser };
+// Id do usuário que já escolheu a clínica nesta aba (só um id, sem dado de paciente); um login novo apaga e a escolha volta.
+const clinicChosenKey = "harmonize-clinic-chosen";
+
+function clinicChosenFor(userId: string) {
+  try { return window.sessionStorage.getItem(clinicChosenKey) === userId; } catch { return false; }
+}
+
+function markClinicChosen(userId: string) {
+  try { window.sessionStorage.setItem(clinicChosenKey, userId); } catch { /* sem sessionStorage: a escolha só reaparece no próximo reload */ }
+}
+
+type SessionCheck = { status: number; user?: CurrentUser; clinics?: UserClinic[] };
 let sessionCheck: Promise<SessionCheck> | null = null;
 
 function getSessionCheck() {
   if (!sessionCheck) {
     sessionCheck = fetch("/api/auth/me", { cache: "no-store" })
-      .then(async (response) => ({ status: response.status, ...(response.ok ? await response.json() as { user?: CurrentUser } : {}) }))
+      .then(async (response) => ({ status: response.status, ...(response.ok ? await response.json() as { user?: CurrentUser; clinics?: UserClinic[] } : {}) }))
       .finally(() => { sessionCheck = null; });
   }
   return sessionCheck;
@@ -118,6 +130,8 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [startup, setStartup] = useState<StartupState>({ status: "checking-session", sessionConfirmed: false, message: "Validando seu acesso..." });
   const [startupAttempt, setStartupAttempt] = useState(0);
+  const [clinics, setClinics] = useState<UserClinic[]>([]);
+  const [clinicChoice, setClinicChoice] = useState<{ userId: string; activeClinicId: string } | null>(null);
   const [agendaFocus, setAgendaFocus] = useState<AgendaFocus | null>(null);
   const [purchasesTab, setPurchasesTab] = useState<PurchasesTab>("purchases");
   const [undoNotice, setUndoNotice] = useState<UndoNotice>(null);
@@ -176,6 +190,13 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
 
         const user = session.user;
         sessionConfirmed = true;
+        const userClinics = session.clinics ?? [];
+        setClinics(userClinics);
+        // 2+ clínicas e ainda sem escolha nesta sessão: pergunta antes de carregar qualquer dado.
+        if (userClinics.length > 1 && !clinicChosenFor(user.id)) {
+          setClinicChoice({ userId: user.id, activeClinicId: user.clinicId });
+          return;
+        }
         clinicName = user.clinic?.name;
         setClientCacheScope(`${user.id}:${user.clinicId}:${JSON.stringify(user.rolePermissions ?? {})}`);
         setCurrentUser(user);
@@ -211,7 +232,9 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     const url = new URL(window.location.href);
     if (url.searchParams.get("google") !== "ok") return;
     window.localStorage.setItem("harmonize-session-change", String(Date.now()));
-    if (url.searchParams.get("other_clinic") === "1") toast.success("Convite aceito. Por enquanto o acesso abre a sua clínica mais antiga; a seleção de clínica chega em breve.");
+    // Login novo com Google: com 2+ clínicas a escolha é pedida de novo.
+    try { window.sessionStorage.removeItem(clinicChosenKey); } catch { /* ignora */ }
+    if (url.searchParams.get("other_clinic") === "1") toast.success("Convite aceito. Para entrar na nova clínica, use o seletor de clínica no topo da tela.");
     url.searchParams.delete("google");
     url.searchParams.delete("other_clinic");
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
@@ -258,6 +281,46 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     router.replace(sectionPaths[active]);
   }
 
+  // Devolve a mensagem de erro, ou null quando a troca foi aceita pelo servidor (que reconfere a membership).
+  async function activateClinic(clinicId: string) {
+    const response = await fetch("/api/auth/active-clinic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clinicId }),
+    }).catch(() => null);
+    if (!response?.ok) {
+      const data = await response?.json().catch(() => null) as { message?: string } | null;
+      return data?.message ?? "Não foi possível trocar de clínica. Tente novamente.";
+    }
+    return null;
+  }
+
+  async function chooseClinicOnEntry(clinicId: string) {
+    if (!clinicChoice) return null;
+    if (clinicId !== clinicChoice.activeClinicId) {
+      const failure = await activateClinic(clinicId);
+      if (failure) return failure;
+    }
+    markClinicChosen(clinicChoice.userId);
+    setClinicChoice(null);
+    setStartupAttempt((attempt) => attempt + 1);
+    return null;
+  }
+
+  async function switchClinic(clinicId: string) {
+    if (!currentUser || clinicId === currentUser.clinicId) return;
+    if (!await guardDraftNavigation()) return;
+    const failure = await activateClinic(clinicId);
+    if (failure) {
+      toast.error(failure);
+      return;
+    }
+    // Descarta o cache da clínica anterior e recarrega: o escopo novo é montado a partir de /api/auth/me.
+    setClientCacheScope(null);
+    window.localStorage.setItem("harmonize-session-change", String(Date.now()));
+    window.location.reload();
+  }
+
   async function logout() {
     if (!await guardDraftNavigation()) return;
     try {
@@ -270,6 +333,10 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       setCreateDialog(null);
       router.replace("/login");
     }
+  }
+
+  if (clinicChoice) {
+    return <ClinicChooser clinics={clinics} activeClinicId={clinicChoice.activeClinicId} onChoose={chooseClinicOnEntry} onLogout={() => { void logout(); }} />;
   }
 
   if (startup.status !== "ready" || !currentUser) {
@@ -308,7 +375,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
         rolePermissions={currentUser?.rolePermissions}
       />
       <div className="lg:pl-[220px]">
-        <Topbar user={currentUser} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onOpenStockAlert={openStockAlert} onLogout={logout} />
+        <Topbar user={currentUser} clinics={clinics} onSwitchClinic={switchClinic} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onOpenStockAlert={openStockAlert} onLogout={logout} />
         <main className={`mx-auto w-full ${active === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
           <AnimatedPage routeKey={active}>
           {currentUser && allowedSections.includes("dashboard") && active === "dashboard" ? <Dashboard userName={currentUser?.name} onNavigate={selectSection} /> : null}
