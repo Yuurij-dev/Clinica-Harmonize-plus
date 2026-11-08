@@ -5,7 +5,7 @@ import { exchangeCodeForIdToken, getGoogleConfig, verifyGoogleIdToken } from "@/
 import { makeUnusablePasswordHash, prismaGoogleRepo } from "@/lib/google-oauth-repo";
 import { prismaInvitationRepo } from "@/lib/invitations-db";
 import { handleGoogleCallback } from "@/lib/google-oauth-flow";
-import { GOOGLE_PENDING_COOKIE, GOOGLE_PENDING_PATH, OAUTH_FLOW_TTL_SECONDS, signPendingGoogle } from "@/lib/google-oauth-rules";
+import { GOOGLE_PENDING_COOKIE, GOOGLE_PENDING_PATH, GOOGLE_SIGNUP_COOKIE, GOOGLE_SIGNUP_PATH, OAUTH_FLOW_TTL_SECONDS, signPendingGoogle, signPendingSignup } from "@/lib/google-oauth-rules";
 
 const oauthCookieName = "harmonize_oauth";
 
@@ -50,6 +50,18 @@ export async function GET(request: Request) {
       secure: process.env.NODE_ENV === "production",
       maxAge: OAUTH_FLOW_TTL_SECONDS,
       path: GOOGLE_PENDING_PATH,
+    });
+  }
+  if (result.pendingSignup) {
+    // Identidade nova validada; falta coletar os dados da clinica. Cookie curto, assinado, so enviado ao endpoint de conclusao.
+    response.cookies.set({
+      name: GOOGLE_SIGNUP_COOKIE,
+      value: await signPendingSignup(result.pendingSignup, getAuthSecret()),
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      maxAge: OAUTH_FLOW_TTL_SECONDS,
+      path: GOOGLE_SIGNUP_PATH,
     });
   }
   if (result.sessionUserId) {

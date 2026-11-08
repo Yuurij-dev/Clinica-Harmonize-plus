@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { jwtVerify, SignJWT } from "jose";
 import { isInviteTokenShape, normalizeInviteEmail } from "./invitation-rules.ts";
 import type { PendingGoogleInvite } from "./invitations.ts";
+import type { PendingGoogleSignup } from "./google-signup.ts";
 
 // Regras puras do login com Google (Authorization Code + PKCE S256 + state + nonce).
 // Sem Prisma, sem rede. Nunca logar code, tokens, verifier, state ou nonce.
@@ -12,10 +13,10 @@ export const OAUTH_FLOW_TTL_SECONDS = 600;
 export const CLOCK_TOLERANCE_MS = 5_000; // igual ao clockTolerance do jwtVerify
 export const GOOGLE_SCOPE = "openid email profile";
 
-export type GoogleIntent = "login" | "link";
+export type GoogleIntent = "login" | "link" | "signup";
 
 export function parseGoogleIntent(value: unknown): GoogleIntent {
-  return value === "link" ? "link" : "login";
+  return value === "link" ? "link" : value === "signup" ? "signup" : "login";
 }
 
 const randomToken = (bytes = 32) => randomBytes(bytes).toString("base64url");
@@ -119,6 +120,32 @@ export async function verifyPendingGoogle(token: string | null | undefined, secr
     const { invite, invitationId, clinicId, sub, email } = payload;
     if (!isInviteTokenShape(invite) || typeof invitationId !== "string" || typeof clinicId !== "string" || typeof sub !== "string" || typeof email !== "string" || !sub || !email) return null;
     return { invite, invitationId, clinicId, sub, email };
+  } catch {
+    return null;
+  }
+}
+
+// Cookie de "cadastro Google pendente" (usuario novo criando a propria clinica): typ proprio, distinto de fluxo,
+// convite-pendente e sessao. Leva so o minimo da identidade ja verificada pelo Google.
+export const GOOGLE_SIGNUP_COOKIE = "harmonize_google_signup";
+export const GOOGLE_SIGNUP_PATH = "/api/auth/google/signup/complete";
+
+export async function signPendingSignup(pending: PendingGoogleSignup, secret: Uint8Array, ttlSeconds = OAUTH_FLOW_TTL_SECONDS) {
+  return new SignJWT({ typ: "google_signup_pending", sub: pending.sub, email: pending.email, name: pending.name })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime(Math.floor(Date.now() / 1000) + ttlSeconds)
+    .sign(secret);
+}
+
+export async function verifyPendingSignup(token: string | null | undefined, secret: Uint8Array): Promise<PendingGoogleSignup | null> {
+  if (!token) return null;
+  try {
+    const { payload } = await jwtVerify(token, secret, { algorithms: ["HS256"] });
+    if (payload.typ !== "google_signup_pending") return null;
+    const { sub, email, name } = payload;
+    if (typeof sub !== "string" || typeof email !== "string" || typeof name !== "string" || !sub || !email) return null;
+    return { sub, email, name };
   } catch {
     return null;
   }

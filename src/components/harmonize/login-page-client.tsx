@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { LoginScreen, type RegisterResult, type RegisterValues } from "./login-screen";
+import { LoginScreen, type GoogleSignupValues, type RegisterResult, type RegisterValues } from "./login-screen";
 import { setClientCacheScope } from "@/lib/client-cache";
 
 export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "login" | "register"; googleStatus?: string }) {
@@ -57,5 +57,26 @@ export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "l
     return { error: result.error } satisfies RegisterResult;
   }
 
-  return <LoginScreen initialMode={initialMode} googleStatus={googleStatus} onLogin={handleLogin} onChangePassword={handlePasswordChange} onRegister={handleRegister} />;
+  async function handleGoogleSignup(values: GoogleSignupValues) {
+    const response = await fetch("/api/auth/google/signup/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null) as { code?: string; message?: string } | null;
+      // Cookie expirado ou conta já existente: o passo não tem como continuar, volta ao login com o aviso.
+      if (data?.code === "pending_missing" || data?.code === "account_exists") {
+        window.location.assign(data.code === "account_exists" ? "/login?google=account_exists" : "/login?google=signup_expired");
+        return {} satisfies RegisterResult;
+      }
+      return { error: data?.message ?? "Não foi possível criar a conta agora. Tente novamente." } satisfies RegisterResult;
+    }
+    // Navegação completa: o app abre já autenticado e `?google=ok` avisa as outras abas da troca de sessão.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    window.location.assign("/?google=ok");
+    return {} satisfies RegisterResult;
+  }
+
+  return <LoginScreen initialMode={initialMode} googleStatus={googleStatus} onLogin={handleLogin} onChangePassword={handlePasswordChange} onRegister={handleRegister} onGoogleSignup={handleGoogleSignup} />;
 }

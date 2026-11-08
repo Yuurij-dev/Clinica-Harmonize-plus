@@ -5655,6 +5655,71 @@ async function deleteProcedure() {
   }
 }
 
+// Cadastro de clínica nova via Google (3b): o fluxo OAuth real não é testável; assina-se o cookie pendente com AUTH_SECRET.
+// Cria clínica/usuário próprios (não a clínica de teste): tudo é removido por e-mail/nome com prefixo da execução.
+async function googleSignup() {
+  const authSecret = process.env.AUTH_SECRET ?? "";
+  if (authSecret.length < 32) { check("cadastro Google: SEM AUTH_SECRET no ambiente do teste (parte ignorada)", false); return; }
+  const { SignJWT } = await import("jose");
+  const key = new TextEncoder().encode(authSecret);
+  const sign = (typ, p) => new SignJWT({ typ, ...p }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime(Math.floor(Date.now() / 1000) + 600).sign(key);
+  const prefix = `e2e-gsu-${run}`;
+  const mailOf = (t) => `${prefix}-${t}@example.invalid`;
+  const profile = { clinicName: `${prefix} Clínica`, name: "Dona E2E", phone: "11999990000", profession: "Biomédica", practiceArea: "Estética", hasSecretary: "Sim" };
+  const post = async (cookieValue, body) => {
+    const res = await fetch(`${baseUrl}/api/auth/google/signup/complete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(cookieValue ? { cookie: `harmonize_google_signup=${cookieValue}` } : {}) },
+      body: JSON.stringify(body),
+      redirect: "manual",
+    });
+    return { status: res.status, data: await res.json().catch(() => null), setCookie: res.headers.getSetCookie() };
+  };
+  const clears = (r) => r.setCookie.some((c) => c.startsWith("harmonize_google_signup=;") || /^harmonize_google_signup=\s*;/.test(c) || (c.startsWith("harmonize_google_signup=") && /Max-Age=0/i.test(c)));
+  try {
+    const sub = `${prefix}-sub`;
+    const good = await sign("google_signup_pending", { sub, email: mailOf("ok"), name: "Nome Google" });
+    const missing = await post(null, profile);
+    check("cadastro Google: sem cookie = 400 pending_missing e limpa o cookie", missing.status === 400 && missing.data?.code === "pending_missing" && clears(missing), `${missing.status} ${JSON.stringify(missing.data)}`);
+    const wrongTyp = await post(await sign("google_pending", { sub, email: mailOf("ok"), name: "N" }), profile);
+    check("cadastro Google: cookie com typ errado = 400 pending_missing", wrongTyp.status === 400 && wrongTyp.data?.code === "pending_missing", `${wrongTyp.status}`);
+    const forged = await post(await new SignJWT({ typ: "google_signup_pending", sub, email: mailOf("ok"), name: "N" }).setProtectedHeader({ alg: "HS256" }).setExpirationTime("10m").sign(new TextEncoder().encode("outro-segredo-qualquer-com-mais-de-32-bytes!!")), profile);
+    check("cadastro Google: cookie assinado com outro segredo = 400 pending_missing", forged.status === 400 && forged.data?.code === "pending_missing", `${forged.status}`);
+
+    const invalid = await post(good, { ...profile, clinicName: "   " });
+    check("cadastro Google: perfil inválido = 400 invalid_profile, cookie mantido e nada criado", invalid.status === 400 && invalid.data?.code === "invalid_profile" && !clears(invalid) && await prisma.user.count({ where: { email: { startsWith: prefix } } }) === 0, `${invalid.status} ${JSON.stringify(invalid.data)}`);
+    const badSecretary = await post(good, { ...profile, hasSecretary: "talvez" });
+    check("cadastro Google: campo obrigatório inválido (hasSecretary) = 400 invalid_profile", badSecretary.status === 400 && badSecretary.data?.code === "invalid_profile", `${badSecretary.status}`);
+    // E-mail/sub vêm só do cookie: o corpo não pode trocá-los.
+    const [a, b] = await Promise.all([post(good, { ...profile, email: mailOf("hacker") }), post(good, { ...profile, email: mailOf("hacker") })]);
+    const wins = [a, b].filter((r) => r.status === 201);
+    const losers = [a, b].filter((r) => r.status === 409);
+    check("cadastro Google: clique duplo = um 201 e um 409 account_exists", wins.length === 1 && losers.length === 1 && losers[0].data?.code === "account_exists", `${a.status}/${b.status}`);
+    const ok = wins[0];
+    const sessionSet = ok?.setCookie.find((c) => c.startsWith("harmonize_session=") && !/Max-Age=0/i.test(c));
+    check("cadastro Google: 201 abre sessão (Set-Cookie) e limpa o cookie pendente", Boolean(sessionSet) && clears(ok), `${ok?.status} ${ok?.setCookie.map((c) => c.split("=")[0]).join(",")}`);
+    const user = await prisma.user.findUnique({ where: { email: mailOf("ok") }, include: { memberships: { include: { clinic: true } }, identities: true } });
+    const m = user?.memberships[0];
+    check("cadastro Google: e-mail do cookie (não do corpo), ADMIN verificado, 1 identidade google com o sub do cookie", Boolean(user) && user.role === "ADMIN" && !!user.emailVerifiedAt && user.identities.length === 1 && user.identities[0].provider === "google" && user.identities[0].providerSubject === sub && await prisma.user.count({ where: { email: mailOf("hacker") } }) === 0, JSON.stringify({ role: user?.role, ids: user?.identities.length }));
+    check("cadastro Google: uma clínica nova, membership owner ADMIN e trial de 3 dias", user?.memberships.length === 1 && m.isOwner === true && m.role === "ADMIN" && m.clinic.name === profile.clinicName && (m.clinic.trialEndsAt - m.clinic.trialStartedAt) === 3 * 86_400_000 && await prisma.clinic.count({ where: { name: profile.clinicName } }) === 1, JSON.stringify({ n: user?.memberships.length, owner: m?.isOwner }));
+    const me = sessionSet ? await fetch(`${baseUrl}/api/auth/me`, { headers: { cookie: sessionSet.split(";")[0] } }) : null;
+    const meBody = await me?.json().catch(() => null);
+    check("cadastro Google: a sessão devolvida autentica o dono na clínica nova", me?.status === 200 && meBody?.user?.email === mailOf("ok") && meBody?.user?.clinic?.name === profile.clinicName, `${me?.status}`);
+
+    const again = await post(await sign("google_signup_pending", { sub: `${prefix}-sub2`, email: mailOf("ok"), name: "N" }), profile);
+    check("cadastro Google: e-mail já cadastrado = 409 account_exists e nenhuma clínica extra", again.status === 409 && again.data?.code === "account_exists" && await prisma.clinic.count({ where: { name: profile.clinicName } }) === 1, `${again.status}`);
+    const sameSub = await post(await sign("google_signup_pending", { sub, email: mailOf("other"), name: "N" }), profile);
+    check("cadastro Google: sub já vinculado (outro e-mail) = 409 e nada criado", sameSub.status === 409 && await prisma.user.count({ where: { email: mailOf("other") } }) === 0, `${sameSub.status}`);
+  } finally {
+    const users = (await prisma.user.findMany({ where: { email: { startsWith: prefix } }, select: { id: true } })).map((u) => u.id);
+    const clinics = (await prisma.clinic.findMany({ where: { name: { startsWith: prefix } }, select: { id: true } })).map((c) => c.id);
+    await prisma.clinicMembership.deleteMany({ where: { OR: [{ clinicId: { in: clinics } }, { userId: { in: users } }] } });
+    await prisma.userIdentity.deleteMany({ where: { userId: { in: users } } });
+    await prisma.user.deleteMany({ where: { id: { in: users } } });
+    await prisma.clinic.deleteMany({ where: { id: { in: clinics } } });
+  }
+}
+
 // Convites de equipe: criar/listar/reenviar/cancelar, prévia pública, cadastro e aceite, tetos, concorrência e isolamento.
 // Só usa endereços @example.invalid; o e-mail deve estar desligado (emailSent nunca pode ser true).
 async function invitations() {
@@ -5882,6 +5947,7 @@ async function invitations() {
 
 const suites = {
   convites: { needs: [], run: () => invitations() },
+  cadastro_google: { needs: [], run: () => googleSignup() },
   jornadas_etapa: { needs: [], run: () => journeyStageFilter() },
   cadastro_cliente: { needs: [], run: () => patientRegistration() },
   pacientes: { needs: [], run: async (state) => { Object.assign(state, await patientsAndPayments()); await patientCpfMask(); } },

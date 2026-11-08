@@ -1,4 +1,5 @@
 import { hashInviteToken, invitationState, isInviteTokenShape, normalizeInviteEmail } from "./invitation-rules.ts";
+import type { PendingGoogleSignup } from "./google-signup.ts";
 import { acceptInvitation, inviterCanInvite, type InvitationRepo, type PendingGoogleInvite } from "./invitations.ts";
 import {
   buildGoogleAuthUrl,
@@ -76,7 +77,24 @@ export type GoogleCallbackInput = {
   flowToken?: string | null;
 };
 
-export type GoogleCallbackResult = { redirect: string; sessionUserId?: string; pendingGoogle?: PendingGoogleInvite };
+export type GoogleCallbackResult = { redirect: string; sessionUserId?: string; pendingGoogle?: PendingGoogleInvite; pendingSignup?: PendingGoogleSignup };
+
+// Cadastro com Google (usuario novo cria a propria clinica). Roda DEPOIS de toda a validacao de claims.
+// Conta ja existente (e-mail ou sub) => account_exists, sem criar nada. Conta nova => NADA e criado aqui:
+// so o cookie pendente; a clinica nasce atomicamente em /api/auth/google/signup/complete.
+async function handleSignup(deps: GoogleCallbackDeps, google: { sub: string; email: string; name: string }): Promise<GoogleCallbackResult> {
+  try {
+    const [identity, userByEmail] = await Promise.all([deps.repo.findIdentity(google.sub), deps.repo.findUserByEmail(google.email)]);
+    if (identity || userByEmail) {
+      diag("account_exists");
+      return { redirect: loginRedirect("account_exists") };
+    }
+    return { redirect: "/login?google=signup", pendingSignup: { sub: google.sub, email: google.email, name: google.name } };
+  } catch (error) {
+    diag((error as { code?: unknown } | null)?.code);
+    return { redirect: loginRedirect("error") };
+  }
+}
 
 // Devolve sempre um destino fixo ("/" ou /login?google=...). `sessionUserId` so existe no sucesso;
 // `pendingGoogle` so existe no convite de conta nova (sem sessao: falta coletar os dados pessoais).
@@ -104,6 +122,7 @@ export async function handleGoogleCallback(deps: GoogleCallbackDeps, input: Goog
   const google = claimsResult;
 
   if (flow.intent === "login" && flow.invite) return handleInviteLogin(deps, flow.invite, google);
+  if (flow.intent === "signup") return handleSignup(deps, google);
 
   try {
     const now = deps.now();
