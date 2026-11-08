@@ -99,19 +99,22 @@ export async function sendInvitationEmail(
   const inviter = escapeHtml(input.inviterName);
   const role = roleLabels[input.role] ?? "equipe";
   const url = escapeHtml(input.url);
-  const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#25263a">
-<h2 style="color:#211960;margin:0 0 16px">Harmonize+</h2>
-<p>${inviter} convidou você para entrar na clínica <strong>${clinic}</strong> como ${role}.</p>
-<p style="margin:24px 0"><a href="${url}" style="background:#4938f4;color:#ffffff;padding:12px 20px;border-radius:8px;text-decoration:none;font-weight:bold">Aceitar convite</a></p>
-<p style="font-size:12px;color:#7783a8">O convite vale por 7 dias. Se você não esperava este e-mail, ignore-o.</p>
+  // Formato transacional (1:1), sem botao de campanha nem cabecalho de marca: ajuda a cair na caixa
+  // principal em vez de Promocoes. O nome da clinica/convidante continua escapado (seguranca).
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#25263a">
+<p>Olá,</p>
+<p>${inviter} convidou você para entrar na clínica <strong>${clinic}</strong> como ${role} no Harmonize+.</p>
+<p>Para aceitar, abra este link:</p>
+<p><a href="${url}">${url}</a></p>
+<p style="font-size:13px;color:#7783a8">O convite vale por 7 dias. Se você não esperava este e-mail, pode ignorá-lo.</p>
 </div>`;
-  const text = `${input.inviterName} convidou você para entrar na clínica ${input.clinicName} como ${role}.\n\nAceite o convite: ${input.url}\n\nO convite vale por 7 dias. Se você não esperava este e-mail, ignore-o.`;
+  const text = `Olá,\n\n${input.inviterName} convidou você para entrar na clínica ${input.clinicName} como ${role} no Harmonize+.\n\nPara aceitar, abra este link:\n${input.url}\n\nO convite vale por 7 dias. Se você não esperava este e-mail, pode ignorá-lo.`;
 
   try {
     const response = await (deps.fetchImpl ?? fetch)(RESEND_ENDPOINT, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to: [input.to], subject: `Convite para a clínica ${input.clinicName} no Harmonize+`, html, text }),
+      body: JSON.stringify({ from, to: [input.to], subject: `${input.inviterName} convidou você para a clínica ${input.clinicName}`, html, text }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
       cache: "no-store",
     });
