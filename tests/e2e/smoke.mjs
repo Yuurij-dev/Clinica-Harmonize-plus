@@ -41,7 +41,8 @@ function check(name, ok, detail = "") {
 }
 
 const day = (offset) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date(Date.now() + offset * 86_400_000));
-const randomCpf = () => Array.from({ length: 11 }, () => Math.floor(Math.random() * 10)).join("");
+// CPF com digitos verificadores validos (passa na validacao de paciente e de colaborador).
+const randomCpf = () => { const d = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10)); if (d.every((x) => x === d[0])) d[0] = (d[0] + 1) % 10; for (let n = 9; n < 11; n += 1) { const sum = d.reduce((t, x, i) => t + x * (n + 1 - i), 0); d.push(((sum * 10) % 11) % 10); } return d.join(""); };
 
 async function login() {
   const response = await api("POST", "/api/auth/login", { login: email, password });
