@@ -33,6 +33,9 @@ model User {
   createdAt                  DateTime           @default(now()) @db.Timestamptz(6)
   updatedAt                  DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
   memberships                ClinicMembership[]
+  identities                 UserIdentity[]
+  invitationsSent            ClinicInvitation[] @relation("InvitationInvitedBy")
+  invitationsAccepted        ClinicInvitation[] @relation("InvitationAcceptedBy")
 }
 
 model Clinic {
@@ -67,6 +70,7 @@ model Clinic {
   createdAt                   DateTime                   @default(now()) @db.Timestamptz(6)
   updatedAt                   DateTime                   @default(now()) @updatedAt @db.Timestamptz(6)
   memberships                 ClinicMembership[]
+  invitations                 ClinicInvitation[]
   patients                    Patient[]
   appointments                Appointment[]
   procedures                  Procedure[]
@@ -103,6 +107,55 @@ model ClinicMembership {
 
   @@unique([userId, clinicId])
   @@index([clinicId])
+}
+
+// Vinculo de um usuario a um provedor externo (ex.: Google).
+model UserIdentity {
+  id              String    @id @default(cuid())
+  userId          String
+  provider        String
+  providerSubject String
+  email           String
+  createdAt       DateTime  @default(now()) @db.Timestamptz(6)
+  lastLoginAt     DateTime? @db.Timestamptz(6)
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([provider, providerSubject])
+  @@unique([userId, provider])
+  @@index([userId])
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  CANCELLED
+}
+
+// Convite para entrar em uma clinica. So o hash SHA-256 do token e gravado.
+// Unicidade de convite PENDING por (lower(email), clinicId) e garantida por indice
+// unico parcial criado via SQL na migration (o Prisma nao o declara no schema).
+model ClinicInvitation {
+  id           String           @id @default(cuid())
+  clinicId     String
+  email        String
+  role         UserRole
+  tokenHash    String           @unique
+  status       InvitationStatus @default(PENDING)
+  expiresAt    DateTime         @db.Timestamptz(6)
+  invitedById  String?
+  acceptedById String?
+  acceptedAt   DateTime?        @db.Timestamptz(6)
+  lastSentAt   DateTime         @default(now()) @db.Timestamptz(6)
+  sendCount    Int              @default(1)
+  createdAt    DateTime         @default(now()) @db.Timestamptz(6)
+  updatedAt    DateTime         @default(now()) @updatedAt @db.Timestamptz(6)
+  clinic       Clinic           @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  invitedBy    User?            @relation("InvitationInvitedBy", fields: [invitedById], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  acceptedBy   User?            @relation("InvitationAcceptedBy", fields: [acceptedById], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([clinicId, status])
+  @@index([email])
 }
 
 model Patient {

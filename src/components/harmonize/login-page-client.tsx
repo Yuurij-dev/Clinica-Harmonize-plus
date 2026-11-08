@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { LoginScreen, type RegisterResult, type RegisterValues } from "./login-screen";
 import { setClientCacheScope } from "@/lib/client-cache";
 
-export function LoginPageClient({ initialMode }: { initialMode: "login" | "register" }) {
+export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "login" | "register"; googleStatus?: string }) {
   const router = useRouter();
 
   useEffect(() => {
@@ -57,5 +57,5 @@ export function LoginPageClient({ initialMode }: { initialMode: "login" | "regis
     return { error: result.error } satisfies RegisterResult;
   }
 
-  return <LoginScreen initialMode={initialMode} onLogin={handleLogin} onChangePassword={handlePasswordChange} onRegister={handleRegister} />;
+  return <LoginScreen initialMode={initialMode} googleStatus={googleStatus} onLogin={handleLogin} onChangePassword={handlePasswordChange} onRegister={handleRegister} />;
 }

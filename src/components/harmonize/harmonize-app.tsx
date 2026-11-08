@@ -206,6 +206,17 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     return () => { active = false; };
   }, [initialSection, router, startupAttempt]);
 
+  // Retorno do login com Google (?google=ok): avisa outras abas como o login por senha e limpa a URL.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("google") !== "ok") return;
+    window.localStorage.setItem("harmonize-session-change", String(Date.now()));
+    if (url.searchParams.get("other_clinic") === "1") toast.success("Convite aceito. Por enquanto o acesso abre a sua clínica mais antiga; a seleção de clínica chega em breve.");
+    url.searchParams.delete("google");
+    url.searchParams.delete("other_clinic");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+
   useEffect(() => {
     const handleUnauthorized = () => {
       setCurrentUser(null);

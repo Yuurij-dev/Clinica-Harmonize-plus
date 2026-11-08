@@ -65,6 +65,7 @@ import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/cli
 import { cleanSearchQuery, defaultPatientPageSize, patientListKey, patientPageSizes } from "@/lib/patient-list-rules";
 import { capitalizeFirst, formatDayBR, agendaDayInvalidationKey, agendaPeriodKey, agendaPeriodRange, dayInRange, shiftAgendaDay, type AgendaRange } from "@/lib/agenda-period-rules";
 import { PaginationBar } from "./clinical-pagination";
+import { TeamInvitations } from "./team-invitations";
 import { usePatientLookup, type LookupPatient } from "./use-patient-lookup";
 import { createDefaultRolePermissionMatrix, permissionGroups, roleLabels, roles, runningAppointmentStatuses, type Role, type RolePermissionMatrix } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
@@ -1968,7 +1969,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const [newMemberCpf, setNewMemberCpf] = useState("");
   const [newMemberPostalCode, setNewMemberPostalCode] = useState("");
   const [newMemberAddress, setNewMemberAddress] = useState("");
-  const [newMemberCountry, setNewMemberCountry] = useState("");
+  const [newMemberCountry, setNewMemberCountry] = useState("Brasil");
   const [newMemberState, setNewMemberState] = useState("");
   const [newMemberCity, setNewMemberCity] = useState("");
   const [postalCodeLoading, setPostalCodeLoading] = useState(false);
@@ -2248,7 +2249,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
     setNewMemberCpf("");
     setNewMemberPostalCode("");
     setNewMemberAddress("");
-    setNewMemberCountry("");
+    setNewMemberCountry("Brasil");
     setNewMemberState("");
     setNewMemberCity("");
     setPostalCodeError("");
@@ -2349,7 +2350,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
       const data = await response.json().catch(() => null) as { member?: TeamMember; message?: string } | null;
       if (!response.ok || !data?.member) throw new Error(data?.message ?? "Não foi possível alterar o cargo.");
       setMembers((current) => current.map((member) => member.id === data.member!.id ? data.member! : member));
-      invalidateClientCache("/api/team", "/api/team/professionals", "/api/agenda/bootstrap", "/api/appointments/options");
+      invalidateClientCache("/api/team", "/api/team/professionals", "/api/agenda/bootstrap", "/api/appointments/options", "/api/invitations");
       setMemberToChangeRole(null);
       toast.success("Cargo atualizado com sucesso.");
     } catch (error) {
@@ -2375,7 +2376,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
       return;
     }
     setMembers((current) => current.filter((member) => member.id !== memberToRemove.id));
-    invalidateClientCache("/api/team", "/api/team/professionals", "/api/agenda/bootstrap");
+    invalidateClientCache("/api/team", "/api/team/professionals", "/api/agenda/bootstrap", "/api/invitations");
     setMemberToRemove(null);
   }
 
@@ -2489,6 +2490,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
           ) : null}
 
           {displayedSettingsSection === "Profissionais e equipe" ? (
+            <>
             <Card className="border-border/70">
               <CardHeader className="flex flex-col gap-3 border-b border-border/70 sm:flex-row sm:items-center sm:justify-between">
                 <div><CardTitle>Profissionais e equipe</CardTitle><p className="mt-1 text-sm text-muted-foreground">Contas vinculadas à clínica e seus níveis de acesso.</p></div>
@@ -2513,6 +2515,8 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
                 )) : <p className="py-6 text-sm text-muted-foreground">{isSearchingTeam ? "Nenhum profissional ou membro da equipe corresponde à busca." : "Nenhum colaborador cadastrado."}</p>}
               </CardContent>
             </Card>
+            {canManageTeam ? <TeamInvitations /> : null}
+            </>
           ) : null}
 
           {displayedSettingsSection === "Agenda e horários" ? (
@@ -2678,9 +2682,15 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
         </form>
       </Modal>
 
-      <Modal open={Boolean(memberToRemove)} onClose={() => { if (!memberRemoving) setMemberToRemove(null); }} title="Remover colaborador" description="Essa ação remove o acesso do colaborador à clínica.">
+      <Modal open={Boolean(memberToRemove)} onClose={() => { if (!memberRemoving) setMemberToRemove(null); }} title="Remover colaborador" description="A remoção é imediata e não pode ser desfeita.">
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">Tem certeza que deseja remover <strong>{memberToRemove?.user.name}</strong>?</p>
+          <ul className="space-y-1.5 rounded-md bg-muted/40 px-3 py-2.5 text-sm text-muted-foreground">
+            <li>Ele perde o acesso a esta clínica na mesma hora.</li>
+            <li>Se ele entra com o Google, esse login deixa de funcionar — não será mais possível acessar por ele.</li>
+            <li>Convites pendentes que ele criou são cancelados.</li>
+            <li>O histórico de atendimentos e lançamentos que ele já registrou continua na clínica.</li>
+          </ul>
           {memberRemoveError ? <p className="rounded-md bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{memberRemoveError}</p> : null}
           <div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={memberRemoving} onClick={() => setMemberToRemove(null)}>Cancelar</Button><Button type="button" className="bg-destructive hover:bg-destructive/90" disabled={memberRemoving} onClick={() => void removeCollaborator()}>{memberRemoving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}{memberRemoving ? "Removendo..." : "Remover colaborador"}</Button></div>
         </div>
