@@ -55,8 +55,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col">
         <Script id="harmonize-theme" strategy="beforeInteractive">{`(() => { try { if (window.location.pathname === "/login") return; var saved = window.localStorage.getItem("harmonize-theme"); var dark = saved === "dark" || saved === "light" ? saved === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches; if (dark) document.documentElement.classList.add("dark"); } catch {} })();`}</Script>
         <Script id="disable-browser-autocomplete" strategy="beforeInteractive">{`(() => {
+          // Formulários de autenticação (login, cadastro, troca de senha, convite) se declaram com data-autofill="allow":
+          // mantêm o autocomplete que o próprio componente define (username/current-password/new-password).
+          const allowed = (element) => element.closest('form[data-autofill="allow"]') !== null;
           const disableAutocomplete = (element) => {
             if (!(element instanceof Element)) return;
+            if (allowed(element)) return;
             if (element instanceof HTMLFormElement && element.autocomplete !== "off") element.autocomplete = "off";
             if (element instanceof HTMLInputElement && !["hidden", "password", "submit", "button", "reset", "image", "checkbox", "radio", "file"].includes(element.type) && element.autocomplete !== "off") element.autocomplete = "off";
             if (element instanceof HTMLTextAreaElement && element.autocomplete !== "off") element.autocomplete = "off";

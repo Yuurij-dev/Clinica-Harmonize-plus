@@ -2137,6 +2137,7 @@ async function resetTestClinic() {
   }
   const clinicId = clinic.id;
   await prisma.$transaction([
+    prisma.clinicInvitation.deleteMany({ where: { clinicId } }),
     prisma.stockMovement.deleteMany({ where: { clinicId } }),
     prisma.pendingStockOutput.deleteMany({ where: { clinicId } }),
     prisma.expense.deleteMany({ where: { clinicId } }),
@@ -5654,7 +5655,381 @@ async function deleteProcedure() {
   }
 }
 
+// Cadastro de clínica nova via Google (3b): o fluxo OAuth real não é testável; assina-se o cookie pendente com AUTH_SECRET.
+// Cria clínica/usuário próprios (não a clínica de teste): tudo é removido por e-mail/nome com prefixo da execução.
+async function googleSignup() {
+  const authSecret = process.env.AUTH_SECRET ?? "";
+  if (authSecret.length < 32) { check("cadastro Google: SEM AUTH_SECRET no ambiente do teste (parte ignorada)", false); return; }
+  const { SignJWT } = await import("jose");
+  const key = new TextEncoder().encode(authSecret);
+  const sign = (typ, p) => new SignJWT({ typ, ...p }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime(Math.floor(Date.now() / 1000) + 600).sign(key);
+  const prefix = `e2e-gsu-${run}`;
+  const mailOf = (t) => `${prefix}-${t}@example.invalid`;
+  const profile = { clinicName: `${prefix} Clínica`, name: "Dona E2E", phone: "11999990000", profession: "Biomédica", practiceArea: "Estética", hasSecretary: "Sim" };
+  const post = async (cookieValue, body) => {
+    const res = await fetch(`${baseUrl}/api/auth/google/signup/complete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(cookieValue ? { cookie: `harmonize_google_signup=${cookieValue}` } : {}) },
+      body: JSON.stringify(body),
+      redirect: "manual",
+    });
+    return { status: res.status, data: await res.json().catch(() => null), setCookie: res.headers.getSetCookie() };
+  };
+  const clears = (r) => r.setCookie.some((c) => c.startsWith("harmonize_google_signup=;") || /^harmonize_google_signup=\s*;/.test(c) || (c.startsWith("harmonize_google_signup=") && /Max-Age=0/i.test(c)));
+  try {
+    const sub = `${prefix}-sub`;
+    const good = await sign("google_signup_pending", { sub, email: mailOf("ok"), name: "Nome Google" });
+    const missing = await post(null, profile);
+    check("cadastro Google: sem cookie = 400 pending_missing e limpa o cookie", missing.status === 400 && missing.data?.code === "pending_missing" && clears(missing), `${missing.status} ${JSON.stringify(missing.data)}`);
+    const wrongTyp = await post(await sign("google_pending", { sub, email: mailOf("ok"), name: "N" }), profile);
+    check("cadastro Google: cookie com typ errado = 400 pending_missing", wrongTyp.status === 400 && wrongTyp.data?.code === "pending_missing", `${wrongTyp.status}`);
+    const forged = await post(await new SignJWT({ typ: "google_signup_pending", sub, email: mailOf("ok"), name: "N" }).setProtectedHeader({ alg: "HS256" }).setExpirationTime("10m").sign(new TextEncoder().encode("outro-segredo-qualquer-com-mais-de-32-bytes!!")), profile);
+    check("cadastro Google: cookie assinado com outro segredo = 400 pending_missing", forged.status === 400 && forged.data?.code === "pending_missing", `${forged.status}`);
+
+    const invalid = await post(good, { ...profile, clinicName: "   " });
+    check("cadastro Google: perfil inválido = 400 invalid_profile, cookie mantido e nada criado", invalid.status === 400 && invalid.data?.code === "invalid_profile" && !clears(invalid) && await prisma.user.count({ where: { email: { startsWith: prefix } } }) === 0, `${invalid.status} ${JSON.stringify(invalid.data)}`);
+    const badSecretary = await post(good, { ...profile, hasSecretary: "talvez" });
+    check("cadastro Google: campo obrigatório inválido (hasSecretary) = 400 invalid_profile", badSecretary.status === 400 && badSecretary.data?.code === "invalid_profile", `${badSecretary.status}`);
+    // E-mail/sub vêm só do cookie: o corpo não pode trocá-los.
+    const [a, b] = await Promise.all([post(good, { ...profile, email: mailOf("hacker") }), post(good, { ...profile, email: mailOf("hacker") })]);
+    const wins = [a, b].filter((r) => r.status === 201);
+    const losers = [a, b].filter((r) => r.status === 409);
+    check("cadastro Google: clique duplo = um 201 e um 409 account_exists", wins.length === 1 && losers.length === 1 && losers[0].data?.code === "account_exists", `${a.status}/${b.status}`);
+    const ok = wins[0];
+    const sessionSet = ok?.setCookie.find((c) => c.startsWith("harmonize_session=") && !/Max-Age=0/i.test(c));
+    check("cadastro Google: 201 abre sessão (Set-Cookie) e limpa o cookie pendente", Boolean(sessionSet) && clears(ok), `${ok?.status} ${ok?.setCookie.map((c) => c.split("=")[0]).join(",")}`);
+    const user = await prisma.user.findUnique({ where: { email: mailOf("ok") }, include: { memberships: { include: { clinic: true } }, identities: true } });
+    const m = user?.memberships[0];
+    check("cadastro Google: e-mail do cookie (não do corpo), ADMIN verificado, 1 identidade google com o sub do cookie", Boolean(user) && user.role === "ADMIN" && !!user.emailVerifiedAt && user.identities.length === 1 && user.identities[0].provider === "google" && user.identities[0].providerSubject === sub && await prisma.user.count({ where: { email: mailOf("hacker") } }) === 0, JSON.stringify({ role: user?.role, ids: user?.identities.length }));
+    check("cadastro Google: uma clínica nova, membership owner ADMIN e trial de 3 dias", user?.memberships.length === 1 && m.isOwner === true && m.role === "ADMIN" && m.clinic.name === profile.clinicName && (m.clinic.trialEndsAt - m.clinic.trialStartedAt) === 3 * 86_400_000 && await prisma.clinic.count({ where: { name: profile.clinicName } }) === 1, JSON.stringify({ n: user?.memberships.length, owner: m?.isOwner }));
+    const me = sessionSet ? await fetch(`${baseUrl}/api/auth/me`, { headers: { cookie: sessionSet.split(";")[0] } }) : null;
+    const meBody = await me?.json().catch(() => null);
+    check("cadastro Google: a sessão devolvida autentica o dono na clínica nova", me?.status === 200 && meBody?.user?.email === mailOf("ok") && meBody?.user?.clinic?.name === profile.clinicName, `${me?.status}`);
+
+    const again = await post(await sign("google_signup_pending", { sub: `${prefix}-sub2`, email: mailOf("ok"), name: "N" }), profile);
+    check("cadastro Google: e-mail já cadastrado = 409 account_exists e nenhuma clínica extra", again.status === 409 && again.data?.code === "account_exists" && await prisma.clinic.count({ where: { name: profile.clinicName } }) === 1, `${again.status}`);
+    const sameSub = await post(await sign("google_signup_pending", { sub, email: mailOf("other"), name: "N" }), profile);
+    check("cadastro Google: sub já vinculado (outro e-mail) = 409 e nada criado", sameSub.status === 409 && await prisma.user.count({ where: { email: mailOf("other") } }) === 0, `${sameSub.status}`);
+  } finally {
+    const users = (await prisma.user.findMany({ where: { email: { startsWith: prefix } }, select: { id: true } })).map((u) => u.id);
+    const clinics = (await prisma.clinic.findMany({ where: { name: { startsWith: prefix } }, select: { id: true } })).map((c) => c.id);
+    await prisma.clinicMembership.deleteMany({ where: { OR: [{ clinicId: { in: clinics } }, { userId: { in: users } }] } });
+    await prisma.userIdentity.deleteMany({ where: { userId: { in: users } } });
+    await prisma.user.deleteMany({ where: { id: { in: users } } });
+    await prisma.clinic.deleteMany({ where: { id: { in: clinics } } });
+  }
+}
+
+// Convites de equipe: criar/listar/reenviar/cancelar, prévia pública, cadastro e aceite, tetos, concorrência e isolamento.
+// Só usa endereços @example.invalid; o e-mail deve estar desligado (emailSent nunca pode ser true).
+async function invitations() {
+  const pw = `E2e-${run}-Conv9!`;
+  const mail = (tag) => `e2e-conv-${tag}-${run}@example.invalid`;
+  const outEmail = mail("fora"), outClinic = `E2E Convites Externa ${run}`;
+  const clinicId = (await prisma.clinicMembership.findFirst({ where: { user: { email } }, select: { clinicId: true } }))?.clinicId;
+  if (!clinicId) { check("clínica de teste encontrada para os convites", false); return; }
+  let emailSentTrue = 0;
+  const tokenOf = (url) => String(url ?? "").split("/convite/")[1] ?? "";
+  const invite = async (to, role = "PROFESSIONAL", who) => {
+    const r = await (who ? withSession(who, () => api("POST", "/api/invitations", { email: to, role })) : api("POST", "/api/invitations", { email: to, role }));
+    if (r.data?.emailSent === true) emailSentTrue += 1;
+    return r;
+  };
+  const byId = (id) => prisma.clinicInvitation.findUnique({ where: { id } });
+  // Sem estado global (seguro com Promise.all): fetch direto; devolve o cookie de sessão, se houver.
+  const profile = { cpf: "529.982.247-25", postalCode: "01310-100", address: "Av. Teste, 100", country: "Brasil", state: "SP", city: "São Paulo" };
+  const registerAs = async (token, name = "E2E Convidado", password = pw, extra = profile) => {
+    const res = await fetch(`${baseUrl}/api/auth/invite/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, name, password, ...extra }), redirect: "manual" });
+    const text = await res.text();
+    let data; try { data = JSON.parse(text); } catch { data = text.slice(0, 200); }
+    const set = res.headers.getSetCookie().find((c) => c.startsWith("harmonize_session="));
+    return { status: res.status, data, cookie: set ? set.split(";")[0] : "" };
+  };
+  const preview = (token) => withSession("", () => fetch(`${baseUrl}/api/invitations/preview?token=${encodeURIComponent(token)}`).then(async (res) => ({ status: res.status, cache: res.headers.get("cache-control"), body: await res.text() })));
+  const created = [];
+  // Cria um admin B pelo fluxo de convite + promoção, devolve { email, cookie, membershipId }.
+  const makeAdmin = async (tag) => {
+    const to = mail(tag);
+    const inv = await invite(to, "PROFESSIONAL");
+    const reg = await registerAs(tokenOf(inv.data.inviteUrl));
+    const m = await prisma.clinicMembership.findFirst({ where: { clinicId, user: { email: to } }, select: { id: true } });
+    const up = await api("PATCH", "/api/team", { membershipId: m?.id, role: "ADMIN" });
+    return { email: to, cookie: reg.cookie, membershipId: m?.id, ok: reg.status === 201 && up.status === 200, detail: `${inv.status}/${reg.status}/${up.status}` };
+  };
+  try {
+    // --- Criar ---
+    const anon = await withSession("", async () => [await api("POST", "/api/invitations", { email: mail("x"), role: "STAFF" }), await api("GET", "/api/invitations")]);
+    check("convites: sem sessão, criar e listar devolvem 401", anon.every((x) => x.status === 401), anon.map((x) => x.status).join());
+    let r = await invite(mail("a").toUpperCase().replace("@EXAMPLE.INVALID", "@Example.Invalid"), "PROFESSIONAL");
+    const invA = r.data.invitation;
+    check("convite criado: 201, e-mail normalizado, papel, sem e-mail enviado e com inviteUrl", r.status === 201 && invA?.email === mail("a") && invA.role === "PROFESSIONAL" && r.data.emailSent === false && /\/convite\/[A-Za-z0-9_-]{20,}/.test(r.data.inviteUrl ?? ""), `${r.status} ${JSON.stringify(r.data).replace(/convite\/[^"]+/, "convite/***")}`);
+    check("convite não guarda o token em claro", !!invA && !JSON.stringify(await byId(invA.id)).includes(tokenOf(r.data.inviteUrl)), "");
+    const tokenA = tokenOf(r.data.inviteUrl);
+    r = await invite(mail("a"), "STAFF");
+    check("convite duplicado PENDING devolve 409", r.status === 409, r.status);
+    r = await invite(mail("adm"), "ADMIN");
+    check("convite com papel ADMIN é recusado (400/403) e nada é gravado", [400, 403].includes(r.status) && await prisma.clinicInvitation.count({ where: { clinicId, email: mail("adm") } }) === 0, r.status);
+    for (const [label, body] of [["clinicId extra", { email: mail("y"), role: "STAFF", clinicId: "x" }], ["status extra", { email: mail("y"), role: "STAFF", status: "ACCEPTED" }], ["papel inválido", { email: mail("y"), role: "OWNER" }], ["e-mail inválido", { email: "naoeemail", role: "STAFF" }], ["sem corpo", {}]]) {
+      r = await api("POST", "/api/invitations", body);
+      check(`convite com ${label} é recusado (400)`, r.status === 400, r.status);
+    }
+    r = await invite(email, "STAFF");
+    check("convite para e-mail de quem já é membro devolve 409", r.status === 409, r.status);
+
+    // --- Lista ---
+    r = await api("GET", "/api/invitations");
+    const listed = r.data.invitations?.find((i) => i.id === invA?.id);
+    check("lista de convites traz o convite sem token nem tokenHash", r.status === 200 && !!listed && !JSON.stringify(r.data).includes("tokenHash") && !JSON.stringify(r.data).includes(tokenA) && listed.status === "pending", `${r.status} ${JSON.stringify(listed)}`);
+
+    // --- Prévia pública ---
+    const bogus = await preview("x".repeat(43));
+    const good = await preview(tokenA);
+    const shaped = await preview("curto");
+    check("prévia: token válido traz só clinicName, role, email e status; no-store", good.status === 200 && /no-store/.test(good.cache ?? "") && JSON.stringify(Object.keys(JSON.parse(good.body).invitation).sort()) === JSON.stringify(["clinicName", "email", "role", "status"]) && JSON.parse(good.body).invitation.email === mail("a"), good.body);
+    check("prévia: token inexistente/malformado devolve 200 com invitation null, idêntico", bogus.status === 200 && JSON.parse(bogus.body).invitation === null && shaped.body === bogus.body && /no-store/.test(bogus.cache ?? ""), `${bogus.body}|${shaped.body}`);
+
+    // --- Reenvio ---
+    r = await api("POST", `/api/invitations/${invA.id}/resend`);
+    check("reenvio dentro de 60 s devolve 429", r.status === 429, r.status);
+    await prisma.clinicInvitation.update({ where: { id: invA.id }, data: { lastSentAt: new Date(Date.now() - 120_000) } });
+    const race = await Promise.all([api("POST", `/api/invitations/${invA.id}/resend`), api("POST", `/api/invitations/${invA.id}/resend`)]);
+    race.forEach((x) => { if (x.data?.emailSent === true) emailSentTrue += 1; });
+    check("dois reenvios simultâneos: um 200 e um 429", race.map((x) => x.status).sort().join() === "200,429", race.map((x) => x.status).join("/"));
+    const okResend = race.find((x) => x.status === 200);
+    const tokenA2 = tokenOf(okResend?.data?.inviteUrl);
+    check("reenvio gira o token: o antigo deixa de valer e o novo vale; sendCount 2", !!tokenA2 && tokenA2 !== tokenA && JSON.parse((await preview(tokenA)).body).invitation === null && JSON.parse((await preview(tokenA2)).body).invitation?.email === mail("a") && (await byId(invA.id)).sendCount === 2, "");
+    await prisma.clinicInvitation.update({ where: { id: invA.id }, data: { sendCount: 5, lastSentAt: new Date(Date.now() - 120_000) } });
+    r = await api("POST", `/api/invitations/${invA.id}/resend`);
+    check("reenvio além de 5 envios devolve 429", r.status === 429, r.status);
+    await prisma.clinicInvitation.update({ where: { id: invA.id }, data: { sendCount: 2 } });
+
+    // --- Vencido ---
+    await prisma.clinicInvitation.update({ where: { id: invA.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    const expired = await preview(tokenA2);
+    r = await registerAs(tokenA2);
+    // Divergência do combinado: a prévia NÃO devolve null para vencido; devolve os 4 campos com status "expired" (a tela usa isso).
+    check("convite vencido: prévia mostra só os 4 campos com status expired e cadastro 404", JSON.parse(expired.body).invitation?.status === "expired" && Object.keys(JSON.parse(expired.body).invitation).length === 4 && r.status === 404, `${r.status} ${expired.body}`);
+    await prisma.clinicInvitation.update({ where: { id: invA.id }, data: { expiresAt: new Date(Date.now() + 86_400_000) } });
+
+    // --- Cancelar ---
+    r = await api("DELETE", `/api/invitations/${invA.id}`);
+    check("cancelar convite PENDING: 200 e status CANCELLED", r.status === 200 && (await byId(invA.id)).status === "CANCELLED", `${r.status} ${JSON.stringify(r.data)}`);
+    const cancelled = await preview(tokenA2);
+    r = await registerAs(tokenA2);
+    check("convite cancelado: prévia mostra status cancelled e cadastro 404 idêntico ao inválido", JSON.parse(cancelled.body).invitation?.status === "cancelled" && r.status === 404 && r.data.message === (await registerAs("z".repeat(43))).data.message, r.status);
+    r = await api("DELETE", `/api/invitations/${invA.id}`);
+    check("cancelar convite já cancelado é recusado (409)", r.status === 409, r.status);
+    r = await api("POST", `/api/invitations/${invA.id}/resend`);
+    check("reenviar convite cancelado é recusado (409)", r.status === 409, r.status);
+
+    // --- Cadastro por convite ---
+    const inv = await invite(mail("b").toUpperCase().replace("@EXAMPLE.INVALID", "@example.invalid"), "STAFF");
+    const tokenB = tokenOf(inv.data.inviteUrl);
+    r = await registerAs(tokenB, "E2E", "curta");
+    check("cadastro por convite com senha curta devolve 400 e não consome o convite", r.status === 400 && (await byId(inv.data.invitation.id)).status === "PENDING", r.status);
+    r = await registerAs(tokenB, "", pw);
+    check("cadastro por convite sem nome devolve 400", r.status === 400, r.status);
+    const { cpf: _c, ...noCpf } = profile, { address: _a, ...noAddress } = profile, { city: _ci, ...noCity } = profile;
+    const badProfiles = [["sem corpo pessoal", {}], ["sem CPF", noCpf], ["CPF com 10 dígitos", { ...profile, cpf: "5299822472" }], ["sem endereço", noAddress], ["sem cidade", noCity], ["CEP com 7 dígitos", { ...profile, postalCode: "0131010" }], ["endereço > 200", { ...profile, address: "x".repeat(201) }]];
+    for (const [label, extra] of badProfiles) {
+      r = await registerAs(tokenB, "E2E", pw, extra);
+      check(`cadastro por convite ${label} devolve 400 e não cria conta nem consome o convite`, r.status === 400 && !r.cookie && (await byId(inv.data.invitation.id)).status === "PENDING" && !(await prisma.user.findUnique({ where: { email: mail("b") }, select: { id: true } })), r.status);
+    }
+    r = await registerAs(tokenB, "N".repeat(101), pw);
+    check("cadastro por convite com nome > 100 devolve 400", r.status === 400, r.status);
+    const pair = await Promise.all([registerAs(tokenB), registerAs(tokenB)]);
+    check("dois cadastros simultâneos com o mesmo token: um 201 e o outro recusado", pair.filter((x) => x.status === 201).length === 1 && pair.filter((x) => [404, 409].includes(x.status)).length === 1, pair.map((x) => x.status).join("/"));
+    const won = pair.find((x) => x.status === 201);
+    const userB = await prisma.user.findUnique({ where: { email: mail("b") }, select: { id: true, name: true, memberships: { select: { clinicId: true, role: true, isOwner: true } } } });
+    const rowB = await byId(inv.data.invitation.id);
+    check("cadastro por convite: usuário com e-mail do convite, vínculo STAFF não dono e convite ACCEPTED", !!userB && userB.memberships.length === 1 && userB.memberships[0].clinicId === clinicId && userB.memberships[0].role === "STAFF" && userB.memberships[0].isOwner === false && rowB.status === "ACCEPTED" && rowB.acceptedById === userB.id, JSON.stringify({ m: userB?.memberships, s: rowB?.status }));
+    const piiB = await prisma.user.findUnique({ where: { email: mail("b") }, select: { cpf: true, postalCode: true, address: true, country: true, state: true, city: true } });
+    check("cadastro por convite grava dados pessoais normalizados (CPF e CEP só dígitos)", piiB?.cpf === "52998224725" && piiB.postalCode === "01310100" && piiB.address === profile.address && piiB.country === "Brasil" && piiB.state === "SP" && piiB.city === profile.city, JSON.stringify({ ok: !!piiB, cpfLen: piiB?.cpf?.length, cepLen: piiB?.postalCode?.length }));
+    check("cadastro devolve sessão (cookie) e ela não ganha permissão de equipe (STAFF recebe 403)", !!won?.cookie && (await withSession(won.cookie, () => api("GET", "/api/invitations"))).status === 403 && (await withSession(won.cookie, () => api("POST", "/api/invitations", { email: mail("z"), role: "STAFF" }))).status === 403, won?.status);
+    r = await registerAs(tokenB);
+    check("reuso do token após aceitar é recusado (404)", r.status === 404, r.status);
+    const reuse = await invite(mail("b"), "STAFF");
+    check("convite para quem acabou de entrar na equipe devolve 409", reuse.status === 409, reuse.status);
+    r = await withSession("", () => api("POST", "/api/invitations/accept", { token: tokenB }));
+    check("aceite sem sessão devolve 401", r.status === 401, r.status);
+
+    // --- Conta existente em outra clínica: aceite com sessão, isolamento ---
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: outClinic, name: "E2E Externo", phone: "11999990077", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: outEmail, password: pw }));
+    const outsider = r.status === 201 ? await loginAs(outEmail, pw) : null;
+    if (outsider?.status !== 200) { check("conta de outra clínica criada para os convites", false, `registro ${r.status}`); }
+    else {
+      const asOut = (fn) => withSession(outsider.cookie, fn);
+      const invOut = await invite(outEmail, "PROFESSIONAL");
+      const tokenOut = tokenOf(invOut.data.inviteUrl);
+      const invOther = await invite(mail("outro"), "STAFF");
+      const idOther = invOther.data.invitation.id;
+      r = await withSession("", () => api("POST", "/api/auth/invite/register", { token: tokenOut, name: "X", password: pw, ...profile }));
+      check("cadastro por convite para e-mail que já tem conta devolve 409 sem criar vínculo", r.status === 409 && await prisma.clinicMembership.count({ where: { clinicId, user: { email: outEmail } } }) === 0, r.status);
+      r = await asOut(() => api("GET", "/api/invitations"));
+      check("admin de outra clínica não vê convites desta (lista vazia)", r.status === 200 && r.data.invitations.length === 0, `${r.status} ${r.data.invitations?.length}`);
+      const ghost = await asOut(() => api("POST", "/api/invitations/cxxxxxxxxxxxxxxxxxxxxxxxx/resend"));
+      const cross = await asOut(() => Promise.all([api("POST", `/api/invitations/${idOther}/resend`), api("DELETE", `/api/invitations/${idOther}`)]));
+      check("admin de outra clínica reenviar/cancelar convite desta: 404 igual ao inexistente, nada muda", cross.every((x) => x.status === 404 && x.status === ghost.status && JSON.stringify(x.data) === JSON.stringify(ghost.data)) && (await byId(idOther)).status === "PENDING", cross.map((x) => x.status).join());
+      r = await asOut(() => api("POST", "/api/invitations/accept", { token: tokenB.replace(/.$/, tokenB.endsWith("A") ? "B" : "A") }));
+      check("aceite com token inventado devolve 404", r.status === 404, r.status);
+      // e-mail da sessão diferente do convite: 404 genérico, convite continua PENDING
+      const tokenOther = tokenOf(invOther.data.inviteUrl);
+      r = await asOut(() => api("POST", "/api/invitations/accept", { token: tokenOther }));
+      check("aceite com e-mail da sessão diferente do convite devolve 404 e não consome", r.status === 404 && (await byId(idOther)).status === "PENDING" && await prisma.clinicMembership.count({ where: { clinicId, user: { email: outEmail } } }) === 0, r.status);
+      const acc = await asOut(() => Promise.all([api("POST", "/api/invitations/accept", { token: tokenOut }), api("POST", "/api/invitations/accept", { token: tokenOut })]));
+      check("dois aceites simultâneos do mesmo token: um 200 e o outro recusado", acc.filter((x) => x.status === 200).length === 1 && acc.filter((x) => [404, 409].includes(x.status)).length === 1, acc.map((x) => x.status).join("/"));
+      const mOut = await prisma.clinicMembership.findMany({ where: { clinicId, user: { email: outEmail } }, select: { role: true, isOwner: true } });
+      check("aceite: vínculo com o papel do convite (PROFESSIONAL), não dono, uma só vez", mOut.length === 1 && mOut[0].role === "PROFESSIONAL" && mOut[0].isOwner === false && (await byId(invOut.data.invitation.id)).status === "ACCEPTED", JSON.stringify(mOut));
+    }
+
+    // --- Convidante removido / rebaixado ---
+    const admB = await makeAdmin("admb"), admC = await makeAdmin("admc"), admD = await makeAdmin("admd");
+    check("admins extras criados pelo fluxo de convite + promoção", admB.ok && admC.ok && admD.ok, `${admB.detail} ${admC.detail} ${admD.detail}`);
+    if (admB.ok && admC.ok && admD.ok) {
+      const g1 = await invite(mail("g1"), "STAFF", admB.cookie), g2 = await invite(mail("g2"), "PROFESSIONAL", admB.cookie);
+      const own = await invite(mail("own"), "STAFF");
+      check("admin convidado cria convites (201)", g1.status === 201 && g2.status === 201 && own.status === 201, `${g1.status}/${g2.status}/${own.status}`);
+      r = await api("PATCH", "/api/team", { membershipId: admB.membershipId, role: "STAFF" });
+      const st = await Promise.all([g1, g2, own].map((x) => byId(x.data.invitation.id)));
+      check("rebaixar o convidante cancela os convites PENDING dele e preserva os de outros", r.status === 200 && st[0].status === "CANCELLED" && st[1].status === "CANCELLED" && st[2].status === "PENDING", `${r.status} ${st.map((x) => x.status).join()}`);
+      // O PATCH /api/team invalida o cache de auth do membro afetado (nesta instância): o 403 vale logo após o rebaixamento.
+      r = await invite(mail("g3"), "STAFF", admB.cookie);
+      check("convidante rebaixado a STAFF não cria mais convites logo após o rebaixamento (403 imediato)", r.status === 403, r.status);
+      const c1 = await invite(mail("c1"), "STAFF", admC.cookie);
+      r = await api("DELETE", "/api/team", { membershipId: admC.membershipId });
+      check("remover o convidante cancela os convites PENDING dele", r.status === 200 && (await byId(c1.data.invitation.id)).status === "CANCELLED", `${r.status}`);
+      const d1 = await invite(mail("d1"), "STAFF", admD.cookie);
+      // simula convite criado na janela do cache: remove o vínculo direto, sem a rotina de cancelamento
+      await prisma.clinicMembership.delete({ where: { id: admD.membershipId } });
+      const pv = await preview(tokenOf(d1.data.inviteUrl));
+      r = await registerAs(tokenOf(d1.data.inviteUrl));
+      check("convite de quem deixou a clínica: cadastro 404 e nenhum usuário criado", r.status === 404 && await prisma.user.count({ where: { email: mail("d1") } }) === 0, `${r.status} prévia ${pv.body.slice(0, 40)}`);
+    }
+
+    // --- Cabeçalhos da página e Google ---
+    const page = await fetch(`${baseUrl}/convite/${tokenB}`, { redirect: "manual" });
+    check("página /convite/<token> responde 200 com Referrer-Policy no-referrer e Cache-Control sem cache (no-store só em build de produção; o next dev troca por no-cache)", page.status === 200 && page.headers.get("referrer-policy") === "no-referrer" && /no-store|no-cache/.test(page.headers.get("cache-control") ?? ""), `${page.status} ${page.headers.get("referrer-policy")} ${page.headers.get("cache-control")}`);
+    const live = await invite(mail("goog"), "STAFF");
+    const goog = await fetch(`${baseUrl}/api/auth/google?intent=login&invite=${tokenOf(live.data.inviteUrl)}`, { redirect: "manual" });
+    const flow = goog.headers.getSetCookie().find((c) => c.startsWith("harmonize_oauth="));
+    check("Google login com convite: 302 para accounts.google.com e cookie de fluxo", goog.status === 302 && (goog.headers.get("location") ?? "").startsWith("https://accounts.google.com/") && !!flow, `${goog.status} ${(goog.headers.get("location") ?? "").slice(0, 40)} cookie=${!!flow}`);
+    const link = await fetch(`${baseUrl}/api/auth/google?intent=link`, { redirect: "manual" });
+    check("Google link sem sessão: 302 para /login?google=error e sem cookie de fluxo", link.status === 302 && /\/login\?google=error/.test(link.headers.get("location") ?? "") && !link.headers.getSetCookie().some((c) => c.startsWith("harmonize_oauth=")), `${link.status} ${link.headers.get("location")}`);
+    const bad = await fetch(`${baseUrl}/api/auth/google?intent=login&invite=${encodeURIComponent("<script>")}`, { redirect: "manual" });
+    check("Google com invite malformado é descartado (sem eco no redirecionamento)", bad.status === 302 && !decodeURIComponent(bad.headers.get("location") ?? "").includes("<script>"), `${bad.status}`);
+
+    // --- Tetos (por último: enchem a clínica de convites) ---
+    const ids = [];
+    let hit = null;
+    for (let n = 0; n < 40 && !hit; n += 1) {
+      const x = await invite(mail(`p${n}`), "STAFF");
+      if (x.status === 201) ids.push(x.data.invitation.id); else hit = x.status;
+    }
+    const pending = await prisma.clinicInvitation.count({ where: { clinicId, status: "PENDING" } });
+    check("teto de 25 convites pendentes: o excedente devolve 429", hit === 429 && pending === 25, `hit=${hit} pendentes=${pending}`);
+    for (const id of ids) await api("DELETE", `/api/invitations/${id}`);
+    await prisma.clinicInvitation.updateMany({ where: { clinicId, status: "PENDING" }, data: { status: "CANCELLED" } });
+    hit = null;
+    for (let n = 0; n < 60 && !hit; n += 1) {
+      const x = await invite(mail(`w${n}`), "STAFF");
+      if (x.status !== 201) hit = x.status;
+    }
+    const touched = await prisma.clinicInvitation.count({ where: { clinicId, lastSentAt: { gte: new Date(Date.now() - 86_400_000) } } });
+    check("teto de 40 convites em 24 h: o excedente devolve 429", hit === 429 && touched === 40, `hit=${hit} tocados=${touched}`);
+  } finally {
+    check("convites: nenhuma resposta teve emailSent true (e-mail real nunca enviado)", emailSentTrue === 0, emailSentTrue);
+    await prisma.clinicInvitation.deleteMany({ where: { clinicId } });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { endsWith: `-${run}@example.invalid` } } } });
+    await prisma.clinic.deleteMany({ where: { name: outClinic } });
+    await prisma.user.deleteMany({ where: { email: { endsWith: `-${run}@example.invalid` } } });
+  }
+}
+
+// Etapa 5b: clínica ativa (POST /api/auth/active-clinic e clinics em GET /api/auth/me).
+async function activeClinic() {
+  const me = await prisma.user.findUnique({ where: { email: email.toLowerCase() }, select: { id: true } });
+  const home = (await prisma.clinicMembership.findFirst({ where: { userId: me.id, clinic: { name: testClinicName } }, select: { clinicId: true } })).clinicId;
+  const nameB = `E2E Clinica Ativa B ${run}`, nameC = `E2E Clinica Ativa Alheia ${run}`;
+  const activeInDb = async () => (await prisma.user.findUnique({ where: { id: me.id }, select: { activeClinicId: true } })).activeClinicId;
+  const freshLogin = async () => { const r = await api("POST", "/api/auth/login", { login: email, password }); if (r.status !== 200) throw new Error(`login ${r.status}`); return r; };
+  const sessionClinic = async () => (await api("GET", "/api/auth/me")).data.user?.clinic?.id;
+  let clinicB, clinicC;
+  try {
+    // 4) uma clínica só.
+    await prisma.user.update({ where: { id: me.id }, data: { activeClinicId: null } });
+    await freshLogin();
+    let r = await api("GET", "/api/auth/me");
+    check("clínica ativa: com 1 clínica, /me lista 1 e a sessão segue nela", r.status === 200 && r.data.clinics?.length === 1 && r.data.clinics[0].id === home && r.data.clinics[0].name === testClinicName && r.data.user?.clinic?.id === home, `${r.status} ${JSON.stringify(r.data.clinics)}`);
+    const pa = { status: 201 }; await prisma.patient.create({ data: { clinicId: home, name: `Paciente Ativa A ${run}`, phone: "11999990090", age: 30 } });
+    check("clínica ativa: paciente de A criado", pa.status === 201, `${pa.status} ${JSON.stringify(pa.data)}`);
+
+    // Fixture: 2ª clínica com membership do usuário de teste, e uma 3ª sem vínculo.
+    clinicB = await prisma.clinic.create({ data: { name: nameB, slug: `e2e-ativa-b-${run}`, memberships: { create: { userId: me.id, role: "ADMIN" } } } });
+    clinicC = await prisma.clinic.create({ data: { name: nameC, slug: `e2e-ativa-c-${run}` } });
+    await prisma.patient.create({ data: { clinicId: clinicB.id, name: `Paciente Ativa B ${run}`, phone: "11999990091", age: 30 } });
+    await prisma.patient.create({ data: { clinicId: clinicC.id, name: `Paciente Ativa C ${run}`, phone: "11999990092", age: 30 } });
+
+    // 3) activeClinicId nulo: cai na 1ª membership (id asc).
+    const firstId = (await prisma.clinicMembership.findFirst({ where: { userId: me.id }, orderBy: { id: "asc" }, select: { clinicId: true } })).clinicId;
+    await prisma.user.update({ where: { id: me.id }, data: { activeClinicId: null } });
+    await freshLogin();
+    check("clínica ativa: activeClinicId nulo cai na 1ª membership (id asc)", await sessionClinic() === firstId, `${await sessionClinic()} vs ${firstId}`);
+    await prisma.user.update({ where: { id: me.id }, data: { activeClinicId: clinicC.id } });
+    await freshLogin();
+    check("clínica ativa: activeClinicId apontando para clínica sem membership cai na 1ª", await sessionClinic() === firstId, `${await sessionClinic()} vs ${firstId}`);
+    await prisma.user.update({ where: { id: me.id }, data: { activeClinicId: null } });
+    await freshLogin();
+
+    // 1) duas clínicas.
+    r = await api("GET", "/api/auth/me");
+    const ids = (r.data.clinics ?? []).map((c) => c.id).sort().join();
+    check("clínica ativa: /me lista as 2 clínicas do usuário e nenhuma alheia", r.data.clinics?.length === 2 && ids === [home, clinicB.id].sort().join() && !JSON.stringify(r.data).includes(clinicC.id), JSON.stringify(r.data.clinics));
+    const entryB = r.data.clinics?.find((c) => c.id === clinicB.id);
+    check("clínica ativa: /me traz nome, papel e isOwner da membership", entryB?.name === nameB && entryB?.role === "ADMIN" && entryB?.isOwner === false, JSON.stringify(entryB));
+
+    // 2) segurança.
+    await prisma.user.update({ where: { id: me.id }, data: { activeClinicId: home } });
+    const anon = await withSession("", () => api("POST", "/api/auth/active-clinic", { clinicId: clinicB.id }));
+    check("clínica ativa: sem sessão devolve 401 e nada é gravado", anon.status === 401 && await activeInDb() === home, anon.status);
+    for (const [label, body] of [["sem clinicId", {}], ["clinicId numérico", { clinicId: 5 }], ["clinicId vazio", { clinicId: "" }]]) {
+      r = await api("POST", "/api/auth/active-clinic", body);
+      check(`clínica ativa: ${label} devolve 400`, r.status === 400 && await activeInDb() === home, r.status);
+    }
+    r = await api("POST", "/api/auth/active-clinic", { clinicId: clinicC.id });
+    check("clínica ativa: clínica onde NÃO é membro devolve 403 e activeClinicId não muda", r.status === 403 && await activeInDb() === home && await sessionClinic() === home, `${r.status} ativa=${await activeInDb()}`);
+    r = await api("POST", "/api/auth/active-clinic", { clinicId: `inexistente-${run}` });
+    check("clínica ativa: clínica inexistente devolve 403 e nada muda", r.status === 403 && await activeInDb() === home, r.status);
+
+    // 1) troca e re-escopo.
+    r = await api("POST", "/api/auth/active-clinic", { clinicId: clinicB.id });
+    check("clínica ativa: troca para clínica onde é membro (200) grava activeClinicId", r.status === 200 && r.data.clinicId === clinicB.id && await activeInDb() === clinicB.id, r.status);
+    r = await api("GET", "/api/auth/me");
+    check("clínica ativa: /me reflete a outra clínica logo após a troca", r.data.user?.clinic?.id === clinicB.id && r.data.user?.clinic?.name === nameB && r.data.clinics?.length === 2, JSON.stringify(r.data.user?.clinic));
+    r = await api("GET", "/api/patients");
+    const txt = JSON.stringify(r.data);
+    check("clínica ativa: dados re-escopados (vê paciente de B, não vê o de A nem o da clínica C)", r.status === 200 && txt.includes(`Paciente Ativa B ${run}`) && !txt.includes(`Paciente Ativa A ${run}`) && !txt.includes(`Paciente Ativa C ${run}`), r.status);
+    r = await api("POST", "/api/auth/active-clinic", { clinicId: home });
+    r = await api("GET", "/api/patients");
+    check("clínica ativa: voltando para A, vê o paciente de A e não o de B", r.status === 200 && JSON.stringify(r.data).includes(`Paciente Ativa A ${run}`) && !JSON.stringify(r.data).includes(`Paciente Ativa B ${run}`), r.status);
+    const dbl = await Promise.all([1, 2].map(() => api("POST", "/api/auth/active-clinic", { clinicId: clinicB.id })));
+    check("clínica ativa: clique duplo na troca devolve 200 nas duas e estado consistente", dbl.every((x) => x.status === 200) && await activeInDb() === clinicB.id, dbl.map((x) => x.status).join("/"));
+  } finally {
+    await prisma.user.update({ where: { id: me.id }, data: { activeClinicId: null } }).catch(() => {});
+    const created = [clinicB?.id, clinicC?.id].filter(Boolean);
+    if (created.length) {
+      await prisma.patient.deleteMany({ where: { clinicId: { in: created } } });
+      await prisma.clinicMembership.deleteMany({ where: { clinicId: { in: created } } });
+      await prisma.clinic.deleteMany({ where: { id: { in: created } } });
+    }
+    await prisma.patient.deleteMany({ where: { clinicId: home, name: { contains: `Ativa A ${run}` } } });
+    await freshLogin().catch(() => {});
+  }
+}
+
 const suites = {
+  clinica_ativa: { needs: [], run: () => activeClinic() },
+  convites: { needs: [], run: () => invitations() },
+  cadastro_google: { needs: [], run: () => googleSignup() },
   jornadas_etapa: { needs: [], run: () => journeyStageFilter() },
   cadastro_cliente: { needs: [], run: () => patientRegistration() },
   pacientes: { needs: [], run: async (state) => { Object.assign(state, await patientsAndPayments()); await patientCpfMask(); } },

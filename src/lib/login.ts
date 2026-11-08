@@ -1,5 +1,6 @@
 import { compare } from "bcryptjs";
 import { prisma } from "@/lib/prisma";
+import { pickMembership } from "@/lib/active-clinic-rules";
 
 const maxFailedLogins = 10;
 const lockMinutes = 15;
@@ -25,7 +26,6 @@ export async function authenticateLogin(rawLogin: unknown, rawPassword: unknown)
     where: { email: login },
     include: {
       memberships: {
-        take: 1,
         orderBy: { id: "asc" },
         include: { clinic: { select: { id: true, name: true, trialEndsAt: true } } },
       },
@@ -48,7 +48,7 @@ export async function authenticateLogin(rawLogin: unknown, rawPassword: unknown)
   if (user.failedLogins || user.lockedUntil) {
     await prisma.user.update({ where: { id: user.id }, data: { failedLogins: 0, lockedUntil: null } });
   }
-  const membership = user.memberships[0];
+  const membership = pickMembership(user.memberships, user.activeClinicId);
   if (!membership) return { ok: false, status: 403, message: "Este usuário ainda não está vinculado a uma clínica." };
 
   return {

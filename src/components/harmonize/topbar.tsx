@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { ArrowRight, Bell, ChevronDown, HelpCircle, Loader2, LogOut, Moon, Search, Settings2, Sparkles, Sun } from "lucide-react";
+import { ArrowRight, Bell, Building2, Check, ChevronDown, HelpCircle, Loader2, LogOut, Moon, Search, Settings2, Sparkles, Sun } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { THEME_CHANGE_EVENT, isDarkTheme, resolveStoredDark, toggleThemeWithReveal } from "@/lib/theme-transition";
@@ -12,6 +12,7 @@ import { invalidateClientCache } from "@/lib/client-cache";
 import { StockAlertGroups, useStockAlerts } from "./stock-alerts";
 import { TrialStatus } from "./trial-status";
 import { useCan } from "./current-user";
+import type { UserClinic } from "./clinic-chooser";
 import { Modal } from "@/components/ui/modal";
 import { tourReplayEvent } from "@/lib/section-events";
 
@@ -21,7 +22,9 @@ type TopbarProps = {
   onNavigate: (section: SectionId) => void;
   onOpenStockAlert: (alert: StockAlert) => void;
   onLogout: () => Promise<void>;
-  user?: { id: string; name: string; role: string; clinic?: { trialEndsAt?: string | null } } | null;
+  user?: { id: string; name: string; role: string; clinicId?: string; clinic?: { name?: string; trialEndsAt?: string | null } } | null;
+  clinics?: UserClinic[];
+  onSwitchClinic?: (clinicId: string) => Promise<void>;
 };
 
 function clinicNow() {
@@ -40,7 +43,8 @@ function appointmentMinutesFromTime(time: string) {
   return (hours || 0) * 60 + (minutes || 0);
 }
 
-export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, onLogout, user }: TopbarProps) {
+export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, onLogout, user, clinics = [], onSwitchClinic }: TopbarProps) {
+
   const canAccessDashboard = useCan("dashboard:access");
   const canAccessSettings = useCan("settings:access");
   const canAccessStock = useCan("stock:access");
@@ -194,6 +198,24 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, 
           <Image alt="" aria-hidden="true" className="hp-logo-dark h-auto w-[120px]" height={300} src="/brand/logo-horizontal-white.svg" unoptimized width={1200} />
         </div>
         <div className="min-w-0 flex-1" />
+
+        {user?.clinic?.name ? (clinics.length > 1 && onSwitchClinic ? <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="hp-pressable flex h-9 min-w-0 max-w-[150px] items-center gap-1.5 rounded-full border border-border bg-muted px-3 text-xs font-bold text-foreground sm:max-w-[220px]" aria-label="Trocar de clínica">
+              <Building2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="truncate">{user.clinic.name}</span>
+              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-64">
+            {clinics.map((clinic) => (
+              <DropdownMenuItem key={clinic.id} onSelect={() => { if (clinic.id !== user.clinicId) void onSwitchClinic(clinic.id); }}>
+                <span className="min-w-0 flex-1 truncate">{clinic.name}</span>
+                {clinic.id === user.clinicId ? <Check /> : null}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu> : <span className="flex h-9 min-w-0 max-w-[150px] items-center gap-1.5 px-1 text-xs font-bold text-foreground sm:max-w-[220px]"><Building2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /><span className="truncate">{user.clinic.name}</span></span>) : null}
 
         <label className="hidden h-9 min-w-[230px] items-center gap-2 rounded-full border border-border bg-muted px-4 text-xs text-muted-foreground transition-[border-color,box-shadow,background-color] duration-200 focus-within:border-ring focus-within:bg-background focus-within:shadow-[0_0_0_4px_color-mix(in_srgb,var(--ring)_12%,transparent)] xl:flex">
           <Search className="h-4 w-4" />

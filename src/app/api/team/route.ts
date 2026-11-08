@@ -1,9 +1,12 @@
 import { hash } from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, invalidateUserAuthCache } from "@/lib/auth";
 import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { parseCollaboratorProfile } from "@/lib/collaborator-profile-rules";
+import { isRoleDemotion } from "@/lib/invitation-rules";
+import { cancelPendingByInviter, deleteAcceptedByAccepter } from "@/lib/invitations-repo";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -27,18 +30,12 @@ export async function POST(request: Request) {
   const email = body?.email?.trim().toLowerCase();
   const password = body?.password ?? "";
   const role = body?.role ?? "PROFESSIONAL";
-  const cpf = (typeof body?.cpf === "string" ? body.cpf : "").replace(/\D/g, "") || null;
-  const postalCode = (typeof body?.postalCode === "string" ? body.postalCode : "").replace(/\D/g, "") || null;
-  const address = (typeof body?.address === "string" ? body.address : "").trim() || null;
-  const country = (typeof body?.country === "string" ? body.country : "").trim() || null;
-  const state = (typeof body?.state === "string" ? body.state : "").trim() || null;
-  const city = (typeof body?.city === "string" ? body.city : "").trim() || null;
   if (!name || !email || password.length < 8 || !["ADMIN", "PROFESSIONAL", "STAFF"].includes(role)) {
     return NextResponse.json({ message: "Informe nome, e-mail e uma senha com pelo menos 8 caracteres." }, { status: 400 });
   }
-  if (!cpf || cpf.length !== 11 || !address || !country || !state || !city || (postalCode && postalCode.length !== 8)) {
-    return NextResponse.json({ message: "Preencha os campos obrigatórios. O CPF deve ter 11 dígitos e o CEP, quando informado, deve ter 8." }, { status: 400 });
-  }
+  const profile = parseCollaboratorProfile(body);
+  if (!profile.ok) return NextResponse.json({ message: profile.message }, { status: 400 });
+  const { cpf, postalCode, address, country, state, city } = profile.value;
 
   const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
   if (existing) return NextResponse.json({ message: "Já existe uma conta com este e-mail." }, { status: 409 });
@@ -83,11 +80,20 @@ export async function PATCH(request: Request) {
     if (member.isOwner || member.userId === user.id) {
       return NextResponse.json({ message: "O cargo do administrador principal não pode ser alterado." }, { status: 409 });
     }
-    const updated = await prisma.clinicMembership.update({
-      where: { id: member.id },
-      data: { role: body.role as "ADMIN" | "PROFESSIONAL" | "STAFF" },
-      select: { id: true, role: true, isOwner: true, laborCostCents: true, user: { select: { id: true, name: true, email: true, createdAt: true } } },
+    // B3: rebaixar o cargo cancela, na mesma transação, os convites PENDING que este membro criou nesta clínica.
+    const newRole = body.role as "ADMIN" | "PROFESSIONAL" | "STAFF";
+    const updated = await prisma.$transaction(async (transaction) => {
+      const result = await transaction.clinicMembership.update({
+        where: { id: member.id },
+        data: { role: newRole },
+        select: { id: true, role: true, isOwner: true, laborCostCents: true, user: { select: { id: true, name: true, email: true, createdAt: true } } },
+      });
+      if (isRoleDemotion(member.role, newRole)) await cancelPendingByInviter(transaction, { clinicId: user.clinicId, invitedById: member.userId });
+      return result;
     });
+    // Só depois do sucesso, só o usuário afetado. O cache de auth é em memória por instância: em serverless a janela
+    // de 15 s pode persistir em outras instâncias; por isso o aceite continua exigindo que o convidante seja membro.
+    invalidateUserAuthCache(member.userId);
     return NextResponse.json({ member: updated });
   }
 
@@ -124,10 +130,15 @@ export async function DELETE(request: Request) {
   }
 
   await prisma.$transaction(async (transaction) => {
+    // B3: convites pendentes criados por quem sai deixam de valer (escopo da clínica da sessão).
+    await cancelPendingByInviter(transaction, { clinicId: user.clinicId, invitedById: member.userId });
+    // O convite que o removido aceitou nesta clínica some (antes de apagar o usuário, enquanto acceptedById ainda aponta pra ele).
+    await deleteAcceptedByAccepter(transaction, { clinicId: user.clinicId, acceptedById: member.userId });
     await transaction.clinicMembership.delete({ where: { id: member.id } });
     const remainingMemberships = await transaction.clinicMembership.count({ where: { userId: member.userId } });
     if (!remainingMemberships) await transaction.user.delete({ where: { id: member.userId } });
   });
 
+  invalidateUserAuthCache(member.userId); // mesma ressalva de instância do PATCH acima
   return NextResponse.json({ removed: true });
 }
