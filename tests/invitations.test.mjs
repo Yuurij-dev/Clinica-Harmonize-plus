@@ -211,7 +211,7 @@ test("register por convite: grava os dados pessoais normalizados; sem eles => 40
   const { repo, db } = makeRepo();
   const c = await create(repo);
   const run = (over = {}) => inv.registerByInvite(repo, { token: c.token, name: "Ana", password: "senha-forte-1", ...personal, hashPassword, ...over }, later(1000));
-  for (const bad of [{ cpf: "123" }, { cpf: undefined }, { address: " " }, { country: "" }, { state: undefined }, { city: "" }, { postalCode: "123" }]) {
+  for (const bad of [{ cpf: "123" }, { cpf: undefined }, { postalCode: "123" }]) {
     const r = await run(bad);
     assert.deepEqual([r.ok, r.status, r.code], [false, 400, "invalid_input"], JSON.stringify(bad));
   }
@@ -222,6 +222,11 @@ test("register por convite: grava os dados pessoais normalizados; sem eles => 40
     [db.users[0].cpf, db.users[0].postalCode, db.users[0].address, db.users[0].country, db.users[0].state, db.users[0].city],
     ["52998224725", null, "Rua A, 1", "Brasil", "SP", "Sao Paulo"],
   );
+  // Endereco, pais, estado e cidade tambem sao opcionais: vazio grava null.
+  const c2 = await create(repo, { email: "bia@x.com" });
+  const r2 = await inv.registerByInvite(repo, { token: c2.token, name: "Bia", password: "senha-forte-1", cpf: personal.cpf, hashPassword }, later(1000));
+  assert.equal(r2.ok, true);
+  assert.deepEqual([db.users[1].address, db.users[1].country, db.users[1].state, db.users[1].city], [null, null, null, null]);
 });
 
 test("google (conta nova): completeGoogleInvite valida e grava os dados pessoais na mesma transacao", async () => {

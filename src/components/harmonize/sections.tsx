@@ -2654,10 +2654,10 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
                 <Button className="w-full sm:w-auto" type="button" variant="secondary" size="sm" disabled={postalCodeLoading} onClick={() => void lookupCollaboratorPostalCode()}>{postalCodeLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}{postalCodeLoading ? "Buscando CEP..." : "Buscar CEP"}</Button>
               </div>
               {postalCodeError ? <p className="sm:col-span-2 -mt-2 text-xs text-destructive" role="alert">{postalCodeError}</p> : null}
-              <div className="sm:col-span-2"><FormField label="Endereço" required><input className={fieldClassName} name="address" autoComplete="address-line1" placeholder="Rua, número, bairro e complemento" value={newMemberAddress} onChange={(event) => setNewMemberAddress(event.target.value)} required /></FormField></div>
-              <FormField label="País" required><input className={fieldClassName} name="country" autoComplete="country-name" placeholder="Brasil" value={newMemberCountry} onChange={(event) => setNewMemberCountry(event.target.value)} required /></FormField>
-              <FormField label="Estado" required><input className={fieldClassName} name="state" autoComplete="address-level1" placeholder="Estado" value={newMemberState} onChange={(event) => setNewMemberState(event.target.value)} required /></FormField>
-              <FormField label="Cidade" required><input className={fieldClassName} name="city" autoComplete="address-level2" placeholder="Cidade" value={newMemberCity} onChange={(event) => setNewMemberCity(event.target.value)} required /></FormField>
+              <div className="sm:col-span-2"><FormField label="Endereço"><input className={fieldClassName} name="address" autoComplete="address-line1" placeholder="Rua, número, bairro e complemento" value={newMemberAddress} onChange={(event) => setNewMemberAddress(event.target.value)} /></FormField></div>
+              <FormField label="País"><input className={fieldClassName} name="country" autoComplete="country-name" placeholder="Brasil" value={newMemberCountry} onChange={(event) => setNewMemberCountry(event.target.value)} /></FormField>
+              <FormField label="Estado"><input className={fieldClassName} name="state" autoComplete="address-level1" placeholder="Estado" value={newMemberState} onChange={(event) => setNewMemberState(event.target.value)} /></FormField>
+              <FormField label="Cidade"><input className={fieldClassName} name="city" autoComplete="address-level2" placeholder="Cidade" value={newMemberCity} onChange={(event) => setNewMemberCity(event.target.value)} /></FormField>
             </div>
           </section>
 

@@ -23,7 +23,7 @@ test("sendInvitationEmail: chamada correta ao Resend", async () => {
   const body = JSON.parse(seen.init.body);
   assert.equal(body.from, env.EMAIL_FROM);
   assert.deepEqual(body.to, ["ana@x.com"]);
-  assert.equal(body.subject, "Convite para a clínica Clínica <Um> & Cia no Harmonize+");
+  assert.equal(body.subject, 'Dr. "Bob" convidou você para a clínica Clínica <Um> & Cia');
   assert.ok(body.html.includes("https://app.h.com/convite/TOKEN123"));
   assert.ok(body.text.includes("https://app.h.com/convite/TOKEN123"));
   // HTML escapado: nada de tag injetada pelo nome da clinica/convidante

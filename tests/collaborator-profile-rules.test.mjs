@@ -24,12 +24,21 @@ test("CPF obrigatorio com exatamente 11 digitos", () => {
   }
 });
 
-test("endereco, pais, estado e cidade obrigatorios (so espacos conta como vazio)", () => {
+test("endereco, pais, estado e cidade sao opcionais (vazio, so espacos ou ausente viram null)", () => {
   for (const field of ["address", "country", "state", "city"]) {
-    for (const bad of ["", "   ", undefined, 5]) {
-      assert.deepEqual(parseCollaboratorProfile({ ...valid, [field]: bad }), { ok: false, message: COLLABORATOR_PROFILE_MESSAGE }, `${field}=${String(bad)}`);
+    for (const empty of ["", "   ", undefined, null, 5]) {
+      const result = parseCollaboratorProfile({ ...valid, [field]: empty });
+      assert.equal(result.ok, true, `${field}=${String(empty)}`);
+      assert.equal(result.value[field], null, `${field}=${String(empty)}`);
     }
   }
+});
+
+test("so nome e CPF: sem nenhum campo de endereco o perfil e valido", () => {
+  assert.deepEqual(parseCollaboratorProfile({ name: "Ana", cpf: "529.982.247-25" }), {
+    ok: true,
+    value: { name: "Ana", cpf: "52998224725", postalCode: null, address: null, country: null, state: null, city: null },
+  });
 });
 
 test("nome obrigatorio, trim e no maximo 100 caracteres", () => {
