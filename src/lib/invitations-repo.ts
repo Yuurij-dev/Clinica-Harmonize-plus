@@ -60,8 +60,12 @@ function makeTx(db: Client): InvitationTx {
     async findMembership({ userId, clinicId }) {
       return db.clinicMembership.findUnique({ where: { userId_clinicId: { userId, clinicId } }, select: { id: true } });
     },
-    async isMemberById({ userId, clinicId }) {
-      return (await db.clinicMembership.count({ where: { userId, clinicId } })) > 0;
+    async inviterAccess({ userId, clinicId }) {
+      const row = await db.clinicMembership.findUnique({
+        where: { userId_clinicId: { userId, clinicId } },
+        select: { role: true, isOwner: true, clinic: { select: { rolePermissions: true } } },
+      });
+      return row ? { role: row.role, isOwner: row.isOwner, rolePermissions: row.clinic.rolePermissions } : null;
     },
     async countMembershipsOutside({ userId, clinicId }) {
       return db.clinicMembership.count({ where: { userId, clinicId: { not: clinicId } } });

@@ -54,8 +54,10 @@ export function makeRepo() {
     async findMembership({ userId, clinicId }) {
       return db.memberships.find((m) => m.userId === userId && m.clinicId === clinicId) ?? null;
     },
-    async isMemberById({ userId, clinicId }) {
-      return db.memberships.some((m) => m.userId === userId && m.clinicId === clinicId) || db.staff.some((m) => m.userId === userId && m.clinicId === clinicId);
+    // db.staff = membros pre-existentes (ADMIN, matriz padrao); aceita role/isOwner/rolePermissions para sobrescrever.
+    async inviterAccess({ userId, clinicId }) {
+      const m = db.memberships.find((x) => x.userId === userId && x.clinicId === clinicId) ?? db.staff.find((x) => x.userId === userId && x.clinicId === clinicId);
+      return m ? { role: m.role ?? "ADMIN", isOwner: m.isOwner ?? false, rolePermissions: m.rolePermissions ?? {} } : null;
     },
     async countMembershipsOutside({ userId, clinicId }) {
       return db.memberships.filter((m) => m.userId === userId && m.clinicId !== clinicId).length;

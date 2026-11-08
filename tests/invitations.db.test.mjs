@@ -323,3 +323,30 @@ test("db: autor removido da clinica (ou convite sem autor) => aceite recusado, c
   await prisma.clinicInvitation.update({ where: { id: c.invitation.id }, data: { invitedById: null } });
   assert.equal((await inv.acceptInvitation(repo, { token: c.token, user: guest })).code, "not_found");
 });
+
+test("db: autor ainda membro mas sem settings:team (rebaixado/matriz) => aceite e registro Google recusados; ADMIN com matriz {} segue valido", opts, async () => {
+  const clinic = await makeClinic("inviter-nomatrix");
+  const admin = await makeUser("nm-admin");
+  const guest = await makeUser("nm-guest");
+  const google = { sub: `${tag}-nm-sub`, email: `${tag}-nm-new@example.test` };
+  const c = await newInvite(clinic, admin.id, guest.email);
+  const c2 = await newInvite(clinic, admin.id, google.email);
+  // ADMIN com matriz vazia (default tem settings:team): valido, nao e consumido aqui
+  await prisma.clinic.update({ where: { id: clinic }, data: { rolePermissions: {} } });
+  assert.equal(await inv.inviterCanInvite(repo, { invitedById: admin.id, clinicId: clinic }), true);
+  // rebaixa para STAFF mantendo a membership
+  await prisma.clinicMembership.update({ where: { userId_clinicId: { userId: admin.id, clinicId: clinic } }, data: { role: "STAFF" } });
+  assert.equal((await inv.acceptInvitation(repo, { token: c.token, user: guest })).code, "not_found");
+  assert.equal(await memberships(guest.id, clinic), 0);
+  assert.equal((await row(c.invitation.id)).status, "PENDING");
+  const r = await inv.registerGoogleByInvite(repo, { token: c2.token, google, profile, passwordHash: "x" });
+  assert.deepEqual([r.ok, r.code], [false, "invite_invalid"]);
+  assert.equal(await prisma.user.count({ where: { email: google.email } }), 0);
+  assert.equal(await prisma.userIdentity.count({ where: { providerSubject: google.sub } }), 0);
+  assert.equal((await row(c2.invitation.id)).status, "PENDING");
+  // revogacao pela matriz: STAFF com settings:team concedido aceita; revogado, recusa
+  await prisma.clinic.update({ where: { id: clinic }, data: { rolePermissions: { STAFF: { "settings:team": true } } } });
+  assert.equal(await inv.inviterCanInvite(repo, { invitedById: admin.id, clinicId: clinic }), true);
+  await prisma.clinic.update({ where: { id: clinic }, data: { rolePermissions: { STAFF: { "settings:team": false } } } });
+  assert.equal(await inv.inviterCanInvite(repo, { invitedById: admin.id, clinicId: clinic }), false);
+});

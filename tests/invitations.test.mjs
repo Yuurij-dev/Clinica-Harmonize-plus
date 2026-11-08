@@ -379,6 +379,20 @@ test("e-mail do convite: rejeita injecao de cabecalho/lista/aspas/espacos", asyn
   assert.equal((await create(repo, { email: "ana.silva+tag@sub.dominio.com.br" })).ok, true);
 });
 
+test("aceitar: autor sem settings:team (cargo/matriz) => not_found; ADMIN com matriz {} vale", async () => {
+  const { repo, db } = makeRepo();
+  const c = await create(repo);
+  db.staff[0].rolePermissions = {};
+  assert.equal(await inv.inviterCanInvite(repo, db.invitations[0]), true);
+  db.staff[0].role = "STAFF";
+  assert.equal((await inv.acceptInvitation(repo, { token: c.token, user: user("u1", "ana@x.com") }, later(1000))).code, "not_found");
+  assert.equal(db.memberships.length, 0);
+  assert.equal(db.invitations[0].status, "PENDING");
+  db.staff[0].role = "PROFESSIONAL";
+  db.staff[0].rolePermissions = { PROFESSIONAL: { "settings:team": true } };
+  assert.equal((await inv.acceptInvitation(repo, { token: c.token, user: user("u1", "ana@x.com") }, later(1000))).ok, true);
+});
+
 test("aceitar: autor que saiu da clinica (ou convite sem autor) => not_found, convite segue PENDING", async () => {
   const { repo, db } = makeRepo();
   const c = await create(repo);

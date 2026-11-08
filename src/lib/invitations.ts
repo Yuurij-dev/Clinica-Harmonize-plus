@@ -1,5 +1,6 @@
 import { parseCollaboratorProfile, type CollaboratorProfile } from "./collaborator-profile-rules.ts";
 import type { EmailFailureReason, EmailResult } from "./email.ts";
+import { canForUser } from "./permissions.ts";
 import {
   canAcceptInvitation,
   generateInviteToken,
@@ -64,8 +65,9 @@ export type InvitationTx = {
   findByTokenHash(tokenHash: string): Promise<(InvitationRow & { clinicName: string }) | null>;
   markAccepted(input: { id: string; clinicId: string; tokenHash: string; userId: string; now: Date }): Promise<number>;
   findMembership(input: { userId: string; clinicId: string }): Promise<{ id: string } | null>;
-  // Quem criou o convite precisa continuar membro da clinica (B3 pode nao ter alcancado convites criados na janela do cache de login).
-  isMemberById(input: { userId: string; clinicId: string }): Promise<boolean>;
+  // Acesso atual de quem criou o convite: precisa continuar membro E com settings:team (B3 nao alcanca revogacao pela matriz
+  // nem convites criados na janela do cache de login). null = nao e mais membro.
+  inviterAccess(input: { userId: string; clinicId: string }): Promise<{ role: string; isOwner: boolean; rolePermissions: unknown } | null>;
   countMembershipsOutside(input: { userId: string; clinicId: string }): Promise<number>;
   createMembership(input: { userId: string; clinicId: string; role: InviteRole }): Promise<void>;
   findUserByEmail(email: string): Promise<{ id: string } | null>;
@@ -200,6 +202,13 @@ export async function previewInvitation(repo: InvitationRepo, token: unknown, no
 export type AcceptFailureCode = "not_found" | "expired" | "cancelled" | "accepted" | "email_mismatch" | "invalid_role";
 export type AcceptResult = { ok: true; alreadyInOtherClinic: boolean } | { ok: false; code: AcceptFailureCode };
 
+// Mesma permissao exigida para ENVIAR convites (POST /api/invitations), reavaliada no momento do aceite.
+export async function inviterCanInvite(tx: Pick<InvitationTx, "inviterAccess">, invitation: Pick<InvitationRow, "invitedById" | "clinicId">): Promise<boolean> {
+  if (!invitation.invitedById) return false;
+  const inviter = await tx.inviterAccess({ userId: invitation.invitedById, clinicId: invitation.clinicId });
+  return !!inviter && canForUser({ role: inviter.role, isOwner: inviter.isOwner, rolePermissions: inviter.rolePermissions }, "settings:team");
+}
+
 // Nucleo do aceite, dentro de uma transacao ja aberta. O papel vem SEMPRE do convite.
 async function acceptInTx(tx: InvitationTx, invitation: InvitationRow, user: { id: string; email: string }, now: Date): Promise<AcceptResult> {
   // emailVerified: true porque o token (enviado so ao e-mail do convite) e a prova de posse da caixa.
@@ -207,8 +216,8 @@ async function acceptInTx(tx: InvitationTx, invitation: InvitationRow, user: { i
   const decision = canAcceptInvitation({ invitation, accountEmail: user.email, emailVerified: true, now });
   if (!decision.ok) return { ok: false, code: decision.reason === "email_unverified" ? "email_mismatch" : decision.reason };
   if (!isAllowedInviteRole(invitation.role)) return { ok: false, code: "invalid_role" };
-  // Convite sem autor ou de autor que saiu da clinica nao vale (mesma resposta generica de convite inexistente).
-  if (!invitation.invitedById || !(await tx.isMemberById({ userId: invitation.invitedById, clinicId: invitation.clinicId }))) return { ok: false, code: "not_found" };
+  // Convite sem autor, ou de autor que saiu da clinica / perdeu settings:team, nao vale (mesma resposta generica de convite inexistente).
+  if (!(await inviterCanInvite(tx, invitation))) return { ok: false, code: "not_found" };
 
   // Consumo atomico, amarrado ao tokenHash lido (um reenvio que gira o token invalida este aceite).
   const consumed = await tx.markAccepted({ id: invitation.id, clinicId: invitation.clinicId, tokenHash: invitation.tokenHash, userId: user.id, now });

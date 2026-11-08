@@ -1,5 +1,5 @@
 import { hashInviteToken, invitationState, isInviteTokenShape, normalizeInviteEmail } from "./invitation-rules.ts";
-import { acceptInvitation, type InvitationRepo, type PendingGoogleInvite } from "./invitations.ts";
+import { acceptInvitation, inviterCanInvite, type InvitationRepo, type PendingGoogleInvite } from "./invitations.ts";
 import {
   buildGoogleAuthUrl,
   codeChallengeFor,
@@ -187,8 +187,8 @@ async function handleInviteLogin(
       diag("account_exists");
       return backToInvite("account_exists");
     } else {
-      // Autor que saiu da clinica invalida o convite (a conclusao tambem re-checa, na transacao).
-      if (!invitation.invitedById || !(await deps.invitations.isMemberById({ userId: invitation.invitedById, clinicId: invitation.clinicId }))) return fail("invite_invalid");
+      // Autor que saiu da clinica ou perdeu settings:team invalida o convite (a conclusao tambem re-checa, na transacao).
+      if (!(await inviterCanInvite(deps.invitations, invitation))) return fail("invite_invalid");
       // Conta nova: identidade e convite ja estao validados. Nada e criado aqui; os dados pessoais sao coletados
       // na pagina do convite e a conta nasce atomicamente em /api/auth/invite/google/complete.
       return {
