@@ -1,16 +1,31 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { canForUser } from "@/lib/permissions";
-import { parseDateOnly } from "@/lib/clinic-time";
-import { isExpenseCategory, parseRecurringSchedule, recurringSelect, serializeRecurring } from "@/lib/finance";
+import { clinicToday, parseDateOnly } from "@/lib/clinic-time";
+import { ensureRecurringOccurrences, isExpenseCategory, parseRecurringSchedule, recurringNextInfo, recurringSelect, serializeRecurring } from "@/lib/finance";
+import { isRecurringActive, monthlyEquivalentCents } from "@/lib/finance-rules";
 import { prisma } from "@/lib/prisma";
 
+// Lista com próximo vencimento, situação dele e se está ativa; totais: ativas, equivalente mensal e próximo vencimento geral.
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (!canForUser(user, "finance:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  await ensureRecurringOccurrences(user.clinicId);
+  const today = clinicToday();
   const items = await prisma.recurringExpense.findMany({ where: { clinicId: user.clinicId }, orderBy: [{ endsOn: { sort: "asc", nulls: "first" } }, { description: "asc" }], select: recurringSelect });
-  return NextResponse.json({ recurringExpenses: items.map(serializeRecurring) });
+  const info = await recurringNextInfo(user.clinicId, items, today);
+  const recurringExpenses = items.map((item) => {
+    const serialized = serializeRecurring(item);
+    const next = info.get(item.id);
+    return { ...serialized, nextDueOn: next?.nextDueOn ?? null, nextStatus: next?.nextStatus ?? null, overdueCount: next?.overdueCount ?? 0, active: isRecurringActive(serialized.endsOn, today) };
+  });
+  const active = recurringExpenses.filter((item) => item.active);
+  const nextDates = active.flatMap((item) => item.nextDueOn ? [item.nextDueOn] : []).sort();
+  return NextResponse.json({
+    recurringExpenses,
+    totals: { activeCount: active.length, monthlyTotalCents: active.reduce((sum, item) => sum + monthlyEquivalentCents(item.frequency, item.amountCents), 0), nextDueOn: nextDates[0] ?? null },
+  });
 }
 
 export async function POST(request: Request) {

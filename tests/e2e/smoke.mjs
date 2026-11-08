@@ -11,7 +11,7 @@ const baseUrl = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const testClinicName = "Clínica Teste Auditoria";
 const email = process.env.TEST_ACCOUNT_EMAIL;
 const password = process.env.TEST_ACCOUNT_PASSWORD;
-const run = Date.now().toString(36);
+const run = Date.now().toString(36).replace(/\d/g, (digit) => "abcdefghij"[digit]); // só letras: nomes de paciente não aceitam números
 const results = [];
 const prisma = new PrismaClient();
 // Avaliação completa: para CONCLUIR, a API exige queixa, objetivo, os 5 campos da anamnese rápida e observações.
@@ -40,7 +40,14 @@ function check(name, ok, detail = "") {
 }
 
 const day = (offset) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date(Date.now() + offset * 86_400_000));
-const randomCpf = () => Array.from({ length: 11 }, () => Math.floor(Math.random() * 10)).join("");
+const randomCpf = () => {
+  // CPF com dígitos verificadores válidos (o cadastro de paciente valida).
+  const d = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10));
+  if (new Set(d).size === 1) d[0] = (d[0] + 1) % 10;
+  for (const len of [9, 10]) { const sum = d.reduce((t, n, i) => t + n * (len + 1 - i), 0); d.push((sum * 10) % 11 % 10); }
+  return d.join("");
+};
+const regDefaults = { birthDate: "10/01/1990", privacyConsent: true };
 
 async function login() {
   const response = await api("POST", "/api/auth/login", { login: email, password });
@@ -50,18 +57,18 @@ async function login() {
 }
 
 async function patientsAndPayments() {
-  let r = await api("POST", "/api/patients", { name: `Paciente ${run}`, phone: "11999990000", age: 30, cpf: "123" });
+  let r = await api("POST", "/api/patients", { ...regDefaults, name: `Paciente ${run}`, phone: "11999990000", age: 30, cpf: "123" });
   check("CPF inválido no cadastro é recusado", r.status === 400, r.status);
   const cpf = randomCpf();
-  r = await api("POST", "/api/patients", { name: `Paciente ${run}`, phone: "11999990000", age: 30, cpf });
+  r = await api("POST", "/api/patients", { ...regDefaults, name: `Paciente ${run}`, phone: "11999990000", age: 30, cpf });
   const patient = r.data.patient;
   check("cadastro de paciente", r.status === 201, r.status);
-  r = await api("POST", "/api/patients", { name: `Outro ${run}`, phone: "11999990001", age: 31, cpf });
+  r = await api("POST", "/api/patients", { ...regDefaults, name: `Outro ${run}`, phone: "11999990001", age: 31, cpf });
   check("CPF repetido devolve 409", r.status === 409, r.status);
   const sameCpf = randomCpf();
-  const pair = await Promise.all([1, 2].map((n) => api("POST", "/api/patients", { name: `CPF Simultâneo ${n} ${run}`, phone: "11999990004", age: 30, cpf: sameCpf })));
+  const pair = await Promise.all([1, 2].map((n) => api("POST", "/api/patients", { ...regDefaults, name: `CPF Simultâneo ${"AB"[n - 1]} ${run}`, phone: "11999990004", age: 30, cpf: sameCpf })));
   check("dois cadastros simultâneos com o mesmo CPF: um 201 e um 409, nunca 500", pair.map((res) => res.status).sort().join() === "201,409", pair.map((res) => res.status).join("/"));
-  r = await api("POST", "/api/patients", { name: `Paciente ${run}`, phone: "11999990002", age: 40 });
+  r = await api("POST", "/api/patients", { ...regDefaults, name: `Paciente ${run}`, phone: "11999990002", age: 40, cpf: randomCpf() });
   const homonym = r.data.patient;
 
   const before = (await api("GET", "/api/finance/summary?period=month")).data.totals?.receivedCents ?? 0;
@@ -89,7 +96,7 @@ async function patientsAndPayments() {
   r = await api("GET", "/api/dashboard/bootstrap");
   check("dashboard traz total de atendimentos e valores em reais", typeof r.data.appointmentCount === "number" && r.data.payments?.some((payment) => payment.value === 150.5), r.status);
   // Paciente sem jornada recebendo registros ao mesmo tempo: uma só "Jornada 1".
-  const fresh = (await api("POST", "/api/patients", { name: `Sem Jornada ${run}`, phone: "11999990003", age: 28 })).data.patient;
+  const fresh = (await api("POST", "/api/patients", { ...regDefaults, name: `Sem Jornada ${run}`, phone: "11999990003", age: 28, cpf: randomCpf() })).data.patient;
   const burst = await Promise.all([
     api("POST", "/api/payments", { patientId: fresh?.id, value: 5, method: "Pix", status: "Pago", installments: "A vista" }),
     api("POST", "/api/payments", { patientId: fresh?.id, value: 6, method: "Pix", status: "Pago", installments: "A vista" }),
@@ -1207,7 +1214,7 @@ async function anamnesis() {
 
     const staffEmail = `e2e-staff-${run}@example.com`;
     const staffPassword = `E2e-${run}-Staff9!`;
-    r = await api("POST", "/api/team", { name: "E2E Atendente", email: staffEmail, password: staffPassword, role: "STAFF" });
+    r = await api("POST", "/api/team", { name: "E2E Atendente", email: staffEmail, password: staffPassword, role: "STAFF", cpf: randomCpf(), address: "Rua A, 1", country: "Brasil", state: "SP", city: "São Paulo" });
     team = r.status === 201 ? r.data.member : null;
     const staff = team ? await loginAs(staffEmail, staffPassword) : null;
     if (staff?.status === 200) {
@@ -4729,22 +4736,24 @@ async function patientCpfMask() {
   const staffEmail = `e2e-staff-cpf-${run}@example.com`;
   const staffPassword = `E2e-${run}-Staff9!`;
   const cpf = randomCpf();
+  const shown = `${cpf.slice(0, 3)}.${cpf.slice(3, 6)}.${cpf.slice(6, 9)}-${cpf.slice(9)}`; // a API devolve o CPF formatado
+  const digits = (value) => String(value ?? "").replace(/[^0-9]/g, "");
   const masked = `***.***.***-${cpf.slice(-2)}`;
   const nameKey = `Mascara ${run}`;
   let team = null;
-  let r = await api("POST", "/api/patients", { name: nameKey, phone: "11999990077", age: 33, cpf });
+  let r = await api("POST", "/api/patients", { ...regDefaults, name: nameKey, phone: "11999990077", age: 33, cpf });
   const target = r.data.patient;
-  check("CPF (máscara): ADMIN cadastra e recebe o CPF completo", r.status === 201 && target?.cpf === cpf, `${r.status} ${target?.cpf}`);
+  check("CPF (máscara): ADMIN cadastra e recebe o CPF completo", r.status === 201 && target?.cpf === shown, `${r.status} ${target?.cpf}`);
   r = await api("GET", `/api/patients?q=${encodeURIComponent(nameKey)}`);
-  check("CPF (máscara): ADMIN vê CPF completo na lista", r.data.patients?.find((p) => p.id === target.id)?.cpf === cpf);
+  check("CPF (máscara): ADMIN vê CPF completo na lista", r.data.patients?.find((p) => p.id === target.id)?.cpf === shown);
   r = await api("GET", `/api/patients/lookup?q=${cpf.slice(0, 5)}`);
-  check("CPF (máscara): ADMIN busca CPF parcial (5 dígitos) no lookup e vê completo", r.data.patients?.find((p) => p.id === target.id)?.cpf === cpf, JSON.stringify(r.data).slice(0, 120));
+  check("CPF (máscara): ADMIN busca CPF parcial (5 dígitos) no lookup e vê completo", r.data.patients?.find((p) => p.id === target.id)?.cpf === shown, JSON.stringify(r.data).slice(0, 120));
   try {
-    r = await api("POST", "/api/team", { name: "E2E Atendente CPF", email: staffEmail, password: staffPassword, role: "STAFF" });
+    r = await api("POST", "/api/team", { name: "E2E Atendente CPF", email: staffEmail, password: staffPassword, role: "STAFF", cpf: randomCpf(), address: "Rua A, 1", country: "Brasil", state: "SP", city: "São Paulo" });
     team = r.status === 201 ? r.data.member : null;
     const staff = team ? await loginAs(staffEmail, staffPassword) : null;
     if (staff?.status !== 200) { check("usuário STAFF criado para testar o CPF mascarado", false, `team ${r.status} login ${staff?.status}`); return; }
-    const has = (value) => JSON.stringify(value).includes(cpf);
+    const has = (value) => JSON.stringify(value).includes(cpf) || JSON.stringify(value).includes(shown);
     const s = await withSession(staff.cookie, async () => {
       const out = {};
       out.list = await api("GET", `/api/patients?q=${encodeURIComponent(nameKey)}`);
@@ -4769,20 +4778,20 @@ async function patientCpfMask() {
     check("CPF (máscara): STAFF com os 11 dígitos exatos encontra o paciente, mascarado", row(s.exact)?.cpf === masked && !has(s.exact.data), JSON.stringify(s.exact.data).slice(0, 120));
     check("CPF (máscara): STAFF com CPF formatado completo encontra o paciente", row(s.formatted)?.cpf === masked, JSON.stringify(s.formatted.data).slice(0, 120));
     check("CPF (máscara): STAFF busca por nome e vê mascarado", row(s.byName)?.cpf === masked && !has(s.byName.data));
-    check("CPF (máscara): lista de orçamentos do STAFF não vaza o CPF", s.quotes.status === 200 && !has(s.quotes.data), s.quotes.status);
+    check("CPF (máscara): lista de orçamentos do STAFF não vaza o CPF", [200, 403].includes(s.quotes.status) && !has(s.quotes.data), s.quotes.status);
     check("CPF (máscara): POST com asteriscos no CPF é recusado (400)", s.maskedPost.status === 400, s.maskedPost.status);
     check("CPF (máscara): PATCH do STAFF sem cpf, com cpf mascarado ou vazio responde 200 e devolve mascarado", [s.patchAbsent, s.patchMasked, s.patchEmpty].every((x) => x.status === 200 && x.data.patient?.cpf === masked), [s.patchAbsent, s.patchMasked, s.patchEmpty].map((x) => `${x.status}:${x.data.patient?.cpf}`).join(" "));
     const stored = await prisma.patient.findUnique({ where: { id: target.id }, select: { cpf: true, name: true, age: true } });
-    check("CPF (máscara): no banco o CPF original foi mantido após os PATCH do STAFF, mas nome/idade mudaram", stored.cpf === cpf && stored.name === `${nameKey} D` && stored.age === 36, JSON.stringify(stored));
+    check("CPF (máscara): no banco o CPF original foi mantido após os PATCH do STAFF, mas nome/idade mudaram", digits(stored.cpf) === cpf && stored.name === `${nameKey} D` && stored.age === 36, `${JSON.stringify(stored)} esperado=${cpf}`);
     const fresh = randomCpf();
     const staffNew = await withSession(staff.cookie, () => api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36, cpf: fresh }));
     check("CPF (máscara): STAFF consegue informar um CPF completo novo (e vê mascarado)", staffNew.status === 200 && staffNew.data.patient?.cpf === `***.***.***-${fresh.slice(-2)}` && (await prisma.patient.findUnique({ where: { id: target.id }, select: { cpf: true } })).cpf === fresh, `${staffNew.status} ${staffNew.data.patient?.cpf}`);
     r = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36, cpf });
-    check("CPF (máscara): ADMIN volta ao CPF original e vê completo", r.status === 200 && r.data.patient?.cpf === cpf, `${r.status} ${r.data.patient?.cpf}`);
+    check("CPF (máscara): ADMIN volta ao CPF original e vê completo", r.status === 200 && digits(r.data.patient?.cpf) === cpf, `${r.status} ${r.data.patient?.cpf}`);
     r = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36, cpf: masked });
-    check("CPF (máscara): ADMIN enviando CPF mascarado não grava o valor mascarado", r.status === 200 && (await prisma.patient.findUnique({ where: { id: target.id }, select: { cpf: true } })).cpf === cpf, r.status);
+    check("CPF (máscara): ADMIN enviando CPF mascarado não grava o valor mascarado", r.status === 200 && (await prisma.patient.findUnique({ where: { id: target.id }, select: { cpf: true } })).cpf?.replace(/D/g, "") === cpf, r.status);
     r = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36 });
-    check("CPF (máscara): ADMIN sem cpf no PATCH mantém o CPF", r.status === 200 && r.data.patient?.cpf === cpf);
+    check("CPF (máscara): ADMIN sem cpf no PATCH mantém o CPF", r.status === 200 && digits(r.data.patient?.cpf) === cpf);
     r = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36, cpf: "" });
     check("CPF (máscara): ADMIN com cpf vazio limpa o CPF", r.status === 200 && r.data.patient?.cpf == null && (await prisma.patient.findUnique({ where: { id: target.id }, select: { cpf: true } })).cpf === null, `${r.status} ${r.data.patient?.cpf}`);
   } finally {
@@ -5580,7 +5589,7 @@ async function journeyStageFilter() {
     const sessionB = await loginAs(clinicBMail, clinicBPass);
     check("etapa: clínica B criada para isolamento", registered.status === 201 && sessionB.status === 200, `${registered.status}/${sessionB.status}`);
     const foreign = await withSession(sessionB.cookie, async () => {
-      const foreignPatient = (await api("POST", "/api/patients", { name: `Paciente B ${run}`, phone: "11999990042", age: 40, cpf: randomCpf() })).data.patient;
+      const foreignPatient = (await api("POST", "/api/patients", { ...regDefaults, name: `Paciente B ${run}`, phone: "11999990042", age: 40, cpf: randomCpf() })).data.patient;
       const foreignProfessional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
       const foreignJourney = (await api("POST", `/api/patients/${foreignPatient.id}/journeys`, { name: `Jornada B ${run}`, professionalId: foreignProfessional?.id })).data.journey;
       return { patient: foreignPatient, journey: foreignJourney };
@@ -5654,6 +5663,271 @@ async function deleteProcedure() {
   }
 }
 
+// Financeiro remodelado: resumo, fluxo, movimentações, contas a pagar/receber, pagamentos (receber/editar) e despesas fixas.
+async function financeiro(state) {
+  const today = day(0);
+  const mkExpense = (extra = {}) => api("POST", "/api/expenses", { description: `Fin despesa ${run}`, category: "Aluguel", amountCents: 10_000, dueOn: today, paymentMethod: "Pix", ...extra });
+  const summary = async (query = "period=month") => (await api("GET", `/api/finance/summary?${query}`)).data;
+  const patientName = `Paciente ${run}`;
+
+  // Sem sessão: 401 nas rotas novas.
+  const anon = await withSession("", async () => Promise.all([
+    api("GET", "/api/finance/summary"), api("GET", "/api/finance/flow"), api("GET", "/api/finance/movements"), api("GET", "/api/finance/accounts?kind=payable"), api("GET", "/api/recurring-expenses"),
+    api("PATCH", "/api/payments/x", { action: "receive" }),
+  ]));
+  check("financeiro: sem sessão tudo devolve 401", anon.every((res) => res.status === 401), anon.map((res) => res.status).join("/"));
+
+  // Resumo e fluxo: formato e entradas inválidas.
+  let r = await api("GET", "/api/finance/summary?period=month");
+  const totalsKeys = ["revenueCents", "receivedCents", "pendingReceivableCents", "expensesCents", "resultCents", "payableCents"];
+  check("resumo: formato do contrato", r.status === 200 && totalsKeys.every((key) => Number.isInteger(r.data.totals?.[key])) && r.data.previousTotals && r.data.previousRange && r.data.range && Number.isInteger(r.data.counts?.payable) && Number.isInteger(r.data.counts?.pendingReceivable), JSON.stringify(r.data).slice(0, 200));
+  for (const query of ["period=month&date=2026-13-45", "period=month&date=abc", "period=month&date=31/12/2026", "period=month&date=2026-02-31"]) {
+    r = await api("GET", `/api/finance/summary?${query}`);
+    check(`resumo: entrada inválida (${query}) devolve 400`, r.status === 400, r.status);
+  }
+  r = await api("GET", "/api/finance/flow?granularity=ano");
+  check("fluxo: granularidade inválida 400", r.status === 400, r.status);
+  r = await api("GET", "/api/finance/flow?date=2026-02-31");
+  check("fluxo: data inválida 400", r.status === 400, r.status);
+
+  // Pagamento pago + despesa paga hoje entram no resumo e na série do dia.
+  const baseSummary = await summary();
+  r = await api("POST", "/api/payments", { patientId: state.patient.id, value: 200.25, method: "Pix", status: "Pago", installments: "A vista" });
+  check("financeiro: pagamento pago criado", r.status === 201, r.status);
+  r = await mkExpense({ description: `Fin paga ${run}`, amountCents: 7_777, paid: true, paidOn: today });
+  const paidExpense = r.data.expense;
+  check("financeiro: despesa já paga criada", r.status === 201 && paidExpense?.status === "paid", r.status);
+  const afterSummary = await summary();
+  check("resumo: recebido +20025, despesas +7777, resultado coerente", afterSummary.totals.receivedCents - baseSummary.totals.receivedCents === 20_025 && afterSummary.totals.expensesCents - baseSummary.totals.expensesCents === 7_777 && afterSummary.totals.resultCents - baseSummary.totals.resultCents === 20_025 - 7_777, JSON.stringify([baseSummary.totals, afterSummary.totals]));
+  for (const period of ["today", "week", "month"]) {
+    const [s, f] = await Promise.all([summary(`period=${period}`), api("GET", `/api/finance/flow?granularity=day&period=${period}`)]);
+    const series = f.data.series ?? [];
+    check(`fluxo: soma da série diária == totais do resumo (${period})`, f.status === 200 && series.reduce((t, x) => t + x.revenueCents, 0) === s.totals.revenueCents && series.reduce((t, x) => t + x.expensesCents, 0) === s.totals.expensesCents, `totais=${s.totals.revenueCents}/${s.totals.expensesCents} série=${series.reduce((t, x) => t + x.revenueCents, 0)}/${series.reduce((t, x) => t + x.expensesCents, 0)}`);
+  }
+  for (const granularity of ["week", "month"]) {
+    r = await api("GET", `/api/finance/flow?granularity=${granularity}&period=month`);
+    check(`fluxo: granularidade ${granularity} devolve série`, r.status === 200 && Array.isArray(r.data.series) && r.data.series.length > 0 && r.data.series.every((x) => x.key && x.label !== undefined), r.status);
+  }
+
+  // Movimentações.
+  r = await api("GET", `/api/finance/movements?type=all&from=${today}&to=${today}&pageSize=50`);
+  check("movimentações: pagamento e despesa de hoje aparecem; categorias incluem Receita", r.status === 200 && r.data.items.some((i) => i.kind === "revenue" && i.amountCents === 20_025) && r.data.items.some((i) => i.id === paidExpense.id && i.kind === "expense") && r.data.categories.includes("Receita") && r.data.categories.includes("Aluguel"), JSON.stringify(r.data).slice(0, 200));
+  r = await api("GET", `/api/finance/movements?type=revenue&from=${today}&to=${today}`);
+  check("movimentações: aba receitas só traz receitas", r.status === 200 && r.data.items.length > 0 && r.data.items.every((i) => i.kind === "revenue") && r.data.total === r.data.items.length);
+  r = await api("GET", `/api/finance/movements?type=expense&from=${today}&to=${today}`);
+  check("movimentações: aba despesas só traz despesas", r.status === 200 && r.data.items.length > 0 && r.data.items.every((i) => i.kind === "expense"));
+  r = await api("GET", `/api/finance/movements?category=Receita&from=${today}&to=${today}`);
+  check("movimentações: categoria Receita só traz receitas", r.status === 200 && r.data.items.length > 0 && r.data.items.every((i) => i.kind === "revenue"));
+  r = await api("GET", `/api/finance/movements?category=Aluguel&from=${today}&to=${today}`);
+  check("movimentações: categoria de despesa filtra", r.status === 200 && r.data.items.length > 0 && r.data.items.every((i) => i.category === "Aluguel"));
+  for (const query of ["category=Inexistente", "type=outros", "sort=up", "from=2026-99-99", "page=0", "page=abc", "pageSize=51", "pageSize=0", `from=${day(2)}&to=${day(1)}`]) {
+    r = await api("GET", `/api/finance/movements?${query}`);
+    check(`movimentações: filtro inválido (${query}) devolve 400`, r.status === 400, r.status);
+  }
+  // Busca: curingas do LIKE são literais.
+  await mkExpense({ description: `Fin 100% ${run}` });
+  await mkExpense({ description: `Fin 100X ${run}` });
+  await mkExpense({ description: `Fin a_b ${run}` });
+  await mkExpense({ description: `Fin aXb ${run}` });
+  r = await api("GET", "/api/finance/movements?type=expense&q=%25");
+  check("movimentações: q='%' casa só descrições com % literal", r.status === 200 && r.data.items.length > 0 && r.data.items.every((i) => i.description.includes("%")) && r.data.total === r.data.items.length, `${r.status} total=${r.data.total}`);
+  r = await api("GET", `/api/finance/movements?type=expense&q=${encodeURIComponent(`a_b ${run}`)}`);
+  check("movimentações: q com '_' casa só o literal", r.status === 200 && r.data.items.length === 1 && r.data.items[0].description.includes("a_b"), `${r.data.items?.map((i) => i.description)}`);
+  r = await api("GET", `/api/finance/movements?type=expense&q=${encodeURIComponent(`FIN 100% ${run}`.toUpperCase())}`);
+  check("movimentações: busca ignora maiúsculas", r.status === 200 && r.data.total === 1, r.data.total);
+  r = await api("GET", `/api/finance/movements?q=${encodeURIComponent(patientName)}`);
+  check("movimentações: busca por nome do paciente acha a receita", r.status === 200 && r.data.items.some((i) => i.kind === "revenue" && i.patientName === patientName), r.data.total);
+
+  // Paginação e ordenação com 5 despesas marcadas.
+  const pg = [];
+  for (let n = 0; n < 5; n += 1) pg.push((await mkExpense({ description: `Fin pg ${n} ${run}`, amountCents: 100 + n, dueOn: day(n - 2) })).data.expense?.id);
+  const pgFilter = `type=expense&q=${encodeURIComponent(`Fin pg`)}`;
+  const pgQuery = `${pgFilter}&pageSize=2`;
+  const pages = await Promise.all([1, 2, 3, 4].map((page) => api("GET", `/api/finance/movements?${pgQuery}&page=${page}`)));
+  const ids = pages.flatMap((p) => p.data.items.map((i) => i.id));
+  check("movimentações: paginação com total consistente e sem repetidos entre páginas", pages.every((p) => p.status === 200 && p.data.total === 5) && ids.length === 5 && new Set(ids).size === 5 && pages[0].data.items.length === 2 && pages[2].data.items.length === 1 && pages[3].data.items.length === 0, pages.map((p) => `${p.data.total}/${p.data.items?.length}`).join(" "));
+  const [desc, asc] = await Promise.all([api("GET", `/api/finance/movements?${pgFilter}&pageSize=50&sort=desc`), api("GET", `/api/finance/movements?${pgFilter}&pageSize=50&sort=asc`)]);
+  const dates = desc.data.items.map((i) => i.date);
+  check("movimentações: ordenação desc/asc por data", dates.length === 5 && dates.join() === [...dates].sort().reverse().join() && asc.data.items.map((i) => i.id).join() === [...desc.data.items].reverse().map((i) => i.id).join(), dates.join());
+  r = await api("PATCH", `/api/expenses/${pg[0]}`, { action: "cancel" });
+  const afterCancel = await api("GET", `/api/finance/movements?${pgFilter}&pageSize=50`);
+  const cancelledAccounts = await api("GET", `/api/finance/accounts?kind=payable&status=all&q=${encodeURIComponent("Fin pg 0")}`);
+  check("canceladas ficam fora das movimentações e das contas a pagar", r.status === 200 && afterCancel.data.total === 4 && !afterCancel.data.items.some((i) => i.id === pg[0]) && !cancelledAccounts.data.items.some((i) => i.id === pg[0]), `${r.status} ${afterCancel.data.total}`);
+
+  // Contas a pagar.
+  r = await api("GET", "/api/finance/accounts");
+  check("contas: kind ausente devolve 400", r.status === 400, r.status);
+  for (const query of ["kind=outro", "kind=payable&status=x", "kind=payable&page=0", "kind=payable&from=2026-02-30", "kind=receivable&pageSize=100"]) {
+    r = await api("GET", `/api/finance/accounts?${query}`);
+    check(`contas: entrada inválida (${query}) devolve 400`, r.status === 400, r.status);
+  }
+  const payBefore = (await api("GET", "/api/finance/accounts?kind=payable&status=all")).data.totals;
+  const late = (await mkExpense({ description: `Fin vencida ${run}`, amountCents: 3_333, dueOn: day(-5) })).data.expense;
+  const future = (await mkExpense({ description: `Fin futura ${run}`, amountCents: 4_444, dueOn: day(5) })).data.expense;
+  const payAfter = (await api("GET", "/api/finance/accounts?kind=payable&status=all")).data.totals;
+  check("contas a pagar: totais em aberto e vencidas sobem na medida certa", payAfter.openCents - payBefore.openCents === 7_777 && payAfter.openCount - payBefore.openCount === 2 && payAfter.overdueCents - payBefore.overdueCents === 3_333 && payAfter.overdueCount - payBefore.overdueCount === 1, JSON.stringify([payBefore, payAfter]));
+  r = await api("GET", `/api/finance/accounts?kind=payable&status=overdue&q=${encodeURIComponent(`Fin vencida ${run}`)}`);
+  check("contas a pagar: filtro vencidas traz a vencida (status overdue)", r.data.items?.length === 1 && r.data.items[0].id === late.id && r.data.items[0].status === "overdue", JSON.stringify(r.data.items?.map((i) => [i.id, i.status])));
+  r = await api("GET", `/api/finance/accounts?kind=payable&status=overdue&q=${encodeURIComponent(`Fin futura ${run}`)}`);
+  check("contas a pagar: despesa futura não é vencida", r.status === 200 && r.data.items.length === 0, r.data.items?.length);
+  const settledBefore = (await api("GET", "/api/finance/accounts?kind=payable&status=settled")).data.totals.settledCents;
+  const monthBefore = await summary();
+  const doublePay = await Promise.all([1, 2].map(() => api("PATCH", `/api/expenses/${late.id}`, { action: "pay", paidOn: today })));
+  check("despesa: pagar em clique duplo dá um 200 e um 409", doublePay.map((p) => p.status).sort().join() === "200,409", doublePay.map((p) => p.status).join("/"));
+  r = await api("GET", `/api/finance/accounts?kind=payable&status=settled&q=${encodeURIComponent(`Fin vencida ${run}`)}`);
+  const settledAfter = (await api("GET", "/api/finance/accounts?kind=payable&status=settled")).data.totals.settledCents;
+  const monthAfter = await summary();
+  check("despesa paga vai para settled e entra nas despesas do resumo", r.data.items?.length === 1 && r.data.items[0].status === "settled" && settledAfter - settledBefore === 3_333 && monthAfter.totals.expensesCents - monthBefore.totals.expensesCents === 3_333, `${settledBefore}->${settledAfter} ${monthBefore.totals.expensesCents}->${monthAfter.totals.expensesCents}`);
+  r = await api("GET", `/api/finance/movements?type=expense&q=${encodeURIComponent(`Fin vencida ${run}`)}`);
+  check("despesa paga aparece em movimentações com status paid", r.data.items?.length === 1 && r.data.items[0].status === "paid");
+
+  // Contas a receber + receber pagamento.
+  const pending = (await api("POST", "/api/payments", { patientId: state.patient.id, value: 321.1, method: "Pix", status: "Pendente", installments: "A vista" })).data.payment;
+  const recBefore = (await api("GET", "/api/finance/accounts?kind=receivable&status=all")).data.totals;
+  const revBefore = (await summary()).totals;
+  r = await api("GET", `/api/finance/accounts?kind=receivable&status=open&q=${encodeURIComponent(patientName)}`);
+  check("contas a receber: pagamento Pendente aparece em aberto", pending?.id && r.data.items?.some((i) => i.id === pending.id && i.amountCents === 32_110 && i.status !== "settled"), JSON.stringify(r.data.items?.map((i) => [i.id, i.status])));
+  r = await api("PATCH", `/api/payments/${pending.id}`, { date: day(-3) });
+  check("pagamento: editar data para o passado", r.status === 200, r.status);
+  r = await api("GET", "/api/finance/accounts?kind=receivable&status=overdue&pageSize=50");
+  const overdueRec = r.data.items?.find((i) => i.id === pending.id);
+  check("contas a receber: Pendente com data passada é vencida", overdueRec?.status === "overdue" && r.data.totals.overdueCount >= 1, JSON.stringify(overdueRec));
+  for (const [label, body] of [["receivedOn futuro", { action: "receive", receivedOn: day(3) }], ["receivedOn inválido", { action: "receive", receivedOn: "2026-02-31" }], ["ação desconhecida", { action: "pagar" }], ["corpo vazio", {}], ["valor acima do máximo", { value: 21_474_836.48 }], ["valor negativo", { value: -1 }], ["método vazio", { method: " " }], ["data inválida", { date: "ontem" }]]) {
+    r = await api("PATCH", `/api/payments/${pending.id}`, body);
+    check(`pagamento: ${label} devolve 400`, r.status === 400, `${r.status} ${JSON.stringify(r.data).slice(0, 80)}`);
+  }
+  r = await api("PATCH", `/api/payments/${pending.id}`, { value: 21_474_836.47, method: "Cartão" });
+  check("pagamento: valor máximo exato é aceito (reais, centavos preservados)", r.status === 200 && r.data.payment?.value === 21_474_836.47 && r.data.payment?.method === "Cartão", JSON.stringify(r.data).slice(0, 120));
+  r = await api("PATCH", `/api/payments/${pending.id}`, { value: 321.1 });
+  check("pagamento: edição volta o valor a 321,10", r.status === 200 && r.data.payment?.value === 321.1, r.status);
+  r = await api("POST", "/api/payments", { patientId: state.patient.id, value: 21_474_836.48, method: "Pix", status: "Pago", installments: "A vista" });
+  check("pagamento: POST acima do máximo devolve 400", r.status === 400, r.status);
+  const recDouble = await Promise.all([1, 2].map(() => api("PATCH", `/api/payments/${pending.id}`, { action: "receive", receivedOn: today })));
+  check("pagamento: receber em clique duplo dá um 200 e um 409", recDouble.map((p) => p.status).sort().join() === "200,409", recDouble.map((p) => p.status).join("/"));
+  r = await api("GET", `/api/finance/accounts?kind=receivable&status=settled&q=${encodeURIComponent(patientName)}`);
+  const recAfter = (await api("GET", "/api/finance/accounts?kind=receivable&status=all")).data.totals;
+  check("contas a receber: recebido vai para settled e sai do aberto", r.data.items?.some((i) => i.id === pending.id && i.status === "settled") && recBefore.openCents - recAfter.openCents === 32_110 && recAfter.settledCents - recBefore.settledCents === 32_110, JSON.stringify([recBefore, recAfter]));
+  const revAfter = (await summary()).totals;
+  check("resumo: recebimento soma 32110 em recebido e tira do pendente", revAfter.receivedCents - revBefore.receivedCents === 32_110 && revBefore.pendingReceivableCents - revAfter.pendingReceivableCents === 32_110, JSON.stringify([revBefore, revAfter]));
+  r = await api("GET", `/api/finance/movements?type=revenue&from=${today}&to=${today}&q=${encodeURIComponent(patientName)}`);
+  check("pagamento recebido hoje aparece em receitas das movimentações", r.data.items?.some((i) => i.id === pending.id && i.amountCents === 32_110 && i.status === "Pago"), r.data.total);
+  r = await api("PATCH", "/api/payments/naoexiste", { action: "receive" });
+  check("pagamento inexistente devolve 404", r.status === 404, r.status);
+
+  // Isolamento: pagamento da clínica de teste visto por outra clínica.
+  const otherEmail = `e2e-fin-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E Financeiro Externa ${run}`;
+  const fresh = (await api("POST", "/api/payments", { patientId: state.patient.id, value: 1, method: "Pix", status: "Pendente", installments: "A vista" })).data.payment;
+  try {
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990023", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const other = reg.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    if (other?.status === 200) {
+      const res = await withSession(other.cookie, async () => ({ rec: await api("PATCH", `/api/payments/${fresh.id}`, { action: "receive" }), edit: await api("PATCH", `/api/payments/${fresh.id}`, { value: 9 }), acc: await api("GET", "/api/finance/accounts?kind=receivable&status=all"), mov: await api("GET", "/api/finance/movements?pageSize=50"), sum: await api("GET", "/api/finance/summary?period=month") }));
+      const row = await prisma.payment.findUnique({ where: { id: fresh.id }, select: { status: true, valueCents: true } });
+      check("outra clínica: receber/editar pagamento alheio devolve 404 e nada muda", res.rec.status === 404 && res.edit.status === 404 && row.status === "Pendente" && row.valueCents === 100, `${res.rec.status}/${res.edit.status}`);
+      check("outra clínica: contas, movimentações e resumo não trazem dados da clínica de teste", !JSON.stringify(res.acc.data).includes(fresh.id) && !JSON.stringify(res.mov.data).includes(paidExpense.id) && res.sum.data.totals?.receivedCents === 0 && res.sum.data.totals?.expensesCents === 0, `${res.acc.status}/${res.mov.status}/${res.sum.status}`);
+    } else check("outra clínica criada para o teste de isolamento", false, `register ${reg.status}`);
+  } finally {
+    await prisma.user.deleteMany({ where: { email: otherEmail } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+  }
+
+  // Despesas fixas.
+  const newDay = 27; // diferente de 28
+  r = await api("POST", "/api/recurring-expenses", { description: `Fin fixa ${run}`, category: "Aluguel", amountCents: 150_000, paymentMethod: "Pix", frequency: "monthly", dayOfMonth: 28, startsOn: day(-75) });
+  const rec = r.data.recurringExpense;
+  check("despesa fixa mensal criada", r.status === 201 && rec?.id, `${r.status} ${JSON.stringify(r.data).slice(0, 120)}`);
+  r = await api("POST", "/api/recurring-expenses", { description: `Fin fixa ruim ${run}`, category: "Inexistente", amountCents: 100, paymentMethod: "Pix", frequency: "monthly", dayOfMonth: 5, startsOn: day(-5) });
+  check("despesa fixa: categoria inválida 400", r.status === 400, r.status);
+  r = await api("POST", "/api/recurring-expenses", { description: `Fin fixa ruim ${run}`, category: "Aluguel", amountCents: 100.5, paymentMethod: "Pix", frequency: "monthly", dayOfMonth: 5, startsOn: day(-5) });
+  check("despesa fixa: centavos fracionados 400", r.status === 400, r.status);
+  r = await api("POST", "/api/recurring-expenses", { description: `Fin fixa ruim ${run}`, category: "Aluguel", amountCents: 100, paymentMethod: "Pix", frequency: "monthly", dayOfMonth: 40, startsOn: day(-5) });
+  check("despesa fixa: dia do mês 40 é 400", r.status === 400, r.status);
+  r = await api("GET", "/api/recurring-expenses");
+  const listed = r.data.recurringExpenses?.find((x) => x.id === rec.id);
+  check("despesas fixas: lista com nextDueOn, nextStatus, overdueCount, active e totais", r.status === 200 && listed && typeof listed.nextDueOn === "string" && listed.nextStatus && Number.isInteger(listed.overdueCount) && listed.active === true && r.data.totals.activeCount >= 1 && r.data.totals.monthlyTotalCents >= 150_000 && r.data.totals.nextDueOn, JSON.stringify(listed));
+  const getOccurrences = async () => (await api("GET", `/api/recurring-expenses/${rec.id}?limit=100`)).data;
+  const first = await getOccurrences();
+  await Promise.all([1, 2, 3].map(() => api("GET", "/api/recurring-expenses")));
+  await Promise.all([1, 2].map(() => api("GET", "/api/finance/accounts?kind=payable")));
+  await summary();
+  const second = await getOccurrences();
+  const keys = (list) => list.map((o) => o.dueOn.slice(0, 7));
+  check("despesas fixas: abrir várias vezes não duplica ocorrências (no máx. 1 por mês)", first.occurrences.length >= 2 && second.occurrences.length === first.occurrences.length && new Set(keys(second.occurrences)).size === second.occurrences.length, `${first.occurrences.length}/${second.occurrences.length}`);
+  r = await api("GET", `/api/recurring-expenses/${rec.id}?limit=0`);
+  check("despesa fixa: limit inválido 400", r.status === 400, r.status);
+  r = await api("GET", "/api/recurring-expenses/naoexiste");
+  check("despesa fixa inexistente 404", r.status === 404, r.status);
+
+  const month = today.slice(0, 7);
+  const pastOcc = second.occurrences.find((o) => o.dueOn.slice(0, 7) < month && o.status === "open");
+  if (pastOcc) {
+    r = await api("PATCH", `/api/expenses/${pastOcc.id}`, { action: "pay", paidOn: today });
+    check("despesa fixa: ocorrência passada paga", r.status === 200, r.status);
+  } else check("despesa fixa: havia ocorrência passada em aberto para pagar", false, JSON.stringify(second.occurrences.map((o) => o.dueOn)));
+  const snapshot = (list) => list.filter((o) => o.dueOn.slice(0, 7) < month).map((o) => `${o.id}|${o.dueOn}|${o.status}|${o.amountCents}`).sort();
+  const pastBefore = snapshot((await getOccurrences()).occurrences);
+  r = await api("PATCH", `/api/recurring-expenses/${rec.id}`, { dayOfMonth: newDay });
+  check("despesa fixa: mudar o dia do vencimento", r.status === 200 && r.data.recurringExpense?.dayOfMonth === newDay, `${r.status} ${JSON.stringify(r.data).slice(0, 100)}`);
+  const doubleChange = await Promise.all([1, 2].map(() => api("PATCH", `/api/recurring-expenses/${rec.id}`, { dayOfMonth: 26 })));
+  check("despesa fixa: mudança de agenda simultânea não dá erro", doubleChange.every((p) => p.status === 200), doubleChange.map((p) => p.status).join("/"));
+  const afterChange = await getOccurrences();
+  const pastAfter = snapshot(afterChange.occurrences);
+  check("mudança de agenda: meses passados intactos (nenhuma ocorrência criada, apagada ou alterada)", pastBefore.length > 0 && pastBefore.join() === pastAfter.join(), `${pastBefore.length}/${pastAfter.length}`);
+  check("mudança de agenda: no máximo 1 ocorrência por mês, incluindo o corrente", new Set(keys(afterChange.occurrences)).size === afterChange.occurrences.length, keys(afterChange.occurrences).join());
+  check("mudança de agenda: ocorrência paga continua paga", !pastOcc || afterChange.occurrences.some((o) => o.id === pastOcc.id && o.status === "paid" && o.paidOn === today));
+  const stable = await Promise.all([1, 2].map(() => api("GET", "/api/recurring-expenses")));
+  const third = await getOccurrences();
+  check("mudança de agenda: leituras seguintes não criam duplicatas", stable.every((s) => s.status === 200) && third.occurrences.length === afterChange.occurrences.length, `${afterChange.occurrences.length}/${third.occurrences.length}`);
+  r = await api("PATCH", `/api/recurring-expenses/${rec.id}`, { frequency: "weekly", weekday: 9 });
+  check("despesa fixa: dia da semana inválido 400", r.status === 400, r.status);
+  r = await api("PATCH", `/api/recurring-expenses/${rec.id}`, { amountCents: -5 });
+  check("despesa fixa: valor negativo 400", r.status === 400, r.status);
+  r = await api("PATCH", "/api/recurring-expenses/naoexiste", { amountCents: 100 });
+  check("despesa fixa: PATCH inexistente 404", r.status === 404, r.status);
+
+  r = await api("DELETE", `/api/recurring-expenses/${rec.id}`);
+  check("excluir despesa fixa com ocorrência paga devolve 409 e mantém tudo", r.status === 409 && (await prisma.recurringExpense.count({ where: { id: rec.id } })) === 1 && (await prisma.expense.count({ where: { recurringExpenseId: rec.id } })) === third.occurrences.length, r.status);
+  r = await api("POST", "/api/recurring-expenses", { description: `Fin fixa 2 ${run}`, category: "Marketing", amountCents: 5_000, paymentMethod: "Pix", frequency: "monthly", dayOfMonth: 10, startsOn: day(-40) });
+  const rec2 = r.data.recurringExpense;
+  await api("GET", "/api/recurring-expenses");
+  const hadOcc = await prisma.expense.count({ where: { recurringExpenseId: rec2.id } });
+  r = await api("DELETE", `/api/recurring-expenses/${rec2.id}`);
+  check("excluir despesa fixa sem paga remove recorrência e ocorrências", r.status === 200 && hadOcc >= 1 && r.data.removedOccurrences === hadOcc && (await prisma.expense.count({ where: { recurringExpenseId: rec2.id } })) === 0 && (await prisma.recurringExpense.count({ where: { id: rec2.id } })) === 0, `${r.status} ${hadOcc} ${JSON.stringify(r.data)}`);
+  r = await api("DELETE", `/api/recurring-expenses/${rec2.id}`);
+  check("excluir despesa fixa de novo devolve 404", r.status === 404, r.status);
+
+  // Permissões: STAFF e PROFESSIONAL sem finance:access.
+  const members = [];
+  const staffEmail = `e2e-fin-staff-${run}@example.com`, proEmail = `e2e-fin-pro-${run}@example.com`;
+  try {
+    for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, `E2e-${run}-Staff9!`], ["PROFESSIONAL", proEmail, `E2e-${run}-Pro99!`]]) {
+      const created = await api("POST", "/api/team", { name: `E2E ${role} Fin`, email: memberEmail, password: memberPassword, role, cpf: randomCpf(), address: "Rua A, 1", country: "Brasil", state: "SP", city: "São Paulo" });
+      if (created.status !== 201) { check(`financeiro: usuário ${role} criado`, false, created.status); continue; }
+      members.push(created.data.member);
+      const session = await loginAs(memberEmail, memberPassword);
+      const calls = await withSession(session.cookie, async () => [
+        await api("GET", "/api/finance/summary"), await api("GET", "/api/finance/flow"), await api("GET", "/api/finance/movements"), await api("GET", "/api/finance/accounts?kind=payable"), await api("GET", "/api/finance/accounts?kind=receivable"),
+        await api("GET", "/api/recurring-expenses"), await api("GET", `/api/recurring-expenses/${rec.id}`), await api("PATCH", `/api/recurring-expenses/${rec.id}`, { amountCents: 1 }), await api("DELETE", `/api/recurring-expenses/${rec.id}`),
+        await api("PATCH", `/api/payments/${pending.id}`, { value: 1 }), await api("PATCH", `/api/expenses/${future.id}`, { action: "pay" }),
+      ]);
+      check(`financeiro: ${role} sem permissão recebe 403 em todas as rotas`, calls.every((c) => c.status === 403), calls.map((c) => c.status).join("/"));
+    }
+    const intact = await prisma.recurringExpense.findUnique({ where: { id: rec.id }, select: { amountCents: true } });
+    check("financeiro: tentativas sem permissão não alteraram a despesa fixa", intact?.amountCents === 150_000, intact?.amountCents);
+  } finally {
+    for (const member of members) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.user.deleteMany({ where: { email: { in: [staffEmail, proEmail] } } });
+  }
+
+  // Tela do Financeiro.
+  await withPage(async (page, pageErrors) => {
+    await page.goto(`${baseUrl}/financeiro`, { waitUntil: "domcontentloaded" });
+    await page.waitForLoadState("networkidle").catch(() => {});
+    const text = await page.locator("body").innerText();
+    check("tela Financeiro abre sem erro de página e mostra valores em reais", /Financeiro/.test(text) && /R\$/.test(text) && pageErrors.length === 0, pageErrors.join(" | ").slice(0, 200));
+  });
+}
+
 const suites = {
   jornadas_etapa: { needs: [], run: () => journeyStageFilter() },
   cadastro_cliente: { needs: [], run: () => patientRegistration() },
@@ -5681,6 +5955,7 @@ const suites = {
   fotos: { needs: [], run: async () => { await mobilePhotos(); await mobilePhotosGaps(); } },
   procedimentos_ativos: { needs: [], run: () => activeProcedures() },
   avaliacao_facial: { needs: [], run: () => facialEvaluation() },
+  financeiro: { needs: ["pacientes"], run: (state) => financeiro(state) },
   excluir_procedimento: { needs: [], run: () => deleteProcedure() },
 };
 
@@ -5717,7 +5992,7 @@ async function main() {
 
 main().catch((error) => {
   for (const result of results) console.log(`${result.ok ? "OK    " : "FALHOU"} ${result.name}${result.detail ? ` — ${result.detail}` : ""}`);
-  console.error(`ERRO: ${error.message}`);
+  console.error(`ERRO: ${error.message}`, process.env.E2E_STACK ? error.stack : "");
   process.exitCode = 1;
 }).finally(async () => {
   if (email) await resetTestClinic().catch((error) => { console.error(`Limpeza da clínica de teste falhou: ${error.message}`); process.exitCode = 1; });

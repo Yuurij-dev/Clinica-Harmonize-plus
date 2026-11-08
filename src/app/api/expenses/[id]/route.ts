@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { canForUser } from "@/lib/permissions";
@@ -57,6 +57,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     }
   }
 
-  const updated = await prisma.expense.update({ where: { id }, data, select: expenseSelect });
-  return NextResponse.json({ expense: serializeExpense(updated) });
+  // Só grava se o status ainda for o lido acima: dois cliques simultâneos em "pagar" dão 200 e 409.
+  try {
+    const updated = await prisma.expense.update({ where: { id, clinicId: user.clinicId, status: expense.status }, data, select: expenseSelect });
+    return NextResponse.json({ expense: serializeExpense(updated) });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") return NextResponse.json({ message: "Esta despesa acabou de ser alterada. Atualize a tela." }, { status: 409 });
+    throw error;
+  }
 }

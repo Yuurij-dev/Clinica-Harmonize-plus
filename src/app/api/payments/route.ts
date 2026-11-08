@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
-import { listLimit, listPeriodFilter, serializePayment, toCents } from "@/lib/finance";
+import { listLimit, listPeriodFilter, maxPaymentReais, serializePayment, toCents } from "@/lib/finance";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 
 // Os mesmos status do formulário de Pagamentos; o resumo financeiro só conta "Pago" como recebido.
@@ -34,6 +34,7 @@ export async function POST(request: Request) {
   const value = Number(body?.value);
   const status = body?.status || "Pago";
   // Zero vale: orçamento de cortesia (desconto total) também registra o recebimento ao ser confirmado.
+  if (Number.isFinite(value) && value > maxPaymentReais) return NextResponse.json({ message: "O valor máximo é R$ 21.474.836,47." }, { status: 400 });
   if (!patient || !Number.isFinite(value) || value < 0 || !paymentStatuses.includes(status) || !body?.method || !body.installments) return NextResponse.json({ message: "Selecione um paciente e preencha o pagamento." }, { status: 400 });
   if (body.journeyId && !await prisma.patientJourney.findFirst({ where: { id: body.journeyId, patientId: patient.id, clinicId: user.clinicId, archivedAt: null }, select: { id: true } })) {
     return NextResponse.json({ message: "Tratamento não encontrado." }, { status: 404 });

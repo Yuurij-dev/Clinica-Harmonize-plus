@@ -74,6 +74,7 @@ import { describeTechnicalSheet } from "@/lib/stock-rules";
 import type { TechnicalSheetItem } from "./technical-sheet-editor";
 import { ProcedureFormModal, procedureCatalogCacheKey, type EditableProcedure } from "./procedure-form-modal";
 import { MaterialCheckModal } from "./material-check-modal";
+import { PaymentCreateModal } from "./payment-modals";
 import { ClinicTimePicker } from "./clinic-time-picker";
 import { latestAppointmentStart } from "@/lib/clinic-time";
 import { appointmentProcedureDuration } from "@/lib/procedure-session-rules";
@@ -1675,16 +1676,12 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
   const [paymentRows, setPaymentRows] = useState<Payment[]>(() => (cachedPayments?.payments ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), dateRaw: item.date, status: item.status, installments: item.installments })));
   const [loadedPaymentsKey, setLoadedPaymentsKey] = useState(cachedPayments ? "/api/payments" : "");
   const [paymentsHasMore, setPaymentsHasMore] = useState(Boolean(cachedPayments?.hasMore));
-  const [isSaving, setIsSaving] = useState(false);
   const [methodFilter, setMethodFilter] = useState("Todos");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   // O período vai ao servidor (ver a lista de orçamentos).
   const paymentsKey = periodListKey("/api/payments", dateFrom, dateTo);
   const isLoading = loadedPaymentsKey !== paymentsKey;
-  const [paymentPatientQuery, setPaymentPatientQuery] = useState("");
-  const [paymentPatient, setPaymentPatient] = useState<LookupPatient | null>(null);
-  const paymentLookup = usePatientLookup(paymentPatientQuery, !paymentPatient);
   const visiblePayments = paymentRows.filter((item) => {
     const matchesMethod = methodFilter === "Todos" || item.method === methodFilter;
     const paymentDate = item.dateRaw?.slice(0, 10) ?? "";
@@ -1704,17 +1701,9 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
     return () => { active = false; };
   }, [paymentsKey]);
 
-  async function savePayment(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setIsSaving(true); const form = new FormData(event.currentTarget); const patientId = paymentPatient?.id ?? ""; const patient = paymentPatient?.name ?? "Paciente";
-    const response = await fetch("/api/payments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId, value: parseCurrency(form.get("value")), method: String(form.get("method")), status: String(form.get("status")), installments: String(form.get("installments")) }) });
-    setIsSaving(false);
-    if (!response.ok) return;
-    const data = await response.json() as { payment: { id: string; value: number; method: string; date: string; status: string; installments: string; patient?: { name: string } | null } };
-    const item = data.payment;
-    invalidateClientCache("/api/payments", "/api/dashboard/bootstrap");
+  function paymentCreated(item: ApiPayment, patient: string) {
     setPaymentRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), dateRaw: item.date, status: item.status, installments: item.installments }, ...current]);
-    setPaymentPatient(null); setPaymentPatientQuery("");
-    onCreateClose(); onSaved?.(`Pagamento de ${patient} foi registrado.`);
+    onSaved?.(`Pagamento de ${patient} foi registrado.`);
   }
 
   return (
@@ -1756,22 +1745,7 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
         ])}
       />}
       {!isLoading && paymentsHasMore ? <p className="mt-2 text-xs text-[#68697b]" role="status">Mostrando os 200 pagamentos mais recentes{dateFrom || dateTo ? " do período" : ""}. Use o filtro de datas para ver os anteriores.</p> : null}
-      <Modal open={openCreate} onClose={onCreateClose} title="Registrar pagamento" description="O lançamento aparecerá imediatamente no histórico financeiro.">
-        <form className="grid gap-4 sm:grid-cols-2" onSubmit={savePayment}>
-          <div className="relative sm:col-span-2">
-            <FormField label="Paciente"><input className={fieldClassName} name="patientSearch" placeholder="Pesquise por nome ou CPF" required value={paymentPatientQuery} onChange={(event) => { setPaymentPatientQuery(event.target.value); setPaymentPatient(null); }} /></FormField>
-            {paymentPatientQuery && !paymentPatient ? <div className="absolute left-0 right-0 top-[68px] z-20 max-h-44 overflow-auto rounded-[7px] border border-[#e5e5ee] bg-white p-1 shadow-xl">
-              {paymentLookup.patients.length ? paymentLookup.patients.map((item) => <button className="flex w-full items-center justify-between rounded-[5px] px-3 py-2 text-left text-xs transition hover:bg-[#f5f4ff]" key={item.id} type="button" onClick={() => { setPaymentPatient(item); setPaymentPatientQuery(`${item.name}${item.cpf ? ` · ${item.cpf}` : ""}`); }}><span className="font-bold text-[#303144]">{item.name}</span><span className="text-[10px] text-[#858696]">{item.cpf || "CPF não informado"}</span></button>) : <p className="px-3 py-2 text-xs text-[#858696]">{paymentLookup.tooShort ? "Digite pelo menos 2 letras." : paymentLookup.loading ? "Buscando pacientes..." : paymentLookup.error ? "Não foi possível buscar pacientes." : "Nenhum paciente encontrado."}</p>}
-            </div> : null}
-            {paymentPatient ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {paymentPatient.name}</p> : null}
-          </div>
-          <FormField label="Valor"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="value" inputMode="decimal" placeholder="R$ 0,00" required /></FormField>
-          <FormField label="Forma"><select className={fieldClassName} name="method"><option>Pix</option><option>Cartão de crédito</option><option>Cartão de débito</option><option>Dinheiro</option></select></FormField>
-          <FormField label="Status"><select className={fieldClassName} name="status"><option>Pago</option><option>Parcial</option><option>Pendente</option></select></FormField>
-          <FormField label="Parcelamento"><input className={fieldClassName} name="installments" defaultValue="À vista" required /></FormField>
-          <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || !paymentPatient} type="submit">{isSaving ? "Salvando..." : "Registrar pagamento"}</Button></div>
-        </form>
-      </Modal>
+      <PaymentCreateModal open={openCreate} onClose={onCreateClose} onCreated={paymentCreated} />
     </div>
   );
 }
