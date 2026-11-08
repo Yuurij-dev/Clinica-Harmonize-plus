@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { hash } from "bcryptjs";
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { clinicSlug, parseClinicProfile, trialWindow } from "@/lib/clinic-signup-rules";
 import { prisma } from "@/lib/prisma";
@@ -57,7 +58,14 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({ created: true }, { status: 201 });
   } catch (error) {
-    console.error("[register]", error);
+    // Corrida: outro cadastro com o mesmo e-mail entre o find e o create.
+    // So o e-mail: outra unique (se o schema ganhar uma) cai no 500 generico.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const target = error.meta?.target;
+      const onEmail = Array.isArray(target) ? target.includes("email") : typeof target === "string" && target.includes("email");
+      if (onEmail) return NextResponse.json({ message: "Já existe uma conta com este e-mail." }, { status: 409 });
+    }
+    console.error("[register]", (error as { code?: unknown } | null)?.code);
     return NextResponse.json({ message: "Não foi possível criar a conta agora. Tente novamente." }, { status: 500 });
   }
 }
