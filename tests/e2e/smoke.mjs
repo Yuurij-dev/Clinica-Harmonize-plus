@@ -6,6 +6,7 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { chromium } from "playwright-core";
+import { createHash, randomBytes } from "node:crypto";
 
 const baseUrl = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const testClinicName = "Clínica Teste Auditoria";
@@ -6026,7 +6027,98 @@ async function activeClinic() {
   }
 }
 
+// Endereço opcional no cadastro de colaborador: só nome e CPF (com dígito) são obrigatórios.
+// Cobre POST /api/team, POST /api/auth/invite/register e POST /api/auth/invite/google/complete. Só @example.invalid.
+async function collaboratorOptionalAddress() {
+  const mail = (t) => `e2e-colabend-${t}-${run}@example.invalid`;
+  const pw = `E2e-${run}-Colab9!`;
+  const full = { address: "Rua Completa, 10", country: "Brasil", state: "SP", city: "São Paulo", postalCode: "01310-100" };
+  const emails = [];
+  const CPF_OK = "529.982.247-25";
+  const validCpfGen = () => { const d = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10)); if (d.every((x) => x === d[0])) d[0] = (d[0] + 1) % 10; for (let n = 9; n < 11; n += 1) { const sum = d.reduce((t, x, i) => t + x * (n + 1 - i), 0); d.push(((sum * 10) % 11) % 10); } return d.join(""); };
+  const addr = async (addrEmail) => prisma.user.findUnique({ where: { email: addrEmail }, select: { cpf: true, address: true, country: true, state: true, city: true, postalCode: true } });
+  const clinicId = (await prisma.clinicMembership.findFirst({ where: { user: { email } }, select: { clinicId: true } }))?.clinicId;
+  if (!clinicId) { check("endereço opcional: clínica de teste encontrada", false); return; }
+  // Convite criado direto no banco da clínica de teste: a rota /api/invitations envia e-mail real quando o envio está ligado.
+  const adminId = (await prisma.user.findUnique({ where: { email }, select: { id: true } }))?.id;
+  const mkInvite = async (tag) => {
+    const to = mail(tag); emails.push(to);
+    const token = randomBytes(32).toString("base64url");
+    const row = await prisma.clinicInvitation.create({ data: { clinicId, email: to, role: "STAFF", tokenHash: createHash("sha256").update(token, "utf8").digest("hex"), expiresAt: new Date(Date.now() + 86_400_000), invitedById: adminId, lastSentAt: new Date() }, select: { id: true } });
+    return { to, token, id: row.id, r: { data: { invitation: { id: row.id } } } };
+  };
+  const register = async (token, body) => {
+    const res = await fetch(`${baseUrl}/api/auth/invite/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, password: pw, ...body }), redirect: "manual" });
+    return { status: res.status, data: await res.json().catch(() => null) };
+  };
+  try {
+    // --- POST /api/team ---
+    const t = async (tag, extra) => { emails.push(mail(tag)); return api("POST", "/api/team", { name: `E2E Colab ${tag}`, email: mail(tag), password: pw, role: "STAFF", ...extra }); };
+    let r = await t("min", { cpf: validCpfGen(), address: "", country: "", state: "", city: "" });
+    const u = await addr(mail("min"));
+    check("equipe: só nome + CPF válido (endereço vazio) cria o colaborador (201)", r.status === 201, `${r.status} ${JSON.stringify(r.data)}`);
+    check("equipe: endereço, país, estado e cidade ficam null no banco", !!u && u.address === null && u.country === null && u.state === null && u.city === null && u.postalCode === null && !!u.cpf, JSON.stringify(u));
+    r = await t("omit", { cpf: validCpfGen() });
+    const u2 = await addr(mail("omit"));
+    check("equipe: campos de endereço omitidos também criam (201) com null", r.status === 201 && u2?.address === null && u2?.city === null, `${r.status} ${JSON.stringify(u2)}`);
+    r = await t("noname", { name: "   ", cpf: validCpfGen() });
+    check("equipe: nome vazio é recusado (400) e não cria", r.status === 400 && !(await addr(mail("noname"))), `${r.status}`);
+    r = await t("badcpf", { cpf: "529.982.247-24", ...full });
+    check("equipe: CPF com dígito inválido é recusado (400) e não cria", r.status === 400 && !(await addr(mail("badcpf"))), `${r.status} ${JSON.stringify(r.data)}`);
+    r = await t("nocpf", { ...full });
+    check("equipe: sem CPF é recusado (400) e não cria", r.status === 400 && !(await addr(mail("nocpf"))), `${r.status}`);
+    const cpfFull = validCpfGen();
+    r = await t("full", { cpf: cpfFull, ...full });
+    const u3 = await addr(mail("full"));
+    check("equipe: com endereço completo continua funcionando e grava tudo", r.status === 201 && u3?.address === full.address && u3.country === "Brasil" && u3.state === "SP" && u3.city === "São Paulo" && u3.cpf === cpfFull, `${r.status} ${JSON.stringify(u3)}`);
+
+    // --- POST /api/auth/invite/register ---
+    let inv = await mkInvite("rmin");
+    let g = await register(inv.token, { name: "E2E Convidado Min", cpf: CPF_OK, address: "", country: "", state: "", city: "" });
+    const ru = await addr(inv.to);
+    check("convite (senha): só nome + CPF válido aceita (201) e endereço fica null", g.status === 201 && !!ru && ru.address === null && ru.country === null && ru.state === null && ru.city === null, `${g.status} ${JSON.stringify(g.data)} ${JSON.stringify(ru)}`);
+    inv = await mkInvite("rbad");
+    g = await register(inv.token, { name: "E2E Convidado Bad", cpf: "529.982.247-24", ...full });
+    check("convite (senha): CPF inválido é recusado (400) e não cria conta", g.status === 400 && !(await addr(inv.to)), `${g.status} ${JSON.stringify(g.data)}`);
+    g = await register(inv.token, { name: "   ", cpf: CPF_OK });
+    check("convite (senha): nome vazio é recusado (400)", g.status === 400 && !(await addr(inv.to)), `${g.status}`);
+    g = await register(inv.token, { name: "E2E Convidado Bad", cpf: CPF_OK, ...full });
+    const rfu = await addr(inv.to);
+    check("convite (senha): após erro, o mesmo convite aceita com endereço completo", g.status === 201 && rfu?.address === full.address && rfu.city === "São Paulo", `${g.status} ${JSON.stringify(rfu)}`);
+
+    // --- POST /api/auth/invite/google/complete ---
+    const authSecret = process.env.AUTH_SECRET ?? "";
+    if (authSecret.length < 32) { check("convite (Google): AUTH_SECRET ausente no ambiente do teste (parte ignorada)", false); return; }
+    const { SignJWT } = await import("jose");
+    const key = new TextEncoder().encode(authSecret);
+    const pending = (p) => new SignJWT({ typ: "google_invite_pending", ...p }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime(Math.floor(Date.now() / 1000) + 600).sign(key);
+    const complete = async (cookieValue, body) => {
+      const res = await fetch(`${baseUrl}/api/auth/invite/google/complete`, { method: "POST", headers: { "Content-Type": "application/json", cookie: `harmonize_google_pending=${cookieValue}` }, body: JSON.stringify(body), redirect: "manual" });
+      return { status: res.status, data: await res.json().catch(() => null) };
+    };
+    const gInvite = async (tag) => { const i = await mkInvite(tag); return { ...i, id: i.r.data?.invitation?.id, cookie: await pending({ invite: i.token, invitationId: i.r.data?.invitation?.id, clinicId, sub: `e2e-colabend-sub-${tag}-${run}`, email: i.to }) }; };
+    let gi = await gInvite("gbad");
+    g = await complete(gi.cookie, { token: gi.token, name: "E2E Google Bad", cpf: "529.982.247-24", ...full });
+    check("convite (Google): CPF inválido é recusado (400 invalid_profile) e não cria conta", g.status === 400 && g.data?.code === "invalid_profile" && !(await addr(gi.to)), `${g.status} ${JSON.stringify(g.data)}`);
+    g = await complete(gi.cookie, { token: gi.token, name: "E2E Google Min", cpf: CPF_OK, address: "", country: "", state: "", city: "" });
+    const gu = await addr(gi.to);
+    check("convite (Google): só nome + CPF válido aceita (201) e endereço fica null", g.status === 201 && !!gu && gu.address === null && gu.country === null && gu.state === null && gu.city === null, `${g.status} ${JSON.stringify(g.data)} ${JSON.stringify(gu)}`);
+    gi = await gInvite("gfull");
+    g = await complete(gi.cookie, { token: gi.token, name: "E2E Google Full", cpf: CPF_OK, ...full });
+    const gfu = await addr(gi.to);
+    check("convite (Google): com endereço completo continua funcionando", g.status === 201 && gfu?.address === full.address && gfu.state === "SP", `${g.status} ${JSON.stringify(gfu)}`);
+  } finally {
+    const users = await prisma.user.findMany({ where: { email: { in: emails } }, select: { id: true } });
+    const ids = users.map((x) => x.id);
+    await prisma.clinicInvitation.deleteMany({ where: { clinicId, OR: [{ email: { in: emails } }, { acceptedById: { in: ids } }] } }).catch(() => {});
+    await prisma.clinicMembership.deleteMany({ where: { userId: { in: ids }, isOwner: false } });
+    await prisma.userIdentity.deleteMany({ where: { userId: { in: ids } } });
+    await prisma.user.deleteMany({ where: { id: { in: ids } } });
+  }
+}
+
 const suites = {
+  colaborador_endereco: { needs: [], run: () => collaboratorOptionalAddress() },
   clinica_ativa: { needs: [], run: () => activeClinic() },
   convites: { needs: [], run: () => invitations() },
   cadastro_google: { needs: [], run: () => googleSignup() },

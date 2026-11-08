@@ -5,6 +5,8 @@ import { ArrowRight, Mail, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MaskedInput } from "@/components/ui/masked-input";
 import { formatCpf } from "@/lib/input-masks";
+import { validCpf } from "@/lib/patient-registration-rules";
+import { cn } from "@/lib/utils";
 import { inviteGoogleNotice, loginMessageFor, stepAfterPasswordChange, type InviteStep } from "@/lib/invite-flow-rules";
 import { AuthShell, ErrorMessage, GoogleMark, PasswordField, TextField } from "./login-screen";
 
@@ -33,9 +35,35 @@ const personalBoxClass = "flex h-9 items-center gap-2 rounded-[8px] border borde
 type Address = { address: string; country: string; state: string; city: string };
 const emptyAddress: Address = { address: "", country: "Brasil", state: "", city: "" };
 
-// Dados pessoais exigidos no cadastro direto de colaborador (CPF, endereço, país, estado, cidade; CEP opcional).
-// CPF e CEP são lidos do formulário (name="cpf" / "postalCode") em `readPersonal`; o resto vem do estado do pai.
-function PersonalDataFields({ value, onChange }: { value: Address; onChange: (next: Address) => void }) {
+type FieldErrors = { name?: string; cpf?: string };
+
+// Campo com validação visual (padrão do app): aria-invalid + borda vermelha + shake e mensagem role="alert".
+// `key={attempt}` re-dispara o shake a cada envio inválido; o valor mora no estado do pai, então o remonte não o perde.
+function InviteField({ attempt, error, icon: Icon, label, onChange, optional = false, ...input }: { attempt: number; error?: string; icon?: typeof User; label: string; onChange: (value: string) => void; optional?: boolean; autoComplete?: string; inputMode?: "numeric"; maxLength?: number; name?: string; placeholder: string; value: string }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[11px] font-bold text-[#2d3654]">{label}{optional ? " (opcional)" : ""}</span>
+      <span className={cn(personalBoxClass, error && "border-destructive animate-[hp-shake_0.42s_ease-in-out]")} key={`box-${attempt}`}>
+        {Icon ? <Icon className="h-4 w-4 shrink-0 text-[#7885ab]" /> : null}
+        <input {...input} aria-invalid={error ? true : undefined} className={cn(personalInputClass, "aria-invalid:text-destructive")} onChange={(event) => onChange(event.target.value)} />
+      </span>
+      {error ? <p className="mt-1 text-xs font-medium text-destructive" key={`err-${attempt}`} role="alert">{error}</p> : null}
+    </label>
+  );
+}
+
+// Valida nome e CPF no envio (sem o popup nativo). Devolve os erros por campo; vazio = tudo certo.
+function validateProfile(name: string, cpf: string): FieldErrors {
+  const errors: FieldErrors = {};
+  if (!name.trim()) errors.name = "Informe seu nome.";
+  if (!cpf.trim()) errors.cpf = "Informe o CPF.";
+  else if (!validCpf(cpf)) errors.cpf = "CPF inválido. Confira os números.";
+  return errors;
+}
+
+// Dados pessoais do cadastro de colaborador: só CPF é obrigatório; CEP, endereço, país, estado e cidade são opcionais.
+// O CEP é lido do formulário (name="postalCode") em `readPersonal`; o resto vem do estado do pai.
+function PersonalDataFields({ value, onChange, cpf, onCpfChange, cpfError, attempt }: { value: Address; onChange: (next: Address) => void; cpf: string; onCpfChange: (cpf: string) => void; cpfError?: string; attempt: number }) {
   const postalRef = useRef<HTMLSpanElement>(null); // MaskedInput não repassa ref; o valor é lido do <input> dentro do span
   const [cepError, setCepError] = useState("");
   const [cepLoading, setCepLoading] = useState(false);
@@ -60,23 +88,23 @@ function PersonalDataFields({ value, onChange }: { value: Address; onChange: (ne
   const label = (text: string) => <span className="mb-1 block text-[11px] font-bold text-[#2d3654]">{text}</span>;
   return (
     <>
-      <label className="block">{label("CPF")}<span className={personalBoxClass}><MaskedInput autoComplete="off" className={personalInputClass} formatter={formatCpf} inputMode="numeric" maxLength={14} name="cpf" placeholder="000.000.000-00" required /></span></label>
+      <InviteField attempt={attempt} autoComplete="off" error={cpfError} inputMode="numeric" label="CPF" maxLength={14} name="cpf" onChange={(next) => onCpfChange(formatCpf(next))} placeholder="000.000.000-00" value={cpf} />
       <div className="flex items-end gap-2">
         <label className="block min-w-0 flex-1">{label("CEP (opcional)")}<span className={personalBoxClass} ref={postalRef}><MaskedInput autoComplete="postal-code" className={personalInputClass} formatter={formatCep} inputMode="numeric" maxLength={9} name="postalCode" placeholder="00000-000" /></span></label>
         <Button className="h-9 shrink-0 rounded-[8px] px-3 text-xs" disabled={cepLoading} onClick={() => void lookupPostalCode()} size="sm" type="button" variant="secondary">{cepLoading ? "Buscando..." : "Buscar CEP"}</Button>
       </div>
       {cepError ? <p className="-mt-2 text-xs text-[#b42318]" role="alert">{cepError}</p> : null}
-      <TextField autoComplete="address-line1" compact label="endereço" onChange={(address) => onChange({ ...value, address })} placeholder="Rua, número, bairro e complemento" value={value.address} />
-      <TextField autoComplete="country-name" compact label="país" onChange={(country) => onChange({ ...value, country })} placeholder="Brasil" value={value.country} />
-      <TextField autoComplete="address-level1" compact label="estado" onChange={(state) => onChange({ ...value, state })} placeholder="Estado" value={value.state} />
-      <TextField autoComplete="address-level2" compact label="cidade" onChange={(city) => onChange({ ...value, city })} placeholder="Cidade" value={value.city} />
+      <InviteField attempt={0} autoComplete="address-line1" label="endereço" onChange={(address) => onChange({ ...value, address })} optional placeholder="Rua, número, bairro e complemento" value={value.address} />
+      <InviteField attempt={0} autoComplete="country-name" label="país" onChange={(country) => onChange({ ...value, country })} optional placeholder="Brasil" value={value.country} />
+      <InviteField attempt={0} autoComplete="address-level1" label="estado" onChange={(state) => onChange({ ...value, state })} optional placeholder="Estado" value={value.state} />
+      <InviteField attempt={0} autoComplete="address-level2" label="cidade" onChange={(city) => onChange({ ...value, city })} optional placeholder="Cidade" value={value.city} />
     </>
   );
 }
 
-function readPersonal(form: HTMLFormElement, address: Address) {
+function readPersonal(form: HTMLFormElement, cpf: string, address: Address) {
   const data = new FormData(form);
-  return { cpf: String(data.get("cpf") ?? ""), postalCode: String(data.get("postalCode") ?? ""), ...address };
+  return { cpf, postalCode: String(data.get("postalCode") ?? ""), ...address };
 }
 
 export function InviteAcceptScreen({ token, googleStatus }: { token: string; googleStatus?: string }) {
@@ -89,6 +117,9 @@ export function InviteAcceptScreen({ token, googleStatus }: { token: string; goo
   const [session, setSession] = useState<Session | undefined>(undefined);
   const [step, setStep] = useState<Step>(notice?.step ?? "choose");
   const [name, setName] = useState("");
+  const [cpf, setCpf] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [formAttempt, setFormAttempt] = useState(0); // re-dispara o shake a cada envio inválido
   const [address, setAddress] = useState<Address>(emptyAddress);
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -139,7 +170,22 @@ export function InviteAcceptScreen({ token, googleStatus }: { token: string; goo
     try { await acceptWithSession(); } catch { setError("Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente."); } finally { setBusy(false); }
   }
 
+  // true = nome e CPF ok. Senão marca os campos (vermelho + shake), foca o primeiro inválido e bloqueia o envio.
+  function profileIsValid(form: HTMLFormElement) {
+    const errors = validateProfile(name, cpf);
+    setFieldErrors(errors);
+    if (!errors.name && !errors.cpf) return true;
+    setError("");
+    setFormAttempt((n) => n + 1);
+    requestAnimationFrame(() => form.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus());
+    return false;
+  }
+
+  function changeName(next: string) { setName(next); setFieldErrors((current) => ({ ...current, name: undefined })); }
+  function changeCpf(next: string) { setCpf(next); setFieldErrors((current) => ({ ...current, cpf: undefined })); }
+
   function go(next: Step) {
+    setFieldErrors({});
     setError("");
     setPassword("");
     setConfirmation("");
@@ -166,12 +212,14 @@ export function InviteAcceptScreen({ token, googleStatus }: { token: string; goo
 
   async function submitRegister(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const form = event.currentTarget;
+    if (!profileIsValid(form)) return;
     if (password.length < 8) { setError("A senha deve ter pelo menos 8 caracteres."); return; }
     if (password !== confirmation) { setError("As senhas não coincidem."); return; } // nosemgrep: rules.ajinabraham.njsscan.crypto.timing_attack_node.node_timing_attack
     setBusy(true);
     setError("");
     try {
-      const response = await fetch("/api/auth/invite/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, name, password, ...readPersonal(event.currentTarget, address) }) });
+      const response = await fetch("/api/auth/invite/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, name, password, ...readPersonal(form, cpf, address) }) });
       if (response.ok) { openApp(); return; }
       if (response.status === 409) { go("signin"); setError("Já existe uma conta com este e-mail. Entre com sua senha para aceitar o convite."); return; }
       setError(await readMessage(response, "Não foi possível criar a conta agora. Tente novamente."));
@@ -186,10 +234,11 @@ export function InviteAcceptScreen({ token, googleStatus }: { token: string; goo
   async function submitGoogleComplete(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
+    if (!profileIsValid(form)) return;
     setBusy(true);
     setError("");
     try {
-      const response = await fetch("/api/auth/invite/google/complete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, name, ...readPersonal(form, address) }) });
+      const response = await fetch("/api/auth/invite/google/complete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, name, ...readPersonal(form, cpf, address) }) });
       if (response.ok) { openApp(); return; }
       const data = await response.json().catch(() => null) as { code?: string; message?: string } | null;
       const message = data?.message ?? "Não foi possível concluir o cadastro agora. Tente novamente.";
@@ -295,10 +344,10 @@ export function InviteAcceptScreen({ token, googleStatus }: { token: string; goo
                 {errorBlock}
               </div>
             ) : step === "register" ? (
-              <form className="space-y-4" data-autofill="allow" onSubmit={submitRegister}>
+              <form className="space-y-4" data-autofill="allow" noValidate onSubmit={submitRegister}>
                 <TextField compact icon={Mail} label="e-mail do convite" onChange={() => {}} placeholder="" readOnly value={invitation.email} />
-                <TextField autoComplete="name" compact icon={User} label="seu nome" maxLength={100} onChange={setName} placeholder="Nome e sobrenome" value={name} />
-                <PersonalDataFields onChange={setAddress} value={address} />
+                <InviteField attempt={formAttempt} autoComplete="name" error={fieldErrors.name} icon={User} label="seu nome" maxLength={100} onChange={changeName} placeholder="Nome e sobrenome" value={name} />
+                <PersonalDataFields attempt={formAttempt} cpf={cpf} cpfError={fieldErrors.cpf} onChange={setAddress} onCpfChange={changeCpf} value={address} />
                 <PasswordField compact label="Senha" minLength={8} onChange={setPassword} password={password} placeholder="Pelo menos 8 caracteres" setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="new-password" />
                 <PasswordField compact label="Confirmar senha" minLength={8} onChange={setConfirmation} password={confirmation} placeholder="Digite a senha novamente" setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="new-password" />
                 {errorBlock}
@@ -306,11 +355,11 @@ export function InviteAcceptScreen({ token, googleStatus }: { token: string; goo
                 <button className="w-full text-center text-xs font-medium text-[#4938f4] hover:underline" onClick={() => go("choose")} type="button">Voltar</button>
               </form>
             ) : step === "google-complete" ? (
-              <form className="space-y-4" data-autofill="allow" onSubmit={submitGoogleComplete}>
+              <form className="space-y-4" data-autofill="allow" noValidate onSubmit={submitGoogleComplete}>
                 <p className="text-[13px] leading-5 text-[#7783a8]">Google confirmado. Complete seus dados para criar a conta.</p>
                 <TextField compact icon={Mail} label="e-mail do convite" onChange={() => {}} placeholder="" readOnly value={invitation.email} />
-                <TextField autoComplete="name" compact icon={User} label="seu nome" maxLength={100} onChange={setName} placeholder="Nome e sobrenome" value={name} />
-                <PersonalDataFields onChange={setAddress} value={address} />
+                <InviteField attempt={formAttempt} autoComplete="name" error={fieldErrors.name} icon={User} label="seu nome" maxLength={100} onChange={changeName} placeholder="Nome e sobrenome" value={name} />
+                <PersonalDataFields attempt={formAttempt} cpf={cpf} cpfError={fieldErrors.cpf} onChange={setAddress} onCpfChange={changeCpf} value={address} />
                 {errorBlock}
                 <Button className="h-[42px] w-full rounded-[10px] bg-[#4938f4] px-4 text-[13px] font-bold hover:bg-[#3d2de0]" disabled={busy} size="lg" type="submit"><ArrowRight className="h-4 w-4" />{busy ? "Criando conta..." : "Criar conta e entrar"}</Button>
                 <button className="w-full text-center text-xs font-medium text-[#4938f4] hover:underline" onClick={() => go("choose")} type="button">Recomeçar</button>
