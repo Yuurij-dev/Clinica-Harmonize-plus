@@ -62,11 +62,13 @@ import { PatientTour } from "./patient-tour";
 import { PatientAnamnesis } from "./patient-anamnesis";
 import { PatientClinicalDocuments } from "./patient-clinical-documents";
 import { PatientClinicalPhotos } from "./patient-clinical-photos";
+import { PatientProfilePhotoDialog } from "./patient-profile-photo-dialog";
 import { EvaluationSummaryDialog } from "./evaluation-summary-dialog";
 import { isDocumentCategory, type DocumentCategory } from "@/lib/clinical-files-rules";
 import { photoRef, type PhotoFilters } from "@/lib/photo-gallery-rules";
 import { PatientClinicalSummary } from "./patient-clinical-summary";
 import { PatientAppointmentsList } from "./patient-appointments-list";
+import { PatientAvatar } from "./patient-avatar";
 import { anamnesisKey, useCachedResource, type AnamnesisOverview } from "./patient-clinical-data";
 import { initialEvaluationLabel, useAnamnesisStartGate, type AnamnesisOpenMode } from "./anamnesis-start-gate";
 
@@ -233,6 +235,7 @@ export function PatientDetail({
   // Apenas uma linha do tempo de procedimento fica exibida no topo por vez.
   const [pinnedJourney, setPinnedJourney] = useState<PinnedJourney | null>(null);
   const [pinnedRefreshKey, setPinnedRefreshKey] = useState(0);
+  const [profilePhotoDialogOpen, setProfilePhotoDialogOpen] = useState(false);
   const pinnedJourneyKey = pinnedJourney?.key;
   const journeyPage = activeTab === "Tratamentos" && Boolean(selectedJourneyId);
   const canWriteClinical = useCan("clinical:write");
@@ -294,7 +297,6 @@ export function PatientDetail({
     return () => window.removeEventListener("popstate", syncJourneyRoute);
   }, []);
 
-  const initials = currentPatient.name.split(" ").map((part) => part[0]).slice(0, 2).join("");
   // A lista de agendamentos do cliente cobre todos os tratamentos (sem filtro de jornada).
   const historyTab = activeTab === "Prontuário" && recordTab === "Agendamentos" ? "Agendamentos" : null;
   const currentHistoryKey = patient.id && historyTab ? historyCacheKey(patient.id, historyTab, null) : null;
@@ -575,7 +577,7 @@ export function PatientDetail({
         <nav aria-label="Navegação estrutural" className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <button className="transition-colors hover:text-primary" type="button" onClick={onBack}>Clientes</button>
           <ChevronRight className="h-3 w-3" aria-hidden="true" />
-          <button className="transition-colors hover:text-primary" type="button" onClick={returnToPatientProfile}>{currentPatient.name}</button>
+          <button className="inline-flex items-center gap-1.5 transition-colors hover:text-primary" type="button" onClick={returnToPatientProfile}><PatientAvatar patientId={currentPatient.id} name={currentPatient.name} size="xs" />{currentPatient.name}</button>
           <ChevronRight className="h-3 w-3" aria-hidden="true" />
           <span aria-current="page" className="font-semibold text-foreground">{selectedJourneyLabel}</span>
         </nav>
@@ -584,7 +586,7 @@ export function PatientDetail({
         <nav aria-label="Navegação estrutural" className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <button className="rounded-sm transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 max-lg:min-h-11 max-lg:px-1" type="button" onClick={() => guarded(onBack)}>Clientes</button>
           <ChevronRight className="h-3 w-3" aria-hidden="true" />
-          <span aria-current="page" className="font-semibold text-foreground">{currentPatient.name}</span>
+          <span aria-current="page" className="inline-flex items-center gap-1.5 font-semibold text-foreground"><PatientAvatar patientId={currentPatient.id} name={currentPatient.name} size="xs" />{currentPatient.name}</span>
         </nav>
         <button type="button" onClick={() => guarded(onBack)} className="flex items-center gap-2 text-xs font-semibold text-muted-foreground transition-colors hover:text-primary max-lg:min-h-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm"><ArrowLeft className="h-4 w-4" />Voltar para clientes</button>
         </>
@@ -593,7 +595,10 @@ export function PatientDetail({
       <Card className={cn("grid overflow-hidden p-0", pinnedJourney && "lg:grid-cols-[350px_minmax(0,1fr)]")}>
         <div className={cn("flex min-w-0 flex-wrap items-center justify-between gap-4 p-4", pinnedJourney && "border-b border-[#ececf2] lg:border-b-0 lg:border-r")}>
           <div className="flex min-w-0 items-center gap-4" data-tour-patient="cabecalho">
-          <div className="grid h-16 w-16 shrink-0 place-items-center rounded-full border-4 border-[#f2f0ff] bg-[#e8e5ff] text-base font-black text-[#5147dc]">{initials}</div>
+          <div className="group relative h-16 w-16 shrink-0">
+            <PatientAvatar patientId={currentPatient.id} name={currentPatient.name} size="lg" className="h-16 w-16 border-4 border-[#f2f0ff]" />
+            {canWriteClinical && currentPatient.id ? <button type="button" aria-label="Adicionar foto do paciente" title="Adicionar foto do paciente" onClick={() => setProfilePhotoDialogOpen(true)} className="absolute inset-0 grid scale-95 place-items-center rounded-full bg-black/20 text-3xl font-medium leading-none text-white opacity-0 drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)] backdrop-blur-[1px] transition-all duration-200 hover:scale-100 hover:bg-black/25 focus-visible:scale-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5147dc] focus-visible:ring-offset-2 group-hover:scale-100 group-hover:opacity-100">+</button> : null}
+          </div>
           <div className="min-w-0">
             <h2 className="truncate text-lg sm:text-xl font-bold text-[#242538]">{currentPatient.name}</h2>
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:text-sm text-[#77788a]">
@@ -672,6 +677,7 @@ export function PatientDetail({
       {startGate.gate}
       <PatientTour enabled={!selectedJourneyId} suppressAutoOpen={editPatientOpen || returnAppointmentTarget !== null || summaryEvaluationId !== null} activeTab={activeTab} recordTab={recordTab} onShow={(tab, record) => { selectTab(tab); if (record) selectRecordTab(record); }} />
       <PatientEditModal patient={currentPatient} open={editPatientOpen} onClose={() => setEditPatientOpen(false)} onUpdated={setCurrentPatient} />
+      {currentPatient.id && profilePhotoDialogOpen ? <PatientProfilePhotoDialog patientId={currentPatient.id} patientName={currentPatient.name} onClose={() => setProfilePhotoDialogOpen(false)} /> : null}
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { getCachedJson, readClientCache } from "@/lib/client-cache";
 import { ReverseMovementButton } from "./pending-panel";
 import { sendJson } from "@/lib/send-json";
 import { attendanceKindLabels, formatQuantity, manualReasons, parseQuantity, type AttendanceKind, type ManualReason } from "@/lib/stock-rules";
+import { PatientAvatar } from "./patient-avatar";
 
 export const movementTypeLabels: Record<string, string> = {
   initial: "Saldo inicial",
@@ -19,7 +20,7 @@ export const movementTypeLabels: Record<string, string> = {
   purchase_cancel: "Cancelamento de compra",
 };
 
-type Movement = { id: string; type: string; quantity: number; reason: string | null; notes: string; userName: string; createdAt: string; lotCode: string; patientName: string | null; attendanceKind: AttendanceKind | null; attendanceName: string | null; attendanceDate: string | null; reversed: boolean };
+type Movement = { id: string; type: string; quantity: number; reason: string | null; notes: string; userName: string; createdAt: string; lotCode: string; patientId: string | null; patientName: string | null; attendanceKind: AttendanceKind | null; attendanceName: string | null; attendanceDate: string | null; reversed: boolean };
 
 function attendanceText(movement: Movement) {
   return [movement.patientName, movement.attendanceKind ? attendanceKindLabels[movement.attendanceKind] : null, movement.attendanceName, movement.attendanceDate ? new Date(movement.attendanceDate).toLocaleDateString("pt-BR") : null].filter(Boolean).join(" · ");
@@ -131,7 +132,7 @@ export function LotUsage({ productId, unit, lotId, lotCode }: { productId: strin
           {movements.map((movement) => (
             <div className={`flex items-start justify-between gap-3 px-3 py-2 text-xs ${movement.reversed ? "opacity-60" : ""}`} key={movement.id}>
               <div className="min-w-0">
-                <p className="font-bold text-foreground">{movement.patientName ?? "Paciente removido"}</p>
+                <p className="flex items-center gap-2 font-bold text-foreground">{movement.patientName ? <PatientAvatar patientId={movement.patientId ?? undefined} name={movement.patientName} size="xs" /> : null}{movement.patientName ?? "Paciente removido"}</p>
                 <p className="text-muted-foreground">{[movement.attendanceKind ? attendanceKindLabels[movement.attendanceKind] : null, movement.attendanceName, movement.attendanceDate ? new Date(movement.attendanceDate).toLocaleDateString("pt-BR") : null].filter(Boolean).join(" · ")}{movement.reversed ? " · estornada" : ""}</p>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-1">

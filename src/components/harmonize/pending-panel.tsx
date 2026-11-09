@@ -11,11 +11,12 @@ import { MaterialCheckModal } from "./material-check-modal";
 import { EmptyState } from "./shared";
 import { StockKindBadge } from "./stock-kind";
 import { formatDateOnly, invalidateStockCache } from "./stock-shared";
+import { PatientAvatar } from "./patient-avatar";
 
 const pendingKey = "/api/stock/pending";
 
-type PendingOutput = { id: string; quantity: number; attendanceKind: AttendanceKind; attendanceName: string; attendanceDate: string; patientName: string | null; product: { id: string; name: string; kind: StockKind; unit: string }; lots: Array<{ id: string; code: string; expiresOn: string; balance: number }> };
-type PendingCheck = { id: string; procedure: string; date: string; time: string; patientName: string };
+type PendingOutput = { id: string; quantity: number; attendanceKind: AttendanceKind; attendanceName: string; attendanceDate: string; patientId: string | null; patientName: string | null; product: { id: string; name: string; kind: StockKind; unit: string }; lots: Array<{ id: string; code: string; expiresOn: string; balance: number }> };
+type PendingCheck = { id: string; patientId: string; procedure: string; date: string; time: string; patientName: string };
 
 export function PendingPanel({ onSaved }: { onSaved?: (message: string) => void }) {
   const [data, setData] = useState<{ outputs: PendingOutput[]; checks: PendingCheck[] } | null>(() => readClientCache(pendingKey) ?? null);
@@ -67,7 +68,7 @@ export function PendingPanel({ onSaved }: { onSaved?: (message: string) => void 
           <div className="divide-y divide-border rounded-lg border border-border bg-card">
             {data.checks.map((check) => (
               <div className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm" key={check.id}>
-                <div><p className="font-bold text-foreground">{check.patientName}</p><p className="text-xs text-muted-foreground">{check.procedure} · {new Date(check.date).toLocaleDateString("pt-BR")} às {check.time}</p></div>
+                <div className="flex items-center gap-2"><PatientAvatar patientId={check.patientId} name={check.patientName} size="xs" /><div><p className="font-bold text-foreground">{check.patientName}</p><p className="text-xs text-muted-foreground">{check.procedure} · {new Date(check.date).toLocaleDateString("pt-BR")} às {check.time}</p></div></div>
                 <Button size="sm" onClick={() => setCheckId(check.id)}>Conferir</Button>
               </div>
             ))}
@@ -84,7 +85,7 @@ export function PendingPanel({ onSaved }: { onSaved?: (message: string) => void 
               <div className="flex flex-col gap-2 p-3 text-sm sm:flex-row sm:items-center sm:justify-between" key={output.id}>
                 <div className="min-w-0">
                   <p className="font-bold text-foreground">{formatQuantity(output.quantity, output.product.unit)} {output.product.name} <StockKindBadge className="ml-1 align-middle" kind={output.product.kind} /></p>
-                  <p className="text-xs text-muted-foreground">{[output.patientName, attendanceKindLabels[output.attendanceKind], output.attendanceName, new Date(output.attendanceDate).toLocaleDateString("pt-BR")].filter(Boolean).join(" · ")}</p>
+                  <p className="flex items-center gap-1.5 text-xs text-muted-foreground">{output.patientName ? <><PatientAvatar patientId={output.patientId ?? undefined} name={output.patientName} size="xs" className="h-5 w-5 text-[7px]" />{output.patientName}<span>·</span></> : null}{[attendanceKindLabels[output.attendanceKind], output.attendanceName, new Date(output.attendanceDate).toLocaleDateString("pt-BR")].filter(Boolean).join(" · ")}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <select className={`${fieldClassName} h-9 w-auto text-xs`} aria-label="Lote" value={selectedLots[output.id] ?? ""} onChange={(event) => setSelectedLots((current) => ({ ...current, [output.id]: event.target.value }))}>

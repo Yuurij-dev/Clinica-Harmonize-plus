@@ -13,6 +13,7 @@ import type { SectionId } from "@/types/clinic";
 import { getCachedJson, readClientCache } from "@/lib/client-cache";
 import { Bar, CartesianGrid, ComposedChart, Line, Rectangle, ResponsiveContainer, Tooltip, XAxis, YAxis, type BarShapeProps } from "recharts";
 import { useRevealOnView } from "@/lib/use-reveal-on-view";
+import { PatientAvatar } from "./patient-avatar";
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 const percentFormat = (value: number) => `${Math.round(value)}%`;
@@ -147,7 +148,7 @@ export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (
                 </div>
                 {appointment.patient?.id ? (
                   <PatientAvatarLink patientId={appointment.patient.id} patientName={appointment.patient.name} onClick={(event) => event.stopPropagation()} />
-                ) : <ClientAvatar name={appointment.patient?.name ?? "Paciente"} />}
+                  ) : <PatientAvatar name={appointment.patient?.name ?? "Paciente"} />}
                 <div className="min-w-0 flex-1">
                   {appointment.patient?.id ? (
                     <Link className={`block truncate max-lg:line-clamp-2 max-lg:whitespace-normal text-sm font-bold text-[#121733] ${patientNameLinkClassName}`} href={`/clientes?patient=${encodeURIComponent(appointment.patient.id)}`} onClick={(event) => event.stopPropagation()}>
@@ -200,7 +201,7 @@ export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (
                   <div className="flex min-w-0 items-center gap-3">
                     {quote.patient?.id ? (
                       <PatientAvatarLink patientId={quote.patient.id} patientName={quote.patient.name} />
-                    ) : <ClientAvatar name={quote.patient?.name ?? "Paciente"} />}
+                    ) : <PatientAvatar name={quote.patient?.name ?? "Paciente"} />}
                     {quote.patient?.id ? (
                       <Link className={`min-w-0 truncate max-lg:line-clamp-2 max-lg:whitespace-normal font-bold text-[#121733] ${patientNameLinkClassName}`} href={`/clientes?patient=${encodeURIComponent(quote.patient.id)}`}>
                         {quote.patient.name}
@@ -265,12 +266,6 @@ function DashboardListActions({ canShowMore, onShowMore, onNavigate, destination
   );
 }
 
-function ClientAvatar({ name }: { name: string }) {
-  const tones = ["#5147dc", "#6257e8", "#23806f", "#6d5ce7"];
-  const tone = tones[name.split("").reduce((sum, character) => sum + character.charCodeAt(0), 0) % tones.length];
-  return <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[10px] font-black text-white" style={{ backgroundColor: tone }}>{getInitials(name)}</span>;
-}
-
 function PatientAvatarLink({ patientId, patientName, onClick }: { patientId: string; patientName: string; onClick?: (event: MouseEvent<HTMLAnchorElement>) => void }) {
   return (
     <Link
@@ -279,15 +274,9 @@ function PatientAvatarLink({ patientId, patientName, onClick }: { patientId: str
       href={`/clientes?patient=${encodeURIComponent(patientId)}`}
       onClick={onClick}
     >
-      <ClientAvatar name={patientName} />
+      <PatientAvatar patientId={patientId} name={patientName} size="sm" className="h-8 w-8" />
     </Link>
   );
-}
-
-function getInitials(name: string) {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (!parts.length) return "?";
-  return parts.length === 1 ? parts[0].slice(0, 2).toUpperCase() : `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 }
 
 function AttendanceMetric({ icon: Icon, label, value, format, change, comparison, suffix = "%" }: { icon: LucideIcon; label: string; value: number; format?: (value: number) => string; change: number | null; comparison: number | string | null; suffix?: string }) {
