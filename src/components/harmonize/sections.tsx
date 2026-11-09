@@ -54,7 +54,6 @@ import { buildCustomerJourney } from "@/lib/customer-journey";
 import {
   formatCurrency,
   formatCnpj,
-  formatCpf,
   formatDate,
   formatPhone,
   parseCurrency,
@@ -66,6 +65,7 @@ import { cleanSearchQuery, defaultPatientPageSize, patientListKey, patientPageSi
 import { capitalizeFirst, formatDayBR, agendaDayInvalidationKey, agendaPeriodKey, agendaPeriodRange, dayInRange, shiftAgendaDay, type AgendaRange } from "@/lib/agenda-period-rules";
 import { PaginationBar } from "./clinical-pagination";
 import { TeamInvitations } from "./team-invitations";
+import { TeamMemberDetail } from "./team-member-detail";
 import { usePatientLookup, type LookupPatient } from "./use-patient-lookup";
 import { createDefaultRolePermissionMatrix, permissionGroups, roleLabels, roles, runningAppointmentStatuses, type Role, type RolePermissionMatrix } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
@@ -1942,11 +1942,12 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const canManageSettings = useCan("settings:manage");
   const [editing, setEditing] = useState<string | null>(null);
   const [settingsSearch, setSettingsSearch] = useState("");
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
   const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection ?? (canManageSettings ? "Dados da clínica" : canManageTeam ? "Custos e orçamento" : "Segurança e permissões"));
   useEffect(() => {
     const focusSection = (event: Event) => {
       const section = (event as CustomEvent<string>).detail;
-      if (section) setActiveSettingsSection(section);
+      if (section) { setSelectedMemberId(null); setActiveSettingsSection(section); }
     };
     window.addEventListener(SETTINGS_SECTION_FOCUS_EVENT, focusSection);
     return () => window.removeEventListener(SETTINGS_SECTION_FOCUS_EVENT, focusSection);
@@ -2316,7 +2317,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
       if (!response.ok || !data?.member) throw new Error(data?.message ?? "Não foi possível salvar o valor de mão de obra.");
       setMembers((current) => current.map((item) => item.id === member.id ? data.member! : item));
       setEditingLaborCostId(null);
-      invalidateClientCache("/api/team");
+      invalidateClientCache("/api/team", `/api/team/${encodeURIComponent(member.id)}`);
       setLaborCostFeedback({ message: `Valor de mão de obra de ${member.user.name} salvo.`, success: true });
     } catch (error) {
       setLaborCostFeedback({ message: error instanceof Error ? error.message : "Não foi possível salvar o valor de mão de obra.", success: false });
@@ -2339,7 +2340,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
       const data = await response.json().catch(() => null) as { member?: TeamMember; message?: string } | null;
       if (!response.ok || !data?.member) throw new Error(data?.message ?? "Não foi possível alterar o cargo.");
       setMembers((current) => current.map((member) => member.id === data.member!.id ? data.member! : member));
-      invalidateClientCache("/api/team", "/api/team/professionals", "/api/agenda/bootstrap", "/api/appointments/options", "/api/invitations");
+      invalidateClientCache("/api/team", `/api/team/${encodeURIComponent(memberToChangeRole.id)}`, "/api/team/professionals", "/api/agenda/bootstrap", "/api/appointments/options", "/api/invitations");
       setMemberToChangeRole(null);
       toast.success("Cargo atualizado com sucesso.");
     } catch (error) {
@@ -2365,7 +2366,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
       return;
     }
     setMembers((current) => current.filter((member) => member.id !== memberToRemove.id));
-    invalidateClientCache("/api/team", "/api/team/professionals", "/api/agenda/bootstrap", "/api/invitations");
+    invalidateClientCache("/api/team", `/api/team/${encodeURIComponent(memberToRemove.id)}`, "/api/team/professionals", "/api/agenda/bootstrap", "/api/invitations");
     setMemberToRemove(null);
   }
 
@@ -2425,7 +2426,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
         <Card className="h-fit border-border/70 p-2.5">
           <nav aria-label="Seções de configurações" className="grid gap-1">
             {visibleSettingsNavigation.map(({ label, icon: Icon }) => (
-              <button aria-current={displayedSettingsSection === label ? "page" : undefined} className={cn("flex min-h-11 items-center gap-3 rounded-md px-3 text-left text-sm font-semibold transition-colors", displayedSettingsSection === label ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")} key={label} type="button" onClick={() => setActiveSettingsSection(label)}>
+              <button aria-current={displayedSettingsSection === label ? "page" : undefined} className={cn("flex min-h-11 items-center gap-3 rounded-md px-3 text-left text-sm font-semibold transition-colors", displayedSettingsSection === label ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground")} key={label} type="button" onClick={() => { setSelectedMemberId(null); setActiveSettingsSection(label); }}>
                 <Icon className="h-4 w-4 shrink-0" />{label}
               </button>
             ))}
@@ -2478,7 +2479,11 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
             </Card>
           ) : null}
 
-          {displayedSettingsSection === "Profissionais e equipe" ? (
+          {displayedSettingsSection === "Profissionais e equipe" && selectedMemberId ? (
+            <TeamMemberDetail key={selectedMemberId} memberId={selectedMemberId} onBack={() => setSelectedMemberId(null)} />
+          ) : null}
+
+          {displayedSettingsSection === "Profissionais e equipe" && !selectedMemberId ? (
             <>
             <Card className="border-border/70">
               <CardHeader className="flex flex-col gap-3 border-b border-border/70 sm:flex-row sm:items-center sm:justify-between">
@@ -2489,12 +2494,12 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
                 {teamError && !editing ? <p className="my-4 rounded-md bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{teamError}</p> : null}
                 {teamLoading ? <div className="space-y-3 py-4">{[0, 1, 2].map((item) => <div className="flex items-center justify-between gap-4" key={item}><div className="flex-1 space-y-2"><LoadingSkeleton className="h-3 w-40" /><LoadingSkeleton className="h-2.5 w-56" /></div><LoadingSkeleton className="h-6 w-20 rounded-full" /></div>)}</div> : filteredTeamMembers.length ? filteredTeamMembers.map((member) => (
                   <div className="flex flex-col gap-2 py-4 sm:flex-row sm:items-center sm:justify-between" key={member.id}>
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-sm font-bold text-foreground">{member.user.name}</p>
-                      </div>
-                      <p className="text-xs text-muted-foreground">{member.user.email}</p>
-                    </div>
+                    <button type="button" className="min-w-0 text-left hover:text-primary max-lg:-my-3 max-lg:py-3" aria-label={"Ver dados de " + member.user.name} onClick={() => setSelectedMemberId(member.id)}>
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="block text-sm font-bold text-foreground">{member.user.name}</span>
+                      </span>
+                      <span className="block text-xs text-muted-foreground">{member.user.email}</span>
+                    </button>
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge variant={member.isOwner || member.role === "ADMIN" ? "purple" : "green"}>{member.isOwner ? "Administrador principal" : member.role === "PROFESSIONAL" ? "Profissional" : member.role === "STAFF" ? "Equipe" : "Administrador"}</Badge>
                       {canManageTeam && !member.isOwner ? <Button type="button" variant="secondary" size="sm" className="h-7 px-2.5 text-xs" onClick={() => { setRoleToChange(member.role); setRoleChangeError(""); setMemberToChangeRole(member); }}>Alterar cargo</Button> : null}

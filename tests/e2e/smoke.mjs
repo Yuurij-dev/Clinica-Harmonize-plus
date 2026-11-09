@@ -6517,7 +6517,69 @@ async function financeiro(state) {
   });
 }
 
+async function teamMemberDetail() {
+  const otherClinic = `Clínica Detalhe ${run}`;
+  const otherEmail = `e2e-det-outro-${run}@example.com`;
+  const otherPassword = `E2e-${run}-Outro9!`;
+  const staffEmail = `e2e-det-staff-${run}@example.com`;
+  const staffPassword = `E2e-${run}-Staff9!`;
+  const proEmail = `e2e-det-pro-${run}@example.com`;
+  const proPassword = `E2e-${run}-Pro9!`;
+  const created = [];
+  try {
+    let r = await api("POST", "/api/team", { name: "E2E Profissional Detalhe", email: proEmail, password: proPassword, role: "PROFESSIONAL", cpf: randomCpf(), address: "Rua Detalhe, 10", country: "Brasil", state: "SP", city: "São Paulo" });
+    const pro = r.status === 201 ? r.data.member : null;
+    if (pro) created.push(pro);
+    r = await api("POST", "/api/team", { name: "E2E Atendente Detalhe", email: staffEmail, password: staffPassword, role: "STAFF", cpf: randomCpf(), address: "Rua A, 1", country: "Brasil", state: "SP", city: "São Paulo" });
+    const staffTeam = r.status === 201 ? r.data.member : null;
+    if (staffTeam) created.push(staffTeam);
+    if (!pro || !staffTeam) { check("detalhe do profissional: membros criados", false, `pro ${!!pro} staff ${!!staffTeam}`); return; }
+
+    // 200
+    r = await api("GET", `/api/team/${pro.id}`);
+    const m = r.data?.member;
+    const userKeys = ["id", "name", "email", "createdAt", "cpf", "postalCode", "address", "city", "state", "country"];
+    check("detalhe do profissional: ADMIN recebe 200 com o shape esperado", r.status === 200 && m?.id === pro.id && m.role === "PROFESSIONAL" && m.isOwner === false && "laborCostCents" in m && m.user?.email === proEmail && m.user.name === "E2E Profissional Detalhe" && m.user.city === "São Paulo" && m.user.address === "Rua Detalhe, 10", JSON.stringify(r.data).slice(0, 200));
+    check("detalhe do profissional: chaves exatas, sem campos sensíveis", !!m && Object.keys(m).sort().join() === "id,isOwner,laborCostCents,role,user" && Object.keys(m.user).sort().join() === [...userKeys].sort().join() && !/passwordHash|password|token|secret/i.test(JSON.stringify(r.data)), m ? Object.keys(m.user).join() : "");
+
+    // 404 inexistente e outra clínica
+    r = await api("GET", `/api/team/inexistente-${run}`);
+    check("detalhe do profissional: id inexistente devolve 404", r.status === 404, r.status);
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990023", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const foreign = await prisma.clinicMembership.findFirst({ where: { user: { email: otherEmail } }, select: { id: true } });
+    if (reg.status === 201 && foreign) {
+      r = await api("GET", `/api/team/${foreign.id}`);
+      check("detalhe do profissional: membro de outra clínica devolve 404 sem vazar dados", r.status === 404 && !JSON.stringify(r.data).includes(otherEmail), r.status);
+      const other = await loginAs(otherEmail, otherPassword);
+      if (other.status === 200) {
+        r = await withSession(other.cookie, () => api("GET", `/api/team/${pro.id}`));
+        check("detalhe do profissional: admin de outra clínica não vê membro da clínica de teste (404)", r.status === 404 && !JSON.stringify(r.data).includes(proEmail), r.status);
+        r = await withSession(other.cookie, () => api("GET", `/api/team/${foreign.id}`));
+        check("detalhe do profissional: admin da outra clínica vê o próprio membro (200)", r.status === 200 && r.data.member?.user?.email === otherEmail, r.status);
+      } else check("login do admin da outra clínica", false, other.status);
+    } else check("segunda clínica criada para testar o detalhe", false, `registro ${reg.status}`);
+
+    // 403 STAFF e PROFESSIONAL
+    for (const [label, email, secret] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
+      const s = await loginAs(email, secret);
+      if (s.status !== 200) { check(`login ${label} para o detalhe`, false, s.status); continue; }
+      r = await withSession(s.cookie, () => api("GET", `/api/team/${pro.id}`));
+      check(`detalhe do profissional: ${label} recebe 403 sem vazar dados`, r.status === 403 && !JSON.stringify(r.data).includes(proEmail), r.status);
+    }
+
+    // 401
+    r = await withSession("", () => api("GET", `/api/team/${pro.id}`));
+    check("detalhe do profissional: sem sessão devolve 401", r.status === 401, r.status);
+  } finally {
+    for (const member of created) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [otherEmail, staffEmail, proEmail] } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: [otherEmail, staffEmail, proEmail] } } });
+  }
+}
+
 const suites = {
+  detalhe_profissional: { needs: [], run: () => teamMemberDetail() },
   colaborador_endereco: { needs: [], run: () => collaboratorOptionalAddress() },
   clinica_ativa: { needs: [], run: () => activeClinic() },
   convites: { needs: [], run: () => invitations() },
