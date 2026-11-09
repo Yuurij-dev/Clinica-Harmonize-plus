@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { ArrowLeft, Loader2, Pencil, Search } from "lucide-react";
+import { createPortal } from "react-dom";
+import { ArrowLeft, Loader2, Pencil, Search, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { FormField, fieldClassName } from "@/components/ui/modal";
+import { FormField, Modal, fieldClassName } from "@/components/ui/modal";
 import { LoadingSkeleton } from "./shared";
+import { TeamMemberPhotoDialog } from "./team-member-photo-dialog";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { formatCpf } from "@/lib/input-masks";
 
@@ -39,6 +41,11 @@ export function TeamMemberDetail({ memberId, onBack }: { memberId: string; onBac
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [cepLoading, setCepLoading] = useState(false);
+  const [photoFailed, setPhotoFailed] = useState(false);
+  const [photoRevision, setPhotoRevision] = useState(0);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoMenu, setPhotoMenu] = useState<null | "menu" | "view" | "zoom" | "upload">(null);
+  const [photoError, setPhotoError] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -52,8 +59,30 @@ export function TeamMemberDetail({ memberId, onBack }: { memberId: string; onBac
   const values: Draft | null = editing && draft ? draft : user ? toDraft(user) : null;
   const set = (field: keyof Draft, value: string) => setDraft((current) => (current ? { ...current, [field]: value } : current));
 
+  useEffect(() => {
+    if (photoMenu !== "zoom") return;
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setPhotoMenu("view"); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [photoMenu]);
+
   function startEdit() { if (!user) return; setDraft(toDraft(user)); setFormError(""); setEditing(true); }
   function cancelEdit() { if (saving) return; setEditing(false); setDraft(null); setFormError(""); }
+
+  async function removePhoto() {
+    setPhotoMenu(null);
+    setPhotoBusy(true);
+    setPhotoError("");
+    try {
+      const response = await fetch(`${key}/avatar`, { method: "DELETE" });
+      if (!response.ok) { const data = await response.json().catch(() => null) as { message?: string } | null; setPhotoError(data?.message ?? "Não foi possível remover a foto."); return; }
+      setPhotoFailed(true);
+    } catch {
+      setPhotoError("Não foi possível remover a foto.");
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
 
   async function lookupCep() {
     if (!draft) return;
@@ -105,7 +134,16 @@ export function TeamMemberDetail({ memberId, onBack }: { memberId: string; onBac
         <>
           <Card className="border-border/70">
             <CardContent className="flex flex-col gap-4 py-6 sm:flex-row sm:items-center">
-              <div aria-hidden="true" className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-accent text-xl font-bold text-accent-foreground">{initials(user.name)}</div>
+              <div className="group relative h-16 w-16 shrink-0">
+                <div aria-hidden="true" className="relative inline-grid h-16 w-16 place-items-center overflow-hidden rounded-full border-4 border-[#f2f0ff] bg-[#efedff] text-base font-black text-[#5147dc]">
+                  {initials(user.name)}
+                  {!photoFailed ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- endpoint privado que já devolve miniatura.
+                    <img alt="" className="absolute inset-0 h-full w-full object-cover" src={`${key}/avatar?v=${photoRevision}`} onError={() => setPhotoFailed(true)} />
+                  ) : null}
+                </div>
+                <button type="button" aria-label={photoFailed ? "Adicionar foto do colaborador" : "Foto do colaborador"} title={photoFailed ? "Adicionar foto do colaborador" : "Foto do colaborador"} disabled={photoBusy} onClick={() => setPhotoMenu(photoFailed ? "upload" : "menu")} className="absolute inset-0 grid scale-95 place-items-center rounded-full bg-black/20 text-3xl font-medium leading-none text-white opacity-0 drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)] backdrop-blur-[1px] transition-all duration-200 hover:scale-100 hover:bg-black/25 focus-visible:scale-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5147dc] focus-visible:ring-offset-2 group-hover:scale-100 group-hover:opacity-100">{photoBusy ? <Loader2 className="h-5 w-5 animate-spin" /> : "+"}</button>
+              </div>
               <div className="min-w-0 flex-1 space-y-2">
                 <h2 className="break-words text-xl font-bold text-foreground">{user.name}</h2>
                 <div className="flex flex-wrap items-center gap-2">
@@ -113,9 +151,32 @@ export function TeamMemberDetail({ memberId, onBack }: { memberId: string; onBac
                   {member.isOwner ? <Badge variant="purple">Proprietário</Badge> : null}
                 </div>
               </div>
-              {!editing ? <Button type="button" variant="secondary" size="sm" onClick={startEdit}><Pencil className="h-4 w-4" />Editar</Button> : null}
+              <div className="flex flex-wrap gap-2">
+                {!editing ? <Button type="button" variant="secondary" size="sm" onClick={startEdit}><Pencil className="h-4 w-4" />Editar</Button> : null}
+              </div>
             </CardContent>
           </Card>
+          <Modal open={photoMenu === "menu"} onClose={() => setPhotoMenu(null)} title="Foto do perfil" panelClassName="max-w-sm">
+            <div className="-mx-1 divide-y divide-border/70 text-center text-sm">
+              <button type="button" className="w-full px-4 py-3 font-semibold text-foreground hover:bg-muted/50" onClick={() => setPhotoMenu("view")}>Ver foto</button>
+              <button type="button" className="w-full px-4 py-3 font-semibold text-foreground hover:bg-muted/50" onClick={() => setPhotoMenu("upload")}>Trocar foto</button>
+              <button type="button" className="flex w-full items-center justify-center gap-2 px-4 py-3 font-semibold text-destructive hover:bg-destructive/5" disabled={photoBusy} onClick={() => void removePhoto()}><Trash2 className="h-4 w-4" />Remover foto</button>
+              <button type="button" className="w-full px-4 py-3 text-muted-foreground hover:bg-muted/50" onClick={() => setPhotoMenu(null)}>Cancelar</button>
+            </div>
+          </Modal>
+          {photoMenu === "upload" ? <TeamMemberPhotoDialog avatarUrl={`${key}/avatar`} onSaved={() => { setPhotoFailed(false); setPhotoRevision((value) => value + 1); }} onClose={() => setPhotoMenu(null)} /> : null}
+          <Modal open={photoMenu === "view"} onClose={() => setPhotoMenu(null)} title={user.name} panelClassName="max-w-sm">
+            {/* eslint-disable-next-line @next/next/no-img-element -- endpoint privado que já devolve miniatura. */}
+            <button type="button" aria-label="Expandir foto" title="Clique para expandir" onClick={() => setPhotoMenu("zoom")} className="mx-auto block w-full max-w-72 cursor-zoom-in rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5147dc]"><img alt={`Foto de ${user.name}`} className="aspect-square w-full rounded-xl object-cover" src={`${key}/avatar?v=${photoRevision}`} /></button>
+          </Modal>
+          {photoMenu === "zoom" && typeof document !== "undefined" ? createPortal(
+            <div role="dialog" aria-modal="true" aria-label={`Foto de ${user.name}`} className="fixed inset-0 z-[1100] grid cursor-zoom-out place-items-center bg-black/85 p-4" onClick={() => setPhotoMenu("view")}>
+              {/* eslint-disable-next-line @next/next/no-img-element -- endpoint privado. */}
+              <img alt={`Foto de ${user.name}`} className="h-[min(92dvh,92vw)] w-[min(92dvh,92vw)] rounded-xl object-cover shadow-2xl" src={`${key}/avatar?v=${photoRevision}`} />
+            </div>,
+            document.body,
+          ) : null}
+          {photoError ? <p className="rounded-md bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{photoError}</p> : null}
           <form onSubmit={save} noValidate>
             <Card className="border-border/70">
               <CardContent className="space-y-6 py-6">
