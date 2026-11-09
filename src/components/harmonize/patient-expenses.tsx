@@ -8,6 +8,7 @@ import { Modal } from "@/components/ui/modal";
 import { getCachedJson, readClientCache, invalidateClientCache } from "@/lib/client-cache";
 import { cn } from "@/lib/utils";
 import { useCan } from "./current-user";
+import { invalidateFinanceCache } from "@/lib/finance-cache";
 import { LoadingSkeleton } from "./shared";
 import { quoteStatusLabels } from "@/lib/patient-finance-rules";
 import { buildQuoteProposalHtml, openQuoteProposal, parseQuoteDetails, proposalRowsFromQuote, quoteFinancialSnapshot } from "@/lib/quote-proposal";
@@ -373,6 +374,7 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
         throw new Error("O recebimento foi registrado, mas o status do orçamento não foi atualizado. " + (quoteData.message ?? "Atualize a página e confira o financeiro."));
       }
       invalidateClientCache("/api/payments", "/api/quotes", quoteKey, "/api/patients/" + patientId + "/history", "/api/patients/" + patientId + "/profile", "/api/dashboard/bootstrap");
+      invalidateFinanceCache();
       setQuotes((current) => current.map((quote) => quote.id === quoteData.quote!.id ? quoteData.quote! : quote));
       setNotice({ error: false, text: "Pagamento registrado e orçamento atualizado." });
       onPaid?.();
@@ -395,6 +397,7 @@ function EncounterQuoteWorkspace({ patientId, journeyId, journeyLabel, patient, 
       }) : null;
       const quoteData = quoteResponse ? await quoteResponse.json().catch(() => ({})) as { quote?: PatientQuote; message?: string } : null;
       invalidateClientCache("/api/payments", "/api/quotes", quoteKey, "/api/patients/" + patientId + "/history", "/api/patients/" + patientId + "/profile", "/api/dashboard/bootstrap");
+      invalidateFinanceCache();
       if (paymentUndoTimer.current !== null) window.clearTimeout(paymentUndoTimer.current);
       paymentUndoTimer.current = null;
       setPaymentUndoNotice(false);
