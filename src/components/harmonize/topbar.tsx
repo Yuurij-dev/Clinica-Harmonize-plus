@@ -44,6 +44,7 @@ function appointmentMinutesFromTime(time: string) {
 }
 
 export function Topbar({ onDashboard, onSettings, onNavigate, onOpenStockAlert, onLogout, user, clinics = [], onSwitchClinic }: TopbarProps) {
+
   const canAccessDashboard = useCan("dashboard:access");
   const canAccessSettings = useCan("settings:access");
   const canAccessStock = useCan("stock:access");
