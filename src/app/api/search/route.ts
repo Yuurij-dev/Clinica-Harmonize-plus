@@ -27,13 +27,15 @@ export async function GET(request: Request) {
        AND (p."name" ILIKE ${pattern} OR p."phone" ILIKE ${pattern} OR p."status" ILIKE ${pattern})
      ORDER BY p."name" LIMIT ${resultLimit})`);
 
+  // Notas do agendamento são texto clínico e não são devolvidas: só entram no filtro com clinical:read.
+  const appointmentNotesMatch = canForUser(user, "clinical:read") ? Prisma.sql`OR a."notes" ILIKE ${pattern} ` : Prisma.empty;
   if (canForUser(user, "agenda:access")) matches.push(Prisma.sql`
     (SELECT a."id", concat_ws(' · ', p."name", a."procedure") AS title,
       concat_ws(' · ', to_char(a."date" AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY') || ' ' || a."time", a."professional", a."status") AS description,
       'agenda' AS section, 'Agendamento' AS kind
      FROM "Appointment" a JOIN "Patient" p ON p."id" = a."patientId"
      WHERE a."clinicId" = ${clinicId}
-       AND (a."procedure" ILIKE ${pattern} OR a."professional" ILIKE ${pattern} OR a."notes" ILIKE ${pattern} OR a."status" ILIKE ${pattern} OR p."name" ILIKE ${pattern})
+       AND (a."procedure" ILIKE ${pattern} OR a."professional" ILIKE ${pattern} ${appointmentNotesMatch}OR a."status" ILIKE ${pattern} OR p."name" ILIKE ${pattern})
      ORDER BY a."date" DESC LIMIT ${resultLimit})`);
 
   if (canForUser(user, "procedures:access")) matches.push(Prisma.sql`
@@ -99,13 +101,17 @@ export async function GET(request: Request) {
        ORDER BY r."description" LIMIT ${resultLimit})`);
   }
 
-  if (canForUser(user, "clinical:read")) matches.push(Prisma.sql`
+  // Conteúdo de anamnese exige anamnesis:read além de clinical:read.
+  const anamnesisMatch = canForUser(user, "anamnesis:read")
+    ? Prisma.sql`OR EXISTS (SELECT 1 FROM "PatientAnamnesis" a WHERE a."patientId" = p."id" AND a."clinicId" = ${clinicId} AND (a."content" ILIKE ${pattern} OR a."reviewReason" ILIKE ${pattern} OR a."status" ILIKE ${pattern}))`
+    : Prisma.empty;
+  if (canForUser(user, "patients:access") && canForUser(user, "clinical:read")) matches.push(Prisma.sql`
     (SELECT p."id", p."name" AS title, 'Registro clínico corresponde à busca' AS description,
       'clientes' AS section, 'Registro clínico' AS kind
      FROM "Patient" p WHERE p."clinicId" = ${clinicId} AND (
        EXISTS (SELECT 1 FROM "PatientObservation" o WHERE o."patientId" = p."id" AND o."clinicId" = ${clinicId} AND o."text" ILIKE ${pattern})
        OR EXISTS (SELECT 1 FROM "Evaluation" e WHERE e."patientId" = p."id" AND e."clinicId" = ${clinicId} AND (e."chiefComplaint" ILIKE ${pattern} OR e."patientGoal" ILIKE ${pattern} OR e."medicalHistory" ILIKE ${pattern} OR e."allergies" ILIKE ${pattern} OR e."pregnancyStatus" ILIKE ${pattern} OR e."anticoagulantUse" ILIKE ${pattern} OR e."autoimmuneDiseases" ILIKE ${pattern} OR e."contraindications" ILIKE ${pattern} OR e."previousProcedures" ILIKE ${pattern} OR e."clinicalNotes" ILIKE ${pattern}))
-       OR EXISTS (SELECT 1 FROM "PatientAnamnesis" a WHERE a."patientId" = p."id" AND a."clinicId" = ${clinicId} AND (a."content" ILIKE ${pattern} OR a."reviewReason" ILIKE ${pattern} OR a."status" ILIKE ${pattern}))
+       ${anamnesisMatch}
        OR EXISTS (SELECT 1 FROM "PatientProcedureSession" s WHERE s."patientId" = p."id" AND s."clinicId" = ${clinicId} AND (s."procedureName" ILIKE ${pattern} OR s."technique" ILIKE ${pattern} OR s."treatedAreas" ILIKE ${pattern} OR s."anesthesia" ILIKE ${pattern} OR s."complications" ILIKE ${pattern} OR s."observations" ILIKE ${pattern} OR s."professional" ILIKE ${pattern}))
        OR EXISTS (SELECT 1 FROM "PatientProcedureFollowUp" f WHERE f."patientId" = p."id" AND f."clinicId" = ${clinicId} AND (f."complaints" ILIKE ${pattern} OR f."guidanceText" ILIKE ${pattern} OR f."observations" ILIKE ${pattern} OR f."complications" ILIKE ${pattern}))
        OR EXISTS (SELECT 1 FROM "PatientJourney" j WHERE j."patientId" = p."id" AND j."clinicId" = ${clinicId} AND j."archivedAt" IS NULL AND (j."name" ILIKE ${pattern} OR j."professional" ILIKE ${pattern} OR j."status" ILIKE ${pattern}))
