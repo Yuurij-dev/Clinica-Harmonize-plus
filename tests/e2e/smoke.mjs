@@ -6685,7 +6685,161 @@ async function collaboratorEdit() {
   }
 }
 
+async function collaboratorPhoto() {
+  const mail = (t) => `e2e-colabfoto-${t}-${run}@example.invalid`;
+  const pw = `E2e-${run}-Foto9!`;
+  const otherClinic = `Clínica Foto ${run}`;
+  const otherEmail = mail("outro");
+  const emails = [mail("pro"), mail("staff"), mail("adm"), mail("multi"), otherEmail];
+  const created = [];
+  const png = await sharp({ create: { width: 32, height: 32, channels: 3, background: { r: 200, g: 80, b: 120 } } }).png().toBuffer();
+  const form = (bytes, type, name = "foto.png", field = "file") => { const f = new FormData(); f.set(field, new File([bytes], name, { type }), name); return f; };
+  const raw = async (method, path, body, sess = cookie) => {
+    const res = await fetch(`${baseUrl}${path}`, { method, body, headers: sess ? { cookie: sess } : {}, redirect: "manual" });
+    const buf = Buffer.from(await res.arrayBuffer());
+    return { status: res.status, type: res.headers.get("content-type"), buf };
+  };
+  try {
+    const mk = async (tag, role) => {
+      const r = await api("POST", "/api/team", { name: `E2E Foto ${tag}`, email: mail(tag), password: pw, role, cpf: randomCpf(), address: "Rua Velha, 1", postalCode: "01001000", country: "Brasil", state: "SP", city: "São Paulo" });
+      if (r.status === 201) created.push(r.data.member);
+      return r.status === 201 ? r.data.member : null;
+    };
+    const pro = await mk("pro", "PROFESSIONAL");
+    const staff = await mk("staff", "STAFF");
+    const adm = await mk("adm", "ADMIN");
+    const multi = await mk("multi", "STAFF");
+    if (!pro || !staff || !adm || !multi) { check("foto colaborador: membros criados", false, `${!!pro} ${!!staff} ${!!adm} ${!!multi}`); return; }
+    const url = (id) => `/api/team/${id}/avatar`;
+
+    // sem foto / sem sessao
+    let r = await raw("GET", url(pro.id));
+    check("foto colaborador: sem foto devolve 204", r.status === 204, r.status);
+    r = await raw("GET", url(pro.id), undefined, "");
+    check("foto colaborador: GET sem sessao devolve 401", r.status === 401, r.status);
+    r = await raw("PUT", url(pro.id), form(png, "image/png"), "");
+    check("foto colaborador: PUT sem sessao devolve 401", r.status === 401, r.status);
+    r = await raw("DELETE", url(pro.id), undefined, "");
+    check("foto colaborador: DELETE sem sessao devolve 401", r.status === 401, r.status);
+
+    // sucesso
+    r = await raw("PUT", url(pro.id), form(png, "image/png"));
+    check("foto colaborador: ADMIN envia PNG (200)", r.status === 200, `${r.status} ${r.buf.toString().slice(0, 100)}`);
+    r = await raw("GET", url(pro.id));
+    const meta = r.status === 200 ? await sharp(r.buf).metadata().catch(() => null) : null;
+    check("foto colaborador: GET devolve JPEG valido", r.status === 200 && r.type === "image/jpeg" && meta?.format === "jpeg" && meta.width === 32, `${r.status} ${r.type} ${meta?.format}`);
+    const webp = await sharp(png).webp().toBuffer();
+    r = await raw("PUT", url(pro.id), form(webp, "image/webp", "f.webp"));
+    check("foto colaborador: aceita WebP", r.status === 200, r.status);
+    const jpg = await sharp(png).jpeg().toBuffer();
+    r = await raw("PUT", url(pro.id), form(jpg, "image/jpeg", "f.jpg"));
+    check("foto colaborador: aceita JPEG", r.status === 200, r.status);
+
+    // invalidos (foto atual deve permanecer)
+    const before = (await raw("GET", url(pro.id))).buf;
+    r = await raw("PUT", url(pro.id), form(Buffer.from("GIF89a"), "image/gif", "a.gif"));
+    check("foto colaborador: tipo fora da allowlist devolve 400", r.status === 400, r.status);
+    r = await raw("PUT", url(pro.id), form(Buffer.from("isto nao e imagem"), "image/png"));
+    check("foto colaborador: imagem ilegivel devolve 400", r.status === 400, r.status);
+    r = await raw("PUT", url(pro.id), form(png, "image/png", "foto.png", "outro"));
+    check("foto colaborador: campo file ausente devolve 400", r.status === 400, r.status);
+    r = await raw("PUT", url(pro.id), form(Buffer.alloc(5 * 1024 * 1024 + 1, 1), "image/png"));
+    check("foto colaborador: acima de 5MB devolve 413", r.status === 413, r.status);
+    const afterBad = (await raw("GET", url(pro.id))).buf;
+    check("foto colaborador: pedidos invalidos nao alteraram a foto", Buffer.compare(before, afterBad) === 0, `${before.length} ${afterBad.length}`);
+
+    // outra clinica
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo Foto", phone: "11999990025", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: pw }));
+    const foreign = await prisma.clinicMembership.findFirst({ where: { user: { email: otherEmail } }, select: { id: true, clinicId: true, userId: true } });
+    if (reg.status === 201 && foreign) {
+      r = await raw("GET", url(foreign.id));
+      check("foto colaborador: GET de membro de outra clinica devolve 404", r.status === 404, r.status);
+      r = await raw("PUT", url(foreign.id), form(png, "image/png"));
+      const fa = await prisma.userAvatar.findUnique({ where: { userId: foreign.userId }, select: { userId: true } });
+      check("foto colaborador: PUT em membro de outra clinica devolve 404 e nao grava", r.status === 404 && !fa, `${r.status} ${!!fa}`);
+      r = await raw("DELETE", url(foreign.id));
+      check("foto colaborador: DELETE em membro de outra clinica devolve 404", r.status === 404, r.status);
+      const other = await loginAs(otherEmail, pw);
+      if (other.status === 200) {
+        r = await raw("GET", url(pro.id), undefined, other.cookie);
+        check("foto colaborador: admin de outra clinica recebe 404 ao ler", r.status === 404, r.status);
+        r = await raw("PUT", url(pro.id), form(png, "image/png"), other.cookie);
+        check("foto colaborador: admin de outra clinica recebe 404 ao enviar", r.status === 404, r.status);
+        r = await raw("DELETE", url(pro.id), undefined, other.cookie);
+        const still = await raw("GET", url(pro.id));
+        check("foto colaborador: admin de outra clinica nao apaga a foto", r.status === 404 && still.status === 200, `${r.status} ${still.status}`);
+      } else check("login do admin da outra clinica (foto)", false, other.status);
+
+      // conta com membership em outra clinica
+      const multiUser = await prisma.user.findUnique({ where: { email: mail("multi") }, select: { id: true } });
+      await prisma.clinicMembership.create({ data: { userId: multiUser.id, clinicId: foreign.clinicId, role: "STAFF" } });
+      r = await raw("PUT", url(multi.id), form(png, "image/png"));
+      check("foto colaborador: admin nao troca foto de conta compartilhada (403)", r.status === 403 && !(await prisma.userAvatar.findUnique({ where: { userId: multiUser.id } })), r.status);
+      r = await raw("DELETE", url(multi.id));
+      check("foto colaborador: admin nao remove foto de conta compartilhada (403)", r.status === 403, r.status);
+      const multiSess = await loginAs(mail("multi"), pw);
+      if (multiSess.status === 200) {
+        r = await raw("PUT", url(multi.id), form(png, "image/png"), multiSess.cookie);
+        check("foto colaborador: conta compartilhada troca a propria foto (200)", r.status === 200, r.status);
+      }
+    } else check("segunda clinica criada para foto", false, `registro ${reg.status}`);
+
+    // owner
+    const owner = await prisma.clinicMembership.findFirst({ where: { isOwner: true, user: { email } }, select: { id: true } });
+    const admSess = await loginAs(mail("adm"), pw);
+    if (owner && admSess.status === 200) {
+      r = await raw("PUT", url(owner.id), form(png, "image/png"), admSess.cookie);
+      check("foto colaborador: outro ADMIN nao troca foto do dono (403)", r.status === 403, r.status);
+      r = await raw("DELETE", url(owner.id), undefined, admSess.cookie);
+      check("foto colaborador: outro ADMIN nao remove foto do dono (403)", r.status === 403, r.status);
+      r = await raw("GET", url(owner.id), undefined, admSess.cookie);
+      check("foto colaborador: qualquer membro le a foto do dono (200/204)", r.status === 200 || r.status === 204, r.status);
+      r = await raw("PUT", url(staff.id), form(png, "image/png"), admSess.cookie);
+      check("foto colaborador: outro ADMIN troca foto de membro comum (200)", r.status === 200, r.status);
+    } else check("dono e login do ADMIN auxiliar (foto)", false, `${!!owner} ${admSess.status}`);
+
+    // papeis
+    for (const [label, tag] of [["STAFF", "staff"], ["PROFESSIONAL", "pro"]]) {
+      const s = await loginAs(mail(tag), pw);
+      if (s.status !== 200) { check(`login ${label} (foto)`, false, s.status); continue; }
+      const target = tag === "staff" ? pro : staff;
+      r = await raw("GET", url(target.id), undefined, s.cookie);
+      check(`foto colaborador: ${label} le foto de outro membro`, r.status === 200 || r.status === 204, r.status);
+      r = await raw("PUT", url(target.id), form(png, "image/png"), s.cookie);
+      check(`foto colaborador: ${label} em outro membro recebe 403 ao enviar`, r.status === 403, r.status);
+      r = await raw("DELETE", url(target.id), undefined, s.cookie);
+      check(`foto colaborador: ${label} em outro membro recebe 403 ao remover`, r.status === 403, r.status);
+      const self = tag === "staff" ? staff : pro;
+      r = await raw("PUT", url(self.id), form(png, "image/png"), s.cookie);
+      check(`foto colaborador: ${label} troca a propria foto (200)`, r.status === 200, r.status);
+      if (tag === "pro") {
+        r = await raw("DELETE", url(self.id), undefined, s.cookie);
+        const g = await raw("GET", url(self.id));
+        check("foto colaborador: proprio membro remove a foto (200 e depois 204)", r.status === 200 && g.status === 204, `${r.status} ${g.status}`);
+      }
+    }
+
+    // clique duplo
+    r = await Promise.all([raw("PUT", url(adm.id), form(png, "image/png")), raw("PUT", url(adm.id), form(png, "image/png"))]);
+    const count = await prisma.userAvatar.count({ where: { user: { email: mail("adm") } } });
+    check("foto colaborador: clique duplo no PUT nao duplica nem falha", r.every((x) => x.status === 200) && count === 1, `${r.map((x) => x.status)} ${count}`);
+
+    // DELETE admin e idempotente
+    r = await raw("DELETE", url(adm.id));
+    const d2 = await raw("DELETE", url(adm.id));
+    const g2 = await raw("GET", url(adm.id));
+    check("foto colaborador: ADMIN remove (200), repetir tambem 200, GET volta 204", r.status === 200 && d2.status === 200 && g2.status === 204, `${r.status} ${d2.status} ${g2.status}`);
+  } finally {
+    for (const member of created) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.userAvatar.deleteMany({ where: { user: { email: { in: emails } } } });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: emails } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: emails } } });
+  }
+}
+
 const suites = {
+  colaborador_foto: { needs: [], run: () => collaboratorPhoto() },
   colaborador_editar: { needs: [], run: () => collaboratorEdit() },
   detalhe_profissional: { needs: [], run: () => teamMemberDetail() },
   colaborador_endereco: { needs: [], run: () => collaboratorOptionalAddress() },
