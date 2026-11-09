@@ -6578,7 +6578,115 @@ async function teamMemberDetail() {
   }
 }
 
+async function collaboratorEdit() {
+  const mail = (t) => `e2e-colabedit-${t}-${run}@example.invalid`;
+  const pw = `E2e-${run}-Edit9!`;
+  const otherClinic = `Clínica Edit ${run}`;
+  const otherEmail = mail("outro");
+  const created = [];
+  const emails = [mail("pro"), mail("staff"), mail("adm"), mail("multi"), otherEmail];
+  try {
+    const mk = async (tag, role) => {
+      const r = await api("POST", "/api/team", { name: `E2E Edit ${tag}`, email: mail(tag), password: pw, role, cpf: randomCpf(), address: "Rua Velha, 1", postalCode: "01001000", country: "Brasil", state: "SP", city: "São Paulo" });
+      if (r.status === 201) created.push(r.data.member);
+      return r.status === 201 ? r.data.member : null;
+    };
+    const pro = await mk("pro", "PROFESSIONAL");
+    const staff = await mk("staff", "STAFF");
+    const adm = await mk("adm", "ADMIN");
+    const multi = await mk("multi", "STAFF");
+    if (!pro || !staff || !adm || !multi) { check("editar colaborador: membros criados", false, `${!!pro} ${!!staff} ${!!adm} ${!!multi}`); return; }
+
+    // sucesso + GET reflete
+    const cpf = randomCpf();
+    let r = await api("PATCH", `/api/team/${pro.id}`, { name: `  E2E Editado ${run}  `, cpf, postalCode: "20040-020", address: "Av Nova, 99", country: "Brasil", state: "RJ", city: "Rio de Janeiro" });
+    const u = r.data?.member?.user;
+    check("editar colaborador: ADMIN edita e recebe o membro com os mesmos campos do GET", r.status === 200 && r.data.member.id === pro.id && Object.keys(r.data.member).sort().join() === "id,isOwner,laborCostCents,role,user" && u?.name === `E2E Editado ${run}` && u.cpf === cpf && u.postalCode === "20040020" && u.address === "Av Nova, 99" && u.state === "RJ" && u.city === "Rio de Janeiro" && u.email === mail("pro"), JSON.stringify(r.data).slice(0, 250));
+    r = await api("GET", `/api/team/${pro.id}`);
+    check("editar colaborador: GET reflete a edicao", r.status === 200 && r.data.member.user.name === `E2E Editado ${run}` && r.data.member.user.city === "Rio de Janeiro" && r.data.member.user.email === mail("pro"), JSON.stringify(r.data).slice(0, 200));
+    r = await api("PATCH", `/api/team/${pro.id}`, { name: "Outro Nome", cpf, email: "hacker@example.invalid", role: "ADMIN" });
+    let after = await api("GET", `/api/team/${pro.id}`);
+    check("editar colaborador: e-mail e papel nao mudam por este endpoint", r.status === 200 && after.data.member.user.email === mail("pro") && after.data.member.role === "PROFESSIONAL", JSON.stringify(after.data).slice(0, 200));
+
+    // invalidos
+    r = await api("PATCH", `/api/team/${pro.id}`, { name: "Nome Ok", cpf: "11111111111" });
+    check("editar colaborador: CPF invalido devolve 400", r.status === 400, r.status);
+    r = await api("PATCH", `/api/team/${pro.id}`, { name: "Nome Ok" });
+    check("editar colaborador: CPF ausente devolve 400", r.status === 400, r.status);
+    r = await api("PATCH", `/api/team/${pro.id}`, { name: "   ", cpf });
+    check("editar colaborador: nome vazio devolve 400", r.status === 400, r.status);
+    r = await api("PATCH", `/api/team/${pro.id}`, { name: "x".repeat(101), cpf });
+    check("editar colaborador: nome acima de 100 devolve 400", r.status === 400, r.status);
+    r = await api("PATCH", `/api/team/${pro.id}`, { name: "Nome Ok", cpf, postalCode: "123" });
+    check("editar colaborador: CEP incompleto devolve 400", r.status === 400, r.status);
+    r = await api("PATCH", `/api/team/${pro.id}`, { name: "Nome Ok", cpf, address: "a".repeat(201) });
+    check("editar colaborador: endereco acima de 200 devolve 400", r.status === 400, r.status);
+    after = await api("GET", `/api/team/${pro.id}`);
+    check("editar colaborador: pedidos invalidos nao gravaram nada", after.data.member.user.name === "Outro Nome" && after.data.member.user.cpf === cpf, JSON.stringify(after.data).slice(0, 200));
+
+    // limpar endereco
+    r = await api("PATCH", `/api/team/${pro.id}`, { name: "Sem Endereco", cpf, postalCode: "", address: "  ", country: "", state: "", city: "" });
+    const c = r.data?.member?.user;
+    check("editar colaborador: limpar endereco grava null", r.status === 200 && c?.address === null && c.postalCode === null && c.country === null && c.state === null && c.city === null && c.name === "Sem Endereco", JSON.stringify(r.data).slice(0, 250));
+    r = await api("GET", `/api/team/${pro.id}`);
+    check("editar colaborador: GET confirma endereco nulo", r.data?.member?.user?.address === null && r.data.member.user.city === null, JSON.stringify(r.data).slice(0, 200));
+
+    // 404
+    r = await api("PATCH", `/api/team/inexistente-${run}`, { name: "Nome Ok", cpf });
+    check("editar colaborador: id inexistente devolve 404", r.status === 404, r.status);
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo Edit", phone: "11999990024", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: pw }));
+    const foreign = await prisma.clinicMembership.findFirst({ where: { user: { email: otherEmail } }, select: { id: true, clinicId: true, user: { select: { name: true } } } });
+    if (reg.status === 201 && foreign) {
+      r = await api("PATCH", `/api/team/${foreign.id}`, { name: "Invadido", cpf });
+      const still = await prisma.user.findUnique({ where: { email: otherEmail }, select: { name: true } });
+      check("editar colaborador: membro de outra clinica devolve 404 e nao altera", r.status === 404 && still?.name === foreign.user.name, `${r.status} ${still?.name}`);
+      const other = await loginAs(otherEmail, pw);
+      if (other.status === 200) {
+        r = await withSession(other.cookie, () => api("PATCH", `/api/team/${pro.id}`, { name: "Invadido", cpf }));
+        check("editar colaborador: admin de outra clinica recebe 404 no membro da clinica de teste", r.status === 404, r.status);
+      } else check("login do admin da outra clinica", false, other.status);
+
+      // usuario com membership em outra clinica
+      const multiUser = await prisma.user.findUnique({ where: { email: mail("multi") }, select: { id: true } });
+      await prisma.clinicMembership.create({ data: { userId: multiUser.id, clinicId: foreign.clinicId, role: "STAFF" } });
+      r = await api("PATCH", `/api/team/${multi.id}`, { name: "Nao Pode", cpf });
+      const mu = await prisma.user.findUnique({ where: { email: mail("multi") }, select: { name: true } });
+      check("editar colaborador: usuario que atua em outra clinica devolve 403 e nao altera", r.status === 403 && mu?.name === "E2E Edit multi", `${r.status} ${mu?.name}`);
+    } else check("segunda clinica criada para editar colaborador", false, `registro ${reg.status}`);
+
+    // owner: so ele mesmo (nao edito a propria conta de teste)
+    const owner = await prisma.clinicMembership.findFirst({ where: { isOwner: true, user: { email } }, select: { id: true } });
+    const admSess = await loginAs(mail("adm"), pw);
+    if (owner && admSess.status === 200) {
+      r = await withSession(admSess.cookie, () => api("PATCH", `/api/team/${owner.id}`, { name: "Invadido", cpf }));
+      const ou = await prisma.user.findUnique({ where: { email }, select: { name: true } });
+      check("editar colaborador: outro ADMIN nao edita o dono (403)", r.status === 403 && ou?.name !== "Invadido", `${r.status}`);
+      r = await withSession(admSess.cookie, () => api("PATCH", `/api/team/${staff.id}`, { name: "Por Outro Admin", cpf: randomCpf() }));
+      check("editar colaborador: outro ADMIN edita membro comum (200)", r.status === 200 && r.data.member.user.name === "Por Outro Admin", r.status);
+    } else check("dono e login do ADMIN auxiliar para editar colaborador", false, `${!!owner} ${admSess.status}`);
+
+    // permissoes
+    for (const [label, tag] of [["STAFF", "staff"], ["PROFESSIONAL", "pro"]]) {
+      const s = await loginAs(mail(tag), pw);
+      if (s.status !== 200) { check(`login ${label} para editar colaborador`, false, s.status); continue; }
+      r = await withSession(s.cookie, () => api("PATCH", `/api/team/${pro.id}`, { name: "Invadido", cpf }));
+      check(`editar colaborador: ${label} recebe 403`, r.status === 403, r.status);
+    }
+    const final = await api("GET", `/api/team/${pro.id}`);
+    check("editar colaborador: nao-admin nao alterou o nome", final.data?.member?.user?.name === "Sem Endereco", final.data?.member?.user?.name);
+
+    r = await withSession("", () => api("PATCH", `/api/team/${pro.id}`, { name: "Nome Ok", cpf }));
+    check("editar colaborador: sem sessao devolve 401", r.status === 401, r.status);
+  } finally {
+    for (const member of created) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: emails } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: emails } } });
+  }
+}
+
 const suites = {
+  colaborador_editar: { needs: [], run: () => collaboratorEdit() },
   detalhe_profissional: { needs: [], run: () => teamMemberDetail() },
   colaborador_endereco: { needs: [], run: () => collaboratorOptionalAddress() },
   clinica_ativa: { needs: [], run: () => activeClinic() },
