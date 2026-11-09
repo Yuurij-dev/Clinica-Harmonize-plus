@@ -75,13 +75,14 @@ import { describeTechnicalSheet } from "@/lib/stock-rules";
 import type { TechnicalSheetItem } from "./technical-sheet-editor";
 import { ProcedureFormModal, procedureCatalogCacheKey, type EditableProcedure } from "./procedure-form-modal";
 import { MaterialCheckModal } from "./material-check-modal";
-import { PaymentCreateModal } from "./payment-modals";
+import { PaymentCreateModal, type CreatedPayment } from "./payment-modals";
 import { ClinicTimePicker } from "./clinic-time-picker";
 import { latestAppointmentStart } from "@/lib/clinic-time";
 import { appointmentProcedureDuration } from "@/lib/procedure-session-rules";
 import { toast } from "sonner";
 import { clientsHomeEvent } from "@/lib/section-events";
 import { ProcedureImage } from "./procedure-image";
+import { PatientAvatar } from "./patient-avatar";
 import type { Appointment, JourneyStageId, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
 
 const currency = new Intl.NumberFormat("pt-BR", {
@@ -509,7 +510,7 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
           const currentStage = journey.find((stage) => stage.status === "current");
 
           return [
-          <button className="text-left font-bold text-[#303144] hover:text-[#5147dc] max-lg:-my-3 max-lg:py-3" key={patient.name} onClick={() => openPatient(patient)}>{patient.name}</button>,
+          <button className="flex items-center gap-2 text-left font-bold text-[#303144] hover:text-[#5147dc] max-lg:-my-3 max-lg:py-3" key={patient.name} onClick={() => openPatient(patient)}><PatientAvatar patientId={patient.id} name={patient.name} />{patient.name}</button>,
           patient.phone,
           <StatusBadge key={patient.status} status={patient.status} />,
           <span className="font-bold text-[#5147dc]" key={currentStage?.id}>{currentStage?.label ?? "Concluída"}</span>,
@@ -1006,7 +1007,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
               <div className="flex min-w-0 items-center gap-2"><ProcedureImage name={appointment.procedure} decorative className="h-8 w-8 rounded-sm" /><div className="min-w-0"><strong className="block truncate text-[#3d3e51]">{appointment.procedure}</strong><span className="mt-1 block text-[9px] text-[#aaaab7]">Consulta clínica</span></div></div>
               <StatusBadge status={appointment.status} />
               <div className="flex items-center gap-2"><span className="grid h-6 w-6 place-items-center rounded-full bg-[#f0efff] text-[8px] font-black text-[#5147dc]">{appointment.professional.replace("Dra. ", "").replace("Dr. ", "").slice(0, 2).toUpperCase()}</span><strong className="text-[#5a5b6e]">{appointment.professional}</strong></div>
-              <div><strong className="block uppercase text-[#444557]">{appointment.patient}</strong><span className="mt-1 block text-[9px] text-[#aaaab7]">Paciente</span></div>
+              <div className="flex items-center gap-2"><PatientAvatar patientId={appointment.patientId} name={appointment.patient} size="xs" /><div><strong className="block uppercase text-[#444557]">{appointment.patient}</strong><span className="mt-1 block text-[9px] text-[#aaaab7]">Paciente</span></div></div>
               <div className="flex justify-end gap-2">
                 {canRun ? <Button className="border-[#5147dc] text-[#5147dc]" key="action" size="sm" variant="secondary" disabled={isCompleted || isMissed || updatingId !== null} onClick={() => advanceAppointment(appointment)}>{updatingId === appointment.id ? <Loader2 className="h-3 w-3 animate-spin" /> : null}{updatingId === appointment.id ? "Atualizando..." : primaryLabel} {updatingId === appointment.id ? null : <ArrowRight className="h-3 w-3" />}</Button> : null}
                 {!isCompleted && !isMissed ? (
@@ -1049,13 +1050,13 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
                       setPatientQuery(`${patient.name}${patient.cpf ? ` · ${patient.cpf}` : ""}`);
                     }}
                   >
-                    <span className="font-bold text-[#303144]">{patient.name}</span>
+                    <span className="flex items-center gap-2"><PatientAvatar patientId={patient.id} name={patient.name} size="xs" /><span className="font-bold text-[#303144]">{patient.name}</span></span>
                     <span className="text-[10px] text-[#858696]">{patient.cpf || "CPF não informado"}</span>
                   </button>
                 )) : <p className="px-3 py-2 text-xs text-[#858696]">{patientLookup.tooShort ? "Digite pelo menos 2 letras." : patientLookup.loading ? "Buscando pacientes..." : patientLookup.error ? "Não foi possível buscar pacientes." : "Nenhum paciente encontrado."}</p>}
               </div>
             ) : null}
-            {selectedPatientId ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {selectedPatient?.name}</p> : null}
+            {selectedPatientId && selectedPatient ? <p className="mt-1 flex items-center gap-1.5 text-[10px] font-semibold text-[#5147dc]"><PatientAvatar patientId={selectedPatient.id} name={selectedPatient.name} size="xs" className="h-5 w-5 text-[7px]" />Paciente selecionado: {selectedPatient.name}</p> : null}
           </div>
           <FormField label="Data">
             <div className="relative">
@@ -1230,7 +1231,9 @@ function CalendarAppointmentCard({ appointment, top, height, column, columns, op
   const primaryLabel = appointment.status === "Em atendimento" ? "Finalizar" : isCompleted ? "Concluído" : isMissed ? "Faltou" : "Atender";
   return <div className={cn("group absolute z-10 cursor-pointer rounded-[7px] border-l-[3px] p-2 text-[10px] shadow-[0_4px_12px_rgba(38,39,58,0.06)]", tone.card, (hasMenu && open) ? "z-30 overflow-visible" : "overflow-hidden", past && "brightness-[0.84] saturate-[0.78]")} style={{ top, height, left: `calc(${column} * 100% / ${columns} + 4px)`, width: `calc(100% / ${columns} - 8px)` }} aria-label={`${appointment.procedure} - status: ${appointment.status}`} onClick={() => onSelect(appointment)}>
     <span className="pointer-events-none absolute -top-7 left-2 z-40 hidden whitespace-nowrap rounded-[5px] bg-[#303144] px-2 py-1 text-[10px] font-bold text-white shadow-lg group-hover:block">Status: {appointment.status}</span>
-    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><div className="mt-1 flex min-w-0 items-center gap-1"><ProcedureImage name={appointment.procedure} decorative className="h-5 w-5 rounded-sm" /><p className="truncate text-[11px] font-black">{appointment.procedure}</p></div><p className="mt-0.5 truncate opacity-80">{appointment.patient}</p></div><div className="relative shrink-0">{hasMenu ? <button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5 max-md:-mr-2 max-md:-mt-2 max-md:h-11 max-md:w-11" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button> : null}{hasMenu && open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}>{canRun ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button> : null}{showStatusGroup ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button>{canDelete ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button> : null}</> : null}{showWhatsapp ? <button type="button" className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] disabled:opacity-50" disabled title="Confirmação por WhatsApp em breve">Confirmar por WhatsApp</button> : null}</div> : null}</div></div>
+
+    <div className="flex items-start justify-between gap-1"><div className="min-w-0"><p className="truncate font-bold">{appointment.time} - {formatEndTime(appointment.time, appointment.durationMinutes)}</p><div className="mt-1 flex min-w-0 items-center gap-1"><ProcedureImage name={appointment.procedure} decorative className="h-5 w-5 rounded-sm" /><p className="truncate text-[11px] font-black">{appointment.procedure}</p></div><p className="mt-0.5 flex items-center gap-1 truncate opacity-80"><PatientAvatar patientId={appointment.patientId} name={appointment.patient} size="xs" className="h-5 w-5 text-[7px]" /><span className="truncate">{appointment.patient}</span></p></div><div className="relative shrink-0">{hasMenu ? <button type="button" className="grid h-6 w-6 place-items-center rounded-full transition hover:bg-black/5 max-md:-mr-2 max-md:-mt-2 max-md:h-11 max-md:w-11" aria-label={`Ações de ${appointment.procedure}`} onClick={(event) => { event.stopPropagation(); onMenuToggle(appointment.id); }}><MoreVertical className="h-3.5 w-3.5" /></button> : null}{hasMenu && open ? <div className="absolute right-0 top-7 z-30 w-36 rounded-[7px] border border-[#e5e5ee] bg-white p-1 text-left shadow-xl" onClick={(event) => event.stopPropagation()}>{canRun ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] hover:bg-[#f5f4ff] disabled:opacity-50" disabled={isCompleted || isMissed || isCancelled || updating || !canStart} onClick={() => { onAdvance(appointment); onMenuToggle(appointment.id); }}>{updating ? "Atualizando..." : primaryLabel}</button> : null}{showStatusGroup ? <><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onMissed(appointment); onMenuToggle(appointment.id); }}>Marcar como faltou</button><button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#b42318] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onCancel(appointment); onMenuToggle(appointment.id); }}>Cancelar agendamento</button>{canDelete ? <button className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#8d1c26] hover:bg-[#fff1f0] disabled:opacity-50" disabled={updating} onClick={() => { onDelete(appointment); onMenuToggle(appointment.id); }}>Excluir agendamento</button> : null}</> : null}{showWhatsapp ? <button type="button" className="block w-full rounded-[5px] px-2 py-1.5 text-[10px] font-bold text-[#454659] disabled:opacity-50" disabled title="Confirmação por WhatsApp em breve">Confirmar por WhatsApp</button> : null}</div> : null}</div></div>
+
     <span className={cn("mt-1 inline-flex rounded-full px-2 py-0.5 text-[9px] font-bold", tone.pill)}>{appointment.category || "Atendimento"}</span>
   </div>;
 }
@@ -1240,7 +1243,9 @@ function MonthCalendar({ date, appointments, onSelect }: { date: Date; appointme
   const startOffset = (first.getDay() + 6) % 7;
   const daysInMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
   const cells = Array.from({ length: Math.ceil((startOffset + daysInMonth) / 7) * 7 }, (_, index) => index - startOffset + 1);
+
   return <><div className="overflow-x-auto rounded-[8px] border border-[#e7e9f2] bg-white shadow-[0_8px_28px_rgba(38,39,58,0.035)] max-md:hidden"><div className="min-w-[700px]"><div className="grid grid-cols-7 border-b border-[#ececf3] bg-[#fbfbfe]">{["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map((label) => <span className="px-2 py-3 text-center text-[10px] font-bold uppercase text-[#858696]" key={label}>{label}</span>)}</div><div className="grid grid-cols-7">{cells.map((day) => { const valid = day > 0 && day <= daysInMonth; const cellDate = valid ? new Date(date.getFullYear(), date.getMonth(), day) : null; const dayAppointments = cellDate ? appointments.filter((item) => calendarDateKey(item.date) === calendarDateKey(cellDate)) : []; return <div className={cn("min-h-28 border-b border-r border-[#f0f0f5] p-2", !valid && "bg-[#fbfbfd]")} key={`${date.getFullYear()}-${date.getMonth()}-${day}`}><span className={cn("grid h-6 w-6 place-items-center rounded-full text-[10px] font-bold", cellDate && calendarDateKey(cellDate) === calendarDateKey(clinicNow()) && "bg-[#5147dc] text-white")}>{valid ? day : ""}</span><div className="mt-1 space-y-1">{dayAppointments.slice(0, 3).map((item) => <button type="button" className={cn("block w-full truncate rounded-[4px] border-l-2 px-1.5 py-1 text-left text-[9px] font-bold", appointmentTone(item).card)} key={item.id} onClick={() => onSelect(item)}>{item.time} · {item.patient}</button>)}{dayAppointments.length > 3 ? <span className="text-[9px] font-semibold text-[#858696]">+{dayAppointments.length - 3} atendimentos</span> : null}</div></div>; })}</div></div></div><AgendaMonthMobile date={date} appointments={appointments} todayKey={calendarDateKey(clinicNow())} dateKey={calendarDateKey} tone={appointmentTone} onSelect={onSelect} /></>;
+
 }
 
 function CalendarSkeleton() {
@@ -1535,12 +1540,12 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
 }
 
 export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
-  type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; createdAt?: string; patient?: { name: string } | null };
+  type ApiQuote = { id: string; items: string; total: number; status: string; expires: string | null; createdAt?: string; patient?: { id: string; name: string } | null };
   type QuoteRow = Quote & { createdAt?: string };
   type QuoteOptions = { procedures?: Array<{ id: string; name: string; price: number; image?: { url: string | null } | null }>; costs?: { laborCost: number; facilityCost: number; medicationCost: number } };
   const cachedQuotes = readClientCache<{ quotes?: ApiQuote[]; hasMore?: boolean }>("/api/quotes");
   const cachedQuoteOptions = readClientCache<QuoteOptions>("/api/quotes/options");
-  const [quoteRows, setQuoteRows] = useState<QuoteRow[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
+  const [quoteRows, setQuoteRows] = useState<QuoteRow[]>(() => (cachedQuotes?.quotes ?? []).map((item) => ({ id: item.id, patientId: item.patient?.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
   const [loadedQuotesKey, setLoadedQuotesKey] = useState(cachedQuotes ? "/api/quotes" : "");
   const [quotesHasMore, setQuotesHasMore] = useState(Boolean(cachedQuotes?.hasMore));
   const [isSaving, setIsSaving] = useState(false);
@@ -1564,7 +1569,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     let active = true;
     getCachedJson<{ quotes?: ApiQuote[]; hasMore?: boolean }>(quotesKey).then((data) => {
       if (!active) return;
-      setQuoteRows((data.quotes ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
+      setQuoteRows((data.quotes ?? []).map((item) => ({ id: item.id, patientId: item.patient?.id, patient: item.patient?.name ?? "Paciente", items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: item.createdAt })));
       setQuotesHasMore(Boolean(data.hasMore));
       setLoadedQuotesKey(quotesKey);
     }).catch(() => { if (active) setLoadedQuotesKey(quotesKey); });
@@ -1602,10 +1607,10 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     const response = await fetch("/api/quotes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ patientId: selectedPatientId, items: String(form.get("items")), total: parseCurrency(form.get("total")), expires: String(form.get("expires")) }) });
     setIsSaving(false);
     if (!response.ok) return;
-    const data = await response.json() as { quote: { id: string; items: string; total: number; status: string; expires: string | null; patient?: { name: string } | null } };
+    const data = await response.json() as { quote: { id: string; items: string; total: number; status: string; expires: string | null; patient?: { id: string; name: string } | null } };
     const item = data.quote;
     invalidateClientCache("/api/quotes", "/api/patients", `/api/patients/${selectedPatientId}/history`, "/api/dashboard/bootstrap");
-    setQuoteRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: new Date().toISOString() }, ...current]);
+    setQuoteRows((current) => [{ id: item.id, patientId: item.patient?.id ?? selectedPatientId, patient: item.patient?.name ?? patient, items: item.items, total: currency.format(item.total), status: item.status, expires: item.expires ? new Date(item.expires).toLocaleDateString("pt-BR") : "Sem validade", createdAt: new Date().toISOString() }, ...current]);
     setPatientQuery(""); setSelectedPatientId(""); setSelectedProcedureNames([]);
     onCreateClose(); onSaved?.(`Orçamento de ${patient} foi criado.`);
   }
@@ -1641,7 +1646,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
       {isLoading ? <LoadingTable columns={6} /> : visibleQuotes.length ? <MiniTable
         columns={["Paciente", "Itens", "Total", "Status", "Validade", "Ação"]}
         rows={visibleQuotes.map((quote) => [
-          <strong className="text-[#121733]" key={quote.patient}>{quote.patient}</strong>,
+          <span className="flex items-center gap-2" key={quote.id}><PatientAvatar patientId={quote.patientId} name={quote.patient} /><strong className="text-[#121733]">{quote.patient}</strong></span>,
           quote.items,
           <span className="font-black text-[#1438ff]" key={quote.total}>{quote.total}</span>,
           <StatusBadge key={quote.status} status={quote.status} />,
@@ -1657,9 +1662,9 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
               <input className={fieldClassName} name="patientSearch" placeholder="Pesquise por nome ou CPF" required value={patientQuery} onChange={(event) => { setPatientQuery(event.target.value); setSelectedPatientId(""); }} />
             </FormField>
             {patientQuery && !selectedPatientId ? <div className="absolute left-0 right-0 top-[68px] z-20 max-h-44 overflow-auto rounded-[7px] border border-[#e5e5ee] bg-white p-1 shadow-xl">
-              {matchingQuotePatients.length ? matchingQuotePatients.map((patient) => <button className="flex w-full items-center justify-between rounded-[5px] px-3 py-2 text-left text-xs transition hover:bg-[#f5f4ff]" key={patient.id} type="button" onClick={() => { setSelectedQuotePatient(patient); setSelectedPatientId(patient.id); setPatientQuery(`${patient.name}${patient.cpf ? ` · ${patient.cpf}` : ""}`); }}><span className="font-bold text-[#303144]">{patient.name}</span><span className="text-[10px] text-[#858696]">{patient.cpf || "CPF não informado"}</span></button>) : <p className="px-3 py-2 text-xs text-[#858696]">{quotePatientLookup.tooShort ? "Digite pelo menos 2 letras." : quotePatientLookup.loading ? "Buscando pacientes..." : quotePatientLookup.error ? "Não foi possível buscar pacientes." : "Nenhum paciente encontrado."}</p>}
+              {matchingQuotePatients.length ? matchingQuotePatients.map((patient) => <button className="flex w-full items-center justify-between rounded-[5px] px-3 py-2 text-left text-xs transition hover:bg-[#f5f4ff]" key={patient.id} type="button" onClick={() => { setSelectedQuotePatient(patient); setSelectedPatientId(patient.id); setPatientQuery(`${patient.name}${patient.cpf ? ` · ${patient.cpf}` : ""}`); }}><span className="flex items-center gap-2"><PatientAvatar patientId={patient.id} name={patient.name} size="xs" /><span className="font-bold text-[#303144]">{patient.name}</span></span><span className="text-[10px] text-[#858696]">{patient.cpf || "CPF não informado"}</span></button>) : <p className="px-3 py-2 text-xs text-[#858696]">{quotePatientLookup.tooShort ? "Digite pelo menos 2 letras." : quotePatientLookup.loading ? "Buscando pacientes..." : quotePatientLookup.error ? "Não foi possível buscar pacientes." : "Nenhum paciente encontrado."}</p>}
             </div> : null}
-            {selectedPatientId ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {selectedQuotePatient?.name}</p> : null}
+            {selectedPatientId && selectedQuotePatient ? <p className="mt-1 flex items-center gap-1.5 text-[10px] font-semibold text-[#5147dc]"><PatientAvatar patientId={selectedQuotePatient.id} name={selectedQuotePatient.name} size="xs" className="h-5 w-5 text-[7px]" />Paciente selecionado: {selectedQuotePatient.name}</p> : null}
           </div>
           <FormField label="Validade"><MaskedInput className={fieldClassName} formatter={formatDate} name="expires" inputMode="numeric" maxLength={10} placeholder="30/09/2026" required /></FormField>
           <div className="sm:col-span-2"><FormField label="Procedimentos"><div className="flex min-h-10 flex-wrap gap-1.5 rounded-[7px] border border-[#dddfea] bg-white p-2">{selectedProcedureNames.map((name) => <span className="flex items-center gap-1 rounded-full bg-[#f0efff] py-1 pl-1 pr-2 text-[10px] font-bold text-[#5147dc]" key={name}><ProcedureImage name={name} imageUrl={quoteProcedures.find((procedure) => procedure.name === name)?.image?.url ?? null} decorative className="h-6 w-6 rounded-full" />{name}<button className="ml-0.5 text-[#5147dc] hover:text-[#b42318]" type="button" onClick={() => setSelectedProcedureNames((current) => current.filter((item) => item !== name))}>×</button></span>)}<select className="min-w-[150px] flex-1 bg-transparent text-sm font-semibold text-[#858696] outline-none" value="" disabled={optionsLoading || !quoteProcedures.length} onChange={(event) => { if (event.target.value) setSelectedProcedureNames((current) => current.includes(event.target.value) ? current : [...current, event.target.value]); }}><option value="">{optionsLoading ? "Carregando procedimentos..." : quoteProcedures.length ? "Adicionar procedimento" : "Nenhum procedimento cadastrado"}</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name} · {currency.format(procedure.price)}</option>)}</select></div><input className="sr-only" name="items" value={selectedProcedureNames.join(", ")} readOnly required /></FormField></div>
@@ -1672,9 +1677,9 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
 }
 
 export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
-  type ApiPayment = { id: string; value: number; method: string; date: string; status: string; installments: string; patient?: { name: string } | null };
+  type ApiPayment = { id: string; value: number; method: string; date: string; status: string; installments: string; patient?: { id: string; name: string } | null };
   const cachedPayments = readClientCache<{ payments?: ApiPayment[]; hasMore?: boolean }>("/api/payments");
-  const [paymentRows, setPaymentRows] = useState<Payment[]>(() => (cachedPayments?.payments ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), dateRaw: item.date, status: item.status, installments: item.installments })));
+  const [paymentRows, setPaymentRows] = useState<Payment[]>(() => (cachedPayments?.payments ?? []).map((item) => ({ id: item.id, patientId: item.patient?.id, patient: item.patient?.name ?? "Paciente", value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), dateRaw: item.date, status: item.status, installments: item.installments })));
   const [loadedPaymentsKey, setLoadedPaymentsKey] = useState(cachedPayments ? "/api/payments" : "");
   const [paymentsHasMore, setPaymentsHasMore] = useState(Boolean(cachedPayments?.hasMore));
   const [methodFilter, setMethodFilter] = useState("Todos");
@@ -1695,15 +1700,15 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
     let active = true;
     getCachedJson<{ payments?: ApiPayment[]; hasMore?: boolean }>(paymentsKey).then((data) => {
       if (!active) return;
-      setPaymentRows((data.payments ?? []).map((item) => ({ id: item.id, patient: item.patient?.name ?? "Paciente", value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), dateRaw: item.date, status: item.status, installments: item.installments })));
+      setPaymentRows((data.payments ?? []).map((item) => ({ id: item.id, patientId: item.patient?.id, patient: item.patient?.name ?? "Paciente", value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), dateRaw: item.date, status: item.status, installments: item.installments })));
       setPaymentsHasMore(Boolean(data.hasMore));
       setLoadedPaymentsKey(paymentsKey);
     }).catch(() => { if (active) setLoadedPaymentsKey(paymentsKey); });
     return () => { active = false; };
   }, [paymentsKey]);
 
-  function paymentCreated(item: ApiPayment, patient: string) {
-    setPaymentRows((current) => [{ id: item.id, patient: item.patient?.name ?? patient, value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), dateRaw: item.date, status: item.status, installments: item.installments }, ...current]);
+  function paymentCreated(item: CreatedPayment, patient: string, patientId: string) {
+    setPaymentRows((current) => [{ id: item.id, patientId, patient: item.patient?.name ?? patient, value: currency.format(item.value), method: item.method, date: new Date(item.date).toLocaleDateString("pt-BR"), dateRaw: item.date, status: item.status, installments: item.installments }, ...current]);
     onSaved?.(`Pagamento de ${patient} foi registrado.`);
   }
 
@@ -1737,7 +1742,7 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
       {isLoading ? <LoadingTable columns={6} /> : <MiniTable
         columns={["Paciente", "Valor", "Forma", "Data", "Status", "Parcelamento"]}
         rows={visiblePayments.map((payment) => [
-          <strong className="text-[#121733]" key={payment.patient}>{payment.patient}</strong>,
+          <span className="flex items-center gap-2" key={payment.id}><PatientAvatar patientId={payment.patientId} name={payment.patient} /><strong className="text-[#121733]">{payment.patient}</strong></span>,
           <span className="font-black text-[#1438ff]" key={payment.value}>{payment.value}</span>,
           payment.method,
           payment.date,
@@ -1929,13 +1934,23 @@ function Time24Input({ name, label, value, onChange }: { name: string; label: st
   );
 }
 
-export function SettingsSection({ isOwner = false, clinicName, onClinicNameChange, onRolePermissionsChange }: { isOwner?: boolean; clinicName?: string; onClinicNameChange?: (name: string) => void; onRolePermissionsChange?: (matrix: RolePermissionMatrix) => void }) {
+export const SETTINGS_SECTION_FOCUS_EVENT = "harmonize:settings-section-focus";
+
+export function SettingsSection({ isOwner = false, clinicName, onClinicNameChange, onRolePermissionsChange, initialSection }: { isOwner?: boolean; clinicName?: string; onClinicNameChange?: (name: string) => void; onRolePermissionsChange?: (matrix: RolePermissionMatrix) => void; initialSection?: string | null }) {
   const canManageRolePermissions = useCan("settings:permissions");
   const canManageTeam = useCan("settings:team");
   const canManageSettings = useCan("settings:manage");
   const [editing, setEditing] = useState<string | null>(null);
   const [settingsSearch, setSettingsSearch] = useState("");
-  const [activeSettingsSection, setActiveSettingsSection] = useState(canManageSettings ? "Dados da clínica" : canManageTeam ? "Custos e orçamento" : "Segurança e permissões");
+  const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection ?? (canManageSettings ? "Dados da clínica" : canManageTeam ? "Custos e orçamento" : "Segurança e permissões"));
+  useEffect(() => {
+    const focusSection = (event: Event) => {
+      const section = (event as CustomEvent<string>).detail;
+      if (section) setActiveSettingsSection(section);
+    };
+    window.addEventListener(SETTINGS_SECTION_FOCUS_EVENT, focusSection);
+    return () => window.removeEventListener(SETTINGS_SECTION_FOCUS_EVENT, focusSection);
+  }, []);
   const cachedTeam = canManageTeam ? readClientCache<{ members?: TeamMember[] }>("/api/team") : undefined;
   const [members, setMembers] = useState<TeamMember[]>(cachedTeam?.members ?? []);
   const [teamLoading, setTeamLoading] = useState(!cachedTeam);

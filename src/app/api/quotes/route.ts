@@ -33,9 +33,8 @@ export async function GET(request: Request) {
     where: { clinicId: user.clinicId, patientId, ...(journeyId ? { journeyId } : {}) },
     orderBy: { createdAt: "desc" },
     include: {
-      patient: { select: { name: true, cpf: true } },
-      evaluation: { select: { professional: true } },
-      clinic: { select: { name: true } },
+      patient: { select: { id: true, name: true, ...(patientId ? { cpf: true } : {}) } },
+      ...(patientId ? { evaluation: { select: { professional: true } }, clinic: { select: { name: true } } } : {}),
     },
   });
   const serialized = quotes.map((quote) => serializeQuote({ ...quote, patient: cpfForRole(user.role, quote.patient, user.rolePermissions) }));
@@ -91,7 +90,7 @@ export async function POST(request: Request) {
   const notes = typeof body?.notes === "string" ? body.notes.trim() : "";
   const installments = Number(body?.installments ?? 1);
   if (notes.length > 2000 || !Number.isInteger(installments) || installments < 1 || installments > 12) return NextResponse.json({ message: "Revise as observações e o número de parcelas." }, { status: 400 });
-  const quote = await prisma.quote.create({ data: { clinicId: user.clinicId, patientId: patient.id, journeyId: journey.id, evaluationId: evaluation?.id, items, details, notes, installments, totalCents, paymentMethod, status: body?.status === "Rascunho" ? "Rascunho" : "Pendente", createdBy: user.name, updatedBy: user.name, expires: parseDate(body?.expires) }, include: { patient: { select: { name: true } } } });
+  const quote = await prisma.quote.create({ data: { clinicId: user.clinicId, patientId: patient.id, journeyId: journey.id, evaluationId: evaluation?.id, items, details, notes, installments, totalCents, paymentMethod, status: body?.status === "Rascunho" ? "Rascunho" : "Pendente", createdBy: user.name, updatedBy: user.name, expires: parseDate(body?.expires) }, include: { patient: { select: { id: true, name: true } } } });
   return NextResponse.json({ quote: serializeQuote(quote) }, { status: 201 });
 }
 

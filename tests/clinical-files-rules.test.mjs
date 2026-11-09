@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  canArchiveFiles, canDeleteFiles, canSeeSystemDocument, canViewDocumentCategory, canWriteDocumentCategory, checkUpload, contentDisposition, detectFileType, displayNameFromFile, editActions,
+  canArchiveFiles, canDeleteFiles, canSeeSystemDocument, canUsePhotos, canWritePhotos, canViewDocumentCategory, canWriteDocumentCategory, checkUpload, contentDisposition, detectFileType, displayNameFromFile, editActions,
   filterSystemDocuments, formatBytes, maxUploadBytes, parseDocumentQuery, sanitizeFileName, sortByDate, visibleDocumentCategories,
 } from "../src/lib/clinical-files-rules.ts";
 import { can } from "../src/lib/permissions.ts";
@@ -33,6 +33,12 @@ test("arquivar é de ADMIN/PROFESSIONAL, excluir só ADMIN; fotos só clínicos"
   assert.equal(canDeleteFiles("PROFESSIONAL"), false);
   assert.equal(canDeleteFiles("STAFF"), false);
   assert.equal(can("STAFF", "clinical:read"), false);
+  assert.equal(canUsePhotos("ADMIN"), true);
+  assert.equal(canUsePhotos("PROFESSIONAL"), true);
+  assert.equal(canUsePhotos("STAFF"), false);
+  assert.equal(canWritePhotos("ADMIN"), true);
+  assert.equal(canWritePhotos("PROFESSIONAL"), true);
+  assert.equal(canWritePhotos("STAFF"), false);
 });
 
 test("regras locais equivalem às permissões centrais", () => {

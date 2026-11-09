@@ -14,7 +14,7 @@ import { usePatientLookup, type LookupPatient } from "./use-patient-lookup";
 export type CreatedPayment = { id: string; value: number; method: string; date: string; status: string; installments: string; patient?: { name: string } | null };
 
 // Modal "Registrar pagamento" compartilhado por /pagamentos e pelo Financeiro (mesmos campos e regras do POST /api/payments).
-export function PaymentCreateModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated?: (payment: CreatedPayment, patientName: string) => void }) {
+export function PaymentCreateModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated?: (payment: CreatedPayment, patientName: string, patientId: string) => void }) {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
   const [paymentPatientQuery, setPaymentPatientQuery] = useState("");
@@ -32,7 +32,7 @@ export function PaymentCreateModal({ open, onClose, onCreated }: { open: boolean
     const data = await response.json() as { payment: CreatedPayment };
     invalidatePaymentCache(patientId);
     setPaymentPatient(null); setPaymentPatientQuery("");
-    onClose(); onCreated?.(data.payment, patient);
+    onClose(); onCreated?.(data.payment, patient, patientId);
   }
 
   function close() {

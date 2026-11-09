@@ -124,6 +124,13 @@ export function PatientClinicalPhotos({ patientId, initialFilters }: { patientId
     setUploadFiles(list); setUploadOpen(true);
   }
 
+  async function resetToAutomaticProfilePhoto() {
+    const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/profile-photo`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ photoRef: null }) });
+    if (!response.ok) { toast.error("Não foi possível voltar à foto automática."); return; }
+    invalidateClientCache(`/api/patients/${encodeURIComponent(patientId)}/profile`);
+    toast.success("Foto automática ativada: depois mais recente, ou antes.");
+  }
+
   return <div className="space-y-4" onDragOver={(event) => { if (canWrite && event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={(event) => { if (!canWrite) return; event.preventDefault(); openFiles(event.dataTransfer.files); }}>
     <Card className="p-4 sm:p-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -132,6 +139,7 @@ export function PatientClinicalPhotos({ patientId, initialFilters }: { patientId
           <div><h3 className="text-base font-bold">Fotos clínicas</h3><p className="mt-0.5 text-xs text-muted-foreground">Registros fotográficos do paciente organizados por atendimento e procedimento.</p></div>
         </div>
         {canWrite ? <div className="flex items-center gap-1">
+          <Button size="sm" variant="outline" onClick={() => void resetToAutomaticProfilePhoto()}>Usar foto automática</Button>
           <Button onClick={() => { setUploadFiles([]); setUploadOpen(true); }}><Upload className="h-4 w-4" />Adicionar fotos</Button>
           <DropdownMenu><DropdownMenuTrigger asChild><Button variant="outline" aria-label="Mais formas de adicionar"><ChevronDown className="h-4 w-4" /></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="end"><DropdownMenuItem onSelect={() => { setUploadFiles([]); setUploadOpen(true); }}><Upload className="h-4 w-4" />Enviar do dispositivo</DropdownMenuItem><DropdownMenuItem onSelect={() => cameraInput.current?.click()}><Camera className="h-4 w-4" />Tirar foto com a câmera</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
@@ -170,6 +178,7 @@ export function PatientClinicalPhotos({ patientId, initialFilters }: { patientId
 
     {/* Com o comparador aberto, o visualizador some (sem perder a foto atual) e volta ao fechar o comparador. */}
     <PhotoViewer patientId={patientId} photo={compare ? null : viewerPhoto} title={viewerGroup?.title} list={viewerList} access={data?.access} pairs={beforeAfterPairs(pool)} onNavigate={setViewerId} onClose={() => setViewerId(null)} onCompare={setCompare}
+      onSetProfile={async (photo) => { const response = await fetch(`/api/patients/${encodeURIComponent(patientId)}/profile-photo`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ photoRef: photo.id }) }); if (!response.ok) { const result = await response.json().catch(() => null) as { message?: string } | null; toast.error(result?.message ?? "Não foi possível definir a foto de perfil."); return; } invalidateClientCache(`/api/patients/${encodeURIComponent(patientId)}/profile`); toast.success("Foto de perfil atualizada."); }}
       onEdit={async (photo, body, message) => { const result = await sendJson(`${base(patientId)}/${encodeURIComponent(photo.id)}`, "PATCH", body); if (!result.ok) { toast.error(result.message); return false; } refresh(); toast.success(message); return true; }}
       onDelete={async (photo, reason) => { const result = await sendJson(`${base(patientId)}/${encodeURIComponent(photo.id)}`, "DELETE", { confirm: true, reason }); if (!result.ok) { toast.error(result.message); return false; } refresh(); toast.success("Foto excluída definitivamente."); setViewerId(null); return true; }}
       journeys={data?.journeys ?? []} encounters={data?.encounters ?? []} />
@@ -247,9 +256,9 @@ function AnnotationLayer({ annotations, width, height }: { annotations: Annotati
   })}</svg>;
 }
 
-function PhotoViewer({ patientId, photo, title, list, access, pairs, onNavigate, onClose, onCompare, onEdit, onDelete, journeys, encounters }: {
+function PhotoViewer({ patientId, photo, title, list, access, pairs, onNavigate, onClose, onCompare, onEdit, onDelete, onSetProfile, journeys, encounters }: {
   patientId: string; photo: GalleryPhoto | null; title?: string; list: GalleryPhoto[]; access?: PhotosResponse["access"]; pairs: BeforeAfterPair[]; onNavigate: (id: string) => void; onClose: () => void; onCompare: (pair: BeforeAfterPair) => void;
-  onEdit: (photo: GalleryPhoto, body: Record<string, unknown>, message: string) => Promise<boolean>; onDelete: (photo: GalleryPhoto, reason: string) => Promise<boolean>;
+  onEdit: (photo: GalleryPhoto, body: Record<string, unknown>, message: string) => Promise<boolean>; onDelete: (photo: GalleryPhoto, reason: string) => Promise<boolean>; onSetProfile: (photo: GalleryPhoto) => Promise<void>;
   journeys: PhotosResponse["journeys"]; encounters: PhotosResponse["encounters"];
 }) {
   const [marks, setMarks] = useState(true);
@@ -301,6 +310,7 @@ function PhotoViewer({ patientId, photo, title, list, access, pairs, onNavigate,
       <aside className="text-xs">
         <dl className="space-y-2">{[["Atendimento", photo.encounterTitle], ["Tipo", encounterKindLabels[photo.encounterKind]], ["Tratamento", photo.journeyName || "Sem tratamento"], ["Categoria", photo.category], ["Fase", photoPhaseLabels[photo.phase]], ["Data", `${formatDate(photo.takenAt)} ${formatTime(photo.takenAt)}`], ["Profissional", photo.professional || "Não informado"]].map(([label, value]) => <div key={label}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="font-medium">{value}</dd></div>)}</dl>
         <div className="mt-4 flex flex-wrap gap-2">
+              {access?.canWrite && !photo.archived ? <Button size="sm" variant="outline" onClick={() => void onSetProfile(photo)}><Camera className="h-4 w-4" />Usar no perfil</Button> : null}
               {photo.hasAnnotations ? <Button size="sm" variant={marks ? "default" : "outline"} aria-pressed={marks} onClick={() => setMarks((value) => !value)}>{marks ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}{marks ? "Com marcações" : "Original"}</Button> : null}
               {pair ? <Button size="sm" variant="outline" onClick={() => onCompare(pair)}><Columns2 className="h-4 w-4" />Antes e depois</Button> : null}
               <Button size="sm" variant="outline" asChild><a href={imageUrl(patientId, photo, "?download=1")}><Download className="h-4 w-4" />Baixar original</a></Button>

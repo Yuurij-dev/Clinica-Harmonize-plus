@@ -6,6 +6,7 @@ import { denyUnless } from "@/lib/api-guards";
 import { canArchiveFiles, canDeleteFiles, canWritePhotos, checkUpload, isPhotoPhase, maxUploadBytes, photoCategoryNames, sanitizeFileName } from "@/lib/clinical-files-rules";
 import { auditEntry, findPatientScoped, readUploadForm, resolveLinks, sha256 } from "@/lib/clinical-files-server";
 import { prepareStorage, removeStoredBytes } from "@/lib/clinical-storage";
+import { inspectClinicalImage } from "@/lib/clinical-image-server";
 import { buildGalleryIndex, type FollowUpRow, type LegacyRow, type SessionPhotoMeta, type SessionRow } from "@/lib/photo-gallery-rules";
 
 type RawSession = { id: string; journeyId: string; evaluationId: string; procedureName: string; treatedAreas: string; professional: string; performedAt: Date; photos: unknown };
@@ -138,6 +139,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const bytes = new Uint8Array(await file.arrayBuffer());
   const check = checkUpload(bytes, file.type || undefined, { imageOnly: true });
   if (!check.ok) return NextResponse.json({ message: check.message }, { status: check.status });
+  const imageDimensions = await inspectClinicalImage(bytes, check.file.mime);
+  if (!imageDimensions) return NextResponse.json({ message: "A imagem está corrompida ou excede as dimensões permitidas." }, { status: 400 });
   const links = await resolveLinks(clinicId, patientId, { journeyId: form.get("journeyId"), encounterType: form.get("encounterType"), encounterId: form.get("encounterId") }, true);
   if (!links.ok) return NextResponse.json({ message: links.message }, { status: 400 });
   if (links.links.encounterType === "followup") return NextResponse.json({ message: "Vincule a foto a uma avaliação ou procedimento." }, { status: 400 });
@@ -147,7 +150,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const stored = await prepareStorage("photo", clinicId, patientId, id, bytes as Uint8Array<ArrayBuffer>, check.file.mime).catch(() => null);
   if (!stored) return NextResponse.json({ message: "Não foi possível gravar a foto." }, { status: 502 });
   const [created] = await prisma.$transaction([prisma.clinicalPhoto.create({
-    data: { id, clinicId, patientId, ...links.links, phase, category, name, mimeType: check.file.mime, sizeBytes: bytes.length, width, height, sha256: sha256(bytes), storageDriver: stored.storageDriver, storageKey: stored.storageKey, takenAt, uploadedBy: user.id, uploadedByName: user.name, blob: stored.blob },
+    data: { id, clinicId, patientId, ...links.links, phase, category, name, mimeType: check.file.mime, sizeBytes: bytes.length, width: imageDimensions.width, height: imageDimensions.height, sha256: sha256(bytes), storageDriver: stored.storageDriver, storageKey: stored.storageKey, takenAt, uploadedBy: user.id, uploadedByName: user.name, blob: stored.blob },
     select: { id: true },
   }), auditEntry(user, patientId, "PHOTO", id, "UPLOAD", { fileName: name, category })]).catch(async (error) => { await removeStoredBytes(stored); throw error; });
   return NextResponse.json({ id: created.id }, { status: 201 });

@@ -16,6 +16,7 @@ import { LoadingSkeleton } from "./shared";
 import { useCan } from "./current-user";
 import { EncounterBreadcrumb, type EncounterBreadcrumbActions } from "./encounter-breadcrumb";
 import { useDraftAutosave } from "./use-draft-autosave";
+import { PatientAvatar } from "./patient-avatar";
 import { revealValidationTarget } from "./reveal-validation-target";
 import { JourneyProgress } from "./journey-progress";
 import { ClinicTimePicker } from "./clinic-time-picker";
@@ -93,7 +94,6 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   const fileInput = useRef<HTMLInputElement>(null);
   const beforeFileInput = useRef<HTMLInputElement>(null);
   const afterFileInput = useRef<HTMLInputElement>(null);
-  const initials = patient.name.split(" ").map((part) => part[0]).slice(0, 2).join("");
   const autosave = useDraftAutosave({ scope: `${patientId}:${sessionId}`, revision: draftRevision, enabled: hydrated && canWrite, save: saveDraft });
   useBodyScrollLock(appointmentOpen || Boolean(preview) || Boolean(photoToRemove));
 
@@ -367,9 +367,11 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   if (!data) return null;
 
   if (activeView === "return" && !returnIsOpen) return <div className="mx-auto max-w-[1400px] space-y-4 pb-8">
-    {breadcrumb ? <EncounterBreadcrumb patientName={patient.name} journeyName={data.journey.name} stage="Retorno" onClients={breadcrumb.onClients} onPatient={breadcrumb.onPatient} onJourney={breadcrumb.onJourney} /> : null}
+
+    {breadcrumb ? <EncounterBreadcrumb patientId={patientId} patientName={patient.name} journeyName={data.journey.name} stage="Retorno" onClients={breadcrumb.onClients} onPatient={breadcrumb.onPatient} onJourney={breadcrumb.onJourney} /> : null}
     {breadcrumb ? <button type="button" onClick={breadcrumb.onJourney} className="flex items-center gap-2 text-xs font-semibold text-muted-foreground transition-colors max-lg:min-h-11 hover:text-primary"><ArrowLeft className="h-4 w-4" />Voltar aos tratamentos</button> : null}
-    <Card className="flex flex-wrap items-center justify-between gap-4 p-4"><div className="flex min-w-0 items-center gap-3"><span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-primary/10 font-bold text-primary">{initials}</span><div className="min-w-0"><h1 className="truncate text-base font-bold">Retorno de {patient.name}</h1><p className="mt-1 text-xs text-muted-foreground">{data.journey.name} · {data.session.procedureName}</p></div></div><div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => setActiveView("post")}><ArrowLeft className="h-4 w-4" />Voltar ao pós-procedimento</Button></div></Card>
+    <Card className="flex flex-wrap items-center justify-between gap-4 p-4"><div className="flex min-w-0 items-center gap-3"><PatientAvatar patientId={patientId} name={patient.name} size="md" /><div className="min-w-0"><h1 className="truncate text-base font-bold">Retorno de {patient.name}</h1><p className="mt-1 text-xs text-muted-foreground">{data.journey.name} · {data.session.procedureName}</p></div></div><div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => setActiveView("post")}><ArrowLeft className="h-4 w-4" />Voltar ao pós-procedimento</Button></div></Card>
+
     <JourneyProgress current={4} />
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
       <Card id="return-schedule-card" tabIndex={-1} className={cn("scroll-mt-24 space-y-4 p-5", startReturnError && "border-destructive animate-[hp-shake_0.42s_ease-in-out]")}><div className="flex items-center gap-2"><CalendarDays className="h-5 w-5 text-primary" /><h2 className="text-sm font-bold">Retorno agendado</h2></div>{returnAppointment ? <><div className="grid gap-3 sm:grid-cols-2"><div className="rounded-md bg-muted/50 p-3"><p className="text-xs text-muted-foreground">Data do retorno</p><strong className="mt-1 block text-base">{new Date(returnAppointment.date).toLocaleDateString("pt-BR")}</strong></div><div className="rounded-md bg-muted/50 p-3"><p className="text-xs text-muted-foreground">Horário</p><strong className="mt-1 block text-base">{returnAppointment.time}</strong></div></div><p className="text-xs text-muted-foreground">O registro clínico ficará disponível no dia do retorno, após iniciar o atendimento.</p>{startReturnError ? <p id="return-start-error" tabIndex={-1} key={startReturnError} role="alert" className="rounded-md bg-destructive/10 p-3 text-xs text-destructive">{startReturnError}</p> : null}<div className="flex flex-wrap gap-2"><Button aria-describedby={startReturnError ? "return-start-error" : undefined} disabled={!canWrite || startingReturn} onClick={() => void startReturn()}>{startingReturn ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Clock3 className="h-4 w-4" />}Iniciar atendimento</Button>{appointmentDay(returnAppointment.date) < today ? <Button variant="outline" onClick={() => { setAppointmentLaunchReturn(true); setAppointmentOpen(true); setActiveView("post"); }}>Reagendar retorno</Button> : null}</div></> : <><p className="text-xs text-muted-foreground">Ainda não há retorno agendado para este procedimento.</p><Button onClick={() => { setAppointmentLaunchReturn(true); setAppointmentOpen(true); setActiveView("post"); }}>Agendar retorno</Button></>}</Card>
@@ -378,10 +380,12 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   </div>;
 
   if (activeView === "return") return <div className="mx-auto max-w-[1400px] space-y-4 pb-8">
-    {breadcrumb ? <EncounterBreadcrumb patientName={patient.name} journeyName={data.journey.name} stage="Retorno" onClients={() => void autosave.leave(breadcrumb.onClients)} onPatient={() => void autosave.leave(breadcrumb.onPatient)} onJourney={() => void autosave.leave(breadcrumb.onJourney)} /> : null}
+
+    {breadcrumb ? <EncounterBreadcrumb patientId={patientId} patientName={patient.name} journeyName={data.journey.name} stage="Retorno" onClients={() => void autosave.leave(breadcrumb.onClients)} onPatient={() => void autosave.leave(breadcrumb.onPatient)} onJourney={() => void autosave.leave(breadcrumb.onJourney)} /> : null}
     {breadcrumb ? <button type="button" onClick={() => void autosave.leave(breadcrumb.onJourney)} className="flex items-center gap-2 text-xs font-semibold text-muted-foreground transition-colors max-lg:min-h-11 hover:text-primary"><ArrowLeft className="h-4 w-4" />Voltar aos tratamentos</button> : null}
+
     <Card className="flex flex-wrap items-center justify-between gap-4 p-4">
-      <div className="flex min-w-0 items-center gap-3"><span className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-primary/10 font-bold text-primary">{initials}</span><div className="min-w-0"><h1 className="truncate text-base font-bold">Retorno de {patient.name}</h1><p className="mt-1 text-xs text-muted-foreground">{data.journey.name} · {data.session.procedureName}</p><p className="mt-1 text-xs text-muted-foreground">Procedimento em {new Date(data.session.performedAt).toLocaleDateString("pt-BR")} · {data.session.professional}</p></div></div>
+      <div className="flex min-w-0 items-center gap-3"><PatientAvatar patientId={patientId} name={patient.name} size="md" /><div className="min-w-0"><h1 className="truncate text-base font-bold">Retorno de {patient.name}</h1><p className="mt-1 text-xs text-muted-foreground">{data.journey.name} · {data.session.procedureName}</p><p className="mt-1 text-xs text-muted-foreground">Procedimento em {new Date(data.session.performedAt).toLocaleDateString("pt-BR")} · {data.session.professional}</p></div></div>
       <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => setActiveView("post")}><ArrowLeft className="h-4 w-4" />Voltar ao pós-procedimento</Button><Button variant="outline" aria-describedby={complaintError ? "return-complaints-error" : undefined} onClick={finishAttendance}>Finalizar atendimento</Button></div>
     </Card>
     <JourneyProgress current={4} />
@@ -414,10 +418,12 @@ export function PostProcedureWorkspace({ patient, patientId, journeyId, sessionI
   </div>;
 
   return <div className="mx-auto max-w-[1400px] space-y-4 pb-8">
-    {breadcrumb ? <EncounterBreadcrumb patientName={patient.name} journeyName={data.journey.name} stage="Pós-procedimento" onClients={() => void autosave.leave(breadcrumb.onClients)} onPatient={() => void autosave.leave(breadcrumb.onPatient)} onJourney={() => void autosave.leave(breadcrumb.onJourney)} /> : null}
+
+    {breadcrumb ? <EncounterBreadcrumb patientId={patientId} patientName={patient.name} journeyName={data.journey.name} stage="Pós-procedimento" onClients={() => void autosave.leave(breadcrumb.onClients)} onPatient={() => void autosave.leave(breadcrumb.onPatient)} onJourney={() => void autosave.leave(breadcrumb.onJourney)} /> : null}
     <button type="button" onClick={() => void autosave.leave(breadcrumb?.onJourney ?? onFinish)} className="flex items-center gap-2 text-xs font-semibold text-muted-foreground transition-colors max-lg:min-h-11 hover:text-primary"><ArrowLeft className="h-4 w-4" />Voltar aos tratamentos</button>
+
     <Card className="flex flex-wrap items-center justify-between gap-4 p-4">
-      <div className="flex min-w-0 items-center gap-3"><div className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-primary/10 font-bold text-primary">{initials}</div><div className="min-w-0"><h1 className="truncate text-base font-bold">{patient.name}</h1><p className="mt-1 text-xs text-muted-foreground">{data.journey.name} · {data.session.procedureName} · Sessão de {new Date(data.session.performedAt).toLocaleDateString("pt-BR")}</p><p className="mt-1 text-xs text-muted-foreground">Profissional: {data.session.professional} · Sessão concluída; tratamento permanece {data.journey.status.toLocaleLowerCase("pt-BR")}</p></div></div>
+      <div className="flex min-w-0 items-center gap-3"><PatientAvatar patientId={patientId} name={patient.name} size="md" /><div className="min-w-0"><h1 className="truncate text-base font-bold">{patient.name}</h1><p className="mt-1 text-xs text-muted-foreground">{data.journey.name} · {data.session.procedureName} · Sessão de {new Date(data.session.performedAt).toLocaleDateString("pt-BR")}</p><p className="mt-1 text-xs text-muted-foreground">Profissional: {data.session.professional} · Sessão concluída; tratamento permanece {data.journey.status.toLocaleLowerCase("pt-BR")}</p></div></div>
       <div className="flex flex-wrap gap-2">{stageBackButtons}<Button onClick={openReturn}><CalendarDays className="h-4 w-4" />Ir para retorno <ArrowRight className="h-4 w-4" /></Button></div>
     </Card>
     <JourneyProgress current={3} />
