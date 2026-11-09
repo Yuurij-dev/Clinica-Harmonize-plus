@@ -51,7 +51,10 @@ async function makeAvatar(bytes: Uint8Array) {
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const auth = await authorize((await params).id);
   if (auth.error) return auth.error;
-  if (Number(request.headers.get("content-length") ?? 0) > MAX_UPLOAD_BYTES + 64 * 1024) return json("A imagem deve ter até 5 MB.", 413);
+  // Exige Content-Length válido: sem ele (chunked) o corpo inteiro seria lido em memória antes do limite.
+  const declared = Number(request.headers.get("content-length"));
+  if (!Number.isFinite(declared) || declared <= 0) return json("Requisição inválida.", 411);
+  if (declared > MAX_UPLOAD_BYTES + 64 * 1024) return json("A imagem deve ter até 5 MB.", 413);
   const form = await request.formData().catch(() => null);
   const file = form?.get("file");
   if (!(file instanceof File) || !ALLOWED_TYPES.has(file.type)) return json("Envie uma imagem (JPG, PNG ou WebP).", 400);
