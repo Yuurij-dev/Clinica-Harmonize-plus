@@ -3,9 +3,9 @@ import { toCents } from "@/lib/finance";
 import { quoteLaborCostCents } from "@/lib/quote-cost-rules";
 
 export async function quoteCostSnapshot(clinicId: string, userId: string, role: string) {
-  const membershipRequest = role === "PROFESSIONAL"
+  const membershipRequest = role === "PROFESSIONAL" || role === "ADMIN"
     ? prisma.clinicMembership.findFirst({
-      where: { clinicId, userId, role: "PROFESSIONAL" },
+      where: { clinicId, userId, role: { in: ["PROFESSIONAL", "ADMIN"] } },
       select: { laborCostCents: true },
     })
     : Promise.resolve(null);

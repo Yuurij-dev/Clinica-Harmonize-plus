@@ -7,6 +7,6 @@ export function quoteLaborCostCents({
   clinicLaborCostCents: number;
   professionalLaborCostCents: number | null;
 }) {
-  if (role === "PROFESSIONAL" && professionalLaborCostCents !== null) return professionalLaborCostCents;
+  if ((role === "PROFESSIONAL" || role === "ADMIN") && professionalLaborCostCents !== null) return professionalLaborCostCents;
   return clinicLaborCostCents;
 }

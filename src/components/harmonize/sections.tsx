@@ -2234,7 +2234,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
     window.dispatchEvent(new Event("harmonize-notification-settings-updated"));
   }
 
-  const professionalLaborCostMembers = members.filter((member) => member.role === "PROFESSIONAL");
+  const professionalLaborCostMembers = members.filter((member) => member.role === "PROFESSIONAL" || member.role === "ADMIN");
   function resetNewCollaboratorContact() {
     setNewMemberCpf("");
     setNewMemberPostalCode("");
@@ -2537,13 +2537,13 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
                 {canManageTeam ? <section className="mb-6 rounded-lg border border-border/70 px-4 py-4">
                   <div className="mb-3">
                     <h3 className="text-sm font-bold text-foreground">Mão de obra por profissional</h3>
-                    <p className="mt-1 text-xs leading-5 text-muted-foreground">Defina o valor em reais para cada profissional da clínica.</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">Defina o valor em reais para cada profissional e administrador que atende na clínica.</p>
                   </div>
                   {teamLoading ? <div className="space-y-3 py-2">{[0, 1].map((item) => <LoadingSkeleton className="h-12 w-full" key={item} />)}</div> : professionalLaborCostMembers.length ? <div className="divide-y divide-border/70">
                     {professionalLaborCostMembers.map((member) => {
                       const isEditing = member.laborCostCents === null || editingLaborCostId === member.id;
                       return <div key={member.id} className="grid gap-3 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,240px)_auto] sm:items-end">
-                        <div className="min-w-0 pb-2 sm:pb-2"><p className="truncate text-sm font-semibold text-foreground">{member.user.name}</p><p className="text-xs text-muted-foreground">Profissional</p></div>
+                        <div className="min-w-0 pb-2 sm:pb-2"><p className="truncate text-sm font-semibold text-foreground">{member.user.name}</p><p className="text-xs text-muted-foreground">{member.role === "ADMIN" ? "Administrador" : "Profissional"}</p></div>
                         {isEditing ? <form className="contents" onSubmit={(event) => void saveProfessionalLaborCost(event, member)}>
                           <FormField label="Mão de obra (R$)"><MaskedInput key={`${member.id}-${member.laborCostCents}`} className={fieldClassName} formatter={formatCurrency} name="laborCost" defaultValue={currency.format((member.laborCostCents ?? 0) / 100)} inputMode="decimal" /></FormField>
                           <Button className="sm:mb-0.5" type="submit" variant="secondary" disabled={laborCostSavingId === member.id}>{laborCostSavingId === member.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{laborCostSavingId === member.id ? "Salvando..." : "Salvar valor"}</Button>
