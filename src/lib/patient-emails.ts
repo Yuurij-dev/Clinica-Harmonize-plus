@@ -1,7 +1,8 @@
 // E-mails transacionais para o paciente (Resend via sendEmail). Recebem dados ja resolvidos, escapam todo valor dinamico
 // e nunca lancam. Datas chegam como "YYYY-MM-DD" (dia da clinica) e horarios como "HH:MM".
-import { escapeHtml, sendEmail, type EmailResult } from "./email.ts";
+import { sendEmail, type EmailResult } from "./email.ts";
 import { formatPhone, formatCnpj, onlyDigits } from "./input-masks.ts";
+import { composeEmail, heading, paragraph, infoCard, highlight, note, type Block, type Row } from "./email-layout.ts";
 
 type Deps = { env?: Record<string, string | undefined>; fetchImpl?: typeof fetch };
 type Clinic = { clinicName: string; clinicPhone?: string | null; clinicCnpj?: string | null; clinicAddress?: string | null };
@@ -16,29 +17,21 @@ export const formatBRL = (cents: number) => (cents / 100).toLocaleString("pt-BR"
 
 // Rodapé rotulado: nome da clínica e, abaixo, cada dado com seu rótulo. Telefone/CNPJ recebem máscara só
 // quando têm o número certo de dígitos; fora disso vão como estão (não mascara dado inválido como se fosse válido).
-function clinicFooterRows(clinic: Clinic): Array<[string, string]> {
+function clinicFooterRows(clinic: Clinic): Row[] {
   const phone = clinic.clinicPhone?.trim();
   const cnpj = clinic.clinicCnpj?.trim();
   const address = clinic.clinicAddress?.trim();
-  const rows: Array<[string, string] | null> = [
+  const rows: Array<Row | null> = [
     phone ? ["Telefone", [10, 11].includes(onlyDigits(phone).length) ? formatPhone(phone) : phone] : null,
     cnpj ? ["CNPJ", onlyDigits(cnpj).length === 14 ? formatCnpj(cnpj) : cnpj] : null,
     address ? ["Endereço", address] : null,
   ];
-  return rows.filter((row): row is [string, string] => row !== null);
+  return rows.filter((row): row is Row => row !== null);
 }
 
-function render(patientName: string, lines: Array<{ html: string; text: string }>, clinic: Clinic) {
-  const rows = clinicFooterRows(clinic);
-  const footerHtml = [`<strong>${escapeHtml(clinic.clinicName)}</strong>`, ...rows.map(([label, value]) => `${label}: ${escapeHtml(value)}`)].join("<br>");
-  const footerText = [clinic.clinicName, ...rows.map(([label, value]) => `${label}: ${value}`)].join("\n");
-  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#25263a">
-<p>Olá, ${escapeHtml(patientName)},</p>
-${lines.map((line) => `<p>${line.html}</p>`).join("\n")}
-<p style="font-size:13px;color:#7783a8;margin-top:24px">${footerHtml}</p>
-</div>`;
-  const text = `Olá, ${patientName},\n\n${lines.map((line) => line.text).join("\n\n")}\n\n${footerText}`;
-  return { html, text };
+function deliverPatient(input: Base, subject: string, preheader: string, blocks: Block[], deps: Deps): Promise<EmailResult> {
+  const body = composeEmail({ preheader, greeting: input.patientName, blocks, clinic: { name: input.clinicName, rows: clinicFooterRows(input) } });
+  return deliver(input.to, subject, body, deps);
 }
 
 async function deliver(to: string, subject: string, body: { html: string; text: string }, deps: Deps): Promise<EmailResult> {
@@ -54,11 +47,11 @@ export function sendAppointmentConfirmationEmail(
   deps: Deps = {},
 ): Promise<EmailResult> {
   const when = `${formatDay(input.date)} às ${input.time}`;
-  const body = render(input.patientName, [
-    { html: `Seu agendamento na clínica <strong>${escapeHtml(input.clinicName)}</strong> foi confirmado.`, text: `Seu agendamento na clínica ${input.clinicName} foi confirmado.` },
-    { html: `Procedimento: ${escapeHtml(input.procedure)}<br>Profissional: ${escapeHtml(input.professional)}<br>Data e horário: ${escapeHtml(when)}`, text: `Procedimento: ${input.procedure}\nProfissional: ${input.professional}\nData e horário: ${when}` },
-  ], input);
-  return deliver(input.to, `Agendamento confirmado — ${input.procedure} em ${formatDay(input.date)}`, body, deps);
+  return deliverPatient(input, `Agendamento confirmado — ${input.procedure} em ${formatDay(input.date)}`, "Seu agendamento foi confirmado.", [
+    heading("Agendamento confirmado"),
+    paragraph(`Seu agendamento na clínica ${input.clinicName} foi confirmado. Aguardamos você no horário abaixo.`),
+    infoCard([["Procedimento", input.procedure], ["Profissional", input.professional], ["Data e horário", when]]),
+  ], deps);
 }
 
 export function sendAppointmentRescheduledEmail(
@@ -67,11 +60,13 @@ export function sendAppointmentRescheduledEmail(
 ): Promise<EmailResult> {
   const before = `${formatDay(input.oldDate)} às ${input.oldTime}`;
   const after = `${formatDay(input.newDate)} às ${input.newTime}`;
-  const body = render(input.patientName, [
-    { html: `Seu agendamento na clínica <strong>${escapeHtml(input.clinicName)}</strong> foi remarcado.`, text: `Seu agendamento na clínica ${input.clinicName} foi remarcado.` },
-    { html: `Procedimento: ${escapeHtml(input.procedure)}<br>Profissional: ${escapeHtml(input.professional)}<br>Antes: ${escapeHtml(before)}<br>Novo horário: <strong>${escapeHtml(after)}</strong>`, text: `Procedimento: ${input.procedure}\nProfissional: ${input.professional}\nAntes: ${before}\nNovo horário: ${after}` },
-  ], input);
-  return deliver(input.to, `Seu agendamento foi remarcado — ${input.procedure}`, body, deps);
+  return deliverPatient(input, `Seu agendamento foi remarcado — ${input.procedure}`, "Seu agendamento foi remarcado.", [
+    heading("Agendamento remarcado"),
+    paragraph(`Seu agendamento na clínica ${input.clinicName} foi remarcado. Veja o novo horário:`),
+    highlight("Novo horário", after),
+    infoCard([["Procedimento", input.procedure], ["Profissional", input.professional]]),
+    note(`Antes: ${before}`),
+  ], deps);
 }
 
 // Nao inclui o motivo do cancelamento: pode conter nota interna da equipe.
@@ -80,11 +75,12 @@ export function sendAppointmentCancelledEmail(
   deps: Deps = {},
 ): Promise<EmailResult> {
   const when = `${formatDay(input.date)} às ${input.time}`;
-  const body = render(input.patientName, [
-    { html: `Seu agendamento de <strong>${escapeHtml(input.procedure)}</strong> em ${escapeHtml(when)} na clínica ${escapeHtml(input.clinicName)} foi cancelado.`, text: `Seu agendamento de ${input.procedure} em ${when} na clínica ${input.clinicName} foi cancelado.` },
-    { html: "Se quiser remarcar, entre em contato com a clínica.", text: "Se quiser remarcar, entre em contato com a clínica." },
-  ], input);
-  return deliver(input.to, `Agendamento cancelado — ${input.procedure}`, body, deps);
+  return deliverPatient(input, `Agendamento cancelado — ${input.procedure}`, "Seu agendamento foi cancelado.", [
+    heading("Agendamento cancelado"),
+    paragraph(`Seu agendamento na clínica ${input.clinicName} foi cancelado.`),
+    infoCard([["Procedimento", input.procedure], ["Data e horário", when]]),
+    paragraph("Se quiser remarcar, entre em contato com a clínica."),
+  ], deps);
 }
 
 export function sendQuoteEmail(
@@ -93,11 +89,12 @@ export function sendQuoteEmail(
 ): Promise<EmailResult> {
   // Omite a contagem quando desconhecida (orçamento legado sem itens estruturados).
   const count = input.itemCount && input.itemCount > 0 ? `, com ${input.itemCount} procedimento${input.itemCount === 1 ? "" : "s"}` : "";
-  const total = formatBRL(input.totalCents);
-  const lines = [
-    { html: `Preparamos seu orçamento na clínica <strong>${escapeHtml(input.clinicName)}</strong>${count}.`, text: `Preparamos seu orçamento na clínica ${input.clinicName}${count}.` },
-    { html: `Valor total: <strong>${escapeHtml(total)}</strong>${input.expires ? `<br>Válido até: ${escapeHtml(formatDay(input.expires))}` : ""}`, text: `Valor total: ${total}${input.expires ? `\nVálido até: ${formatDay(input.expires)}` : ""}` },
-    { html: "Procure a recepção da clínica para seguir com o atendimento.", text: "Procure a recepção da clínica para seguir com o atendimento." },
+  const blocks: Block[] = [
+    heading("Seu orçamento"),
+    paragraph(`Preparamos seu orçamento na clínica ${input.clinicName}${count}.`),
+    highlight("Valor total", formatBRL(input.totalCents)),
   ];
-  return deliver(input.to, `Seu orçamento na clínica ${input.clinicName}`, render(input.patientName, lines, input), deps);
+  if (input.expires) blocks.push(note(`Válido até: ${formatDay(input.expires)}`));
+  blocks.push(paragraph("Procure a recepção da clínica para seguir com o atendimento."));
+  return deliverPatient(input, `Seu orçamento na clínica ${input.clinicName}`, "Seu orçamento está pronto.", blocks, deps);
 }
