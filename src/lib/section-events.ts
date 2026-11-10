@@ -15,3 +15,18 @@ export const setupOpenEvent = "harmonize-setup-open";
 
 // Disparado após gravar o assistente: leva o estado novo (detail) aos outros componentes, sem novo GET.
 export const setupUpdatedEvent = "harmonize-setup-updated";
+
+// Assistente de configuração, etapa equipe ("Convidar por e-mail"): pede à tela de equipe que abra o modal "Convidar funcionário".
+// A tela pode ainda não estar montada (a navegação acabou de começar), então o pedido também fica guardado por alguns segundos.
+export const setupInviteTeamEvent = "harmonize-setup-invite-team";
+let teamInviteRequestedAt = 0;
+export function requestTeamInviteModal() {
+  teamInviteRequestedAt = Date.now();
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(setupInviteTeamEvent));
+}
+export function teamInviteRequested() {
+  return teamInviteRequestedAt > 0 && Date.now() - teamInviteRequestedAt < 5000;
+}
+export function clearTeamInviteRequest() {
+  teamInviteRequestedAt = 0;
+}

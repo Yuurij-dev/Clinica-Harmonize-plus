@@ -45,6 +45,8 @@ export type SetupStepDefinition = {
   /** Etapa só informativa (sem tela para cadastrar): o que aparece é explicação do que o sistema já traz. */
   destination?: SetupDestination;
   actionLabel?: string;
+  /** Ação secundária ao lado do botão principal (ex.: convidar por e-mail na etapa equipe). */
+  secondaryAction?: { label: string; intent: "invite-team" };
   /** Texto do botão de confirmação explícita (só nas etapas em que `canDecide(key, "confirmed")`). */
   confirmLabel?: string;
   /** Texto do botão "Não utilizamos" (só nas etapas opcionais). */
@@ -79,12 +81,13 @@ export const SETUP_STEPS: readonly SetupStepDefinition[] = [
     harmo: "Quem realiza os atendimentos na sua clínica?",
     what: "As pessoas que usam o sistema: administradores, profissionais e atendentes.",
     why: "Cada atendimento é feito por um profissional, e o cargo define o que cada pessoa pode ver e alterar.",
-    todo: "Cadastre ao menos um profissional. Se você mesmo realiza os atendimentos por enquanto, basta confirmar.",
-    example: "Dra. Ana (profissional) e Carla (atendente).",
+    todo: "Cadastre ao menos um profissional direto, ou convide por e-mail (a pessoa escolhe a senha ao aceitar). Se você mesmo realiza os atendimentos por enquanto, basta confirmar.",
+    example: "Dra. Ana cadastrada por você, ou convite enviado para ana@clinica.com.br.",
     destination: { kind: "settings", section: "Profissionais e equipe" },
     actionLabel: "Abrir profissionais e equipe",
+    secondaryAction: { label: "Convidar por e-mail", intent: "invite-team" },
     confirmLabel: "Eu mesmo realizo os atendimentos por enquanto",
-    missingHint: "Você ainda não cadastrou nenhum profissional. Vamos adicionar o primeiro, ou confirmar que você mesmo atende?",
+    missingHint: "Você ainda não tem nenhum profissional. Cadastre um, convide por e-mail ou confirme que você mesmo atende.",
     doneMessage: "Perfeito! A equipe está definida.",
   },
   {

@@ -31,6 +31,7 @@ function payloadFrom(row: SetupRow | null, snapshot: NonNullable<Awaited<ReturnT
       clinicName: snapshot.name,
       clinicFields: { name: Boolean(snapshot.name.trim()), phone: Boolean(snapshot.phone?.trim()), address: Boolean(snapshot.address?.trim()) },
       professionals: snapshot.professionalCount,
+      pendingInvitations: snapshot.pendingInvitations,
       procedures: snapshot.procedureCount,
       materials: snapshot.materialCount,
       products: snapshot.productCount,

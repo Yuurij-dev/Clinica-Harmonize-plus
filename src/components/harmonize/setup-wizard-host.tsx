@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { SETUP_STEPS, confirmsOnSave, isSetupStepKey, setupSpotlightPlan, type SetupDecision, type SetupDestination, type SetupStepKey } from "@/lib/setup-rules";
 import { CLIENT_CACHE_INVALIDATED_EVENT } from "@/lib/client-cache";
-import { setupInviteEvent, setupOpenEvent } from "@/lib/section-events";
+import { requestTeamInviteModal, setupInviteEvent, setupOpenEvent } from "@/lib/section-events";
 import { useCanUseSetup } from "./current-user";
 import { SetupSpotlight } from "./setup-spotlight";
 import { SetupSuccess, SetupWizard } from "./setup-wizard";
@@ -169,13 +169,15 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
     await run({ action: "goto", step: key });
   }
 
-  async function goToScreen(destination: SetupDestination) {
+  async function goToScreen(destination: SetupDestination, intent?: "invite-team") {
     await run({ action: "goto", step: stepKey });
     setView("closed");
     setReturnPending(false);
     setBar(dataRef.current?.status !== "completed");
     setSpotlightRun((run) => run + 1);
     await onOpenDestination(destination);
+    // "Convidar por e-mail": só abre o modal da tela de equipe; nada é enviado sem a pessoa confirmar.
+    if (intent === "invite-team") requestTeamInviteModal();
   }
 
   async function decide(key: SetupStepKey, decision: SetupDecision) {
@@ -224,7 +226,7 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
           busy={busy}
           error={error}
           onSelectStep={(key) => { void selectStep(key); }}
-          onAction={(destination) => { void goToScreen(destination); }}
+          onAction={(destination, intent) => { void goToScreen(destination, intent); }}
           onDecide={(key, decision) => { void decide(key, decision); }}
           onUndo={(key) => { void run({ action: "undo", step: key }); }}
           onFinish={() => { void finish(); }}
