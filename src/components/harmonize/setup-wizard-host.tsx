@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, CheckCircle2, Circle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
-import { SETUP_STEPS, isSetupStepKey, setupSpotlightPlan, type SetupDecision, type SetupDestination, type SetupStepKey } from "@/lib/setup-rules";
+import { SETUP_STEPS, confirmsOnSave, isSetupStepKey, setupSpotlightPlan, type SetupDecision, type SetupDestination, type SetupStepKey } from "@/lib/setup-rules";
 import { CLIENT_CACHE_INVALIDATED_EVENT } from "@/lib/client-cache";
 import { setupInviteEvent, setupOpenEvent } from "@/lib/section-events";
 import { useCanUseSetup } from "./current-user";
@@ -109,17 +109,30 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
     }
   }
 
-  // Etapas de "conferir e confirmar" (sem dado que o servidor conte): salvar algo da clínica na tela encerra o destaque.
+  // Etapas de "conferir e confirmar" (agenda, custos, notificações): salvar com sucesso na tela de destino registra a
+  // confirmação no servidor, que reavalia as regras reais (ex.: horários válidos). Concluída, o assistente volta pela
+  // transição acima; se continuar pendente, volta mesmo assim para mostrar o motivo. Só com a barra de retorno ativa:
+  // quem saiu do fluxo não é puxado de volta e salvamentos fora do fluxo não confirmam nada.
   const [actedRun, setActedRun] = useState(0);
+  const confirmedRun = useRef(0);
   useEffect(() => {
-    if (!enabled || !["agenda", "custos", "notificacoes"].includes(stepKey)) return;
+    if (!enabled || !confirmsOnSave(stepKey)) return;
     const onSaved = (event: Event) => {
       const keys = (event as CustomEvent<string[] | undefined>).detail;
-      if (Array.isArray(keys) && keys.some((key) => key.startsWith("/api/clinic/"))) setActedRun(spotlightRun);
+      if (!Array.isArray(keys) || !keys.some((key) => key.startsWith("/api/clinic/"))) return;
+      if (!bar || view !== "closed" || confirmedRun.current === spotlightRun) return;
+      confirmedRun.current = spotlightRun;
+      setActedRun(spotlightRun);
+      void run({ action: "decide", step: stepKey, decision: "confirmed" }).then((result) => {
+        if (result && !result.steps.find((step) => step.key === stepKey)?.done) {
+          setBar(false);
+          setView("wizard");
+        }
+      });
     };
     window.addEventListener(CLIENT_CACHE_INVALIDATED_EVENT, onSaved);
     return () => window.removeEventListener(CLIENT_CACHE_INVALIDATED_EVENT, onSaved);
-  }, [enabled, stepKey, spotlightRun]);
+  }, [enabled, stepKey, spotlightRun, bar, view, run]);
 
   if (!enabled) return null;
 

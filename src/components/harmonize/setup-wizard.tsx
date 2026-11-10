@@ -54,7 +54,8 @@ function stepStatus(key: SetupStepKey, state: SetupStepState, summary: SetupSumm
     case "agenda": {
       const { hours } = summary;
       const text = `Clínica ${hours.opening}–${hours.closing}; profissionais ${hours.professionalOpening}–${hours.professionalClosing}.`;
-      return state.done ? { text: `${text} Confirmado por você.`, ok: true } : { text: `${text} Falta a sua confirmação.`, ok: false };
+      if (state.done) return { text: `${text} Confirmado por você.`, ok: true };
+      return state.confirmed ? { text: `${text} Os horários estão inválidos: a abertura deve ser antes do fechamento. Corrija em Dados da clínica.`, ok: false } : { text: `${text} Falta a sua confirmação.`, ok: false };
     }
     case "procedimentos":
       return summary.procedures > 0 ? { text: `${plural(summary.procedures, "procedimento cadastrado", "procedimentos cadastrados")}.`, ok: true } : { text: "Nenhum procedimento cadastrado.", ok: false };
@@ -126,7 +127,14 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
   // A etapa exibida troca depois de uma saída curta (fade); a direção vem da posição de origem e destino.
   const [shown, setShown] = useState(stepKey);
   const [dir, setDir] = useState<"next" | "back">("next");
-  const [settled, setSettled] = useState(false);
+  // Marcas que viram concluídas com o assistente aberto fazem o pop; as já concluídas na abertura aparecem prontas.
+  const doneKeys = data.steps.filter((step) => step.done).map((step) => step.key).join(",");
+  const [doneSeen, setDoneSeen] = useState({ keys: doneKeys, popped: "" });
+  if (doneSeen.keys !== doneKeys) {
+    const before = new Set(doneSeen.keys.split(","));
+    setDoneSeen({ keys: doneKeys, popped: doneKeys.split(",").filter((key) => key && !before.has(key)).join(",") });
+  }
+  const poppedKeys = doneSeen.popped.split(",");
   const leaving = shown !== stepKey;
   const listRef = useRef<HTMLOListElement>(null);
   const indicatorRef = useRef<HTMLLIElement>(null);
@@ -139,11 +147,6 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
     }, 120);
     return () => window.clearTimeout(timer);
   }, [stepKey, shown]);
-  // Só marcas que viram concluídas depois da abertura fazem o pop (as já concluídas aparecem prontas).
-  useEffect(() => {
-    const timer = window.setTimeout(() => setSettled(true), 900);
-    return () => window.clearTimeout(timer);
-  }, []);
   // O destaque da etapa atual desliza até o botão dela (transform), sem trocar seco.
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -230,7 +233,7 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
             <p id="setup-wizard-title" className="mt-0.5 text-base font-bold leading-snug sm:text-lg">{definition.harmo}</p>
           </div>
           <div className="w-full basis-64 sm:w-auto sm:min-w-64">
-            <div className="flex items-baseline justify-between text-xs font-semibold"><span><CountUp value={data.doneCount} duration={400} /> de {data.total} etapas concluídas</span><span><CountUp value={data.percent} duration={400} format={(value) => `${Math.round(value)}%`} /></span></div>
+            <div className="flex items-baseline justify-between text-xs font-semibold"><span><CountUp value={data.doneCount} from={data.doneCount} duration={400} /> de {data.total} etapas concluídas</span><span><CountUp value={data.percent} from={data.percent} duration={400} format={(value) => `${Math.round(value)}%`} /></span></div>
             <div className="mt-1.5"><Progress value={data.percent} className="h-2 bg-white/25" indicatorClassName="bg-white" aria-label="Progresso da configuração" /></div>
           </div>
           <Button variant="outline" size="sm" className="shrink-0 border-white/40 bg-white/10 text-white hover:bg-white/20 hover:text-white" onClick={onExit}><LogOut className="h-4 w-4" aria-hidden="true" />{completed ? "Fechar" : "Sair e continuar depois"}</Button>
@@ -254,7 +257,7 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
                     onClick={() => onSelectStep(step.key)}
                     className={cn("flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-sm transition-colors motion-reduce:transition-none max-lg:min-h-11", current ? "border-transparent font-bold text-foreground" : "border-transparent hover:bg-muted", !open && "cursor-not-allowed opacity-50")}
                   >
-                    <StepIcon done={item.done} pop={settled} />
+                    <StepIcon done={item.done} pop={poppedKeys.includes(step.key)} />
                     <span className="min-w-0 flex-1 break-words leading-tight">{position + 1}. {step.title}</span>
                     {step.key !== "revisao" ? <span className="max-lg:hidden"><Badge required={step.required} /></span> : null}
                   </button>

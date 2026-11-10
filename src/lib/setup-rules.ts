@@ -240,6 +240,11 @@ export function canDecide(step: unknown, decision: unknown) {
   return decision === "skipped" ? SKIPPABLE.has(step) : CONFIRMABLE.has(step);
 }
 
+/** Etapas de conferência: salvar com sucesso na tela de destino (vindo pelo assistente) já registra a confirmação. */
+export function confirmsOnSave(step: unknown) {
+  return (step === "agenda" || step === "custos" || step === "notificacoes") && canDecide(step, "confirmed");
+}
+
 /** Lê o JSON salvo sem confiar nele: descarta chaves desconhecidas e decisões que a etapa não aceita. */
 export function parseSetupDecisions(raw: unknown): SetupDecisions {
   const result: SetupDecisions = {};

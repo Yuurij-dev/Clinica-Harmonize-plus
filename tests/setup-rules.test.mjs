@@ -167,3 +167,9 @@ test("balão nunca cobre alvos nem a barra de retorno", async () => {
   assert.equal([...mobileTargets, ...obstacles].some((r) => hits(box, r)), false);
   assert.ok(mob.left >= 12 && mob.left + 320 <= 378 && mob.top >= 12);
 });
+
+test("salvar nas etapas de conferência registra a confirmação; nas demais não", async () => {
+  const { confirmsOnSave } = await import("../src/lib/setup-rules.ts");
+  for (const key of ["agenda", "custos", "notificacoes"]) assert.equal(confirmsOnSave(key), true);
+  for (const key of ["clinica", "equipe", "procedimentos", "materiais", "produtos", "financeiro", "revisao", "x"]) assert.equal(confirmsOnSave(key), false);
+});
