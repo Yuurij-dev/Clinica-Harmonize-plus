@@ -1,4 +1,7 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
+import { loadPatientEmailContext } from "@/lib/patient-email-context";
+import { isEmailDeliveryReady } from "@/lib/email";
+import { sendAppointmentConfirmationEmail } from "@/lib/patient-emails";
 import { getCurrentUser } from "@/lib/auth";
 import { appointmentInstant, appointmentSlotError, clinicNow, parseAppointmentDay } from "@/lib/clinic-time";
 import { cleanProfessionalName } from "@/lib/appointment-conflict-rules";
@@ -87,5 +90,14 @@ export async function POST(request: Request) {
   }, appointmentTransactionOptions);
   if ("duplicate" in result) return NextResponse.json({ message: DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE }, { status: 409 });
   if ("conflict" in result) return NextResponse.json({ message: result.conflict }, { status: 409 });
-  return NextResponse.json({ appointment: result.appointment }, { status: 201 });
+  const created = result.appointment;
+  // E-mail ao paciente depois da resposta; opcional e silencioso, nunca altera o agendamento.
+  after(async () => {
+    try {
+      if (!isEmailDeliveryReady()) return;
+      const context = await loadPatientEmailContext(user.clinicId, patient.id);
+      if (context) await sendAppointmentConfirmationEmail({ ...context, procedure: created.procedure, professional: created.professional, date: day, time: created.time });
+    } catch {}
+  });
+  return NextResponse.json({ appointment: created }, { status: 201 });
 }

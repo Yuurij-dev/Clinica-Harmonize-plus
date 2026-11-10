@@ -80,8 +80,41 @@ export function canRevealInviteUrl(env: Env = process.env): boolean {
   return env.NODE_ENV !== "production";
 }
 
-const escapeHtml = (value: string) =>
+export const escapeHtml = (value: string) =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+export function isEmailDeliveryReady(env: Env = process.env): boolean {
+  return Boolean(env.RESEND_API_KEY?.trim() && env.EMAIL_FROM?.trim());
+}
+
+// Nucleo generico de envio: nunca lanca e so loga um codigo estavel (sem destinatario, corpo, chave ou resposta do provedor).
+export async function sendEmail(
+  input: { to: string; subject: string; html: string; text: string },
+  deps: { env?: Env; fetchImpl?: typeof fetch } = {},
+): Promise<EmailResult> {
+  const env = deps.env ?? process.env;
+  const apiKey = env.RESEND_API_KEY?.trim();
+  const from = env.EMAIL_FROM?.trim();
+  if (!apiKey || !from) return { sent: false, reason: "not_configured" };
+  try {
+    const response = await (deps.fetchImpl ?? fetch)(RESEND_ENDPOINT, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from, to: [input.to], subject: input.subject, html: input.html, text: input.text }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      cache: "no-store",
+    });
+    if (response.ok) return { sent: true };
+    const reason = mapProviderFailure(response.status, await readErrorName(response));
+    logFailure(reason);
+    return { sent: false, reason };
+  } catch (error) {
+    const timedOut = (error as { name?: unknown } | null)?.name === "TimeoutError" || (error as { name?: unknown } | null)?.name === "AbortError";
+    const reason: EmailFailureReason = timedOut ? "timeout" : "network";
+    logFailure(reason);
+    return { sent: false, reason };
+  }
+}
 
 const roleLabels: Record<string, string> = { PROFESSIONAL: "profissional", STAFF: "recepção/apoio" };
 
@@ -90,9 +123,7 @@ export async function sendInvitationEmail(
   deps: { env?: Env; fetchImpl?: typeof fetch } = {},
 ): Promise<EmailResult> {
   const env = deps.env ?? process.env;
-  const apiKey = env.RESEND_API_KEY?.trim();
-  const from = env.EMAIL_FROM?.trim();
-  if (!apiKey || !from) return { sent: false, reason: "not_configured" };
+  if (!isEmailDeliveryReady(env)) return { sent: false, reason: "not_configured" };
   if (!input.url) return { sent: false, reason: "no_site_url" };
 
   const clinic = escapeHtml(input.clinicName);
@@ -110,22 +141,5 @@ export async function sendInvitationEmail(
 </div>`;
   const text = `Olá,\n\n${input.inviterName} convidou você para entrar na clínica ${input.clinicName} como ${role} no Harmonize+.\n\nPara aceitar, abra este link:\n${input.url}\n\nO convite vale por 7 dias. Se você não esperava este e-mail, pode ignorá-lo.`;
 
-  try {
-    const response = await (deps.fetchImpl ?? fetch)(RESEND_ENDPOINT, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to: [input.to], subject: `${input.inviterName} convidou você para a clínica ${input.clinicName}`, html, text }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      cache: "no-store",
-    });
-    if (response.ok) return { sent: true };
-    const reason = mapProviderFailure(response.status, await readErrorName(response));
-    logFailure(reason);
-    return { sent: false, reason };
-  } catch (error) {
-    const timedOut = (error as { name?: unknown } | null)?.name === "TimeoutError" || (error as { name?: unknown } | null)?.name === "AbortError";
-    const reason: EmailFailureReason = timedOut ? "timeout" : "network";
-    logFailure(reason);
-    return { sent: false, reason };
-  }
+  return sendEmail({ to: input.to, subject: `${input.inviterName} convidou você para a clínica ${input.clinicName}`, html, text }, deps);
 }

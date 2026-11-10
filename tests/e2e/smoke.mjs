@@ -6838,7 +6838,40 @@ async function collaboratorPhoto() {
   }
 }
 
+// E-mails ao cliente saem em background (after); aqui só se garante que as rotas seguem iguais.
+// Todo paciente usa e-mail @example.invalid (ou nenhum): nunca entrega e-mail real.
+async function clientEmails() {
+  const mk = async (label, extra) => (await api("POST", "/api/patients", { ...regDefaults, name: `Email ${label} ${run}`, phone: "11999990010", age: 30, cpf: randomCpf(), ...extra })).data.patient;
+  const withMail = await mk("Com", { email: `e2e-${run}@example.invalid` });
+  const noMail = await mk("Sem", {});
+  const stored = await Promise.all([withMail, noMail].map((p) => p?.id ? prisma.patient.findUnique({ where: { id: p.id }, select: { email: true } }) : null));
+  check("pacientes de e-mail usam só @example.invalid (ou nenhum)", stored[0]?.email === `e2e-${run}@example.invalid` && !stored[1]?.email, `${stored[0]?.email}/${stored[1]?.email}`);
+  if (!withMail?.id || !noMail?.id) return;
+
+  for (const [label, patient] of [["com e-mail", withMail], ["sem e-mail", noMail]]) {
+    let r = await api("POST", "/api/appointments", { patientId: patient.id, procedure: "Retorno", professional: "Teste", time: "09:00", date: day(3) });
+    const appt = r.data.appointment;
+    check(`agendamento ${label} continua 201 com resposta normal`, r.status === 201 && appt?.id && appt.status === "Agendado" && appt.time === "09:00" && appt.date === `${day(3)}T15:00:00.000Z`, `${r.status} ${JSON.stringify(appt)?.slice(0, 150)}`);
+    if (!appt?.id) continue;
+    r = await api("PATCH", `/api/appointments/${appt.id}`, { date: `${day(4)}T10:00:00-03:00`, time: "10:00" });
+    check(`reagendar ${label} continua 200 e mantém "Agendado"`, r.status === 200 && r.data.appointment?.date === `${day(4)}T15:00:00.000Z` && r.data.appointment?.time === "10:00" && r.data.appointment?.status === "Agendado", `${r.status} ${JSON.stringify(r.data.appointment)?.slice(0, 150)}`);
+    r = await api("PATCH", `/api/appointments/${appt.id}`, { status: "Cancelado" });
+    check(`cancelar ${label} continua 200 com status Cancelado`, r.status === 200 && r.data.appointment?.status === "Cancelado", `${r.status} ${r.data.appointment?.status}`);
+    r = await api("PATCH", `/api/appointments/${appt.id}`, { status: "Cancelado" });
+    check(`cancelar de novo ${label} não quebra (200)`, r.status === 200 && r.data.appointment?.status === "Cancelado", r.status);
+    r = await api("POST", "/api/quotes", { patientId: patient.id, items: "Botox (1x)", total: 120.5 });
+    check(`orçamento Pendente ${label} continua 201`, r.status === 201 && r.data.quote?.status === "Pendente" && r.data.quote?.total === 120.5, `${r.status} ${r.data.quote?.status} ${r.data.quote?.total}`);
+    r = await api("POST", "/api/quotes", { patientId: patient.id, items: "Botox (1x)", total: 80, status: "Rascunho" });
+    check(`orçamento Rascunho ${label} continua 201`, r.status === 201 && r.data.quote?.status === "Rascunho" && r.data.quote?.total === 80, `${r.status} ${r.data.quote?.status}`);
+  }
+  const bad = await api("POST", "/api/appointments", { patientId: withMail.id, procedure: "Retorno", professional: "Teste", time: "99:99", date: day(3) });
+  check("agendamento com horário inválido segue 400", bad.status === 400, bad.status);
+  const badQuote = await api("POST", "/api/quotes", { patientId: withMail.id, items: "", total: 10 });
+  check("orçamento sem itens segue 400", badQuote.status === 400, badQuote.status);
+}
+
 const suites = {
+  emails_cliente: { needs: [], run: () => clientEmails() },
   colaborador_foto: { needs: [], run: () => collaboratorPhoto() },
   colaborador_editar: { needs: [], run: () => collaboratorEdit() },
   detalhe_profissional: { needs: [], run: () => teamMemberDetail() },
