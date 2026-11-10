@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fieldClassName, FormField, Modal } from "@/components/ui/modal";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
+import { clearTeamInviteRequest, setupInviteTeamEvent, teamInviteRequested } from "@/lib/section-events";
 import { LoadingSkeleton } from "./shared";
 
 type InvitationStatus = "pending" | "accepted" | "expired" | "cancelled";
@@ -48,7 +49,8 @@ export function TeamInvitations() {
   const [items, setItems] = useState<InvitationItem[]>(cached?.invitations ?? []);
   const [loading, setLoading] = useState(!cached);
   const [loadError, setLoadError] = useState("");
-  const [modalOpen, setModalOpen] = useState(false);
+  // Aberto de fora pelo assistente de configuração (etapa equipe): pedido já feito antes da montagem ou evento depois.
+  const [modalOpen, setModalOpen] = useState(teamInviteRequested);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("STAFF");
   const [formError, setFormError] = useState("");
@@ -58,6 +60,13 @@ export function TeamInvitations() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [toCancel, setToCancel] = useState<InvitationItem | null>(null);
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    clearTeamInviteRequest();
+    const open = () => { clearTeamInviteRequest(); setFormError(""); setModalOpen(true); };
+    window.addEventListener(setupInviteTeamEvent, open);
+    return () => window.removeEventListener(setupInviteTeamEvent, open);
+  }, []);
 
   const load = useCallback(async () => {
     try {

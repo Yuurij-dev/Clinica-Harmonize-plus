@@ -6941,8 +6941,10 @@ async function setupWizard() {
   const otherEmail = `e2e-setup-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E Setup Externa ${run}`;
   const stepOf = (data, key) => data.steps?.find((s) => s.key === key);
   const setupRow = () => prisma.clinicSetup.findUnique({ where: { clinicId: home } });
+  const inviteEmail = `e2e-setup-convite-${run}@example.invalid`;
   let member;
   try {
+    await prisma.clinicInvitation.deleteMany({ where: { clinicId: home, email: inviteEmail } });
     await prisma.clinicSetup.deleteMany({ where: { clinicId: home } });
     await prisma.clinic.update({ where: { id: home }, data: { phone: null, address: null } });
 
@@ -6965,6 +6967,14 @@ async function setupWizard() {
     const d = r.data;
     check("setup: GET inicial devolve status pending e formato completo", r.status === 200 && d.status === "pending" && d.currentStep === "clinica" && Array.isArray(d.steps) && d.steps.length === 10 && d.total === 10 && typeof d.doneCount === "number" && typeof d.percent === "number" && d.canFinish === false && "nextPendingKey" in d && d.summary?.clinicFields && !(await setupRow()), `${r.status} ${JSON.stringify(d).slice(0, 200)}`);
     check("setup: inicialmente clínica (sem telefone/endereço), equipe, agenda e procedimentos pendentes", ["clinica", "equipe", "agenda", "procedimentos"].every((k) => stepOf(d, k)?.required && !stepOf(d, k).done) && d.nextPendingKey === "clinica", JSON.stringify(d.steps?.map((s) => [s.key, s.done])));
+
+    // Convites pendentes no resumo.
+    check("setup: summary.pendingInvitations é 0 (número) sem convites", d.summary?.pendingInvitations === 0, JSON.stringify(d.summary?.pendingInvitations));
+    r = await api("POST", "/api/invitations", { email: inviteEmail, role: "STAFF" });
+    check("setup: convite criado pela rota existente", r.status === 201 || r.status === 200, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
+    r = await api("GET", "/api/setup");
+    check("setup: pendingInvitations reflete o convite PENDING (>= 1)", r.status === 200 && typeof r.data.summary?.pendingInvitations === "number" && r.data.summary.pendingInvitations >= 1, JSON.stringify(r.data.summary?.pendingInvitations));
+    check("setup: convite pendente não conclui a etapa equipe nem libera canFinish", stepOf(r.data, "equipe")?.done === false && r.data.canFinish === false, JSON.stringify(stepOf(r.data, "equipe")));
 
     // Entradas inválidas.
     for (const [label, body] of [["pular obrigatória (equipe)", { action: "decide", step: "equipe", decision: "skipped" }], ["pular obrigatória (clinica)", { action: "decide", step: "clinica", decision: "skipped" }], ["pular procedimentos", { action: "decide", step: "procedimentos", decision: "skipped" }], ["confirmar etapa que não aceita (materiais)", { action: "decide", step: "materiais", decision: "confirmed" }], ["confirmar procedimentos", { action: "decide", step: "procedimentos", decision: "confirmed" }], ["decisão desconhecida", { action: "decide", step: "equipe", decision: "talvez" }], ["etapa desconhecida", { action: "decide", step: "xyz", decision: "skipped" }], ["goto inválido", { action: "goto", step: "inexistente" }], ["undo sem etapa", { action: "undo" }], ["ação desconhecida", { action: "apagar" }], ["sem ação", {}]]) {
@@ -7032,12 +7042,14 @@ async function setupWizard() {
       const homeBefore = await setupRow();
       const og = await withSession(other.cookie, () => api("GET", "/api/setup"));
       check("setup: admin de outra clínica vê o próprio setup (pending, sem procedimentos), não o da conta de teste", og.status === 200 && og.data.status === "pending" && og.data.summary.procedures === 0 && og.data.summary.clinicName === otherClinic && !JSON.stringify(og.data).includes(`${testClinicName}`), `${og.status} ${JSON.stringify(og.data).slice(0, 200)}`);
+      check("setup: outra clínica vê pendingInvitations da própria clínica (0), não o da conta de teste", og.data.summary?.pendingInvitations === 0, JSON.stringify(og.data.summary?.pendingInvitations));
       const op = await withSession(other.cookie, () => api("PATCH", "/api/setup", { action: "dismiss", clinicId: home }));
       const homeAfter = await setupRow();
       const otherRow = await prisma.clinicSetup.findFirst({ where: { clinic: { name: otherClinic } } });
       check("setup: PATCH da outra clínica não altera o setup da conta de teste", op.status === 200 && op.data.status === "dismissed" && homeAfter?.status === "completed" && +homeAfter.updatedAt === +homeBefore.updatedAt && otherRow?.status === "dismissed", `${op.status} ${homeAfter?.status}`);
     } else check("setup: segunda clínica criada", false, `registro ${r.status} login ${other?.status}`);
   } finally {
+    await prisma.clinicInvitation.deleteMany({ where: { clinicId: home, email: inviteEmail } });
     if (member) await api("DELETE", "/api/team", { membershipId: member.id });
     const others = (await prisma.clinic.findMany({ where: { name: otherClinic }, select: { id: true } })).map((c) => c.id);
     await prisma.clinicSetup.deleteMany({ where: { clinicId: { in: others } } });

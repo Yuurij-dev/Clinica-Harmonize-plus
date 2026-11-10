@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, Info, LogOut, Undo2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Info, LogOut, MailPlus, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CountUp } from "@/components/ui/count-up";
 import { Progress } from "@/components/ui/progress";
@@ -41,7 +41,7 @@ function plural(count: number, one: string, many: string) {
 }
 
 /** Situação atual da etapa, montada só com o que o servidor devolveu. */
-function stepStatus(key: SetupStepKey, state: SetupStepState, summary: SetupSummary): { text: string; ok: boolean } {
+function stepStatus(key: SetupStepKey, state: SetupStepState, summary: SetupSummary): { text: string; ok: boolean; hint?: string } {
   const decided = state.confirmed ? "confirmada por você" : state.skipped ? "marcada como não utilizada" : null;
   switch (key) {
     case "clinica": {
@@ -50,7 +50,9 @@ function stepStatus(key: SetupStepKey, state: SetupStepState, summary: SetupSumm
     }
     case "equipe":
       if (summary.professionals > 0) return { text: `${plural(summary.professionals, "profissional cadastrado", "profissionais cadastrados")}.`, ok: true };
-      return state.confirmed ? { text: "Você confirmou que realiza os atendimentos por enquanto.", ok: true } : { text: "Nenhum profissional cadastrado.", ok: false };
+      if (state.confirmed) return { text: "Você confirmou que realiza os atendimentos por enquanto.", ok: true };
+      if (summary.pendingInvitations > 0) return { text: `${plural(summary.pendingInvitations, "convite pendente", "convites pendentes")}.`, ok: false, hint: "Convite enviado. A etapa conclui quando a pessoa aceitar e ficar como profissional, ou confirme que você mesmo atende." };
+      return { text: "Nenhum profissional cadastrado.", ok: false };
     case "agenda": {
       const { hours } = summary;
       const text = `Clínica ${hours.opening}–${hours.closing}; profissionais ${hours.professionalOpening}–${hours.professionalClosing}.`;
@@ -112,7 +114,7 @@ type WizardProps = {
   busy: boolean;
   error: string;
   onSelectStep: (key: SetupStepKey) => void;
-  onAction: (destination: SetupDestination) => void;
+  onAction: (destination: SetupDestination, intent?: "invite-team") => void;
   onDecide: (key: SetupStepKey, decision: SetupDecision) => void;
   onUndo: (key: SetupStepKey) => void;
   onFinish: () => void;
@@ -288,12 +290,13 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
                   {status.ok ? <Check className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" /> : <Info className="mt-1 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />}
                   <div>
                     <p className="font-semibold">{status.text}</p>
-                    <p className="text-xs">{state.skipped ? "Tudo bem! Você pode configurar isso depois, quando quiser." : status.ok ? definition.doneMessage : definition.missingHint}</p>
+                    <p className="text-xs">{state.skipped ? "Tudo bem! Você pode configurar isso depois, quando quiser." : status.ok ? definition.doneMessage : status.hint ?? definition.missingHint}</p>
                   </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
                   {definition.destination ? <Button onClick={() => onAction(definition.destination!)} disabled={busy}>{definition.actionLabel ?? "Abrir"}<ArrowRight className="h-4 w-4" aria-hidden="true" /></Button> : null}
+                  {definition.destination && definition.secondaryAction && !state.done ? <Button variant="outline" onClick={() => onAction(definition.destination!, definition.secondaryAction!.intent)} disabled={busy}><MailPlus className="h-4 w-4" aria-hidden="true" />{definition.secondaryAction.label}</Button> : null}
                   {showConfirm ? <Button variant="outline" disabled={busy} onClick={() => onDecide(definition.key, "confirmed")}><Check className="h-4 w-4" aria-hidden="true" />{definition.confirmLabel}</Button> : null}
                   {showSkip && !confirmingSkip ? <Button variant="ghost" disabled={busy} onClick={() => setConfirmingSkip(true)}>{definition.skipLabel}</Button> : null}
                   {decided ? <Button variant="ghost" size="sm" disabled={busy} onClick={() => onUndo(definition.key)}><Undo2 className="h-4 w-4" aria-hidden="true" />Desfazer</Button> : null}
