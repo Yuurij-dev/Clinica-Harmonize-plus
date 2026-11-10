@@ -117,3 +117,12 @@ test("isEmailDeliveryReady exige chave e remetente", () => {
   assert.equal(email.isEmailDeliveryReady({ EMAIL_FROM: "a@b.c", RESEND_API_KEY: " " }), false);
   assert.equal(email.isEmailDeliveryReady({}), false);
 });
+
+test("orçamento com anexo envia attachments ao Resend; sem anexo o payload não tem a chave", async () => {
+  const attachment = { filename: "orcamento.pdf", content: "JVBERi0=" };
+  const withFile = await capture((deps) => pe.sendQuoteEmail({ ...base, totalCents: 1000, attachment }, deps));
+  assert.deepEqual(withFile.result, { sent: true });
+  assert.deepEqual(withFile.seen.body.attachments, [attachment]);
+  const without = await capture((deps) => pe.sendQuoteEmail({ ...base, totalCents: 1000 }, deps));
+  assert.equal("attachments" in without.seen.body, false);
+});
