@@ -1,6 +1,10 @@
 // Envio de e-mail via Resend (fetch, sem dependencia). NUNCA logar token, URL do convite, corpo do e-mail,
 // e-mail do destinatario, chave nem a resposta bruta do provedor: o unico log permitido e um codigo estavel de lista fechada.
 
+import { composeEmail, heading, paragraph, button, note, escapeHtml } from "./email-layout.ts";
+
+export { escapeHtml };
+
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 const TIMEOUT_MS = 8_000;
 
@@ -80,41 +84,24 @@ export function canRevealInviteUrl(env: Env = process.env): boolean {
   return env.NODE_ENV !== "production";
 }
 
-const escapeHtml = (value: string) =>
-  value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+export function isEmailDeliveryReady(env: Env = process.env): boolean {
+  return Boolean(env.RESEND_API_KEY?.trim() && env.EMAIL_FROM?.trim());
+}
 
-const roleLabels: Record<string, string> = { PROFESSIONAL: "profissional", STAFF: "recepção/apoio" };
-
-export async function sendInvitationEmail(
-  input: { to: string; clinicName: string; inviterName: string; role: string; url: string | null },
+// Nucleo generico de envio: nunca lanca e so loga um codigo estavel (sem destinatario, corpo, chave ou resposta do provedor).
+export async function sendEmail(
+  input: { to: string; subject: string; html: string; text: string },
   deps: { env?: Env; fetchImpl?: typeof fetch } = {},
 ): Promise<EmailResult> {
   const env = deps.env ?? process.env;
   const apiKey = env.RESEND_API_KEY?.trim();
   const from = env.EMAIL_FROM?.trim();
   if (!apiKey || !from) return { sent: false, reason: "not_configured" };
-  if (!input.url) return { sent: false, reason: "no_site_url" };
-
-  const clinic = escapeHtml(input.clinicName);
-  const inviter = escapeHtml(input.inviterName);
-  const role = roleLabels[input.role] ?? "equipe";
-  const url = escapeHtml(input.url);
-  // Formato transacional (1:1), sem botao de campanha nem cabecalho de marca: ajuda a cair na caixa
-  // principal em vez de Promocoes. O nome da clinica/convidante continua escapado (seguranca).
-  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#25263a">
-<p>Olá,</p>
-<p>${inviter} convidou você para entrar na clínica <strong>${clinic}</strong> como ${role} no Harmonize+.</p>
-<p>Para aceitar, abra este link:</p>
-<p><a href="${url}">${url}</a></p>
-<p style="font-size:13px;color:#7783a8">O convite vale por 7 dias. Se você não esperava este e-mail, pode ignorá-lo.</p>
-</div>`;
-  const text = `Olá,\n\n${input.inviterName} convidou você para entrar na clínica ${input.clinicName} como ${role} no Harmonize+.\n\nPara aceitar, abra este link:\n${input.url}\n\nO convite vale por 7 dias. Se você não esperava este e-mail, pode ignorá-lo.`;
-
   try {
     const response = await (deps.fetchImpl ?? fetch)(RESEND_ENDPOINT, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to: [input.to], subject: `${input.inviterName} convidou você para a clínica ${input.clinicName}`, html, text }),
+      body: JSON.stringify({ from, to: [input.to], subject: input.subject, html: input.html, text: input.text }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
       cache: "no-store",
     });
@@ -128,4 +115,29 @@ export async function sendInvitationEmail(
     logFailure(reason);
     return { sent: false, reason };
   }
+}
+
+const roleLabels: Record<string, string> = { PROFESSIONAL: "profissional", STAFF: "recepção/apoio" };
+
+export async function sendInvitationEmail(
+  input: { to: string; clinicName: string; inviterName: string; role: string; url: string | null },
+  deps: { env?: Env; fetchImpl?: typeof fetch } = {},
+): Promise<EmailResult> {
+  const env = deps.env ?? process.env;
+  if (!isEmailDeliveryReady(env)) return { sent: false, reason: "not_configured" };
+  if (!input.url) return { sent: false, reason: "no_site_url" };
+
+  const role = roleLabels[input.role] ?? "equipe";
+  const body = composeEmail({
+    preheader: `${input.inviterName} convidou você para a clínica ${input.clinicName}.`,
+    blocks: [
+      heading("Você recebeu um convite"),
+      paragraph(`${input.inviterName} convidou você para entrar na clínica ${input.clinicName} como ${role} no Harmonize+.`),
+      button(input.url, "Aceitar convite"),
+      note("Ou copie e cole este link no navegador:"),
+      note(input.url),
+      note("O convite vale por 7 dias. Se você não esperava este e-mail, pode ignorá-lo."),
+    ],
+  });
+  return sendEmail({ to: input.to, subject: `${input.inviterName} convidou você para a clínica ${input.clinicName}`, html: body.html, text: body.text }, deps);
 }

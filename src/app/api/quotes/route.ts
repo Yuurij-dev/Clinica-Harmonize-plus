@@ -1,4 +1,7 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
+import { loadPatientEmailContext } from "@/lib/patient-email-context";
+import { isEmailDeliveryReady } from "@/lib/email";
+import { sendQuoteEmail } from "@/lib/patient-emails";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { listLimit, listPeriodFilter, serializeQuote, toCents } from "@/lib/finance";
@@ -75,6 +78,8 @@ export async function POST(request: Request) {
   let items = body?.items?.trim() ?? "";
   let totalCents = Number.isFinite(total) ? toCents(total) : 0;
   let details = "[]";
+  // Só conta itens no caminho estruturado (details); sem ele a contagem seria imprecisa, então fica null e o e-mail omite.
+  let itemCount: number | null = null;
   if (body?.details !== undefined) {
     const [procedures, costSnapshot] = await Promise.all([
       prisma.procedure.findMany({ where: { clinicId: user.clinicId }, select: { id: true, name: true, price: true } }),
@@ -84,6 +89,7 @@ export async function POST(request: Request) {
     if (!calculated) return NextResponse.json({ message: "Revise os procedimentos, quantidades e descontos do orçamento." }, { status: 400 });
     items = calculated.items.map((item) => `${item.name} (${item.quantity}x)`).join(", ");
     totalCents = calculated.totalCents;
+    itemCount = calculated.items.length;
     details = JSON.stringify({ ...calculated, costs: costSnapshot });
   }
   if (!items || (body?.details === undefined && !Number.isFinite(total))) return NextResponse.json({ message: "Selecione ao menos um procedimento e preencha o orçamento." }, { status: 400 });
@@ -91,6 +97,14 @@ export async function POST(request: Request) {
   const installments = Number(body?.installments ?? 1);
   if (notes.length > 2000 || !Number.isInteger(installments) || installments < 1 || installments > 12) return NextResponse.json({ message: "Revise as observações e o número de parcelas." }, { status: 400 });
   const quote = await prisma.quote.create({ data: { clinicId: user.clinicId, patientId: patient.id, journeyId: journey.id, evaluationId: evaluation?.id, items, details, notes, installments, totalCents, paymentMethod, status: body?.status === "Rascunho" ? "Rascunho" : "Pendente", createdBy: user.name, updatedBy: user.name, expires: parseDate(body?.expires) }, include: { patient: { select: { id: true, name: true } } } });
+  // E-mail ao paciente depois da resposta (só orçamento "Pendente"); opcional e silencioso, nunca altera o orçamento.
+  if (quote.status === "Pendente") after(async () => {
+    try {
+      if (!isEmailDeliveryReady()) return;
+      const context = await loadPatientEmailContext(user.clinicId, patient.id);
+      if (context) await sendQuoteEmail({ ...context, totalCents: quote.totalCents, expires: quote.expires?.toISOString().slice(0, 10), itemCount });
+    } catch {}
+  });
   return NextResponse.json({ quote: serializeQuote(quote) }, { status: 201 });
 }
 
