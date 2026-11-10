@@ -111,22 +111,46 @@ test("convite só aparece enquanto pendente", () => {
   for (const status of ["in_progress", "dismissed", "completed"]) assert.equal(shouldInviteSetup(status), false);
 });
 
-test("plano de destaque: clínica só mira os campos que faltam; revisão não destaca nada", async () => {
+test("plano de destaque: clínica em ordem (nome, telefone, endereço, salvar); revisão não destaca nada; demais têm um botão", async () => {
   const { setupSpotlightPlan } = await import("../src/lib/setup-rules.ts");
-  const all = { name: true, phone: true, address: true };
-  const plan = setupSpotlightPlan("clinica", { name: true, phone: false, address: false });
-  assert.deepEqual(plan.targets, ['[data-setup-target="clinica:phone"]', '[data-setup-target="clinica:address"]', '[data-setup-target="clinica:save"]']);
-  assert.match(plan.hint, /telefone/);
-  assert.equal(setupSpotlightPlan("clinica", all), null);
-  assert.equal(setupSpotlightPlan("revisao", all), null);
-  for (const step of SETUP_STEPS.filter((item) => item.key !== "clinica" && item.key !== "revisao")) assert.equal(setupSpotlightPlan(step.key, all).targets.length, 1);
+  const plan = setupSpotlightPlan("clinica");
+  assert.deepEqual(plan.items.map((item) => item.selector), ['[data-setup-target="clinica:name"]', '[data-setup-target="clinica:phone"]', '[data-setup-target="clinica:address"]', '[data-setup-target="clinica:save"]']);
+  assert.deepEqual(plan.items.map((item) => item.fieldKey), ["name", "phone", "address", undefined]);
+  assert.match(plan.items[2].hint, /endereço/);
+  assert.match(plan.items[3].hint, /Salvar dados/);
+  assert.equal(setupSpotlightPlan("revisao"), null);
+  for (const step of SETUP_STEPS.filter((item) => item.key !== "clinica" && item.key !== "revisao")) {
+    const single = setupSpotlightPlan(step.key);
+    assert.equal(single.items.length, 1);
+    assert.equal(single.items[0].fieldKey, undefined);
+  }
 });
 
-test("dica da clínica cita todos os campos que faltam", async () => {
-  const { setupSpotlightPlan } = await import("../src/lib/setup-rules.ts");
-  assert.equal(setupSpotlightPlan("clinica", { name: true, phone: false, address: false }).hint, "Preencha o telefone e o endereço da clínica e salve os dados");
-  assert.equal(setupSpotlightPlan("clinica", { name: true, phone: true, address: false }).hint, "Preencha o endereço da clínica e salve os dados");
-  assert.equal(setupSpotlightPlan("clinica", { name: false, phone: false, address: false }).hint, "Preencha o nome, o telefone e o endereço da clínica e salve os dados");
+test("campo preenchido: texto não vazio; telefone exige 10 dígitos ou mais", async () => {
+  const { isSetupFieldFilled } = await import("../src/lib/setup-rules.ts");
+  assert.equal(isSetupFieldFilled("name", "  "), false);
+  assert.equal(isSetupFieldFilled("name", " Bela "), true);
+  assert.equal(isSetupFieldFilled("phone", "(11) 9876"), false);
+  assert.equal(isSetupFieldFilled("phone", "(11) 3456-7890"), true);
+  assert.equal(isSetupFieldFilled("phone", "(11) 98765-4321"), true);
+});
+
+test("alvo atual: primeiro campo vazio; avança ao preencher, volta se apagar; botão fica até a etapa concluir", async () => {
+  const { setupSpotlightPlan, currentSetupTargetIndex } = await import("../src/lib/setup-rules.ts");
+  const items = setupSpotlightPlan("clinica").items;
+  assert.equal(currentSetupTargetIndex(items, [false, false, false, false]), 0);
+  assert.equal(currentSetupTargetIndex(items, [true, false, false, false]), 1);
+  assert.equal(currentSetupTargetIndex(items, [true, true, false, false]), 2);
+  assert.equal(currentSetupTargetIndex(items, [true, true, true, false]), 3);
+  assert.equal(currentSetupTargetIndex(items, [true, true, true, true]), 3);
+  assert.equal(currentSetupTargetIndex(items, [true, false, true, false]), 1);
+  // Alvo fora da tela é ignorado; sem nenhum alvo, -1.
+  assert.equal(currentSetupTargetIndex(items, [null, false, false, false]), 1);
+  assert.equal(currentSetupTargetIndex(items, [null, null, null, null]), -1);
+  // Etapa de um botão só: sempre o botão.
+  const single = setupSpotlightPlan("procedimentos").items;
+  assert.equal(currentSetupTargetIndex(single, [false]), 0);
+  assert.equal(currentSetupTargetIndex(single, [null]), -1);
 });
 
 test("balão nunca cobre alvos nem a barra de retorno", async () => {

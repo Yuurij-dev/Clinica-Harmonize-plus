@@ -347,34 +347,53 @@ export function showsSetupProgress(status: SetupStatus) {
   return status !== "completed";
 }
 
-export type SetupSpotlightPlan = { targets: string[]; hint: string };
+/** Um alvo do destaque, na ordem do plano. `fieldKey` marca campos de formulário (concluídos quando preenchidos); botões não têm. */
+export type SetupSpotlightItem = { selector: string; hint: string; fieldKey?: string };
+export type SetupSpotlightPlan = { items: SetupSpotlightItem[] };
 
 const targetSelector = (key: string) => `[data-setup-target="${key}"]`;
+const buttonItem = (key: string, hint: string): SetupSpotlightPlan => ({ items: [{ selector: targetSelector(key), hint }] });
 
 /**
- * O que destacar na tela da etapa (valores de data-setup-target nas telas existentes) e a dica do balão do Harmo.
- * Em "clinica" só entram os campos que faltam, mais o botão de salvar.
+ * O que destacar na tela da etapa (valores de data-setup-target nas telas existentes), um alvo por vez, na ordem.
+ * Em "clinica": nome, telefone, endereço (o destaque pula os já preenchidos e volta se forem apagados) e depois "Salvar dados".
  */
-export function setupSpotlightPlan(key: SetupStepKey, clinicFields: { name: boolean; phone: boolean; address: boolean }): SetupSpotlightPlan | null {
+export function setupSpotlightPlan(key: SetupStepKey): SetupSpotlightPlan | null {
   switch (key) {
-    case "clinica": {
-      const labels = { name: "o nome", phone: "o telefone", address: "o endereço" } as const;
-      const missing = (["name", "phone", "address"] as const).filter((field) => !clinicFields[field]);
-      if (!missing.length) return null;
-      const names = missing.map((field) => labels[field]);
-      const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} e ${names[names.length - 1]}` : names[0];
-      return { targets: [...missing.map((field) => targetSelector(`clinica:${field}`)), targetSelector("clinica:save")], hint: `Preencha ${list} da clínica e salve os dados` };
-    }
-    case "equipe": return { targets: [targetSelector("equipe")], hint: "Clique aqui para cadastrar seu primeiro profissional" };
-    case "agenda": return { targets: [targetSelector("agenda")], hint: "Confira a tolerância da agenda; depois volte ao assistente e confirme" };
-    case "procedimentos": return { targets: [targetSelector("procedimentos")], hint: "Clique aqui para cadastrar seu primeiro procedimento" };
-    case "materiais": return { targets: [targetSelector("materiais")], hint: "Clique aqui para cadastrar seu primeiro material" };
-    case "produtos": return { targets: [targetSelector("produtos")], hint: "Clique aqui para cadastrar seu primeiro produto" };
-    case "custos": return { targets: [targetSelector("custos")], hint: "Revise a mão de obra e os custos; depois volte e confirme" };
-    case "financeiro": return { targets: [targetSelector("financeiro")], hint: "Clique aqui para cadastrar seu primeiro custo fixo" };
-    case "notificacoes": return { targets: [targetSelector("notificacoes")], hint: "Revise os alertas; depois volte e confirme" };
+    case "clinica":
+      return {
+        items: [
+          { selector: targetSelector("clinica:name"), fieldKey: "name", hint: "Preencha o nome da clínica" },
+          { selector: targetSelector("clinica:phone"), fieldKey: "phone", hint: "Preencha o telefone da clínica, com DDD" },
+          { selector: targetSelector("clinica:address"), fieldKey: "address", hint: "Preencha o endereço da clínica" },
+          { selector: targetSelector("clinica:save"), hint: "Agora clique em Salvar dados" },
+        ],
+      };
+    case "equipe": return buttonItem("equipe", "Clique aqui para cadastrar seu primeiro profissional");
+    case "agenda": return buttonItem("agenda", "Confira a tolerância da agenda; depois volte ao assistente e confirme");
+    case "procedimentos": return buttonItem("procedimentos", "Clique aqui para cadastrar seu primeiro procedimento");
+    case "materiais": return buttonItem("materiais", "Clique aqui para cadastrar seu primeiro material");
+    case "produtos": return buttonItem("produtos", "Clique aqui para cadastrar seu primeiro produto");
+    case "custos": return buttonItem("custos", "Revise a mão de obra e os custos; depois volte e confirme");
+    case "financeiro": return buttonItem("financeiro", "Clique aqui para cadastrar seu primeiro custo fixo");
+    case "notificacoes": return buttonItem("notificacoes", "Revise os alertas; depois volte e confirme");
     case "revisao": return null;
   }
+}
+
+/** Campo preenchido: texto não vazio; telefone exige os dígitos da máscara (DDD + número, 10 ou mais). */
+export function isSetupFieldFilled(fieldKey: string, value: string) {
+  if (fieldKey === "phone") return value.replace(/\D/g, "").length >= 10;
+  return value.trim().length > 0;
+}
+
+/**
+ * Índice do alvo atual: o primeiro, na ordem do plano, que ainda pede ação. `filled`: `null` = o alvo não está na tela
+ * (ignorado); `true` = campo preenchido (pulado); `false` = pendente. Botões (`fieldKey` ausente) nunca contam como feitos:
+ * seguem como alvo até a etapa concluir no servidor, quando o destaque inteiro sai. -1 se não há alvo.
+ */
+export function currentSetupTargetIndex(items: readonly SetupSpotlightItem[], filled: ReadonlyArray<boolean | null>) {
+  return items.findIndex((item, index) => filled[index] !== null && (!item.fieldKey || filled[index] === false));
 }
 
 export type SetupRect = { x: number; y: number; w: number; h: number };

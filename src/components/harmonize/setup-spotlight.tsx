@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { placeBalloon, type SetupRect } from "@/lib/setup-rules";
+import { currentSetupTargetIndex, isSetupFieldFilled, placeBalloon, type SetupRect, type SetupSpotlightItem } from "@/lib/setup-rules";
 import { GuideMascot } from "./illustrations/guide-mascot";
 import { DIM, holePath, prefersReducedMotion } from "./tour-overlay";
 
@@ -24,62 +24,87 @@ function obstacleRects() {
   return rects;
 }
 
-function visibleTargets(selectors: string[]) {
-  const found: HTMLElement[] = [];
-  for (const selector of selectors) {
-    for (const el of document.querySelectorAll<HTMLElement>(selector)) {
-      const rect = el.getBoundingClientRect();
-      if (rect.width >= 1 && rect.height >= 1 && !found.includes(el)) found.push(el);
-    }
+function visibleElement(selector: string) {
+  for (const el of document.querySelectorAll<HTMLElement>(selector)) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width >= 1 && rect.height >= 1) return el;
   }
-  return found;
+  return null;
 }
+
+function fieldValue(el: HTMLElement) {
+  return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement ? el.value : "";
+}
+
+const toRect = (el: HTMLElement): Rect => {
+  const r = el.getBoundingClientRect();
+  return { x: r.left - PAD, y: r.top - PAD, w: r.width + PAD * 2, h: r.height + PAD * 2 };
+};
 
 const sameRects = (a: Rect[], b: Rect[]) => a.length === b.length && a.every((r, i) => Math.abs(r.x - b[i].x) < 1 && Math.abs(r.y - b[i].y) < 1 && Math.abs(r.w - b[i].w) < 1 && Math.abs(r.h - b[i].h) < 1);
 
 type Props = {
-  /** Seletores CSS ([data-setup-target="..."]) dos elementos a destacar na tela. */
-  selectors: string[];
-  /** Dica curta do Harmo no balão. */
-  hint: string;
+  /** Alvos em ordem ([data-setup-target="..."] + dica). Só o primeiro ainda pendente pulsa. */
+  items: readonly SetupSpotlightItem[];
 };
 
 /**
  * Destaque do assistente de configuração sobre a tela real. Diferente do tour, NÃO bloqueia nada: a camada é
  * pointer-events:none (só o balão recebe clique), então o usuário usa o campo destacado normalmente.
- * Começa escurecendo a tela com um buraco no alvo e o balão do Harmo; ao interagir com o alvo, Esc ou "Entendi" o
- * escurecimento some e fica só um anel discreto nos alvos que ainda existem. Monte com `key` novo para recomeçar.
+ * Um alvo por vez: o atual é o primeiro da ordem que ainda não está preenchido (campos) ou o botão da etapa. Só ele
+ * recebe o anel pulsante, e o destaque avança (ou volta, se o campo for apagado) conforme o usuário digita.
+ * O escurecimento com o balão do Harmo some ao interagir com um alvo, Esc ou "Entendi"; o anel segue até a etapa
+ * concluir (quando o host desmonta este componente). Monte com `key` novo para recomeçar.
  */
-export function SetupSpotlight({ selectors, hint }: Props) {
-  const [rects, setRects] = useState<Rect[]>([]);
+export function SetupSpotlight({ items }: Props) {
+  const [view, setView] = useState<{ index: number; rects: Rect[] } | null>(null);
   const [dim, setDim] = useState(true);
   const [vp, setVp] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
   const [obstacles, setObstacles] = useState<Rect[]>([]);
   const [balloon, setBalloon] = useState({ w: 0, h: 0 });
   const balloonRef = useRef<HTMLDivElement>(null);
-  const scrolled = useRef(false);
-  const selectorsKey = selectors.join("|");
+  const scrolledFor = useRef<string | null>(null);
+  const itemsRef = useRef(items);
+  useEffect(() => {
+    itemsRef.current = items;
+  });
+  const itemsKey = items.map((item) => item.selector).join("|");
 
   const measure = useCallback(() => {
-    const els = visibleTargets(selectorsKey ? selectorsKey.split("|") : []);
-    setVp((current) => (current.w === window.innerWidth && current.h === window.innerHeight ? current : { w: window.innerWidth, h: window.innerHeight }));
-    if (els.length && !scrolled.current) {
-      scrolled.current = true;
-      els[0].scrollIntoView({ block: "center", inline: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
-    }
-    const next = els.map((el) => {
-      const r = el.getBoundingClientRect();
-      return { x: r.left - PAD, y: r.top - PAD, w: r.width + PAD * 2, h: r.height + PAD * 2 };
+    const list = itemsRef.current;
+    const els = list.map((item) => visibleElement(item.selector));
+    const filled = list.map((item, index) => {
+      const el = els[index];
+      if (!el) return null;
+      return item.fieldKey ? isSetupFieldFilled(item.fieldKey, fieldValue(el)) : false;
     });
-    setRects((current) => (sameRects(current, next) ? current : next));
+    const index = currentSetupTargetIndex(list, filled);
+    setVp((current) => (current.w === window.innerWidth && current.h === window.innerHeight ? current : { w: window.innerWidth, h: window.innerHeight }));
     const blocked = obstacleRects();
     setObstacles((current) => (sameRects(current, blocked) ? current : blocked));
-    return els.length > 0;
-  }, [selectorsKey]);
+    if (index < 0) {
+      setView((current) => (current === null ? current : null));
+      return false;
+    }
+    const currentEl = els[index]!;
+    // Rola até o alvo novo se ele não estiver inteiro na tela (e sempre no primeiro).
+    const key = list[index].selector;
+    if (scrolledFor.current !== key) {
+      const first = scrolledFor.current === null;
+      scrolledFor.current = key;
+      const r = currentEl.getBoundingClientRect();
+      if (first || r.top < 0 || r.bottom > window.innerHeight) currentEl.scrollIntoView({ block: "center", inline: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+    }
+    // O alvo atual vem primeiro; os demais entram só para o balão não cobri-los.
+    const rects = [toRect(currentEl), ...els.flatMap((el, i) => (el && i !== index ? [toRect(el)] : []))];
+    setView((current) => (current && current.index === index && sameRects(current.rects, rects) ? current : { index, rects }));
+    return true;
+  }, []);
 
-  // O alvo pode aparecer depois (dados assíncronos): tenta por um tempo curto; depois só reposiciona em resize/scroll.
+  // O alvo pode aparecer depois (dados assíncronos): tenta por um tempo curto; depois reposiciona em resize/scroll
+  // e recalcula quando o usuário digita (input/change) em qualquer campo.
   useEffect(() => {
-    scrolled.current = false;
+    scrolledFor.current = null;
     let retries = 0;
     let timer = 0;
     const attempt = () => {
@@ -91,20 +116,24 @@ export function SetupSpotlight({ selectors, hint }: Props) {
     const settle = window.setTimeout(measure, 450); // depois do scroll suave
     window.addEventListener("resize", measure);
     window.addEventListener("scroll", measure, true);
+    document.addEventListener("input", measure, true);
+    document.addEventListener("change", measure, true);
     return () => {
       window.clearTimeout(timer);
       window.clearTimeout(settle);
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure, true);
+      document.removeEventListener("input", measure, true);
+      document.removeEventListener("change", measure, true);
     };
-  }, [measure]);
+  }, [measure, itemsKey]);
 
-  // Interagir com o alvo (clique ou foco), Esc ou "Entendi" tira o escurecimento.
+  // Interagir com um alvo (clique ou foco), Esc ou "Entendi" tira o escurecimento; o anel continua.
   useEffect(() => {
     if (!dim) return;
     const onTarget = (event: Event) => {
       const node = event.target instanceof Node ? event.target : null;
-      if (node && visibleTargets(selectorsKey.split("|")).some((el) => el.contains(node))) setDim(false);
+      if (node && itemsRef.current.some((item) => visibleElement(item.selector)?.contains(node))) setDim(false);
     };
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setDim(false); };
     document.addEventListener("pointerdown", onTarget, true);
@@ -115,33 +144,33 @@ export function SetupSpotlight({ selectors, hint }: Props) {
       document.removeEventListener("focusin", onTarget, true);
       document.removeEventListener("keydown", onKey);
     };
-  }, [dim, selectorsKey]);
+  }, [dim]);
 
+  const hint = view ? items[view.index]?.hint ?? "" : "";
   useLayoutEffect(() => {
     const el = balloonRef.current;
     if (!el) return;
     const w = el.offsetWidth;
     const h = el.offsetHeight;
     setBalloon((current) => (current.w === w && current.h === h ? current : { w, h }));
-  }, [dim, hint, vp.w, vp.h, rects.length]);
+  }, [dim, hint, vp.w, vp.h, view]);
 
-  if (!rects.length) return null;
+  if (!view) return null;
 
+  const [current] = view.rects;
   const width = Math.min(320, vp.w - 24);
-  const { left, top } = placeBalloon({ targets: rects, obstacles, viewport: vp, size: { w: width, h: balloon.h || 110 }, desktop: vp.w >= 1024 });
+  const { left, top } = placeBalloon({ targets: view.rects, obstacles, viewport: vp, size: { w: width, h: balloon.h || 110 }, desktop: vp.w >= 1024 });
 
   return (
     <div className="pointer-events-none fixed inset-0 z-[85]" data-setup-spotlight>
       {dim ? (
         <svg className="hp-tour-dim absolute inset-0" width={vp.w} height={vp.h} aria-hidden="true">
-          <path d={`M0 0H${vp.w}V${vp.h}H0Z${rects.map((r) => holePath(r)).join("")}`} fill={DIM} fillRule="evenodd" />
+          <path d={`M0 0H${vp.w}V${vp.h}H0Z${holePath(current)}`} fill={DIM} fillRule="evenodd" />
         </svg>
       ) : null}
-      {rects.map((r, index) => (
-        <div key={index} aria-hidden="true" className="pointer-events-none absolute" style={{ left: r.x - 3, top: r.y - 3, width: r.w + 6, height: r.h + 6 }}>
-          <div className={cn("h-full w-full rounded-[17px] border-[3px]", dim ? "hp-tour-ring border-white" : "border-primary/60")} />
-        </div>
-      ))}
+      <div aria-hidden="true" className="pointer-events-none absolute" style={{ left: current.x - 3, top: current.y - 3, width: current.w + 6, height: current.h + 6 }}>
+        <div className={cn("hp-setup-ring h-full w-full rounded-[17px] border-[3px]", dim ? "border-white" : "border-primary")} />
+      </div>
       {dim ? (
         <div ref={balloonRef} role="status" className="hp-tour-card pointer-events-auto absolute flex items-start gap-2 rounded-2xl border border-border bg-card p-3 text-card-foreground shadow-2xl" style={{ left, top, width }}>
           <div className="shrink-0" aria-hidden="true"><GuideMascot size={52} pose="point" /></div>
