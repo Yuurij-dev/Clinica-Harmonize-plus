@@ -25,3 +25,9 @@ export function useTourUserId() {
   const user = useContext(CurrentRoleContext);
   return user?.id && user.tourEnabled ? user.id : null;
 }
+
+/** Administrador (settings:manage) com o app pronto e o teste ativo: o único que usa o assistente de configuração da clínica. */
+export function useCanUseSetup() {
+  const user = useContext(CurrentRoleContext);
+  return Boolean(user?.tourEnabled && canForUser(user, "settings:manage"));
+}

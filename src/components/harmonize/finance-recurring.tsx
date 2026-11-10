@@ -31,7 +31,7 @@ export function FinanceRecurring({ onBack }: { onBack: () => void }) {
 
   const header = (
     <FinanceHeader icon={CalendarClock} title="Despesas recorrentes" description="Gerencie suas despesas fixas e recorrentes." parent="Financeiro" onParent={onBack}
-      actions={canManage ? <Button onClick={() => setEditing("new")}><Plus className="h-4 w-4" />Nova despesa fixa</Button> : undefined} />
+      actions={canManage ? <Button data-setup-target="financeiro" onClick={() => setEditing("new")}><Plus className="h-4 w-4" />Nova despesa fixa</Button> : undefined} />
   );
   if (!canManage) return <div>{header}<EmptyState title="Acesso restrito" description="Você não tem permissão para ver as despesas recorrentes." /></div>;
 

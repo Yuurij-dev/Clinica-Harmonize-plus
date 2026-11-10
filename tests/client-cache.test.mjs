@@ -58,6 +58,18 @@ test("revalidates global search results on each query instead of serving stale c
   assert.equal(requests, 2);
 });
 
+test("o progresso do assistente de configuração revalida a cada leitura", async () => {
+  let now = 1_000;
+  Date.now = () => now;
+  let requests = 0;
+  globalThis.fetch = async () => new Response(JSON.stringify({ requests: ++requests }), { status: 200 });
+  setClientCacheScope("user-a:clinic-a");
+
+  assert.deepEqual(await getCachedJson("/api/setup"), { requests: 1 });
+  now += 1;
+  assert.deepEqual(await getCachedJson("/api/setup"), { requests: 2 });
+});
+
 test("invalidates only affected keys, including query-string variants", async () => {
   let requests = 0;
   globalThis.fetch = async (url) => {

@@ -6930,7 +6930,128 @@ async function sendQuote() {
   }
 }
 
+// Assistente de configuração: GET/PATCH /api/setup (permissão, validação, conclusão por dados reais, finish, isolamento).
+async function setupWizard() {
+  const me = await prisma.user.findUnique({ where: { email: email.toLowerCase() }, select: { id: true } });
+  const home = (await prisma.clinicMembership.findFirst({ where: { userId: me.id, clinic: { name: testClinicName } }, select: { clinicId: true } })).clinicId;
+  const clinicFields = { name: true, phone: true, address: true, cnpj: true, email: true, openingTime: true, closingTime: true };
+  const originalClinic = await prisma.clinic.findUnique({ where: { id: home }, select: clinicFields });
+  const originalSetup = await prisma.clinicSetup.findUnique({ where: { clinicId: home } });
+  const staffEmail = `e2e-setup-staff-${run}@example.com`, staffPassword = `E2e-${run}-Staff9!`;
+  const otherEmail = `e2e-setup-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E Setup Externa ${run}`;
+  const stepOf = (data, key) => data.steps?.find((s) => s.key === key);
+  const setupRow = () => prisma.clinicSetup.findUnique({ where: { clinicId: home } });
+  let member;
+  try {
+    await prisma.clinicSetup.deleteMany({ where: { clinicId: home } });
+    await prisma.clinic.update({ where: { id: home }, data: { phone: null, address: null } });
+
+    let r = await withSession("", () => api("GET", "/api/setup"));
+    check("setup: GET sem sessão devolve 401", r.status === 401, r.status);
+    r = await withSession("", () => api("PATCH", "/api/setup", { action: "start" }));
+    check("setup: PATCH sem sessão devolve 401", r.status === 401 && !(await setupRow()), r.status);
+
+    r = await api("POST", "/api/team", { name: "E2E Atendente Setup", email: staffEmail, password: staffPassword, role: "STAFF", cpf: randomCpf(), address: "Rua A, 1", country: "Brasil", state: "SP", city: "São Paulo" });
+    member = r.data.member;
+    const staff = r.status === 201 ? await loginAs(staffEmail, staffPassword) : null;
+    if (staff?.status === 200) {
+      const g = await withSession(staff.cookie, () => api("GET", "/api/setup"));
+      const p = await withSession(staff.cookie, () => api("PATCH", "/api/setup", { action: "start" }));
+      check("setup: STAFF recebe 403 no GET e no PATCH, e nada é gravado", g.status === 403 && p.status === 403 && !(await setupRow()), `${g.status}/${p.status}`);
+    } else check("setup: usuário STAFF criado", false, `team ${r.status} login ${staff?.status}`);
+
+    // GET inicial.
+    r = await api("GET", "/api/setup");
+    const d = r.data;
+    check("setup: GET inicial devolve status pending e formato completo", r.status === 200 && d.status === "pending" && d.currentStep === "clinica" && Array.isArray(d.steps) && d.steps.length === 10 && d.total === 10 && typeof d.doneCount === "number" && typeof d.percent === "number" && d.canFinish === false && "nextPendingKey" in d && d.summary?.clinicFields && !(await setupRow()), `${r.status} ${JSON.stringify(d).slice(0, 200)}`);
+    check("setup: inicialmente clínica (sem telefone/endereço), equipe, agenda e procedimentos pendentes", ["clinica", "equipe", "agenda", "procedimentos"].every((k) => stepOf(d, k)?.required && !stepOf(d, k).done) && d.nextPendingKey === "clinica", JSON.stringify(d.steps?.map((s) => [s.key, s.done])));
+
+    // Entradas inválidas.
+    for (const [label, body] of [["pular obrigatória (equipe)", { action: "decide", step: "equipe", decision: "skipped" }], ["pular obrigatória (clinica)", { action: "decide", step: "clinica", decision: "skipped" }], ["pular procedimentos", { action: "decide", step: "procedimentos", decision: "skipped" }], ["confirmar etapa que não aceita (materiais)", { action: "decide", step: "materiais", decision: "confirmed" }], ["confirmar procedimentos", { action: "decide", step: "procedimentos", decision: "confirmed" }], ["decisão desconhecida", { action: "decide", step: "equipe", decision: "talvez" }], ["etapa desconhecida", { action: "decide", step: "xyz", decision: "skipped" }], ["goto inválido", { action: "goto", step: "inexistente" }], ["undo sem etapa", { action: "undo" }], ["ação desconhecida", { action: "apagar" }], ["sem ação", {}]]) {
+      r = await api("PATCH", "/api/setup", body);
+      check(`setup: ${label} devolve 400 e nada é gravado`, r.status === 400 && !(await setupRow()), `${r.status} ${JSON.stringify(r.data)}`);
+    }
+
+    // finish com obrigatória pendente.
+    r = await api("PATCH", "/api/setup", { action: "finish" });
+    check("setup: finish com obrigatórias pendentes devolve 409 e não vira completed", r.status === 409 && (await setupRow())?.status !== "completed", `${r.status} ${JSON.stringify(r.data)}`);
+
+    // start / goto / dismiss / start.
+    r = await api("PATCH", "/api/setup", { action: "start" });
+    check("setup: start -> in_progress", r.status === 200 && r.data.status === "in_progress" && (await setupRow())?.status === "in_progress", `${r.status} ${r.data.status}`);
+    r = await api("PATCH", "/api/setup", { action: "goto", step: "agenda" });
+    check("setup: goto grava a etapa atual", r.status === 200 && r.data.currentStep === "agenda" && (await api("GET", "/api/setup")).data.currentStep === "agenda", `${r.status} ${r.data.currentStep}`);
+    r = await api("PATCH", "/api/setup", { action: "dismiss" });
+    check("setup: dismiss -> dismissed", r.status === 200 && r.data.status === "dismissed", `${r.status} ${r.data.status}`);
+    r = await api("PATCH", "/api/setup", { action: "start" });
+    check("setup: start após dismiss volta a in_progress", r.status === 200 && r.data.status === "in_progress", `${r.status} ${r.data.status}`);
+
+    // Confirmar sem horários válidos/dados: decisões em equipe e agenda (o corpo não escolhe clínica).
+    r = await api("PATCH", "/api/setup", { action: "decide", step: "equipe", decision: "confirmed", clinicId: "outra" });
+    check("setup: equipe confirmada fica done e confirmed (clinicId do corpo ignorado)", r.status === 200 && stepOf(r.data, "equipe")?.done && stepOf(r.data, "equipe")?.confirmed && (await setupRow())?.clinicId === home, `${r.status}`);
+    r = await api("PATCH", "/api/setup", { action: "undo", step: "equipe" });
+    check("setup: undo desfaz a confirmação da equipe", r.status === 200 && !stepOf(r.data, "equipe")?.done, `${r.status}`);
+    r = await api("PATCH", "/api/setup", { action: "decide", step: "equipe", decision: "confirmed" });
+    r = await api("PATCH", "/api/setup", { action: "decide", step: "agenda", decision: "confirmed" });
+    check("setup: agenda confirmada com horários válidos fica done", r.status === 200 && stepOf(r.data, "agenda")?.done, `${r.status}`);
+
+    r = await api("PATCH", "/api/setup", { action: "finish" });
+    check("setup: finish ainda 409 (clínica e procedimentos pendentes) e status segue in_progress", r.status === 409 && (await setupRow())?.status === "in_progress", `${r.status}`);
+
+    // Dados reais: clínica pela rota de perfil.
+    r = await api("PATCH", "/api/clinic/profile", { name: originalClinic.name, cnpj: originalClinic.cnpj ?? "", email: originalClinic.email ?? "", phone: "11999990070", address: "Rua Setup, 70", openingTime: originalClinic.openingTime, closingTime: originalClinic.closingTime });
+    check("setup: dados da clínica gravados pela rota de configurações", r.status === 200, `${r.status} ${JSON.stringify(r.data)}`);
+    r = await api("GET", "/api/setup");
+    check("setup: clínica vira done com nome+telefone+endereço", stepOf(r.data, "clinica")?.done && r.data.summary.clinicFields.phone && r.data.summary.clinicFields.address, JSON.stringify(stepOf(r.data, "clinica")));
+    check("setup: procedimentos ainda pendente e canFinish false", !stepOf(r.data, "procedimentos")?.done && r.data.canFinish === false, JSON.stringify(stepOf(r.data, "procedimentos")));
+
+    r = await api("POST", "/api/procedures", { name: `E2E Setup Proc ${run}`, category: "Facial", price: 250, durationMinutes: 30, margin: 30 });
+    check("setup: procedimento criado pela rota existente", r.status === 201 || r.status === 200, `${r.status}`);
+    r = await api("GET", "/api/setup");
+    check("setup: procedimentos vira done e canFinish true", stepOf(r.data, "procedimentos")?.done && r.data.canFinish === true && r.data.summary.procedures >= 1, `${JSON.stringify(stepOf(r.data, "procedimentos"))} ${r.data.canFinish}`);
+
+    // Materiais pulado.
+    r = await api("PATCH", "/api/setup", { action: "decide", step: "materiais", decision: "skipped" });
+    const mat = stepOf(r.data, "materiais");
+    check("setup: materiais pulado fica done e skipped", r.status === 200 && mat?.done && mat?.skipped, `${r.status} ${JSON.stringify(mat)}`);
+
+    // Clique duplo no finish: ambos 200 e estado consistente.
+    const fin = await Promise.all([1, 2].map(() => api("PATCH", "/api/setup", { action: "finish" })));
+    const row = await setupRow();
+    check("setup: finish (clique duplo) devolve 200 nas duas e grava completed", fin.every((x) => x.status === 200 && x.data.status === "completed") && row?.status === "completed" && row.completedAt, fin.map((x) => x.status).join("/"));
+    r = await api("GET", "/api/setup");
+    const doneNow = r.data.steps.filter((s) => s.done).length;
+    check("setup: revisão done, doneCount e percent coerentes", stepOf(r.data, "revisao")?.done && r.data.doneCount === doneNow && r.data.percent === Math.round((doneNow / 10) * 100) && r.data.nextPendingKey !== "revisao", `${r.data.doneCount} ${r.data.percent}% next=${r.data.nextPendingKey}`);
+    r = await api("PATCH", "/api/setup", { action: "dismiss" });
+    check("setup: dismiss/start depois de concluído não reabre o assistente", r.status === 200 && r.data.status === "completed", `${r.status} ${r.data.status}`);
+
+    // Isolamento: admin de outra clínica.
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990071", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    if (other?.status === 200) {
+      const homeBefore = await setupRow();
+      const og = await withSession(other.cookie, () => api("GET", "/api/setup"));
+      check("setup: admin de outra clínica vê o próprio setup (pending, sem procedimentos), não o da conta de teste", og.status === 200 && og.data.status === "pending" && og.data.summary.procedures === 0 && og.data.summary.clinicName === otherClinic && !JSON.stringify(og.data).includes(`${testClinicName}`), `${og.status} ${JSON.stringify(og.data).slice(0, 200)}`);
+      const op = await withSession(other.cookie, () => api("PATCH", "/api/setup", { action: "dismiss", clinicId: home }));
+      const homeAfter = await setupRow();
+      const otherRow = await prisma.clinicSetup.findFirst({ where: { clinic: { name: otherClinic } } });
+      check("setup: PATCH da outra clínica não altera o setup da conta de teste", op.status === 200 && op.data.status === "dismissed" && homeAfter?.status === "completed" && +homeAfter.updatedAt === +homeBefore.updatedAt && otherRow?.status === "dismissed", `${op.status} ${homeAfter?.status}`);
+    } else check("setup: segunda clínica criada", false, `registro ${r.status} login ${other?.status}`);
+  } finally {
+    if (member) await api("DELETE", "/api/team", { membershipId: member.id });
+    const others = (await prisma.clinic.findMany({ where: { name: otherClinic }, select: { id: true } })).map((c) => c.id);
+    await prisma.clinicSetup.deleteMany({ where: { clinicId: { in: others } } });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [otherEmail, staffEmail] } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: [otherEmail, staffEmail] } } });
+    await prisma.clinic.update({ where: { id: home }, data: originalClinic });
+    await prisma.clinicSetup.deleteMany({ where: { clinicId: home } });
+    if (originalSetup) await prisma.clinicSetup.create({ data: originalSetup });
+  }
+}
+
 const suites = {
+  setup_wizard: { needs: [], run: () => setupWizard() },
   enviar_orcamento: { needs: [], run: () => sendQuote() },
   emails_cliente: { needs: [], run: () => clientEmails() },
   colaborador_foto: { needs: [], run: () => collaboratorPhoto() },

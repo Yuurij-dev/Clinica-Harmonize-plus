@@ -1304,6 +1304,36 @@ html.dark .hp-accent-text { color: #b4aeff; }
   0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.5); }
   50% { transform: scale(1.03); box-shadow: 0 0 0 8px rgba(255, 255, 255, 0); }
 }
+@keyframes hp-setup-ring {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(81, 71, 220, 0.35); }
+  50% { transform: scale(1.02); box-shadow: 0 0 0 6px rgba(81, 71, 220, 0); }
+}
+/* Assistente de configuração: só transform e opacity, curtas, e todas desligadas em prefers-reduced-motion (bloco abaixo). */
+@keyframes hp-sw-in-next { from { opacity: 0; transform: translateX(22px); } to { opacity: 1; transform: none; } }
+@keyframes hp-sw-in-back { from { opacity: 0; transform: translateX(-22px); } to { opacity: 1; transform: none; } }
+@keyframes hp-sw-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes hp-sw-list-in { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
+@keyframes hp-sw-pop { 0% { opacity: 0; transform: scale(0.4); } 60% { opacity: 1; transform: scale(1.22); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes hp-sw-check { from { stroke-dashoffset: 20; } to { stroke-dashoffset: 0; } }
+@keyframes hp-sw-pulse-once { 0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(81, 71, 220, 0.5); } 45% { transform: scale(1.05); } 100% { transform: scale(1); box-shadow: 0 0 0 10px rgba(81, 71, 220, 0); } }
+@keyframes hp-sw-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+@keyframes hp-sw-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes hp-sw-confetti { 0% { opacity: 0; transform: translate(0, 0) rotate(0deg); } 12% { opacity: 1; } 100% { opacity: 0; transform: translate(var(--dx), var(--dy)) rotate(var(--rot)); } }
+.hp-sw-in-next { animation: hp-sw-in-next 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.hp-sw-in-back { animation: hp-sw-in-back 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.hp-sw-fade { animation: hp-sw-fade 220ms ease-out both; }
+.hp-sw-list-in { animation: hp-sw-list-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(var(--i, 0) * 35ms); }
+.hp-sw-pop { animation: hp-sw-pop 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.hp-sw-check path { stroke-dasharray: 20; animation: hp-sw-check 300ms ease-out 140ms both; }
+.hp-sw-float { animation: hp-sw-float 3600ms ease-in-out infinite; }
+.hp-sw-rise { animation: hp-sw-rise 380ms cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(var(--i, 0) * 90ms); }
+.hp-sw-confetti { animation: hp-sw-confetti 1400ms ease-out both; animation-delay: calc(var(--i, 0) * 40ms + 200ms); }
+.hp-sw-continue:not(:disabled) { animation: hp-sw-pulse-once 600ms ease-out; }
+/* Botões do assistente: transição de cor, sombra e um leve afundar ao pressionar. */
+.hp-sw-root button { transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, transform 120ms ease; }
+.hp-sw-root button:not(:disabled):hover { box-shadow: 0 4px 12px rgba(81, 71, 220, 0.16); }
+.hp-sw-root button:not(:disabled):active { transform: scale(0.98); }
+.hp-sw-badge { transition: background-color 200ms ease, color 200ms ease; }
 @keyframes hp-mascot-float {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(calc(var(--hp-float, 2px) * -1)); }
@@ -1373,6 +1403,7 @@ html.dark .hp-accent-text { color: #b4aeff; }
 .hp-tour-card-back { animation-name: hp-tour-card-in-back; }
 .hp-tour-mascot { animation: hp-tour-mascot-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1) 160ms both; }
 .hp-tour-ring { animation: hp-tour-ring 1600ms ease-in-out infinite; }
+.hp-setup-ring { animation: hp-setup-ring 1600ms ease-in-out infinite; }
 .hp-mascot-arm { transform-origin: 0 0; }
 /* O corpo gira apoiado nos pés; a antena, na base dela. Cada olho e cada par de pupilas usa a própria origem (inline). */
 .hp-mascot-body { transform-box: view-box; transform-origin: 80px 166px; }
@@ -1382,10 +1413,23 @@ html.dark .hp-accent-text { color: #b4aeff; }
 .hp-mascot-look { transform-box: view-box; animation: hp-mascot-look 2800ms ease-in-out 2; }
 
 @media (prefers-reduced-motion: reduce) {
+  .hp-sw-root button { transition: none; }
+  .hp-sw-root button:not(:disabled):active { transform: none; }
   .hp-tour-dim,
   .hp-tour-card,
   .hp-tour-mascot,
   .hp-tour-ring,
+  .hp-setup-ring,
+  .hp-sw-in-next,
+  .hp-sw-in-back,
+  .hp-sw-fade,
+  .hp-sw-list-in,
+  .hp-sw-pop,
+  .hp-sw-check path,
+  .hp-sw-float,
+  .hp-sw-rise,
+  .hp-sw-confetti,
+  .hp-sw-continue:not(:disabled),
   .hp-mascot-blink,
   .hp-mascot-wink,
   .hp-mascot-look,

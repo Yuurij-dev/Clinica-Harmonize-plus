@@ -16,6 +16,8 @@ let generation = 0;
 function policyFor(key: string): CachePolicy {
   if (key === "/api/patients/active-procedures") return { freshFor: 0, retainFor: 10_000 };
   if (key.startsWith("/api/search?")) return { freshFor: 0, retainFor: 10_000 };
+  // Assistente de configuração: o "Continuar" depende do estado atual no servidor, então sempre revalida.
+  if (key === "/api/setup") return { freshFor: 0, retainFor: 10_000 };
   if (key.startsWith("/api/agenda")) return { freshFor: 20_000, retainFor: 90_000 };
   if (key.startsWith("/api/dashboard/bootstrap")) return { freshFor: 45_000, retainFor: 180_000 };
   if (key.includes("/history?")) return { freshFor: 30_000, retainFor: 120_000 };
