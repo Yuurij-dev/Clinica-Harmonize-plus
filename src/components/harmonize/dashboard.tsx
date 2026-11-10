@@ -14,6 +14,7 @@ import { getCachedJson, readClientCache } from "@/lib/client-cache";
 import { Bar, CartesianGrid, ComposedChart, Line, Rectangle, ResponsiveContainer, Tooltip, XAxis, YAxis, type BarShapeProps } from "recharts";
 import { useRevealOnView } from "@/lib/use-reveal-on-view";
 import { PatientAvatar } from "./patient-avatar";
+import { SetupProgressCard } from "./setup-progress-card";
 
 const currency = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 const percentFormat = (value: number) => `${Math.round(value)}%`;
@@ -89,6 +90,7 @@ export function Dashboard({ onNavigate, userName = "Usuário" }: { onNavigate: (
   }, [data]);
   return (
     <PageContainer>
+      <SetupProgressCard />
       <div data-hp-title className="hp-page-enter border-b border-border pb-5">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
           <div>

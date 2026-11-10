@@ -80,7 +80,7 @@ import { ClinicTimePicker } from "./clinic-time-picker";
 import { latestAppointmentStart } from "@/lib/clinic-time";
 import { appointmentProcedureDuration } from "@/lib/procedure-session-rules";
 import { toast } from "sonner";
-import { clientsHomeEvent } from "@/lib/section-events";
+import { clientsHomeEvent, setupOpenEvent } from "@/lib/section-events";
 import { ProcedureImage } from "./procedure-image";
 import { PatientAvatar } from "./patient-avatar";
 import type { Appointment, JourneyStageId, Patient, Payment, Procedure, Product, Quote } from "@/types/clinic";
@@ -2435,6 +2435,12 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
         </Card>
 
         <div className="min-w-0 space-y-4">
+          {canManageSettings && !normalizedSettingsSearch ? (
+            <div className="flex flex-wrap items-center gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
+              <div className="min-w-0 flex-1 basis-56"><p className="text-sm font-bold">Assistente de configuração</p><p className="text-xs text-muted-foreground">Rever as etapas da configuração inicial da clínica.</p></div>
+              <Button size="sm" variant="outline" onClick={() => window.dispatchEvent(new Event(setupOpenEvent))}>Abrir assistente</Button>
+            </div>
+          ) : null}
           {displayedSettingsSection === "Dados da clínica" ? (
             <Card className="border-border/70">
               <CardHeader className="border-b border-border/70"><CardTitle>Dados da clínica</CardTitle><p className="text-sm text-muted-foreground">{isSearchingClinicPreferences ? "Preferências gerais filtradas pela busca." : "Informações básicas e dados de contato da sua clínica."}</p></CardHeader>
