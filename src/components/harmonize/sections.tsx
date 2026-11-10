@@ -1467,6 +1467,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
           title="Procedimentos"
           description="Cadastro de serviços com valor sugerido, tempo estimado e a ficha técnica de materiais e produtos usada no estoque e no orçamento."
           action="Novo procedimento"
+          actionTarget="procedimentos"
           onAction={() => { setProcedureModalKey("new-procedure"); setProcedureModalMounted(true); openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; onCreateOpen?.(); }}
         />
         {isLoading ? <LoadingTable columns={5} /> : <MiniTable
@@ -2447,12 +2448,12 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
               <CardContent className="pt-5">
                 {!isSearchingClinicPreferences ? <form className="space-y-5" onSubmit={(event) => { event.preventDefault(); if (!clinicProfileReady || clinicProfileSaving || clinicProfile === savedClinicProfile) return; void persistClinicProfile(clinicProfile); }}>
                   <div className="grid gap-4 md:grid-cols-2">
-                    <FormField label="Nome da clínica"><input className={fieldClassName} autoComplete="organization" maxLength={30} name="name" required value={clinicNameInput} onChange={(event) => updateClinicProfileField(setClinicNameInput, event.target.value)} /><span className="mt-1 block text-right text-xs text-muted-foreground">{clinicNameInput.length}/30</span></FormField>
+                    <FormField label="Nome da clínica"><input className={fieldClassName} autoComplete="organization" data-setup-target="clinica:name" maxLength={30} name="name" required value={clinicNameInput} onChange={(event) => updateClinicProfileField(setClinicNameInput, event.target.value)} /><span className="mt-1 block text-right text-xs text-muted-foreground">{clinicNameInput.length}/30</span></FormField>
                     <FormField label="CNPJ"><input className={fieldClassName} autoComplete="off" inputMode="numeric" maxLength={18} name="cnpj" value={clinicCnpjInput} onChange={(event) => updateClinicProfileField(setClinicCnpjInput, formatCnpj(event.target.value))} placeholder="00.000.000/0000-00" /></FormField>
-                    <FormField label="Telefone"><input className={fieldClassName} autoComplete="tel" inputMode="tel" maxLength={15} name="phone" type="tel" value={clinicPhoneInput} onChange={(event) => updateClinicProfileField(setClinicPhoneInput, formatPhone(event.target.value))} placeholder="(11) 98765-4321" /></FormField>
+                    <FormField label="Telefone"><input className={fieldClassName} autoComplete="tel" data-setup-target="clinica:phone" inputMode="tel" maxLength={15} name="phone" type="tel" value={clinicPhoneInput} onChange={(event) => updateClinicProfileField(setClinicPhoneInput, formatPhone(event.target.value))} placeholder="(11) 98765-4321" /></FormField>
                     <FormField label="E-mail"><input className={fieldClassName} autoComplete="email" maxLength={254} name="email" type="email" value={clinicEmailInput} onChange={(event) => updateClinicProfileField(setClinicEmailInput, event.target.value)} /></FormField>
                   </div>
-                  <FormField label="Endereço"><input className={fieldClassName} autoComplete="street-address" maxLength={240} name="address" value={clinicAddressInput} onChange={(event) => updateClinicProfileField(setClinicAddressInput, event.target.value)} placeholder="Rua, número, bairro e CEP" /></FormField>
+                  <FormField label="Endereço"><input className={fieldClassName} autoComplete="street-address" data-setup-target="clinica:address" maxLength={240} name="address" value={clinicAddressInput} onChange={(event) => updateClinicProfileField(setClinicAddressInput, event.target.value)} placeholder="Rua, número, bairro e CEP" /></FormField>
                   <div className="rounded-lg border border-border/70 bg-muted/20 p-4">
                     <div className="mb-4">
                       <h3 className="text-sm font-bold text-foreground">Horário diário de funcionamento</h3>
@@ -2466,7 +2467,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
                   {clinicProfileError ? <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{clinicProfileError}</p> : null}
                   {clinicProfileStatus ? <p className="text-xs font-medium text-muted-foreground" role="status">{clinicProfileStatus}</p> : null}
                   <div className="flex justify-end border-t border-border/70 pt-4">
-                    <Button disabled={!clinicProfileReady || clinicProfileSaving || clinicProfile === savedClinicProfile} type="submit"><Save className="h-4 w-4" />{clinicProfileSaving ? "Salvando..." : "Salvar dados"}</Button>
+                    <Button data-setup-target="clinica:save" disabled={!clinicProfileReady || clinicProfileSaving || clinicProfile === savedClinicProfile} type="submit"><Save className="h-4 w-4" />{clinicProfileSaving ? "Salvando..." : "Salvar dados"}</Button>
                   </div>
                 </form> : null}
                   <div className={cn("rounded-lg border border-border/70 px-4 py-2", !isSearchingClinicPreferences && "mt-7")}>
@@ -2494,7 +2495,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
             <Card className="border-border/70">
               <CardHeader className="flex flex-col gap-3 border-b border-border/70 sm:flex-row sm:items-center sm:justify-between">
                 <div><CardTitle>Profissionais e equipe</CardTitle><p className="mt-1 text-sm text-muted-foreground">Contas vinculadas à clínica e seus níveis de acesso.</p></div>
-                {canManageTeam ? <Button size="sm" onClick={() => { resetNewCollaboratorContact(); setTeamError(""); setEditing("Novo colaborador"); }}><UserPlus className="h-4 w-4" />Novo colaborador</Button> : <span className="text-xs font-semibold text-muted-foreground">Apenas administradores</span>}
+                {canManageTeam ? <Button size="sm" data-setup-target="equipe" onClick={() => { resetNewCollaboratorContact(); setTeamError(""); setEditing("Novo colaborador"); }}><UserPlus className="h-4 w-4" />Novo colaborador</Button> : <span className="text-xs font-semibold text-muted-foreground">Apenas administradores</span>}
               </CardHeader>
               <CardContent className="divide-y divide-border/70 pt-1">
                 {teamError && !editing ? <p className="my-4 rounded-md bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{teamError}</p> : null}
@@ -2520,7 +2521,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
           ) : null}
 
           {displayedSettingsSection === "Agenda e horários" ? (
-            <Card className="border-border/70">
+            <Card className="border-border/70" data-setup-target="agenda">
               <CardHeader className="border-b border-border/70"><CardTitle>Agenda e horários</CardTitle><p className="text-sm text-muted-foreground">Ajuste a tolerância usada para identificar atrasos e faltas.</p></CardHeader>
               <CardContent className="pt-5">
                 <form className="space-y-5" onSubmit={saveCostSettings}>
@@ -2537,7 +2538,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
           ) : null}
 
           {displayedSettingsSection === "Custos e orçamento" ? (
-            <Card className="border-border/70">
+            <Card className="border-border/70" data-setup-target="custos">
               <CardHeader className="border-b border-border/70"><CardTitle>Custos e orçamento</CardTitle><p className="text-sm text-muted-foreground">Defina o valor de mão de obra para cada profissional da clínica.</p></CardHeader>
               <CardContent className="pt-5">
                 {canManageTeam ? <section className="mb-6 rounded-lg border border-border/70 px-4 py-4">
@@ -2567,7 +2568,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
           ) : null}
 
           {displayedSettingsSection === "Notificações" ? (
-              <Card className="border-border/70">
+              <Card className="border-border/70" data-setup-target="notificacoes">
                 <CardHeader className="border-b border-border/70"><CardTitle>Notificações</CardTitle><p className="text-sm text-muted-foreground">Escolha quais avisos aparecem no menu superior da aplicação.</p></CardHeader>
                 <CardContent className="pt-4">
                   <form onSubmit={saveCostSettings}>

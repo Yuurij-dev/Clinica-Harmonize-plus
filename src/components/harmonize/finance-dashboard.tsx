@@ -165,7 +165,7 @@ export function FinanceDashboard({ period, date, today, onPeriod, onDate, onGo }
         </Card>
 
         {canExpense ? <Card>
-          <CardHeader><CardTitle className="text-base">Despesas recorrentes</CardTitle><Button size="sm" variant="ghost" className="text-primary" onClick={() => onGo("recorrentes")}>Ver todas<ArrowRight className="h-3.5 w-3.5" /></Button></CardHeader>
+          <CardHeader><CardTitle className="text-base">Despesas recorrentes</CardTitle><Button size="sm" variant="ghost" className="text-primary" data-setup-target="financeiro" onClick={() => onGo("recorrentes")}>Ver todas<ArrowRight className="h-3.5 w-3.5" /></Button></CardHeader>
           <CardContent>
             {recurringState.loading ? <LoadingBlock className="py-4" /> : recurringState.error ? <ErrorNote message={recurringState.error} onRetry={recurringState.reload} /> : activeRecurring.length ? (
               <ul className="space-y-3">

@@ -4,9 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft, CheckCircle2, Circle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
-import { SETUP_STEPS, isSetupStepKey, type SetupDecision, type SetupDestination, type SetupStepKey } from "@/lib/setup-rules";
+import { SETUP_STEPS, isSetupStepKey, setupSpotlightPlan, type SetupDecision, type SetupDestination, type SetupStepKey } from "@/lib/setup-rules";
 import { setupInviteEvent, setupOpenEvent } from "@/lib/section-events";
 import { useCanUseSetup } from "./current-user";
+import { SetupSpotlight } from "./setup-spotlight";
 import { SetupSuccess, SetupWizard } from "./setup-wizard";
 import { useClinicSetup, type SetupAction, type SetupPayload } from "./use-clinic-setup";
 
@@ -32,6 +33,8 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
   const [view, setView] = useState<View>("closed");
   const [bar, setBar] = useState(false);
   const [stepKey, setStepKey] = useState<SetupStepKey>("clinica");
+  // Cada ida a uma tela pelo assistente reinicia o destaque (escurecimento + balão) no alvo da etapa.
+  const [spotlightRun, setSpotlightRun] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const { data, refresh, send } = useClinicSetup(enabled, view !== "closed" || bar);
@@ -100,6 +103,7 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
     await run({ action: "goto", step: stepKey });
     setView("closed");
     setBar(dataRef.current?.status !== "completed");
+    setSpotlightRun((run) => run + 1);
     await onOpenDestination(destination);
   }
 
@@ -129,6 +133,7 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
   }
 
   const current = data?.steps.find((step) => step.key === stepKey);
+  const plan = data ? setupSpotlightPlan(stepKey, data.summary.clinicFields) : null;
   const stepNumber = SETUP_STEPS.findIndex((step) => step.key === stepKey) + 1;
 
   return (
@@ -159,13 +164,16 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
 
       {view === "success" ? <SetupSuccess onDashboard={() => { setView("closed"); onDashboard(); }} /> : null}
 
+      {bar && view === "closed" && spotlightRun > 0 && plan && current && !current.done ? <SetupSpotlight key={`${stepKey}-${spotlightRun}`} selectors={plan.targets} hint={plan.hint} /> : null}
+
       {bar && view === "closed" && data ? (
-        <div className="fixed bottom-[calc(12rem+env(safe-area-inset-bottom))] left-1/2 z-[80] w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 lg:bottom-6 lg:left-[calc(220px+2rem)] lg:translate-x-0" role="region" aria-label="Configuração da clínica">
-          <div className="flex items-center gap-3 rounded-[10px] border border-primary/30 bg-card px-3 py-2.5 text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.22)]">
+        <div className="fixed bottom-[calc(12rem+env(safe-area-inset-bottom))] left-1/2 z-[88] w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 lg:bottom-6 lg:left-[calc(220px+2rem)] lg:translate-x-0" data-setup-bar role="region" aria-label="Configuração da clínica">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[10px] border border-primary/30 bg-card px-3 py-2.5 text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.22)]">
             {current?.done ? <CheckCircle2 className="h-5 w-5 shrink-0 text-success" aria-label="Requisito desta etapa cumprido" /> : <Circle className="h-5 w-5 shrink-0 text-muted-foreground" aria-label="Requisito desta etapa pendente" />}
-            <p className="min-w-0 flex-1 text-xs font-bold leading-tight">Configuração da clínica · Etapa {stepNumber} de {data.total}<span className="block truncate font-medium text-muted-foreground">{current?.done ? "Etapa concluída. Pode voltar ao assistente." : SETUP_STEPS[stepNumber - 1]?.title}</span></p>
-            <Button size="sm" onClick={() => { void backToWizard(); }}><ArrowLeft className="h-4 w-4" aria-hidden="true" />Voltar ao assistente</Button>
-            <Button size="icon" variant="ghost" aria-label="Fechar a barra de configuração" onClick={() => setBar(false)}><X className="h-4 w-4" aria-hidden="true" /></Button>
+            <p className="min-w-0 flex-1 truncate text-xs font-bold lg:hidden">Etapa {stepNumber} de {data.total} · {SETUP_STEPS[stepNumber - 1]?.title}</p>
+            <p className="min-w-0 flex-1 text-xs font-bold leading-tight max-lg:hidden">Configuração da clínica · Etapa {stepNumber} de {data.total}<span className="block truncate font-medium text-muted-foreground">{current?.done ? "Etapa concluída. Pode voltar ao assistente." : SETUP_STEPS[stepNumber - 1]?.title}</span></p>
+            <Button size="sm" className="max-lg:order-last max-lg:w-full" onClick={() => { void backToWizard(); }}><ArrowLeft className="h-4 w-4" aria-hidden="true" />Voltar ao assistente</Button>
+            <Button size="icon" variant="ghost" className="max-lg:order-2" aria-label="Fechar a barra de configuração" onClick={() => setBar(false)}><X className="h-4 w-4" aria-hidden="true" /></Button>
           </div>
         </div>
       ) : null}

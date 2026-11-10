@@ -110,3 +110,36 @@ test("convite só aparece enquanto pendente", () => {
   assert.equal(shouldInviteSetup("pending"), true);
   for (const status of ["in_progress", "dismissed", "completed"]) assert.equal(shouldInviteSetup(status), false);
 });
+
+test("plano de destaque: clínica só mira os campos que faltam; revisão não destaca nada", async () => {
+  const { setupSpotlightPlan } = await import("../src/lib/setup-rules.ts");
+  const all = { name: true, phone: true, address: true };
+  const plan = setupSpotlightPlan("clinica", { name: true, phone: false, address: false });
+  assert.deepEqual(plan.targets, ['[data-setup-target="clinica:phone"]', '[data-setup-target="clinica:address"]', '[data-setup-target="clinica:save"]']);
+  assert.match(plan.hint, /telefone/);
+  assert.equal(setupSpotlightPlan("clinica", all), null);
+  assert.equal(setupSpotlightPlan("revisao", all), null);
+  for (const step of SETUP_STEPS.filter((item) => item.key !== "clinica" && item.key !== "revisao")) assert.equal(setupSpotlightPlan(step.key, all).targets.length, 1);
+});
+
+test("dica da clínica cita todos os campos que faltam", async () => {
+  const { setupSpotlightPlan } = await import("../src/lib/setup-rules.ts");
+  assert.equal(setupSpotlightPlan("clinica", { name: true, phone: false, address: false }).hint, "Preencha o telefone e o endereço da clínica e salve os dados");
+  assert.equal(setupSpotlightPlan("clinica", { name: true, phone: true, address: false }).hint, "Preencha o endereço da clínica e salve os dados");
+  assert.equal(setupSpotlightPlan("clinica", { name: false, phone: false, address: false }).hint, "Preencha o nome, o telefone e o endereço da clínica e salve os dados");
+});
+
+test("balão nunca cobre alvos nem a barra de retorno", async () => {
+  const { placeBalloon } = await import("../src/lib/setup-rules.ts");
+  const hits = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+  const size = { w: 320, h: 110 };
+  const targets = [{ x: 300, y: 300, w: 600, h: 48 }, { x: 300, y: 380, w: 600, h: 48 }];
+  const desk = placeBalloon({ targets, obstacles: [], viewport: { w: 1440, h: 900 }, size, desktop: true });
+  assert.equal(targets.some((t) => hits({ x: desk.left, y: desk.top, ...size }, t)), false);
+  const mobileTargets = [{ x: 16, y: 380, w: 358, h: 48 }];
+  const obstacles = [{ x: 16, y: 470, w: 358, h: 100 }, { x: 0, y: 780, w: 390, h: 64 }];
+  const mob = placeBalloon({ targets: mobileTargets, obstacles, viewport: { w: 390, h: 844 }, size, desktop: false });
+  const box = { x: mob.left, y: mob.top, ...size };
+  assert.equal([...mobileTargets, ...obstacles].some((r) => hits(box, r)), false);
+  assert.ok(mob.left >= 12 && mob.left + 320 <= 378 && mob.top >= 12);
+});

@@ -15,12 +15,15 @@ export function SectionIntro({
   description,
   action,
   onAction,
+  actionTarget,
 }: {
   title: string;
   titleAddon?: React.ReactNode;
   description: string;
   action?: string;
   onAction?: () => void;
+  /** Marca o botão como alvo de destaque do assistente de configuração (data-setup-target). */
+  actionTarget?: string;
 }) {
   return (
     <div data-hp-title className="hp-page-enter mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -34,7 +37,7 @@ export function SectionIntro({
         </p>
       </div>
       {action ? (
-        <Button onClick={onAction}>
+        <Button data-setup-target={actionTarget} onClick={onAction}>
           <Plus className="h-4 w-4" />
           {action}
         </Button>

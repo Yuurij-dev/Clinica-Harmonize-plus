@@ -346,3 +346,78 @@ export function shouldInviteSetup(status: SetupStatus) {
 export function showsSetupProgress(status: SetupStatus) {
   return status !== "completed";
 }
+
+export type SetupSpotlightPlan = { targets: string[]; hint: string };
+
+const targetSelector = (key: string) => `[data-setup-target="${key}"]`;
+
+/**
+ * O que destacar na tela da etapa (valores de data-setup-target nas telas existentes) e a dica do balão do Harmo.
+ * Em "clinica" só entram os campos que faltam, mais o botão de salvar.
+ */
+export function setupSpotlightPlan(key: SetupStepKey, clinicFields: { name: boolean; phone: boolean; address: boolean }): SetupSpotlightPlan | null {
+  switch (key) {
+    case "clinica": {
+      const labels = { name: "o nome", phone: "o telefone", address: "o endereço" } as const;
+      const missing = (["name", "phone", "address"] as const).filter((field) => !clinicFields[field]);
+      if (!missing.length) return null;
+      const names = missing.map((field) => labels[field]);
+      const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} e ${names[names.length - 1]}` : names[0];
+      return { targets: [...missing.map((field) => targetSelector(`clinica:${field}`)), targetSelector("clinica:save")], hint: `Preencha ${list} da clínica e salve os dados` };
+    }
+    case "equipe": return { targets: [targetSelector("equipe")], hint: "Clique aqui para cadastrar seu primeiro profissional" };
+    case "agenda": return { targets: [targetSelector("agenda")], hint: "Confira a tolerância da agenda; depois volte ao assistente e confirme" };
+    case "procedimentos": return { targets: [targetSelector("procedimentos")], hint: "Clique aqui para cadastrar seu primeiro procedimento" };
+    case "materiais": return { targets: [targetSelector("materiais")], hint: "Clique aqui para cadastrar seu primeiro material" };
+    case "produtos": return { targets: [targetSelector("produtos")], hint: "Clique aqui para cadastrar seu primeiro produto" };
+    case "custos": return { targets: [targetSelector("custos")], hint: "Revise a mão de obra e os custos; depois volte e confirme" };
+    case "financeiro": return { targets: [targetSelector("financeiro")], hint: "Clique aqui para cadastrar seu primeiro custo fixo" };
+    case "notificacoes": return { targets: [targetSelector("notificacoes")], hint: "Revise os alertas; depois volte e confirme" };
+    case "revisao": return null;
+  }
+}
+
+export type SetupRect = { x: number; y: number; w: number; h: number };
+
+const overlapArea = (a: SetupRect, b: SetupRect) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+
+/**
+ * Posição do balão do Harmo: nunca sobre um alvo nem sobre obstáculos (barra de retorno, navegação inferior).
+ * Desktop tenta ao lado do primeiro alvo e depois acima/abaixo da união dos alvos; celular, abaixo ou acima.
+ * Sem nenhum lugar livre, escolhe o de menor sobreposição (sempre dentro da tela, para o "Entendi" ficar visível).
+ */
+export function placeBalloon(input: { targets: SetupRect[]; obstacles: SetupRect[]; viewport: { w: number; h: number }; size: { w: number; h: number }; desktop: boolean; margin?: number; gap?: number }) {
+  const { targets, obstacles, viewport, size, desktop } = input;
+  const margin = input.margin ?? 12;
+  const gap = input.gap ?? 14;
+  if (!targets.length) return { left: margin, top: margin };
+  const first = targets[0];
+  const x1 = Math.min(...targets.map((t) => t.x));
+  const y1 = Math.min(...targets.map((t) => t.y));
+  const x2 = Math.max(...targets.map((t) => t.x + t.w));
+  const y2 = Math.max(...targets.map((t) => t.y + t.h));
+  const unionCenter = (x1 + x2) / 2 - size.w / 2;
+  const firstCenter = first.x + first.w / 2 - size.w / 2;
+  const raw: Array<{ left: number; top: number }> = [
+    ...(desktop ? [{ left: first.x + first.w + gap, top: first.y + first.h / 2 - size.h / 2 }, { left: first.x - gap - size.w, top: first.y + first.h / 2 - size.h / 2 }] : []),
+    { left: unionCenter, top: y2 + gap },
+    { left: unionCenter, top: y1 - gap - size.h },
+    { left: firstCenter, top: first.y + first.h + gap },
+    { left: firstCenter, top: first.y - gap - size.h },
+    { left: unionCenter, top: viewport.h - margin - size.h },
+    { left: unionCenter, top: margin },
+  ];
+  const clamp = (value: number, max: number) => Math.max(margin, Math.min(value, max));
+  const avoid = [...targets, ...obstacles];
+  let best = { left: margin, top: margin };
+  let bestScore = Infinity;
+  for (const candidate of raw) {
+    const left = clamp(candidate.left, viewport.w - size.w - margin);
+    const top = clamp(candidate.top, viewport.h - size.h - margin);
+    const box = { x: left, y: top, w: size.w, h: size.h };
+    const score = avoid.reduce((sum, rect) => sum + overlapArea(box, rect), 0);
+    if (score === 0) return { left, top };
+    if (score < bestScore) { best = { left, top }; bestScore = score; }
+  }
+  return best;
+}
