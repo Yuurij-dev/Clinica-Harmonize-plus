@@ -6870,7 +6870,62 @@ async function clientEmails() {
   check("orçamento sem itens segue 400", badQuote.status === 400, badQuote.status);
 }
 
+// Enviar orçamento por e-mail (POST /api/quotes/[id]/send). E-mails de teste são sempre @example.invalid.
+async function sendQuote() {
+  const mkPatient = async (label, mail) => (await api("POST", "/api/patients", { ...regDefaults, name: `Envio ${label} ${run}`, phone: "11999990060", age: 33, cpf: randomCpf(), ...(mail ? { email: mail } : {}) })).data.patient;
+  const mkQuote = async (p) => (await api("POST", "/api/quotes", { patientId: p.id, items: "Botox (1x)", total: 123.45, expires: "30/12/2030" })).data.quote;
+  const withMail = await mkPatient("Com", `e2e-envio-${run}@example.invalid`);
+  const noMail = await mkPatient("Sem", null);
+  const qMail = withMail && await mkQuote(withMail);
+  const qNo = noMail && await mkQuote(noMail);
+  check("envio: pacientes e orçamentos criados", withMail && noMail && qMail?.id && qNo?.id, `${qMail?.id}/${qNo?.id}`);
+  if (!qMail?.id || !qNo?.id) return;
+  const read = (id) => prisma.quote.findUnique({ where: { id }, select: { status: true, sentAt: true, sentBy: true } });
+  const before = await read(qMail.id);
+
+  let r = await api("POST", `/api/quotes/${qMail.id}/send`);
+  const after = await read(qMail.id);
+  check("envio: orçamento de paciente com e-mail devolve 200 {ok,sentAt}", r.status === 200 && r.data.ok === true && !Number.isNaN(Date.parse(r.data.sentAt)), `${r.status} ${JSON.stringify(r.data)}`);
+  check("envio: sentAt e sentBy gravados e status NÃO mudou", after.sentAt && after.sentBy === accountName && after.status === before.status && (!before.sentAt || before.status === "Enviado"), JSON.stringify({ before, after }));
+
+  r = await api("POST", `/api/quotes/${qNo.id}/send`);
+  const noMailRow = await read(qNo.id);
+  check("envio: paciente sem e-mail devolve 422 e nada é gravado", r.status === 422 && !noMailRow.sentAt, `${r.status} ${JSON.stringify(noMailRow)}`);
+  r = await api("POST", "/api/quotes/inexistente/send");
+  check("envio: orçamento inexistente devolve 404", r.status === 404, r.status);
+  r = await withSession("", () => api("POST", `/api/quotes/${qMail.id}/send`));
+  check("envio: sem sessão devolve 401", r.status === 401, r.status);
+
+  const otherEmail = `e2e-envio-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E Envio Externa ${run}`;
+  const staffEmail = `e2e-envio-staff-${run}@example.com`, staffPassword = `E2e-${run}-Staff9!`;
+  let member;
+  try {
+    r = await api("POST", "/api/team", { name: "E2E Atendente Envio", email: staffEmail, password: staffPassword, role: "STAFF", cpf: randomCpf(), address: "Rua A, 1", country: "Brasil", state: "SP", city: "São Paulo" });
+    member = r.data.member;
+    const staff = r.status === 201 ? await loginAs(staffEmail, staffPassword) : null;
+    if (staff?.status === 200) {
+      const sentBefore = (await read(qNo.id)).sentAt;
+      const s = await withSession(staff.cookie, () => api("POST", `/api/quotes/${qMail.id}/send`));
+      check("envio: STAFF devolve 403", s.status === 403, s.status);
+      check("envio: STAFF não alterou sentAt", +(await read(qMail.id)).sentAt === +after.sentAt && sentBefore === null);
+    } else check("envio: usuário STAFF criado", false, `team ${r.status} login ${staff?.status}`);
+
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990061", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    if (other?.status === 200) {
+      const o = await withSession(other.cookie, () => api("POST", `/api/quotes/${qMail.id}/send`));
+      check("envio: orçamento de outra clínica devolve 404 e sentAt não muda", o.status === 404 && +(await read(qMail.id)).sentAt === +after.sentAt, o.status);
+    } else check("envio: segunda clínica criada", false, `registro ${r.status} login ${other?.status}`);
+  } finally {
+    if (member) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [otherEmail, staffEmail] } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: [otherEmail, staffEmail] } } });
+  }
+}
+
 const suites = {
+  enviar_orcamento: { needs: [], run: () => sendQuote() },
   emails_cliente: { needs: [], run: () => clientEmails() },
   colaborador_foto: { needs: [], run: () => collaboratorPhoto() },
   colaborador_editar: { needs: [], run: () => collaboratorEdit() },
