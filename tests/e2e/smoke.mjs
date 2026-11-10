@@ -7050,8 +7050,96 @@ async function setupWizard() {
   }
 }
 
+async function laborCostAdmin() {
+  const mail = (t) => `e2e-maoobra-${t}-${run}@example.invalid`;
+  const pw = `E2e-${run}-Mao9!`;
+  const otherClinic = `Clínica Mão ${run}`;
+  const otherEmail = mail("outro");
+  const emails = [mail("pro"), mail("staff"), otherEmail];
+  const created = [];
+  const owner = await prisma.clinicMembership.findFirst({ where: { isOwner: true, user: { email } }, select: { id: true, clinicId: true, laborCostCents: true } });
+  if (!owner) { check("mão de obra admin: dono da conta de teste encontrado", false); return; }
+  const clinicBefore = await prisma.clinic.findUnique({ where: { id: owner.clinicId }, select: { laborCost: true } });
+  const labor = async (id) => (await prisma.clinicMembership.findUnique({ where: { id }, select: { laborCostCents: true } }))?.laborCostCents;
+  const quoteLabor = async (patientId) => {
+    const q = await api("POST", "/api/quotes", { patientId, details: [{ procedureId: proc.id, quantity: 1, discountCents: 0 }], paymentMethod: "Pix", installments: 1, notes: "" });
+    const row = q.data?.quote?.id ? await prisma.quote.findUnique({ where: { id: q.data.quote.id }, select: { details: true } }) : null;
+    const d = row ? JSON.parse(row.details) : null;
+    return { status: q.status, labor: d?.costs?.laborCents, costTotal: d?.costTotalCents, total: d?.totalCents };
+  };
+  let proc;
+  try {
+    const mk = async (tag, role) => {
+      const r = await api("POST", "/api/team", { name: `E2E Mao ${tag}`, email: mail(tag), password: pw, role, cpf: randomCpf() });
+      if (r.status === 201) created.push(r.data.member);
+      return r.status === 201 ? r.data.member : null;
+    };
+    const pro = await mk("pro", "PROFESSIONAL");
+    const staff = await mk("staff", "STAFF");
+    if (!pro || !staff) { check("mão de obra admin: membros criados", false, `${!!pro} ${!!staff}`); return; }
+
+    // (1) próprio admin
+    let r = await api("PATCH", "/api/team", { membershipId: owner.id, laborCostCents: 12345 });
+    check("mão de obra admin: PATCH no próprio ADMIN devolve 200 com 12345", r.status === 200 && r.data.member?.laborCostCents === 12345 && r.data.member.role === "ADMIN", JSON.stringify(r.data).slice(0, 200));
+    r = await api("GET", "/api/team");
+    check("mão de obra admin: GET /api/team reflete o custo do ADMIN", r.data.members?.find((m) => m.id === owner.id)?.laborCostCents === 12345, r.status);
+    r = await api("GET", `/api/team/${owner.id}`);
+    check("mão de obra admin: GET /api/team/[id] reflete o custo", r.status === 200 && r.data.member?.laborCostCents === 12345, r.status);
+    // (2) PROFESSIONAL
+    r = await api("PATCH", "/api/team", { membershipId: pro.id, laborCostCents: 5000 });
+    check("mão de obra admin: PATCH em PROFESSIONAL continua 200", r.status === 200 && r.data.member?.laborCostCents === 5000, r.status);
+    // (3) STAFF
+    r = await api("PATCH", "/api/team", { membershipId: staff.id, laborCostCents: 5000 });
+    check("mão de obra admin: PATCH em STAFF devolve 404 e não grava", r.status === 404 && r.data.message === "Profissional não encontrado nesta clínica." && (await labor(staff.id)) === null, `${r.status} ${await labor(staff.id)}`);
+    // (4) inválidos
+    for (const [label, v] of [["negativo", -1], ["decimal", 10.5], ["texto", "100"], ["acima do limite", 2_000_000_001], ["ausente", undefined]]) {
+      r = await api("PATCH", "/api/team", { membershipId: owner.id, laborCostCents: v });
+      check(`mão de obra admin: valor ${label} devolve 400`, r.status === 400, r.status);
+    }
+    check("mão de obra admin: pedidos inválidos não alteraram o custo", (await labor(owner.id)) === 12345, await labor(owner.id));
+    // (5) permissões
+    r = await withSession("", () => api("PATCH", "/api/team", { membershipId: owner.id, laborCostCents: 1 }));
+    check("mão de obra admin: sem sessão devolve 401", r.status === 401, r.status);
+    const proSess = await loginAs(mail("pro"), pw);
+    if (proSess.status === 200) {
+      r = await withSession(proSess.cookie, () => api("PATCH", "/api/team", { membershipId: owner.id, laborCostCents: 1 }));
+      check("mão de obra admin: PROFESSIONAL sem settings:team recebe 403 e não altera", r.status === 403 && (await labor(owner.id)) === 12345, r.status);
+    } else check("login PROFESSIONAL para mão de obra", false, proSess.status);
+    // (6) outra clínica
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo Mao", phone: "11999990031", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: pw }));
+    const other = reg.status === 201 ? await loginAs(otherEmail, pw) : null;
+    if (other?.status === 200) {
+      r = await withSession(other.cookie, () => api("PATCH", "/api/team", { membershipId: owner.id, laborCostCents: 1 }));
+      check("mão de obra admin: admin de outra clínica recebe 404 e o valor não muda", r.status === 404 && (await labor(owner.id)) === 12345, `${r.status} ${await labor(owner.id)}`);
+    } else check("segunda clínica para mão de obra", false, `${reg.status} ${other?.status}`);
+
+    // (7) orçamento
+    await api("POST", "/api/procedures", { name: `E2E Mao Proc ${run}`, category: "Facial", price: 100, durationMinutes: 10, margin: 30 });
+    proc = (await api("GET", "/api/quotes/options")).data.procedures?.find((item) => item.name === `E2E Mao Proc ${run}`);
+    const pt = (await api("POST", "/api/patients", { ...regDefaults, name: `Paciente Mao ${run}`, phone: "11999990032", age: 35, cpf: randomCpf() })).data;
+    const patientId = (pt.patient ?? pt).id;
+    await prisma.clinic.update({ where: { id: owner.clinicId }, data: { laborCost: 77 } });
+    let q = await quoteLabor(patientId);
+    check("mão de obra admin: orçamento do ADMIN usa o custo próprio 12345", q.status === 201 && q.labor === 12345 && q.costTotal >= 12345, JSON.stringify(q));
+    await api("PATCH", "/api/team", { membershipId: owner.id, laborCostCents: 0 });
+    q = await quoteLabor(patientId);
+    check("mão de obra admin: custo próprio 0 é respeitado (não cai no padrão)", q.status === 201 && q.labor === 0, JSON.stringify(q));
+    await prisma.clinicMembership.update({ where: { id: owner.id }, data: { laborCostCents: null } });
+    q = await quoteLabor(patientId);
+    check("mão de obra admin: sem custo próprio usa o padrão da clínica (R$ 77 = 7700)", q.status === 201 && q.labor === 7700, JSON.stringify(q));
+  } finally {
+    await prisma.clinicMembership.update({ where: { id: owner.id }, data: { laborCostCents: owner.laborCostCents } }).catch(() => {});
+    await prisma.clinic.update({ where: { id: owner.clinicId }, data: { laborCost: clinicBefore.laborCost } }).catch(() => {});
+    for (const member of created) await api("DELETE", "/api/team", { membershipId: member.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: emails } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: emails } } });
+  }
+}
+
 const suites = {
   setup_wizard: { needs: [], run: () => setupWizard() },
+  mao_de_obra_admin: { needs: [], run: () => laborCostAdmin() },
   enviar_orcamento: { needs: [], run: () => sendQuote() },
   emails_cliente: { needs: [], run: () => clientEmails() },
   colaborador_foto: { needs: [], run: () => collaboratorPhoto() },

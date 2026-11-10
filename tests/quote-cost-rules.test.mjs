@@ -12,8 +12,14 @@ test("orçamento profissional respeita o valor zero e usa o padrão da clínica 
   assert.equal(quoteLaborCostCents({ role: "PROFESSIONAL", clinicLaborCostCents: 12_000, professionalLaborCostCents: null }), 12_000);
 });
 
-test("administrador não usa valor de mão de obra atribuído a um profissional", () => {
-  assert.equal(quoteLaborCostCents({ role: "ADMIN", clinicLaborCostCents: 12_000, professionalLaborCostCents: 35_000 }), 12_000);
+test("administrador usa a própria mão de obra, respeita zero e cai no padrão da clínica sem valor", () => {
+  assert.equal(quoteLaborCostCents({ role: "ADMIN", clinicLaborCostCents: 12_000, professionalLaborCostCents: 35_000 }), 35_000);
+  assert.equal(quoteLaborCostCents({ role: "ADMIN", clinicLaborCostCents: 12_000, professionalLaborCostCents: 0 }), 0);
+  assert.equal(quoteLaborCostCents({ role: "ADMIN", clinicLaborCostCents: 12_000, professionalLaborCostCents: null }), 12_000);
+});
+
+test("equipe (STAFF) sempre usa o padrão da clínica, mesmo com valor próprio", () => {
+  assert.equal(quoteLaborCostCents({ role: "STAFF", clinicLaborCostCents: 12_000, professionalLaborCostCents: 35_000 }), 12_000);
 });
 
 test("mão de obra profissional entra no total calculado do orçamento", () => {
