@@ -20,7 +20,7 @@ export function useStockAlerts(enabled: boolean, onAlertsLoaded?: (alerts: Stock
   const [version, setVersion] = useState(0);
   const hasLoadedRef = useRef(false);
   const onAlertsLoadedRef = useRef(onAlertsLoaded);
-  onAlertsLoadedRef.current = onAlertsLoaded;
+  useEffect(() => { onAlertsLoadedRef.current = onAlertsLoaded; });
 
   useEffect(() => {
     if (!enabled) return;

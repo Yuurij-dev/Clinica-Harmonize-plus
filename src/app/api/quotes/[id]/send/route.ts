@@ -15,9 +15,10 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
   const id = (await params).id;
   const quote = await prisma.quote.findFirst({
     where: { id, clinicId: user.clinicId },
-    select: { id: true, patientId: true, items: true, details: true, totalCents: true, expires: true, installments: true, paymentMethod: true, createdAt: true },
+    select: { id: true, patientId: true, items: true, details: true, totalCents: true, expires: true, installments: true, paymentMethod: true, createdAt: true, status: true },
   });
   if (!quote) return NextResponse.json({ message: "Orçamento não encontrado." }, { status: 404 });
+  if (["Cancelado", "Recusado"].includes(quote.status)) return NextResponse.json({ message: "Não é possível enviar um orçamento cancelado ou recusado." }, { status: 409 });
   const patient = quote.patientId
     ? await prisma.patient.findFirst({
         where: { id: quote.patientId, clinicId: user.clinicId },

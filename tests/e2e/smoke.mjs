@@ -4999,7 +4999,7 @@ async function patientRegistration() {
 
 // Preço com centavos no catálogo e no orçamento (Procedure.price é Float): ida e volta, vírgula pt-BR, multiplicação, desconto.
 async function quoteCents() {
-  const patient = (await api("POST", "/api/patients", { name: `Centavos ${run}`, phone: "11999990066", age: 29 })).data.patient;
+  const patient = (await api("POST", "/api/patients", { ...regDefaults, name: `Centavos ${run}`, phone: "11999990066", age: 29, cpf: randomCpf() })).data.patient;
   const mk = (name, price) => api("POST", "/api/procedures", { custom: true, name: `E2E Cent ${name} ${run}`, category: "Teste", price, durationMinutes: 30, margin: 30 });
   let r = await mk("a", "349,90");
   const a = r.data.procedure;
@@ -6893,6 +6893,12 @@ async function sendQuote() {
   check("envio: paciente sem e-mail devolve 422 e nada é gravado", r.status === 422 && !noMailRow.sentAt, `${r.status} ${JSON.stringify(noMailRow)}`);
   r = await api("POST", "/api/quotes/inexistente/send");
   check("envio: orçamento inexistente devolve 404", r.status === 404, r.status);
+  const qRecusado = withMail && await mkQuote(withMail);
+  if (qRecusado?.id) {
+    await api("PATCH", `/api/quotes/${qRecusado.id}`, { status: "Recusado" });
+    r = await api("POST", `/api/quotes/${qRecusado.id}/send`);
+    check("envio: orçamento recusado devolve 409 e não grava sentAt", r.status === 409 && !(await read(qRecusado.id)).sentAt, `${r.status}`);
+  }
   r = await withSession("", () => api("POST", `/api/quotes/${qMail.id}/send`));
   check("envio: sem sessão devolve 401", r.status === 401, r.status);
 
