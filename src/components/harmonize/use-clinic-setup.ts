@@ -9,6 +9,7 @@ export type SetupSummary = {
   clinicName: string;
   clinicFields: { name: boolean; phone: boolean; address: boolean };
   professionals: number;
+  pendingInvitations: number;
   procedures: number;
   materials: number;
   products: number;

@@ -6,6 +6,8 @@ export type SetupSnapshotData = SetupSnapshot & {
   appointmentNotificationSoundEnabled: boolean;
   stockNotificationsEnabled: boolean;
   expiryWarningDays: number;
+  /** Convites por e-mail ainda pendentes: informativo, não conclui a etapa de equipe. */
+  pendingInvitations: number;
 };
 
 /**
@@ -13,7 +15,7 @@ export type SetupSnapshotData = SetupSnapshot & {
  * uma linha da clínica: nada de listas. Profissional = vínculo com cargo PROFESSIONAL; material/produto = ativo (não arquivado).
  */
 export async function loadSetupSnapshot(clinicId: string): Promise<SetupSnapshotData | null> {
-  const [clinic, professionalCount, procedureCount, materialCount, productCount, recurringExpenseCount] = await Promise.all([
+  const [clinic, professionalCount, procedureCount, materialCount, productCount, recurringExpenseCount, pendingInvitations] = await Promise.all([
     prisma.clinic.findUnique({
       where: { id: clinicId },
       select: {
@@ -26,7 +28,8 @@ export async function loadSetupSnapshot(clinicId: string): Promise<SetupSnapshot
     prisma.product.count({ where: { clinicId, kind: "material", archivedAt: null } }),
     prisma.product.count({ where: { clinicId, kind: "produto", archivedAt: null } }),
     prisma.recurringExpense.count({ where: { clinicId } }),
+    prisma.clinicInvitation.count({ where: { clinicId, status: "PENDING", expiresAt: { gt: new Date() } } }),
   ]);
   if (!clinic) return null;
-  return { ...clinic, professionalCount, procedureCount, materialCount, productCount, recurringExpenseCount };
+  return { ...clinic, professionalCount, procedureCount, materialCount, productCount, recurringExpenseCount, pendingInvitations };
 }
