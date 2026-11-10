@@ -21,6 +21,9 @@ export type EmailFailureReason =
   | "network"
   | "provider_error";
 
+// content = base64 (nunca logar).
+export type EmailAttachment = { filename: string; content: string };
+
 export type EmailResult = { sent: true } | { sent: false; reason: EmailFailureReason };
 
 // Mapeia a falha do Resend para um codigo estavel a partir do status HTTP e do campo `name` da resposta
@@ -90,7 +93,7 @@ export function isEmailDeliveryReady(env: Env = process.env): boolean {
 
 // Nucleo generico de envio: nunca lanca e so loga um codigo estavel (sem destinatario, corpo, chave ou resposta do provedor).
 export async function sendEmail(
-  input: { to: string; subject: string; html: string; text: string },
+  input: { to: string; subject: string; html: string; text: string; attachments?: EmailAttachment[] },
   deps: { env?: Env; fetchImpl?: typeof fetch } = {},
 ): Promise<EmailResult> {
   const env = deps.env ?? process.env;
@@ -101,7 +104,7 @@ export async function sendEmail(
     const response = await (deps.fetchImpl ?? fetch)(RESEND_ENDPOINT, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to: [input.to], subject: input.subject, html: input.html, text: input.text }),
+      body: JSON.stringify({ from, to: [input.to], subject: input.subject, html: input.html, text: input.text, ...(input.attachments?.length ? { attachments: input.attachments } : {}) }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
       cache: "no-store",
     });

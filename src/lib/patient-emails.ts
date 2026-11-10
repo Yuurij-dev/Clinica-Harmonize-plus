@@ -1,6 +1,6 @@
 // E-mails transacionais para o paciente (Resend via sendEmail). Recebem dados ja resolvidos, escapam todo valor dinamico
 // e nunca lancam. Datas chegam como "YYYY-MM-DD" (dia da clinica) e horarios como "HH:MM".
-import { sendEmail, type EmailResult } from "./email.ts";
+import { sendEmail, type EmailAttachment, type EmailResult } from "./email.ts";
 import { formatPhone, formatCnpj, onlyDigits } from "./input-masks.ts";
 import { composeEmail, heading, paragraph, infoCard, highlight, note, type Block, type Row } from "./email-layout.ts";
 
@@ -29,14 +29,14 @@ function clinicFooterRows(clinic: Clinic): Row[] {
   return rows.filter((row): row is Row => row !== null);
 }
 
-function deliverPatient(input: Base, subject: string, preheader: string, blocks: Block[], deps: Deps): Promise<EmailResult> {
+function deliverPatient(input: Base, subject: string, preheader: string, blocks: Block[], deps: Deps, attachments?: EmailAttachment[]): Promise<EmailResult> {
   const body = composeEmail({ preheader, greeting: input.patientName, blocks, clinic: { name: input.clinicName, rows: clinicFooterRows(input) } });
-  return deliver(input.to, subject, body, deps);
+  return deliver(input.to, subject, body, deps, attachments);
 }
 
-async function deliver(to: string, subject: string, body: { html: string; text: string }, deps: Deps): Promise<EmailResult> {
+async function deliver(to: string, subject: string, body: { html: string; text: string }, deps: Deps, attachments?: EmailAttachment[]): Promise<EmailResult> {
   try {
-    return await sendEmail({ to, subject, ...body }, deps);
+    return await sendEmail({ to, subject, ...body, ...(attachments?.length ? { attachments } : {}) }, deps);
   } catch {
     return { sent: false, reason: "network" };
   }
@@ -84,7 +84,7 @@ export function sendAppointmentCancelledEmail(
 }
 
 export function sendQuoteEmail(
-  input: Base & { totalCents: number; expires?: string | null; itemCount?: number | null },
+  input: Base & { totalCents: number; expires?: string | null; itemCount?: number | null; attachment?: EmailAttachment },
   deps: Deps = {},
 ): Promise<EmailResult> {
   // Omite a contagem quando desconhecida (orçamento legado sem itens estruturados).
@@ -96,5 +96,5 @@ export function sendQuoteEmail(
   ];
   if (input.expires) blocks.push(note(`Válido até: ${formatDay(input.expires)}`));
   blocks.push(paragraph("Procure a recepção da clínica para seguir com o atendimento."));
-  return deliverPatient(input, `Seu orçamento na clínica ${input.clinicName}`, "Seu orçamento está pronto.", blocks, deps);
+  return deliverPatient(input, `Seu orçamento na clínica ${input.clinicName}`, "Seu orçamento está pronto.", blocks, deps, input.attachment ? [input.attachment] : undefined);
 }
