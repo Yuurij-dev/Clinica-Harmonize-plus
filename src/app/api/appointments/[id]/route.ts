@@ -1,4 +1,7 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
+import { loadPatientEmailContext } from "@/lib/patient-email-context";
+import { isEmailDeliveryReady } from "@/lib/email";
+import { sendAppointmentCancelledEmail, sendAppointmentRescheduledEmail } from "@/lib/patient-emails";
 import { getCurrentUser } from "@/lib/auth";
 import { appointmentDay, appointmentHasPassed, appointmentInstant, appointmentSlotError, clinicNow, parseAppointmentDay, parseClockMinutes } from "@/lib/clinic-time";
 import { appointmentDurations, appointmentTransactionOptions, lockAppointmentSlots, scheduleConflictError } from "@/lib/appointment-conflict";
@@ -95,6 +98,23 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   // Todo atendimento finalizado (na tela ou automaticamente pela agenda) fica com a conferência de materiais pendente.
   if (body.status === "Atendido") await prisma.appointment.updateMany({ where: { id, clinicId: user.clinicId, materialsCheck: null }, data: { materialsCheck: "pending" } });
   const appointment = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, include: { patient: { select: { name: true } } } });
+  if (appointment) {
+    const oldDate = appointmentDay(current.date);
+    const newDate = appointmentDay(appointment.date);
+    // Só avisa sobre um agendamento que estava "Agendado": não e-mailar cancelamento de algo já Atendido/Faltou nem reabertura de Cancelado.
+    const cancelled = body.status === "Cancelado" && current.status === "Agendado";
+    const rescheduled = !cancelled && current.status === "Agendado" && appointment.status === "Agendado" && (oldDate !== newDate || current.time !== appointment.time);
+    // E-mail ao paciente depois da resposta; opcional e silencioso, nunca altera o agendamento. Sem motivo de cancelamento (nota interna).
+    if (cancelled || rescheduled) after(async () => {
+      try {
+        if (!isEmailDeliveryReady()) return;
+        const context = await loadPatientEmailContext(user.clinicId, current.patientId);
+        if (!context) return;
+        if (cancelled) await sendAppointmentCancelledEmail({ ...context, procedure: appointment.procedure, date: oldDate, time: current.time });
+        else await sendAppointmentRescheduledEmail({ ...context, procedure: appointment.procedure, professional: appointment.professional, oldDate, oldTime: current.time, newDate, newTime: appointment.time });
+      } catch {}
+    });
+  }
   return NextResponse.json({ appointment });
 }
 
