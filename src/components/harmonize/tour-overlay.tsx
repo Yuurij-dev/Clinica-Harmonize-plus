@@ -22,7 +22,7 @@ type Target = { rect: Rect | null; forStep: string | undefined };
 
 export type TourOverlayStep = { key: string; title: string; text: string; pose: TourPose };
 
-const DIM = "rgba(18,14,48,0.78)";
+export const DIM = "rgba(18,14,48,0.78)";
 const TWEEN_MS = 420;
 const SPOT_PAD = 4;
 const SPOT_RADIUS = 14;
@@ -34,13 +34,13 @@ const RETRY_MS = 60;
 const MAX_RETRIES = 10;
 const FOCUSABLE = "button:not([disabled]), [href], input, [tabindex]:not([tabindex='-1'])";
 
-function holePath({ x, y, w, h }: Rect): string {
+export function holePath({ x, y, w, h }: Rect): string {
   const r = Math.min(SPOT_RADIUS, w / 2, h / 2);
   return `M${x + r} ${y}H${x + w - r}A${r} ${r} 0 0 1 ${x + w} ${y + r}V${y + h - r}A${r} ${r} 0 0 1 ${x + w - r} ${y + h}H${x + r}A${r} ${r} 0 0 1 ${x} ${y + h - r}V${y + r}A${r} ${r} 0 0 1 ${x + r} ${y}Z`;
 }
 
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
-const prefersReducedMotion = () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+export const prefersReducedMotion = () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /** Primeiro elemento visível que casa com o seletor (ex.: sidebar no desktop, barra inferior no celular). */
 function findTargetElement(selector: string | undefined): HTMLElement | null {

@@ -98,6 +98,7 @@ model Clinic {
   expenses                    Expense[]
   purchases                   Purchase[]
   recurringExpenses           RecurringExpense[]
+  setup                       ClinicSetup?
   pendingStockOutputs         PendingStockOutput[]
   procedureImageAssets        ProcedureImageAsset[]
 }
@@ -961,4 +962,19 @@ model UserAvatar {
   data      Bytes
   updatedAt DateTime @default(now()) @updatedAt @db.Timestamptz(6)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+/// Assistente de configuração inicial da clínica. Sem linha = "pending".
+model ClinicSetup {
+  clinicId    String    @id
+  /// pending | in_progress | completed | dismissed
+  status      String    @default("pending")
+  currentStep String    @default("clinica")
+  /// { [stepKey]: { decision: "confirmed" | "skipped", by: userId, at: ISO } }
+  decisions   Json      @default("{}") @db.JsonB
+  startedAt   DateTime? @db.Timestamptz(6)
+  dismissedAt DateTime? @db.Timestamptz(6)
+  completedAt DateTime? @db.Timestamptz(6)
+  updatedAt   DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  clinic      Clinic    @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }

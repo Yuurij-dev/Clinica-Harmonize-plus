@@ -93,10 +93,10 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
 
   return (
     <div>
-      <SectionIntro title="Estoque" titleAddon={<SectionWarning section="estoque" enabled={canViewStock} />} description="Materiais, produtos, lotes, validades e saldo disponível da clínica." action={canManageStock ? `Novo ${kindWord}` : undefined} onAction={canManageStock ? () => setEditing({ kind: itemKind }) : undefined} />
+      <SectionIntro title="Estoque" titleAddon={<SectionWarning section="estoque" enabled={canViewStock} />} description="Materiais, produtos, lotes, validades e saldo disponível da clínica." action={canManageStock ? `Novo ${kindWord}` : undefined} onAction={canManageStock ? () => setEditing({ kind: itemKind }) : undefined} actionTarget={itemKind === "material" ? "materiais" : "produtos"} />
       <div className="mb-4 flex flex-wrap gap-2">
-        <Button variant={itemKind === "material" ? "primary" : "secondary"} size="sm" className={warningTabClass(alertKinds.has("material"), itemKind === "material")} onClick={() => setItemKind("material")}>Materiais</Button>
-        <Button variant={itemKind === "produto" ? "primary" : "secondary"} size="sm" className={warningTabClass(alertKinds.has("produto"), itemKind === "produto")} onClick={() => setItemKind("produto")}>Produtos</Button>
+        <Button data-setup-target={itemKind !== "material" ? "materiais" : undefined} variant={itemKind === "material" ? "primary" : "secondary"} size="sm" className={warningTabClass(alertKinds.has("material"), itemKind === "material")} onClick={() => setItemKind("material")}>Materiais</Button>
+        <Button data-setup-target={itemKind !== "produto" ? "produtos" : undefined} variant={itemKind === "produto" ? "primary" : "secondary"} size="sm" className={warningTabClass(alertKinds.has("produto"), itemKind === "produto")} onClick={() => setItemKind("produto")}>Produtos</Button>
       </div>
       {!loading && !loadError ? <div className="mb-4 flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1 text-[11px] font-semibold text-muted-foreground">Situação

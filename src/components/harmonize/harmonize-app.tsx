@@ -16,6 +16,7 @@ import { FinanceSection } from "./finance-section";
 import { stockAlertSection } from "./stock-alerts";
 import { Topbar } from "./topbar";
 import { GuidedTour } from "./guided-tour";
+import { SetupWizardHost } from "./setup-wizard-host";
 import {
   ClientsSection,
   PaymentsSection,
@@ -31,11 +32,12 @@ import type { RolePermissionMatrix } from "@/lib/permissions";
 import type { StockAlert } from "@/lib/stock-rules";
 import { CLIENT_CACHE_UNAUTHORIZED_EVENT, getCachedJson, setClientCacheScope } from "@/lib/client-cache";
 import { visibleSections } from "@/lib/permissions";
+import type { SetupDestination } from "@/lib/setup-rules";
 import { splitMobileSections } from "@/lib/mobile-nav-rules";
 import { CurrentRoleProvider } from "./current-user";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
 import { ClinicChooser, type UserClinic } from "./clinic-chooser";
-import { clientsHomeEvent } from "@/lib/section-events";
+import { clientsHomeEvent, setupInviteEvent } from "@/lib/section-events";
 import { agendaPeriodKey, agendaPeriodRange } from "@/lib/agenda-period-rules";
 import { clinicToday } from "@/lib/clinic-time";
 import { patientListKey } from "@/lib/patient-list-rules";
@@ -179,6 +181,12 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     }
     setAgendaFocus(null);
     router.push(sectionPaths.configuracoes);
+  }
+
+  // Etapa do assistente de configuração: leva à seção ou à subseção de Configurações (as telas reais, sem formulário duplicado).
+  async function openSetupDestination(destination: SetupDestination) {
+    if (destination.kind === "settings") await openSettingsSearchSection(destination.section);
+    else await selectSection(destination.section);
   }
 
   // Saídas e conferências pendentes abrem Compras já na aba Pendências; avisos de lote e saldo abrem o Estoque.
@@ -414,7 +422,8 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       <MobileNav active={active} sections={mobileSections.bar} moreActive={mobileSections.more.includes(active)} moreOpen={moreOpen} onSelect={selectSection} onOpenMore={() => setMoreOpen(true)} moreButtonRef={moreButtonRef} />
       <MobileMoreSheet open={moreOpen} onOpenChange={setMoreOpen} active={active} sections={mobileSections.more} onSelect={selectSection} onLogout={logout} onCloseAutoFocus={(event) => { event.preventDefault(); moreButtonRef.current?.focus(); }} user={currentUser} />
       <QuickCreateFab sections={allowedSections} onCreate={(target) => { const section = { appointment: "agenda", client: "clientes", quote: "orcamentos", payment: "pagamentos" }[target] as SectionId; void openCreate(section, target); }} />
-      {currentUser && startup.status === "ready" && !trialExpired ? <GuidedTour allowedSections={allowedSections} userId={currentUser.id} activeSection={active} suppressAutoOpen={createDialog !== null || hasDraftGuard()} onSelectSection={(section, replace) => selectSection(section, undefined, "purchases", replace)} /> : null}
+      {currentUser && startup.status === "ready" && !trialExpired ? <GuidedTour allowedSections={allowedSections} userId={currentUser.id} activeSection={active} suppressAutoOpen={createDialog !== null || hasDraftGuard()} onFinished={() => window.dispatchEvent(new Event(setupInviteEvent))} onSelectSection={(section, replace) => selectSection(section, undefined, "purchases", replace)} /> : null}
+      <SetupWizardHost onOpenDestination={openSetupDestination} onDashboard={() => { void selectSection("dashboard"); }} />
       <AppToaster />
       {undoNotice ? <div className={`${undoNotice.leaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-[calc(8.5rem+env(safe-area-inset-bottom))] left-1/2 lg:bottom-6 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] border border-border bg-card px-4 py-3 text-xs font-bold text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.18)]`} role="status"><div className="flex items-center gap-3"><span className="min-w-0 flex-1">{undoNotice.message}</span><button className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-[11px] font-black text-foreground transition hover:bg-muted/80" onClick={() => { const undo = undoNotice.undo; setUndoNotice(null); undo(); }}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-success" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
     </div>

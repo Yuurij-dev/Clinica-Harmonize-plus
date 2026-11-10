@@ -101,7 +101,7 @@ export async function PATCH(request: Request) {
   if (typeof laborCostCents !== "number" || !Number.isSafeInteger(laborCostCents) || laborCostCents < 0 || laborCostCents > 2_000_000_000) {
     return NextResponse.json({ message: "Informe um profissional e um valor válido em reais." }, { status: 400 });
   }
-  const member = await prisma.clinicMembership.findFirst({ where: { id: membershipId, clinicId: user.clinicId, role: "PROFESSIONAL" }, select: { id: true } });
+  const member = await prisma.clinicMembership.findFirst({ where: { id: membershipId, clinicId: user.clinicId, role: { in: ["PROFESSIONAL", "ADMIN"] } }, select: { id: true } });
   if (!member) return NextResponse.json({ message: "Profissional não encontrado nesta clínica." }, { status: 404 });
   const updated = await prisma.clinicMembership.update({
     where: { id: member.id },

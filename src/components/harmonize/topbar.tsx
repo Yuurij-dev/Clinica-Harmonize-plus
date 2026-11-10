@@ -16,7 +16,7 @@ import { TrialStatus } from "./trial-status";
 import { useCan } from "./current-user";
 import type { UserClinic } from "./clinic-chooser";
 import { Modal } from "@/components/ui/modal";
-import { tourReplayEvent } from "@/lib/section-events";
+import { setupInviteEvent, tourReplayEvent } from "@/lib/section-events";
 import { PatientAvatar } from "./patient-avatar";
 
 type TopbarProps = {
@@ -140,6 +140,8 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onQuickCreate, onO
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   // Confirmação antes de iniciar o tour: o Harmo se apresenta e o usuário decide.
   const [tourAskOpen, setTourAskOpen] = useState(false);
+  // Recusar o tour também deixa o assistente de configuração convidar o administrador que ainda não decidiu.
+  const declineTour = () => { setTourAskOpen(false); window.dispatchEvent(new Event(setupInviteEvent)); };
   const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
   const [stockNotificationsEnabled, setStockNotificationsEnabled] = useState(true);
   const [appointmentNotificationSoundEnabled, setAppointmentNotificationSoundEnabled] = useState(true);
@@ -559,14 +561,14 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onQuickCreate, onO
         </DropdownMenu>
       </div>
       {/* Mesmo desenho do cartão do tour (guided-tour.tsx): mascote sobreposto, cartão arredondado e a mesma barra de ações. */}
-      <Modal open={tourAskOpen} title="Deseja iniciar o tour?" hideHeader panelClassName="max-w-sm border-0 bg-transparent shadow-none" bodyClassName="p-0 sm:p-0" onClose={() => setTourAskOpen(false)}>
+      <Modal open={tourAskOpen} title="Deseja iniciar o tour?" hideHeader panelClassName="max-w-sm border-0 bg-transparent shadow-none" bodyClassName="p-0 sm:p-0" onClose={declineTour}>
         <div className="flex flex-col items-center">
           {/* O mascote sobreposto vem do próprio Modal. */}
           <div className="w-full rounded-2xl border border-border bg-card px-5 pb-4 pt-[52px] text-center text-card-foreground shadow-2xl">
             <h2 className="text-lg font-black tracking-tight text-foreground">Deseja iniciar o tour?</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">Sou o Harmo e apresento o Harmonize+ em menos de 1 minuto, passando por cada área do sistema. Dá para pular a qualquer momento.</p>
             <div className="mt-4 flex items-center gap-2">
-              <Button type="button" variant="ghost" size="sm" className="shrink-0 text-muted-foreground" onClick={() => setTourAskOpen(false)}>Agora não</Button>
+              <Button type="button" variant="ghost" size="sm" className="shrink-0 text-muted-foreground" onClick={declineTour}>Agora não</Button>
               <Button type="button" variant="primary" size="sm" className="ml-auto" onClick={() => { setTourAskOpen(false); window.dispatchEvent(new Event(tourReplayEvent)); }}>
                 Iniciar tour
                 <ArrowRight aria-hidden="true" />

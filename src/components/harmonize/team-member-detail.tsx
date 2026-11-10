@@ -192,7 +192,7 @@ export function TeamMemberDetail({ memberId, onBack }: { memberId: string; onBac
                   <div className="grid gap-4 sm:grid-cols-2">
                     <FormField label="E-mail de acesso" description="O e-mail é o login e não pode ser alterado aqui."><input className={fieldClassName} value={user.email} readOnly /></FormField>
                     <FormField label="Membro desde"><input className={fieldClassName} value={user.createdAt ? new Date(user.createdAt).toLocaleDateString("pt-BR") : "—"} readOnly /></FormField>
-                    {member.role === "PROFESSIONAL" ? <FormField label="Custo de mão de obra" description="Editado em Custos e orçamento."><input className={fieldClassName} readOnly value={member.laborCostCents === null ? "—" : (member.laborCostCents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} /></FormField> : null}
+                    {member.role === "PROFESSIONAL" || member.role === "ADMIN" ? <FormField label="Custo de mão de obra" description="Editado em Custos e orçamento."><input className={fieldClassName} readOnly value={member.laborCostCents === null ? "—" : (member.laborCostCents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} /></FormField> : null}
                   </div>
                 </section>
                 <section className="space-y-3">

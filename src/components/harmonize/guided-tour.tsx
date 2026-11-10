@@ -19,6 +19,8 @@ type Props = {
   suppressAutoOpen?: boolean;
   /** Seção em que o usuário estava; o tour devolve a ela ao terminar. */
   activeSection?: SectionId;
+  /** Chamado ao concluir ou pular o tour (ex.: convidar para o assistente de configuração). */
+  onFinished?: () => void;
 };
 
 /**
@@ -26,7 +28,7 @@ type Props = {
  * Aparece uma vez por usuário (localStorage, só preferência de interface), pode ser pulado e revisto pelo "?" da topbar.
  * A apresentação (overlay, spotlight, cartão) é do TourOverlay, compartilhado com o tour da ficha da paciente.
  */
-export function GuidedTour({ allowedSections, userId, onSelectSection, activeSection, suppressAutoOpen = false }: Props) {
+export function GuidedTour({ allowedSections, userId, onSelectSection, activeSection, onFinished, suppressAutoOpen = false }: Props) {
   const canReadClinical = useCan("clinical:read");
   const sectionsKey = allowedSections.join(",");
   const steps = useMemo(() => visibleTourSteps(sectionsKey ? (sectionsKey.split(",") as SectionId[]) : [], canReadClinical), [sectionsKey, canReadClinical]);
@@ -86,7 +88,8 @@ export function GuidedTour({ allowedSections, userId, onSelectSection, activeSec
     close();
     const origin = startSection.current;
     if (origin && origin !== activeSection) void onSelectSection(origin, true);
-  }, [userId, activeSection, onSelectSection, close]);
+    onFinished?.();
+  }, [userId, activeSection, onSelectSection, onFinished, close]);
 
   const next = useCallback(() => {
     if (last) finish();
