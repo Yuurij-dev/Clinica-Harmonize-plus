@@ -139,7 +139,7 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
   return (
     <>
       <Modal open={view === "invite"} title="Agora vamos configurar sua clínica?" description="Em poucos passos guiados você deixa a clínica pronta para receber pacientes." mascot="cheer" panelClassName="max-w-md" closeOnOverlayClick={false} onClose={() => { void dismissInvite(); }}>
-        <p className="text-sm leading-6 text-muted-foreground">Vamos cadastrar os dados da clínica, a equipe e os procedimentos. Você pode sair e continuar depois quando quiser.</p>
+        <p className="text-sm leading-6 text-muted-foreground">Seu Harmonize+ está quase pronto! Vamos configurar sua clínica juntos. Vou te orientar em cada etapa para deixar tudo organizado e preparado para começar a atender seus pacientes.</p>
         {error ? <p className="mt-3 text-sm text-destructive" role="alert">{error}</p> : null}
         <div className="mt-5 flex flex-wrap justify-end gap-2">
           <Button variant="ghost" disabled={busy} onClick={() => { void dismissInvite(); }}>Fazer isso depois</Button>
