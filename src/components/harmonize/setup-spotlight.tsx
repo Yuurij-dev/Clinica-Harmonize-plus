@@ -56,7 +56,8 @@ type Props = {
  * O escurecimento com o balão do Harmo some ao interagir com um alvo, Esc ou "Entendi"; o anel segue até a etapa
  * concluir (quando o host desmonta este componente). Monte com `key` novo para recomeçar.
  */
-export function SetupSpotlight({ items }: Props) {
+export function SetupSpotlight({ items: rawItems }: Props) {
+  const items = rawItems ?? [];
   const [view, setView] = useState<{ index: number; rects: Rect[] } | null>(null);
   const [dim, setDim] = useState(true);
   const [vp, setVp] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));

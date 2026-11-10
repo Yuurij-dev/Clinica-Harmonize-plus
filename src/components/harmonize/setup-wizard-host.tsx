@@ -164,7 +164,7 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
 
       {view === "success" ? <SetupSuccess onDashboard={() => { setView("closed"); onDashboard(); }} /> : null}
 
-      {bar && view === "closed" && spotlightRun > 0 && plan && current && !current.done ? <SetupSpotlight key={`${stepKey}-${spotlightRun}`} items={plan.items} /> : null}
+      {bar && view === "closed" && spotlightRun > 0 && plan?.items?.length && current && !current.done ? <SetupSpotlight key={`${stepKey}-${spotlightRun}`} items={plan.items} /> : null}
 
       {bar && view === "closed" && data ? (
         <div className="fixed bottom-[calc(12rem+env(safe-area-inset-bottom))] left-1/2 z-[88] w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 lg:bottom-6 lg:left-[calc(220px+2rem)] lg:translate-x-0" data-setup-bar role="region" aria-label="Configuração da clínica">

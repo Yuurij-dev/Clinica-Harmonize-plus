@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, CheckCircle2, Circle, Info, LogOut, Undo2 } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ArrowLeft, ArrowRight, Check, Info, LogOut, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { CountUp } from "@/components/ui/count-up";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { expenseCategories } from "@/lib/finance-rules";
@@ -12,7 +13,28 @@ import { paymentMethods } from "./finance-shared";
 import { useBodyScrollLock } from "./use-body-scroll-lock";
 import type { SetupPayload, SetupSummary } from "./use-clinic-setup";
 
-const enter = "hp-page-enter motion-reduce:![animation:none]";
+/** Marca da etapa: círculo vazio ou check verde. Ao virar concluída (`pop`), o círculo dá um pop e o check se desenha. */
+function StepIcon({ done, pop = false }: { done: boolean; pop?: boolean }) {
+  if (!done) return <Circle className="h-4 w-4 shrink-0 text-muted-foreground" aria-label="Pendente" />;
+  return (
+    <svg className={cn("h-4 w-4 shrink-0 text-success", pop && "hp-sw-pop")} viewBox="0 0 16 16" role="img" aria-label="Concluída">
+      <circle cx="8" cy="8" r="7.25" fill="currentColor" fillOpacity="0.15" stroke="currentColor" strokeWidth="1.5" />
+      <g className={pop ? "hp-sw-check" : undefined}><path d="M4.8 8.2l2.2 2.2 4.2-4.6" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></g>
+    </svg>
+  );
+}
+
+function Circle({ className, ...props }: React.SVGProps<SVGSVGElement>) {
+  return <svg className={className} viewBox="0 0 16 16" role="img" {...props}><circle cx="8" cy="8" r="7.25" fill="none" stroke="currentColor" strokeWidth="1.5" /></svg>;
+}
+
+// Confete leve da tela de sucesso: posições fixas (sem aleatório no render), só transform/opacity.
+const CONFETTI = Array.from({ length: 18 }, (_, i) => ({
+  dx: (i - 8.5) * 22,
+  dy: 120 + (i % 5) * 34,
+  rot: (i % 2 ? 1 : -1) * (160 + i * 23),
+  color: ["#5147dc", "#7b6ff2", "#f5b942", "#3ecf8e", "#ef6f9b"][i % 5],
+}));
 
 function plural(count: number, one: string, many: string) {
   return `${count} ${count === 1 ? one : many}`;
@@ -80,7 +102,7 @@ function StepExtras({ stepKey, summary }: { stepKey: SetupStepKey; summary: Setu
 }
 
 function Badge({ required }: { required: boolean }) {
-  return <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase", required ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground")}>{required ? "Obrigatória" : "Opcional"}</span>;
+  return <span className={cn("hp-sw-badge shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase", required ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground")}>{required ? "Obrigatória" : "Opcional"}</span>;
 }
 
 type WizardProps = {
@@ -101,10 +123,56 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
   useBodyScrollLock(true);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  // A etapa exibida troca depois de uma saída curta (fade); a direção vem da posição de origem e destino.
+  const [shown, setShown] = useState(stepKey);
+  const [dir, setDir] = useState<"next" | "back">("next");
+  const [settled, setSettled] = useState(false);
+  const leaving = shown !== stepKey;
+  const listRef = useRef<HTMLOListElement>(null);
+  const indicatorRef = useRef<HTMLLIElement>(null);
+  const indicatorPlaced = useRef(false);
+  useEffect(() => {
+    if (shown === stepKey) return;
+    const timer = window.setTimeout(() => {
+      setDir(SETUP_STEPS.findIndex((step) => step.key === stepKey) >= SETUP_STEPS.findIndex((step) => step.key === shown) ? "next" : "back");
+      setShown(stepKey);
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [stepKey, shown]);
+  // Só marcas que viram concluídas depois da abertura fazem o pop (as já concluídas aparecem prontas).
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSettled(true), 900);
+    return () => window.clearTimeout(timer);
+  }, []);
+  // O destaque da etapa atual desliza até o botão dela (transform), sem trocar seco.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const place = () => {
+      const button = list.querySelector<HTMLElement>('[aria-current="step"]');
+      const indicator = indicatorRef.current;
+      if (!button || !indicator) return;
+      const first = !indicatorPlaced.current;
+      if (first) indicator.style.transition = "none";
+      indicator.style.transform = `translate(${button.offsetLeft}px, ${button.offsetTop}px)`;
+      indicator.style.width = `${button.offsetWidth}px`;
+      indicator.style.height = `${button.offsetHeight}px`;
+      indicator.style.opacity = "1";
+      if (first) {
+        void indicator.offsetWidth;
+        indicator.style.transition = "";
+        indicatorPlaced.current = true;
+      }
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [stepKey]);
   const [skipAskedFor, setSkipAskedFor] = useState<SetupStepKey | null>(null);
-  const confirmingSkip = skipAskedFor === stepKey;
-  const setConfirmingSkip = (asking: boolean) => setSkipAskedFor(asking ? stepKey : null);
-  const index = Math.max(0, SETUP_STEPS.findIndex((step) => step.key === stepKey));
+  const confirmingSkip = skipAskedFor === shown;
+  const setConfirmingSkip = (asking: boolean) => setSkipAskedFor(asking ? shown : null);
+  const index = Math.max(0, SETUP_STEPS.findIndex((step) => step.key === shown));
   const definition: SetupStepDefinition = SETUP_STEPS[index];
   const state = data.steps[index];
   const completed = data.status === "completed";
@@ -126,7 +194,7 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
 
   useEffect(() => {
     headingRef.current?.focus();
-  }, [stepKey]);
+  }, [shown]);
 
   // Esc sai (exceto durante uma gravação); Tab fica dentro do assistente.
   useEffect(() => {
@@ -150,16 +218,16 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
   }, [busy, onExit]);
 
   return (
-    <div ref={rootRef} className="fixed inset-0 z-[950] flex flex-col overflow-y-auto bg-background text-foreground" role="dialog" aria-modal="true" aria-labelledby="setup-wizard-title">
+    <div ref={rootRef} className="hp-sw-root fixed inset-0 z-[950] flex flex-col overflow-y-auto bg-background text-foreground" role="dialog" aria-modal="true" aria-labelledby="setup-wizard-title">
       <header className="border-b border-primary/20 bg-gradient-to-r from-[#5147dc] to-[#7b6ff2] px-4 py-4 text-white sm:px-8">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-4">
-          <div className="shrink-0" aria-hidden="true"><GuideMascot pose={definition.pose} size={72} /></div>
+          <div className="hp-sw-float shrink-0" aria-hidden="true"><div key={definition.key} className="hp-sw-fade"><GuideMascot pose={definition.pose} size={72} /></div></div>
           <div className="min-w-0 flex-1 basis-56">
             <p className="text-[11px] font-bold uppercase tracking-wide text-white/75">{completed ? "Assistente de configuração · concluído" : "Configuração da clínica"}</p>
             <p id="setup-wizard-title" className="mt-0.5 text-base font-bold leading-snug sm:text-lg">{definition.harmo}</p>
           </div>
           <div className="w-full basis-64 sm:w-auto sm:min-w-64">
-            <div className="flex items-baseline justify-between text-xs font-semibold"><span>{data.doneCount} de {data.total} etapas concluídas</span><span>{data.percent}%</span></div>
+            <div className="flex items-baseline justify-between text-xs font-semibold"><span><CountUp value={data.doneCount} duration={400} /> de {data.total} etapas concluídas</span><span><CountUp value={data.percent} duration={400} format={(value) => `${Math.round(value)}%`} /></span></div>
             <div className="mt-1.5"><Progress value={data.percent} className="h-2 bg-white/25" indicatorClassName="bg-white" aria-label="Progresso da configuração" /></div>
           </div>
           <Button variant="outline" size="sm" className="shrink-0 border-white/40 bg-white/10 text-white hover:bg-white/20 hover:text-white" onClick={onExit}><LogOut className="h-4 w-4" aria-hidden="true" />{completed ? "Fechar" : "Sair e continuar depois"}</Button>
@@ -168,21 +236,22 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
 
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-5 px-4 py-5 sm:px-8 lg:flex-row lg:gap-8 lg:py-8">
         <nav aria-label="Etapas da configuração" className="lg:w-72 lg:shrink-0">
-          <ol className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
+          <ol ref={listRef} className="relative flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
+            <li ref={indicatorRef} aria-hidden="true" className="pointer-events-none absolute left-0 top-0 rounded-lg border border-primary bg-primary/10 opacity-0 transition-[transform,width,height] duration-300 ease-out motion-reduce:transition-none" />
             {SETUP_STEPS.map((step, position) => {
               const item = data.steps[position];
               const current = step.key === stepKey;
               const open = reachable(position);
               return (
-                <li key={step.key} className="shrink-0 lg:shrink">
+                <li key={step.key} className="hp-sw-list-in relative shrink-0 lg:shrink" style={{ "--i": position } as React.CSSProperties}>
                   <button
                     type="button"
                     disabled={!open || busy}
                     aria-current={current ? "step" : undefined}
                     onClick={() => onSelectStep(step.key)}
-                    className={cn("flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-sm transition-colors motion-reduce:transition-none max-lg:min-h-11", current ? "border-primary bg-primary/10 font-bold text-foreground" : "border-transparent hover:bg-muted", !open && "cursor-not-allowed opacity-50")}
+                    className={cn("flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-sm transition-colors motion-reduce:transition-none max-lg:min-h-11", current ? "border-transparent font-bold text-foreground" : "border-transparent hover:bg-muted", !open && "cursor-not-allowed opacity-50")}
                   >
-                    {item.done ? <CheckCircle2 className="h-4 w-4 shrink-0 text-success" aria-label="Concluída" /> : <Circle className="h-4 w-4 shrink-0 text-muted-foreground" aria-label="Pendente" />}
+                    <StepIcon done={item.done} pop={settled} />
                     <span className="min-w-0 flex-1 break-words leading-tight">{position + 1}. {step.title}</span>
                     {step.key !== "revisao" ? <span className="max-lg:hidden"><Badge required={step.required} /></span> : null}
                   </button>
@@ -193,7 +262,7 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
         </nav>
 
         <main className="min-w-0 flex-1">
-          <section key={stepKey} className={cn("rounded-xl border border-border bg-card p-5 shadow-sm sm:p-7", enter)}>
+          <section key={shown} className={cn("rounded-xl border border-border bg-card p-5 shadow-sm transition-opacity duration-100 motion-reduce:transition-none sm:p-7", leaving ? "opacity-0" : dir === "back" ? "hp-sw-in-back" : "hp-sw-in-next")}>
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-xs font-bold uppercase text-muted-foreground">Etapa {index + 1} de {data.total}</p>
               {!isReview ? <Badge required={definition.required} /> : null}
@@ -209,7 +278,7 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
                 <p><span className="font-bold">O que fazer: </span>{definition.todo}</p>
                 <p className="text-muted-foreground"><span className="font-bold">Exemplo: </span>{definition.example}</p>
                 <StepExtras stepKey={definition.key} summary={data.summary} />
-                <div role="status" className={cn("flex items-start gap-2 rounded-lg border px-3 py-2.5", status.ok ? "border-success/30 bg-success/10 text-success" : "border-warning/40 bg-warning/10 text-foreground")}>
+                <div key={String(status.ok)} role="status" className={cn("hp-sw-fade flex items-start gap-2 rounded-lg border px-3 py-2.5", status.ok ? "border-success/30 bg-success/10 text-success" : "border-warning/40 bg-warning/10 text-foreground")}>
                   {status.ok ? <Check className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" /> : <Info className="mt-1 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />}
                   <div>
                     <p className="font-semibold">{status.text}</p>
@@ -242,7 +311,7 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
                 {isReview ? (
                   completed ? <Button onClick={onExit}>Fechar</Button> : <Button disabled={!data.canFinish || busy} onClick={onFinish}>Finalizar configuração<Check className="h-4 w-4" aria-hidden="true" /></Button>
                 ) : (
-                  <Button disabled={blocked || busy || !nextKey} onClick={() => nextKey && onSelectStep(nextKey)}>Continuar<ArrowRight className="h-4 w-4" aria-hidden="true" /></Button>
+                  <Button className="hp-sw-continue" disabled={blocked || busy || !nextKey} onClick={() => nextKey && onSelectStep(nextKey)}>Continuar<ArrowRight className="h-4 w-4" aria-hidden="true" /></Button>
                 )}
               </div>
             </div>
@@ -264,7 +333,7 @@ function ReviewBody({ data, completed, onSelectStep }: { data: SetupPayload; com
           const status = stepStatus(step.key, step, data.summary);
           return (
             <li key={step.key} className="flex items-center gap-3 px-3 py-2">
-              {step.done ? <CheckCircle2 className="h-4 w-4 shrink-0 text-success" aria-label="Concluída" /> : <Circle className="h-4 w-4 shrink-0 text-muted-foreground" aria-label="Pendente" />}
+              <StepIcon done={step.done} />
               <div className="min-w-0 flex-1">
                 <p className="font-semibold">{step.title} <span className="ml-1 align-middle"><Badge required={step.required} /></span></p>
                 <p className="break-words text-xs text-muted-foreground">{status.text}</p>
@@ -292,11 +361,14 @@ export function SetupSuccess({ onDashboard }: { onDashboard: () => void }) {
   useBodyScrollLock(true);
   return (
     <div className="fixed inset-0 z-[950] grid place-items-center overflow-y-auto bg-background px-4 py-8 text-foreground" role="dialog" aria-modal="true" aria-labelledby="setup-success-title">
-      <div className={cn("w-full max-w-lg rounded-2xl border border-primary/20 bg-card p-8 text-center shadow-lg", enter)}>
-        <div className="mx-auto w-fit" aria-hidden="true"><GuideMascot pose="cheer" size={140} /></div>
-        <h2 id="setup-success-title" className="mt-4 text-2xl font-bold">Sua clínica está pronta para começar!</h2>
-        <p className="mt-2 text-sm text-muted-foreground">A configuração inicial foi concluída. Você pode rever as etapas quando quiser em Configurações.</p>
-        <Button className="mt-6" size="lg" autoFocus onClick={onDashboard}>Ir para o Dashboard<ArrowRight className="h-4 w-4" aria-hidden="true" /></Button>
+      <div className="hp-sw-root hp-sw-fade relative w-full max-w-lg overflow-hidden rounded-2xl border border-primary/20 bg-card p-8 text-center shadow-lg">
+        <div className="pointer-events-none absolute left-1/2 top-24" aria-hidden="true">
+          {CONFETTI.map((piece, i) => <span key={i} className="hp-sw-confetti absolute block h-2 w-1.5 rounded-sm" style={{ "--i": i, "--dx": `${piece.dx}px`, "--dy": `${piece.dy}px`, "--rot": `${piece.rot}deg`, backgroundColor: piece.color } as React.CSSProperties} />)}
+        </div>
+        <div className="hp-sw-rise mx-auto w-fit" style={{ "--i": 0 } as React.CSSProperties} aria-hidden="true"><GuideMascot pose="cheer" size={140} /></div>
+        <h2 id="setup-success-title" className="hp-sw-rise mt-4 text-2xl font-bold" style={{ "--i": 1 } as React.CSSProperties}>Sua clínica está pronta para começar!</h2>
+        <p className="hp-sw-rise mt-2 text-sm text-muted-foreground" style={{ "--i": 2 } as React.CSSProperties}>A configuração inicial foi concluída. Você pode rever as etapas quando quiser em Configurações.</p>
+        <Button className="hp-sw-rise mt-6" style={{ "--i": 3 } as React.CSSProperties} size="lg" autoFocus onClick={onDashboard}>Ir para o Dashboard<ArrowRight className="h-4 w-4" aria-hidden="true" /></Button>
       </div>
     </div>
   );
