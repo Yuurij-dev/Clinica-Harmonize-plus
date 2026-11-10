@@ -119,7 +119,20 @@ export function SetupSpotlight({ items: rawItems }: Props) {
     window.addEventListener("scroll", measure, true);
     document.addEventListener("input", measure, true);
     document.addEventListener("change", measure, true);
+    // Alvos de navegação/seleção (abas do Estoque, "Ver todas" -> tela de recorrentes) trocam de lugar quando a tela muda:
+    // o alvo passa a ser marcado em outro elemento (data-setup-target). Reavalia ao vivo em cliques e em mudanças do DOM.
+    let frame = 0;
+    const later = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => { frame = 0; measure(); });
+    };
+    document.addEventListener("click", later, true);
+    const observer = new MutationObserver(later);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-setup-target"] });
     return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("click", later, true);
+      observer.disconnect();
       window.clearTimeout(timer);
       window.clearTimeout(settle);
       window.removeEventListener("resize", measure);
