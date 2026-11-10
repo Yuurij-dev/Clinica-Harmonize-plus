@@ -4,7 +4,7 @@ import * as email from "../src/lib/email.ts";
 import * as pe from "../src/lib/patient-emails.ts";
 
 const env = { RESEND_API_KEY: "re_SECRETKEY", EMAIL_FROM: "Harmonize <no-reply@h.com>" };
-const base = { to: "paciente@x.com", patientName: "Ana <b>Souza</b>", clinicName: "Clínica <Um> & Cia", clinicPhone: "(11) 99999-0000", clinicAddress: "Rua \"A\", 1" };
+const base = { to: "paciente@x.com", patientName: "Ana <b>Souza</b>", clinicName: "Clínica <Um> & Cia", clinicPhone: "11999990000", clinicCnpj: "12345678000190", clinicAddress: "Rua \"A\", 1" };
 
 const capture = async (fn) => {
   let seen;
@@ -37,8 +37,18 @@ test("cada e-mail chama o Resend com from/to/subject/html/text corretos", async 
     assert.equal(seen.body.subject, subjects[name]);
     assert.ok(seen.body.text.length > 0 && seen.body.html.length > 0);
     assert.ok(seen.body.text.includes("Clínica <Um> & Cia"), name);
-    assert.ok(seen.body.text.includes("(11) 99999-0000"), name);
+    // Rodapé rotulado, com telefone e CNPJ formatados a partir dos dígitos.
+    assert.ok(seen.body.text.includes("Telefone: (11) 99999-0000"), name);
+    assert.ok(seen.body.text.includes("CNPJ: 12.345.678/0001-90"), name);
+    assert.ok(seen.body.text.includes("Endereço: Rua \"A\", 1"), name);
+    assert.ok(seen.body.html.includes("Telefone: (11) 99999-0000"), name);
   }
+});
+
+test("telefone/CNPJ invalidos vao como estao, sem mascara enganosa", async () => {
+  const { seen } = await capture((deps) => pe.sendAppointmentCancelledEmail({ ...base, clinicPhone: "21313131313131313131", clinicCnpj: "", procedure: "Teste", date: "2026-12-05", time: "14:30" }, deps));
+  assert.ok(seen.body.text.includes("Telefone: 21313131313131313131"));
+  assert.ok(!seen.body.text.includes("CNPJ:"));
 });
 
 test("html escapa nome hostil e nao injeta tags", async () => {

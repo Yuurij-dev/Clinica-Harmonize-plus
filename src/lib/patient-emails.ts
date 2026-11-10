@@ -1,9 +1,10 @@
 // E-mails transacionais para o paciente (Resend via sendEmail). Recebem dados ja resolvidos, escapam todo valor dinamico
 // e nunca lancam. Datas chegam como "YYYY-MM-DD" (dia da clinica) e horarios como "HH:MM".
 import { escapeHtml, sendEmail, type EmailResult } from "./email.ts";
+import { formatPhone, formatCnpj, onlyDigits } from "./input-masks.ts";
 
 type Deps = { env?: Record<string, string | undefined>; fetchImpl?: typeof fetch };
-type Clinic = { clinicName: string; clinicPhone?: string | null; clinicAddress?: string | null };
+type Clinic = { clinicName: string; clinicPhone?: string | null; clinicCnpj?: string | null; clinicAddress?: string | null };
 type Base = Clinic & { to: string; patientName: string };
 
 const formatDay = (value: string) => {
@@ -13,13 +14,28 @@ const formatDay = (value: string) => {
 
 export const formatBRL = (cents: number) => (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
+// Rodapé rotulado: nome da clínica e, abaixo, cada dado com seu rótulo. Telefone/CNPJ recebem máscara só
+// quando têm o número certo de dígitos; fora disso vão como estão (não mascara dado inválido como se fosse válido).
+function clinicFooterRows(clinic: Clinic): Array<[string, string]> {
+  const phone = clinic.clinicPhone?.trim();
+  const cnpj = clinic.clinicCnpj?.trim();
+  const address = clinic.clinicAddress?.trim();
+  const rows: Array<[string, string] | null> = [
+    phone ? ["Telefone", [10, 11].includes(onlyDigits(phone).length) ? formatPhone(phone) : phone] : null,
+    cnpj ? ["CNPJ", onlyDigits(cnpj).length === 14 ? formatCnpj(cnpj) : cnpj] : null,
+    address ? ["Endereço", address] : null,
+  ];
+  return rows.filter((row): row is [string, string] => row !== null);
+}
+
 function render(patientName: string, lines: Array<{ html: string; text: string }>, clinic: Clinic) {
-  const contact = [clinic.clinicPhone?.trim(), clinic.clinicAddress?.trim()].filter((value): value is string => Boolean(value));
-  const footerText = [clinic.clinicName, ...contact].join(" · ");
+  const rows = clinicFooterRows(clinic);
+  const footerHtml = [`<strong>${escapeHtml(clinic.clinicName)}</strong>`, ...rows.map(([label, value]) => `${label}: ${escapeHtml(value)}`)].join("<br>");
+  const footerText = [clinic.clinicName, ...rows.map(([label, value]) => `${label}: ${value}`)].join("\n");
   const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:#25263a">
 <p>Olá, ${escapeHtml(patientName)},</p>
 ${lines.map((line) => `<p>${line.html}</p>`).join("\n")}
-<p style="font-size:13px;color:#7783a8">${escapeHtml(footerText)}</p>
+<p style="font-size:13px;color:#7783a8;margin-top:24px">${footerHtml}</p>
 </div>`;
   const text = `Olá, ${patientName},\n\n${lines.map((line) => line.text).join("\n\n")}\n\n${footerText}`;
   return { html, text };

@@ -4,9 +4,9 @@ import { prisma } from "@/lib/prisma";
 export async function loadPatientEmailContext(clinicId: string, patientId: string) {
   const patient = await prisma.patient.findFirst({
     where: { id: patientId, clinicId },
-    select: { name: true, email: true, clinic: { select: { name: true, phone: true, address: true } } },
+    select: { name: true, email: true, clinic: { select: { name: true, phone: true, cnpj: true, address: true } } },
   });
   const to = patient?.email?.trim();
   if (!patient || !patient.clinic || !to) return null;
-  return { to, patientName: patient.name, clinicName: patient.clinic.name, clinicPhone: patient.clinic.phone, clinicAddress: patient.clinic.address };
+  return { to, patientName: patient.name, clinicName: patient.clinic.name, clinicPhone: patient.clinic.phone, clinicCnpj: patient.clinic.cnpj, clinicAddress: patient.clinic.address };
 }
