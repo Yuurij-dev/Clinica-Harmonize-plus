@@ -5,6 +5,7 @@ import { ArrowLeft, CheckCircle2, Circle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { SETUP_STEPS, isSetupStepKey, setupSpotlightPlan, type SetupDecision, type SetupDestination, type SetupStepKey } from "@/lib/setup-rules";
+import { CLIENT_CACHE_INVALIDATED_EVENT } from "@/lib/client-cache";
 import { setupInviteEvent, setupOpenEvent } from "@/lib/section-events";
 import { useCanUseSetup } from "./current-user";
 import { SetupSpotlight } from "./setup-spotlight";
@@ -91,6 +92,35 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
     return () => { if (main) main.style.paddingBottom = previous; };
   }, [bar, view]);
 
+  const current = data?.steps.find((step) => step.key === stepKey);
+  const stepDone = current?.done ?? false;
+
+  // Etapa que a pessoa estava preenchendo numa tela e que o servidor passou a dar como concluída: volta ao assistente
+  // (o mesmo caminho de "Voltar ao assistente"). Só com a barra de retorno ativa, então quem saiu do fluxo não é puxado
+  // de volta, e abrir já com a etapa concluída não conta como transição. Ajuste de estado durante o render (sem efeito).
+  const [watched, setWatched] = useState({ step: stepKey, done: stepDone });
+  if (watched.step !== stepKey) {
+    setWatched({ step: stepKey, done: stepDone });
+  } else if (watched.done !== stepDone) {
+    setWatched({ step: stepKey, done: stepDone });
+    if (stepDone && bar && view === "closed") {
+      setBar(false);
+      setView("wizard");
+    }
+  }
+
+  // Etapas de "conferir e confirmar" (sem dado que o servidor conte): salvar algo da clínica na tela encerra o destaque.
+  const [actedRun, setActedRun] = useState(0);
+  useEffect(() => {
+    if (!enabled || !["agenda", "custos", "notificacoes"].includes(stepKey)) return;
+    const onSaved = (event: Event) => {
+      const keys = (event as CustomEvent<string[] | undefined>).detail;
+      if (Array.isArray(keys) && keys.some((key) => key.startsWith("/api/clinic/"))) setActedRun(spotlightRun);
+    };
+    window.addEventListener(CLIENT_CACHE_INVALIDATED_EVENT, onSaved);
+    return () => window.removeEventListener(CLIENT_CACHE_INVALIDATED_EVENT, onSaved);
+  }, [enabled, stepKey, spotlightRun]);
+
   if (!enabled) return null;
 
   async function selectStep(key: SetupStepKey) {
@@ -132,7 +162,6 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
     await refresh();
   }
 
-  const current = data?.steps.find((step) => step.key === stepKey);
   const plan = data ? setupSpotlightPlan(stepKey) : null;
   const stepNumber = SETUP_STEPS.findIndex((step) => step.key === stepKey) + 1;
 
@@ -164,7 +193,7 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
 
       {view === "success" ? <SetupSuccess onDashboard={() => { setView("closed"); onDashboard(); }} /> : null}
 
-      {bar && view === "closed" && spotlightRun > 0 && plan?.items?.length && current && !current.done ? <SetupSpotlight key={`${stepKey}-${spotlightRun}`} items={plan.items} /> : null}
+      {bar && view === "closed" && spotlightRun > 0 && plan?.items?.length && current && !current.done && actedRun !== spotlightRun ? <SetupSpotlight key={`${stepKey}-${spotlightRun}`} items={plan.items} /> : null}
 
       {bar && view === "closed" && data ? (
         <div className="fixed bottom-[calc(12rem+env(safe-area-inset-bottom))] left-1/2 z-[88] w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 lg:bottom-6 lg:left-[calc(220px+2rem)] lg:translate-x-0" data-setup-bar role="region" aria-label="Configuração da clínica">

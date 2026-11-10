@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, readClientCache } from "@/lib/client-cache";
+import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { setupUpdatedEvent } from "@/lib/section-events";
 import type { SetupEvaluation, SetupStatus, SetupStepKey } from "@/lib/setup-rules";
 
@@ -62,7 +62,8 @@ export function useClinicSetup(enabled: boolean, live: boolean) {
   useEffect(() => {
     if (!enabled || !live || data?.status === "completed") return;
     const onVisible = () => { if (document.visibilityState === "visible") void refresh(); };
-    const onInvalidated = (event: Event) => { if (affectsSetup(event)) void refresh(); };
+    // Descarta uma consulta antiga ainda em voo (feita antes do salvamento) para a releitura refletir o que acabou de ser salvo.
+    const onInvalidated = (event: Event) => { if (!affectsSetup(event)) return; invalidateClientCache(KEY); void refresh(); };
     window.addEventListener("focus", onVisible);
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener(CLIENT_CACHE_INVALIDATED_EVENT, onInvalidated);

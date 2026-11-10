@@ -154,7 +154,9 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
       if (!button || !indicator) return;
       const first = !indicatorPlaced.current;
       if (first) indicator.style.transition = "none";
-      indicator.style.transform = `translate(${button.offsetLeft}px, ${button.offsetTop}px)`;
+      // O <li> é o elemento posicionado: a posição na lista é a do <li> (offsetLeft/Top relativos ao <ol>) mais a do botão nele.
+      const item = button.closest<HTMLElement>("li") ?? button;
+      indicator.style.transform = `translate(${item.offsetLeft + button.offsetLeft}px, ${item.offsetTop + button.offsetTop}px)`;
       indicator.style.width = `${button.offsetWidth}px`;
       indicator.style.height = `${button.offsetHeight}px`;
       indicator.style.opacity = "1";
@@ -165,10 +167,11 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
       }
     };
     place();
+    const frame = requestAnimationFrame(place); // de novo depois do layout final (fontes, scroll da lista)
     const observer = new ResizeObserver(place);
     observer.observe(list);
-    return () => observer.disconnect();
-  }, [stepKey]);
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); };
+  }, [stepKey, shown]);
   const [skipAskedFor, setSkipAskedFor] = useState<SetupStepKey | null>(null);
   const confirmingSkip = skipAskedFor === shown;
   const setConfirmingSkip = (asking: boolean) => setSkipAskedFor(asking ? shown : null);
