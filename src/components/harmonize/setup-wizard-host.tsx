@@ -98,15 +98,14 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
   // Etapa que a pessoa estava preenchendo numa tela e que o servidor passou a dar como concluída: volta ao assistente
   // (o mesmo caminho de "Voltar ao assistente"). Só com a barra de retorno ativa, então quem saiu do fluxo não é puxado
   // de volta, e abrir já com a etapa concluída não conta como transição. Ajuste de estado durante o render (sem efeito).
+  // A volta pedida (etapa concluída ou salvamento de conferência) espera o fluxo da tela terminar: ver o efeito abaixo.
+  const [returnPending, setReturnPending] = useState(false);
   const [watched, setWatched] = useState({ step: stepKey, done: stepDone });
   if (watched.step !== stepKey) {
     setWatched({ step: stepKey, done: stepDone });
   } else if (watched.done !== stepDone) {
     setWatched({ step: stepKey, done: stepDone });
-    if (stepDone && bar && view === "closed") {
-      setBar(false);
-      setView("wizard");
-    }
+    if (stepDone && bar && view === "closed") setReturnPending(true);
   }
 
   // Etapas de "conferir e confirmar" (agenda, custos, notificações): salvar com sucesso na tela de destino registra a
@@ -124,15 +123,43 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
       confirmedRun.current = spotlightRun;
       setActedRun(spotlightRun);
       void run({ action: "decide", step: stepKey, decision: "confirmed" }).then((result) => {
-        if (result && !result.steps.find((step) => step.key === stepKey)?.done) {
-          setBar(false);
-          setView("wizard");
-        }
+        if (result && !result.steps.find((step) => step.key === stepKey)?.done) setReturnPending(true);
       });
     };
     window.addEventListener(CLIENT_CACHE_INVALIDATED_EVENT, onSaved);
     return () => window.removeEventListener(CLIENT_CACHE_INVALIDATED_EVENT, onSaved);
   }, [enabled, stepKey, spotlightRun, bar, view, run]);
+
+  // Volta ao assistente só quando o fluxo da tela de destino terminou: sem nenhum outro diálogo aberto (cadastro pós-criação,
+  // compra, lote, tour...), com um pequeno atraso depois do último fechar para não voltar no meio da animação de saída.
+  // Se a pessoa fechar a barra ou sair do fluxo, não volta.
+  useEffect(() => {
+    if (!returnPending || !bar || view !== "closed") return;
+    const externalDialogOpen = () => document.querySelector('[role="dialog"], [role="alertdialog"]') !== null;
+    let timer = 0;
+    const check = () => {
+      if (externalDialogOpen()) {
+        window.clearTimeout(timer);
+        timer = 0;
+        return;
+      }
+      if (timer) return;
+      timer = window.setTimeout(() => {
+        timer = 0;
+        if (externalDialogOpen()) return;
+        setReturnPending(false);
+        setBar(false);
+        setView("wizard");
+      }, 300);
+    };
+    check();
+    const observer = new MutationObserver(check);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["role", "data-state", "hidden"] });
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(timer);
+    };
+  }, [returnPending, bar, view]);
 
   if (!enabled) return null;
 
@@ -145,6 +172,7 @@ export function SetupWizardHost({ onOpenDestination, onDashboard }: Props) {
   async function goToScreen(destination: SetupDestination) {
     await run({ action: "goto", step: stepKey });
     setView("closed");
+    setReturnPending(false);
     setBar(dataRef.current?.status !== "completed");
     setSpotlightRun((run) => run + 1);
     await onOpenDestination(destination);
