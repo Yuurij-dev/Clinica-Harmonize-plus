@@ -228,7 +228,8 @@ export function recurringCycleStart(frequency: string, date: string) {
 }
 
 export function isRecurringActive(endsOn: string | null, today: string) {
-  return !endsOn || endsOn >= today;
+  // Última data = hoje: não haverá ocorrências depois de hoje, então já conta como encerrada.
+  return !endsOn || endsOn > today;
 }
 
 export type AccountStatus = "open" | "overdue" | "settled";
