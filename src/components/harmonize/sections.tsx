@@ -2650,7 +2650,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
                 <div className="rounded-md border border-border/70 p-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div><p className="text-sm font-bold text-foreground">E-mail</p><p className="mt-1 text-xs text-muted-foreground">Envio de comunicações para pacientes</p></div>
-                    {costSettingsLoading ? <LoadingSkeleton className="h-6 w-24" /> : !emailProviderReady ? <Badge variant="amber">Provedor não configurado</Badge> : (
+                    {costSettingsLoading ? <LoadingSkeleton className="h-7 w-12" /> : !emailProviderReady ? <Badge variant="amber">Provedor não configurado</Badge> : (
                       <button
                         type="button"
                         role="switch"
@@ -2658,10 +2658,9 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
                         aria-label="Enviar e-mails aos clientes"
                         disabled={savingPreference === "patientEmailsEnabled"}
                         onClick={() => void togglePatientEmails(!patientEmailsEnabled)}
-                        className={cn("relative flex h-6 w-24 shrink-0 items-center rounded-full border border-transparent text-[11px] font-semibold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60", patientEmailsEnabled ? "bg-success/10 text-success" : "bg-muted text-muted-foreground")}
+                        className={cn("relative flex h-7 w-12 shrink-0 items-center rounded-full transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60", patientEmailsEnabled ? "bg-[#34c759]" : "bg-[#e5e5ea]")}
                       >
-                        <span className={cn("absolute inset-y-0 flex w-full items-center transition-all duration-200", patientEmailsEnabled ? "justify-start pl-2.5" : "justify-end pr-2.5")}>{patientEmailsEnabled ? "Ativo" : "Desativado"}</span>
-                        <span aria-hidden="true" className={cn("absolute top-0.5 h-5 w-5 rounded-full shadow transition-all duration-200 ease-out", patientEmailsEnabled ? "left-[calc(100%-1.375rem)] bg-success" : "left-0.5 bg-muted-foreground/60")} />
+                        <span aria-hidden="true" className={cn("absolute top-0.5 h-6 w-6 rounded-full bg-white shadow-[0_2px_4px_rgba(0,0,0,0.25)] transition-all duration-200 ease-out", patientEmailsEnabled ? "left-[calc(100%-1.625rem)]" : "left-0.5")} />
                       </button>
                     )}
                   </div>
