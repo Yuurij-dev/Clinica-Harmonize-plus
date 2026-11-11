@@ -74,6 +74,7 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
   const [showPassword, setShowPassword] = useState(false);
   const [registerValues, setRegisterValues] = useState(initialRegisterValues);
   const [invalidFields, setInvalidFields] = useState<string[]>([]);
+  const [ruleShake, setRuleShake] = useState(0);
   const [error, setError] = useState(() => (googleStatus && googleStatus !== "signup" ? googleMessages[Object.hasOwn(googleMessages, googleStatus) ? googleStatus : "error"] : ""));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notice, setNotice] = useState("");
@@ -121,6 +122,7 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
     ].filter((field): field is string => Boolean(field));
     if (invalid.length) {
       setInvalidFields(invalid);
+      if (invalid.includes("password")) setRuleShake((tick) => tick + 1);
       setError(invalid[0] === "password" ? PASSWORD_RULE_MESSAGE : "Preencha os campos destacados.");
       // Rola ate o primeiro campo com erro, foca e faz o shake (mesmo padrao das outras telas).
       const first = `register-field-${invalid[0]}`;
@@ -185,7 +187,7 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
       ) : mode === "login" ? (
         <div className="mx-auto w-full max-w-[360px]"><LoginForm error={error} notice={notice} isSubmitting={isSubmitting} login={login} onLoginChange={setLogin} onPasswordChange={setPassword} onSubmit={handleLoginSubmit} password={password} setShowPassword={setShowPassword} showPassword={showPassword} /></div>
       ) : (
-        <RegisterForm error={error} isSubmitting={isSubmitting} onBack={openLogin} invalidFields={invalidFields} onChange={(field, value) => { setRegisterValues((current) => ({ ...current, [field]: value })); setInvalidFields((current) => current.filter((item) => item !== field)); }} onSubmit={handleRegisterSubmit} values={registerValues} setShowPassword={setShowPassword} showPassword={showPassword} />
+        <RegisterForm error={error} isSubmitting={isSubmitting} onBack={openLogin} invalidFields={invalidFields} ruleShake={ruleShake} onChange={(field, value) => { setRegisterValues((current) => ({ ...current, [field]: value })); setInvalidFields((current) => current.filter((item) => item !== field)); }} onSubmit={handleRegisterSubmit} values={registerValues} setShowPassword={setShowPassword} showPassword={showPassword} />
       )}
     </AuthShell>
   );
@@ -354,7 +356,7 @@ const strengthColors = ["bg-[#e5484d]", "bg-[#e5484d]", "bg-[#f5a524]", "bg-[#8b
 const strengthTextColors = ["text-[#7783a8]", "text-[#e5484d]", "text-[#d9890a]", "text-[#5b9e1f]", "text-[#16a34a]"];
 
 // Medidor de força e checklist da senha: regras compartilhadas com o servidor (password-rules).
-function PasswordStrength({ id, password }: { id: string; password: string }) {
+function PasswordStrength({ id, password, highlightMissing = false, shakeTick = 0 }: { id: string; password: string; highlightMissing?: boolean; shakeTick?: number }) {
   const { score, label } = passwordStrength(password);
   const checks = passwordChecks(password);
   return (
@@ -363,13 +365,13 @@ function PasswordStrength({ id, password }: { id: string; password: string }) {
       <p className="mt-1.5 text-[11px] font-bold text-[#2d3654]">Força da senha: <span className={strengthTextColors[score]}>{password ? label : "—"}</span></p>
       <div className="mt-3 rounded-[10px] border border-[#e6e8f1] bg-[#f8faff] px-4 py-3">
         <p className="text-[11px] font-bold text-[#2d3654]">Sua senha deve conter:</p>
-        <ul className="mt-2 space-y-1.5">{PASSWORD_RULE_LABELS.map(({ key, label: ruleLabel }) => <li className={`flex items-center gap-2 text-[11px] ${checks[key] ? "font-semibold text-[#16805d]" : "text-[#7783a8]"}`} key={key}>{checks[key] ? <Check aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[#16a34a]" /> : <Circle aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[#b5bdd2]" />}{ruleLabel}<span className="sr-only">{checks[key] ? " (cumprida)" : " (pendente)"}</span></li>)}</ul>
+        <ul className="mt-2 space-y-1.5">{PASSWORD_RULE_LABELS.map(({ key, label: ruleLabel }) => <li className={`flex items-center gap-2 text-[11px] ${checks[key] ? "font-semibold text-[#16805d]" : highlightMissing ? "font-semibold text-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]" : "text-[#7783a8]"}`} key={`${key}-${checks[key] || !highlightMissing ? 0 : shakeTick}`}>{checks[key] ? <Check aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[#16a34a]" /> : <Circle aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 ${highlightMissing ? "text-[#d92d20]" : "text-[#b5bdd2]"}`} />}{ruleLabel}<span className="sr-only">{checks[key] ? " (cumprida)" : " (pendente)"}</span></li>)}</ul>
       </div>
     </div>
   );
 }
 
-function RegisterForm({ error, invalidFields, isSubmitting, onBack, onChange, onSubmit, values, setShowPassword, showPassword }: { error: string; invalidFields: string[]; isSubmitting: boolean; onBack: () => void; onChange: (field: keyof RegisterValues, value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; values: RegisterValues; setShowPassword: (value: boolean) => void; showPassword: boolean }) {
+function RegisterForm({ error, invalidFields, ruleShake, isSubmitting, onBack, onChange, onSubmit, values, setShowPassword, showPassword }: { error: string; invalidFields: string[]; ruleShake: number; isSubmitting: boolean; onBack: () => void; onChange: (field: keyof RegisterValues, value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; values: RegisterValues; setShowPassword: (value: boolean) => void; showPassword: boolean }) {
   const strengthId = useId();
   return (
     <div className="mx-auto w-full max-w-[400px]">
@@ -380,7 +382,7 @@ function RegisterForm({ error, invalidFields, isSubmitting, onBack, onChange, on
         <TextField error={values.email.trim() ? "Informe um e-mail válido." : "Preencha o e-mail."} requiredMark fieldId="register-field-email" invalid={invalidFields.includes("email")} help="Enviaremos novidades e informações importantes." icon={Mail} label="E-mail" onChange={(value) => onChange("email", value)} placeholder="nome@dominio.com" type="email" value={values.email} autoComplete="email" />
         <div>
           <PasswordField describedBy={strengthId} requiredMark fieldId="register-field-password" invalid={invalidFields.includes("password")} label="Senha" onChange={(value) => onChange("password", value)} password={values.password} placeholder="Crie uma senha segura" setShowPassword={setShowPassword} showPassword={showPassword} touch />
-          <PasswordStrength id={strengthId} password={values.password} />
+          <PasswordStrength highlightMissing={ruleShake > 0} id={strengthId} password={values.password} shakeTick={ruleShake} />
         </div>
         {error ? <div role="alert"><ErrorMessage>{error}</ErrorMessage></div> : null}
         <div>
