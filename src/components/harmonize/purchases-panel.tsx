@@ -12,6 +12,7 @@ import { sendJson } from "@/lib/send-json";
 import { formatQuantity, parseQuantity, type StockKind, validateQuantity } from "@/lib/stock-rules";
 import { invalidateFinanceCache, paymentMethods } from "./finance-section";
 import { EmptyState } from "./shared";
+import { StockCatalogButton } from "./stock-catalog-picker";
 import { KindOptionGroups, StockKindBadge } from "./stock-kind";
 import { formatDateOnly, invalidateStockCache, type StockMaterial } from "./stock-shared";
 
@@ -137,7 +138,7 @@ function CancelPurchaseModal({ purchase, saving, onClose, onConfirm }: { purchas
 }
 
 // `initialProduct` pré-seleciona o item (ex.: logo após cadastrá-lo no Estoque).
-export function PurchaseFormModal({ materials, initialProduct, onClose, onSaved }: { materials: StockMaterial[]; initialProduct?: StockMaterial; onClose: () => void; onSaved: (message: string) => void }) {
+export function PurchaseFormModal({ materials: baseMaterials, initialProduct, onClose, onSaved }: { materials: StockMaterial[]; initialProduct?: StockMaterial; onClose: () => void; onSaved: (message: string) => void }) {
   const today = clinicToday();
   const [rows, setRows] = useState<ItemRow[]>([{ key: 0, productId: initialProduct?.id ?? "", lotCode: "", expiresOn: "", quantity: "", price: "" }]);
   const [nextKey, setNextKey] = useState(1);
@@ -145,6 +146,9 @@ export function PurchaseFormModal({ materials, initialProduct, onClose, onSaved 
   const [paid, setPaid] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Itens escolhidos do catálogo entram na lista na hora, sem sair da compra.
+  const [catalogItems, setCatalogItems] = useState<StockMaterial[]>([]);
+  const materials = useMemo(() => [...baseMaterials, ...catalogItems.filter((added) => !baseMaterials.some((material) => material.id === added.id))], [baseMaterials, catalogItems]);
 
   const totalCents = useMemo(() => rows.reduce((sum, row) => {
     const quantity = parseQuantity(row.quantity);
@@ -212,7 +216,9 @@ export function PurchaseFormModal({ materials, initialProduct, onClose, onSaved 
                       <option value="">Selecione um item</option>
                       <KindOptionGroups items={materials} label={(material) => `${material.name} (${material.unit})`} />
                     </select>
-                  </FormField></div>
+                  </FormField>
+                  <StockCatalogButton className="mt-2" onChosen={(product) => { setCatalogItems((current) => current.some((item) => item.id === product.id) ? current : [...current, product]); update(row.key, { productId: product.id }); }} />
+                  </div>
                   <Button type="button" variant="ghost" size="icon" aria-label="Remover item" disabled={rows.length === 1} onClick={() => setRows((current) => current.filter((item) => item.key !== row.key))}><Trash2 className="h-3.5 w-3.5" /></Button>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">

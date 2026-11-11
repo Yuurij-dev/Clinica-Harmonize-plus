@@ -15,9 +15,12 @@ export type StockMaterial = {
   hasMovements: boolean;
 };
 
+// Cache da lista do catálogo (marca "Já no estoque"): precisa ser invalidado junto com qualquer mudança de estoque.
+export const stockCatalogCacheKey = "/api/stock-catalog?limit=100";
+
 // Chaves de cache afetadas por qualquer mudança de material ou saldo.
 export function invalidateStockCache(productId?: string) {
-  invalidateClientCache("/api/products", ...(productId ? [`/api/products/${productId}`, `/api/products/${productId}/movements`] : []), "/api/quotes/options", "/api/stock/alerts", "/api/stock/pending");
+  invalidateClientCache("/api/products", stockCatalogCacheKey, ...(productId ? [`/api/products/${productId}`, `/api/products/${productId}/movements`] : []), "/api/quotes/options", "/api/stock/alerts", "/api/stock/pending");
 }
 
 export function formatDateOnly(value: string) {
