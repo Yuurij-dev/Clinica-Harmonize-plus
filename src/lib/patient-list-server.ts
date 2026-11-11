@@ -81,6 +81,16 @@ export async function withCurrentStage<T extends StagePatient>(clinicId: string,
   });
 }
 
+// Dados para preencher o formulário "Editar dados" (GET /api/patients/:id?form=edit). Sem auditLog, fotos nem dados clínicos
+// (alergias, medicações, notas de saúde); o CPF do cliente e do responsável são mascarados na rota para quem não vê o inteiro.
+export const patientEditSelect = {
+  name: true, cpf: true, phone: true, age: true, birthDate: true, email: true, socialName: true, sex: true, profession: true, referralSource: true,
+  postalCode: true, address: true, addressNumber: true, addressComplement: true, neighborhood: true, city: true, state: true,
+  emergencyContactName: true, emergencyContactPhone: true, emergencyContactRelationship: true,
+  legalGuardianName: true, legalGuardianCpf: true, legalGuardianPhone: true, legalGuardianRelationship: true,
+  careType: true, insuranceProvider: true, insuranceCardNumber: true, privacyConsentAt: true, whatsappReminders: true,
+} satisfies Prisma.PatientSelect;
+
 // Resposta do cadastro e da edição: campos da lista + data de nascimento (sem auditLog nem dados do responsável).
 export const patientCreatedSelect = {
   id: true, name: true, cpf: true, phone: true, age: true, sex: true, birthDate: true, status: true, manualJourneyStage: true,

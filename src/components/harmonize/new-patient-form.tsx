@@ -6,23 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
-import { formatCpf, formatDate, formatPhone } from "@/lib/input-masks";
-import { birthDateFromPtBr, fieldMaxLength, isMinorBirthDate, referralSources, relationshipOptions, sexOptions, PRIVACY_CONSENT_TEXT, validateRegistration, type RegistrationValues } from "@/lib/patient-registration-rules";
+import { formatCep, formatCpf, formatDate, formatPhone } from "@/lib/input-masks";
+import { isMaskedCpf } from "@/lib/patient-cpf-mask";
+import { emptyPatientFormValues, type PatientFormValues } from "@/lib/patient-update-rules";
+import { birthDateFromPtBr, fieldMaxLength, isMinorBirthDate, referralSources, relationshipOptions, sexOptions, PRIVACY_CONSENT_TEXT, validateRegistration } from "@/lib/patient-registration-rules";
 
-type Values = RegistrationValues & {
-  socialName: string; sex: string; profession: string; referralSource: string;
-  address: string; addressNumber: string; addressComplement: string; neighborhood: string; city: string; state: string;
-  emergencyContactName: string; emergencyContactRelationship: string;
-  whatsappReminders: boolean;
-};
-
-const initialValues: Values = {
-  name: "", birthDate: "", cpf: "", phone: "", email: "", postalCode: "", emergencyContactPhone: "",
-  legalGuardianName: "", legalGuardianCpf: "", legalGuardianPhone: "", legalGuardianRelationship: "",
-  careType: "Particular", insuranceProvider: "", insuranceCardNumber: "", privacyConsent: false,
-  socialName: "", sex: "", profession: "", referralSource: "", address: "", addressNumber: "", addressComplement: "", neighborhood: "", city: "", state: "",
-  emergencyContactName: "", emergencyContactRelationship: "", whatsappReminders: false,
-};
+type Values = PatientFormValues;
 
 type SectionId = "personal" | "address" | "emergency" | "insurance";
 // Qual seção recolhível contém cada campo validado (para abrir sozinha quando há erro).
@@ -32,22 +21,41 @@ const sectionOfField: Record<string, SectionId> = {
 
 export type NewPatientResult = { ok: true } | { ok: false; message: string; fields?: Record<string, string>; existingPatientId?: string };
 
-const formatCep = (value: string) => { const digits = value.replace(/\D/g, "").slice(0, 8); return digits.length > 5 ? `${digits.slice(0, 5)}-${digits.slice(5)}` : digits; };
-
 type TextOptions = { label: string; required?: boolean; format?: (value: string) => string; placeholder?: string; inputMode?: "numeric" | "tel" | "email" | "text"; maxLength?: number; autoComplete?: string; onValue?: (value: string) => void; type?: string };
 type TextKey = { [K in keyof Values]: Values[K] extends string ? K : never }[keyof Values];
 
-export function NewPatientForm({ saving, onSubmit, onCancel, onOpenExisting }: {
+const sectionHasData = (section: SectionId, values: Values) => ({
+  personal: [values.socialName, values.sex, values.profession, values.referralSource],
+  address: [values.postalCode, values.address, values.addressNumber, values.addressComplement, values.neighborhood, values.city, values.state],
+  emergency: [values.emergencyContactName, values.emergencyContactPhone, values.emergencyContactRelationship],
+  insurance: [values.careType === "Convênio" ? "x" : ""],
+})[section].some(Boolean);
+
+// Formulário único do cadastro ("create") e da edição de um cliente existente ("edit"): mesmos campos, seções e regras.
+// Na edição vêm preenchidos (initialValues), o CPF pode estar mascarado (maskedCpf: em branco = manter), o CPF não é
+// obrigatório e o aceite de privacidade é só exibido (consentAt), nunca pedido de novo.
+export function PatientForm({ saving, onSubmit, onCancel, onOpenExisting, mode = "create", initialValues, maskedCpf, consentAt }: {
   saving: boolean;
   onSubmit: (payload: Record<string, unknown>) => Promise<NewPatientResult>;
   onCancel: () => void;
-  onOpenExisting: (patientId: string) => void;
+  onOpenExisting?: (patientId: string) => void;
+  mode?: "create" | "edit";
+  initialValues?: Values;
+  maskedCpf?: string;
+  consentAt?: string | null;
 }) {
+  const editing = mode === "edit";
+  const validate = (next: Values) => {
+    const found = validateRegistration(editing ? { ...next, privacyConsent: true } : next, undefined, { editing });
+    // CPF do responsável mascarado (vindo do servidor) = manter o atual.
+    if (isMaskedCpf(next.legalGuardianCpf)) delete found.legalGuardianCpf;
+    return found;
+  };
   const uid = useId();
   const formRef = useRef<HTMLFormElement>(null);
-  const [values, setValues] = useState<Values>(initialValues);
+  const [values, setValues] = useState<Values>(initialValues ?? emptyPatientFormValues);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [open, setOpen] = useState<Set<SectionId>>(new Set());
+  const [open, setOpen] = useState<Set<SectionId>>(() => new Set(editing && initialValues ? (["personal", "address", "emergency", "insurance"] as SectionId[]).filter((section) => sectionHasData(section, initialValues)) : []));
   const [attempt, setAttempt] = useState<{ tick: number; fields: string[] }>({ tick: 0, fields: [] });
   const [serverError, setServerError] = useState<{ message: string; existingPatientId?: string } | null>(null);
   const [cepStatus, setCepStatus] = useState("");
@@ -76,7 +84,7 @@ export function NewPatientForm({ saving, onSubmit, onCancel, onOpenExisting }: {
   }, [attempt]);
 
   function revalidate(next: Values) {
-    const fresh = validateRegistration(next);
+    const fresh = validate(next);
     // Só atualiza o que já estava com erro: some ao corrigir, e deixa de aparecer o que ficou oculto (ex.: CPF após virar menor).
     setErrors((current) => Object.fromEntries(Object.keys(current).filter((key) => fresh[key]).map((key) => [key, fresh[key]])));
   }
@@ -89,7 +97,7 @@ export function NewPatientForm({ saving, onSubmit, onCancel, onOpenExisting }: {
   }
 
   function blur(name: string) {
-    const message = validateRegistration(values)[name];
+    const message = validate(values)[name];
     if (!message) return;
     setErrors((current) => ({ ...current, [name]: message }));
     if (!errors[name]) shake([name]);
@@ -110,7 +118,7 @@ export function NewPatientForm({ saving, onSubmit, onCancel, onOpenExisting }: {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const found = validateRegistration(values);
+    const found = validate(values);
     setErrors(found);
     setServerError(null);
     const fields = Object.keys(found);
@@ -119,7 +127,11 @@ export function NewPatientForm({ saving, onSubmit, onCancel, onOpenExisting }: {
       setAttempt((current) => ({ tick: current.tick + 1, fields }));
       return;
     }
-    const result = await onSubmit({ ...values });
+    const { privacyConsent, ...rest } = values;
+    void privacyConsent;
+    const payload: Record<string, unknown> = editing ? rest : { ...values };
+    if (editing && maskedCpf && !values.cpf) delete payload.cpf;
+    const result = await onSubmit(payload);
     if (result.ok) return;
     const serverFields = result.fields ?? {};
     if (Object.keys(serverFields).length) {
@@ -157,9 +169,9 @@ export function NewPatientForm({ saving, onSubmit, onCancel, onOpenExisting }: {
           {text("birthDate", { label: "Data de nascimento", required: true, format: formatDate, placeholder: "dd/mm/aaaa", inputMode: "numeric", maxLength: 10 })}
           <div className="space-y-2">
             <Label htmlFor={`${uid}-age`} className="text-xs font-medium text-foreground">Idade</Label>
-            <Input id={`${uid}-age`} readOnly tabIndex={-1} value={birth.ok ? birth.label : ""} placeholder="Calculada pela data" className="bg-muted/40" />
+            <Input id={`${uid}-age`} readOnly tabIndex={-1} value={birth.ok ? birth.label : ""} placeholder={editing ? "Informe a data de nascimento" : "Calculada pela data"} className="bg-muted/40" />
           </div>
-          {text("cpf", { label: "CPF", required: contactRequired, format: formatCpf, placeholder: "000.000.000-00", inputMode: "numeric", maxLength: 14 })}
+          {text("cpf", { label: "CPF", required: contactRequired && !editing, format: formatCpf, placeholder: maskedCpf ? `${maskedCpf} (em branco mantém)` : "000.000.000-00", inputMode: "numeric", maxLength: 14 })}
           {text("phone", { label: "Telefone / WhatsApp", required: contactRequired, format: formatPhone, placeholder: "(00) 00000-0000", inputMode: "tel", maxLength: 15, autoComplete: "tel" })}
           <div className="min-[521px]:col-span-2">{text("email", { label: "E-mail", type: "email", inputMode: "email", placeholder: "nome@email.com", autoComplete: "email" })}</div>
 
@@ -216,12 +228,14 @@ export function NewPatientForm({ saving, onSubmit, onCancel, onOpenExisting }: {
           </Section>
 
           <div className="space-y-3 min-[521px]:col-span-2">
-            <Field name="privacyConsent" label="" error={errors.privacyConsent} uid={uid}>{(a11y) => (
+            {editing ? (
+              <p className="text-xs leading-5 text-muted-foreground">{consentAt ? `Política de privacidade apresentada em ${new Date(consentAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" })}.` : "Aceite da política de privacidade não registrado."}</p>
+            ) : <Field name="privacyConsent" label="" error={errors.privacyConsent} uid={uid}>{(a11y) => (
               <label className="flex cursor-pointer items-start gap-2 text-xs leading-5 text-foreground">
                 <input {...a11y} type="checkbox" name="privacyConsent" checked={values.privacyConsent} onChange={(event) => setValue("privacyConsent", event.target.checked)} onBlur={() => blur("privacyConsent")} className="mt-0.5 h-4 w-4 accent-[#5147dc]" />
                 <span>{PRIVACY_CONSENT_TEXT}<span aria-hidden="true" className="ml-1 text-destructive">*</span></span>
               </label>
-            )}</Field>
+            )}</Field>}
             <label className="flex cursor-pointer items-start gap-2 text-xs leading-5 text-foreground">
               <input type="checkbox" name="whatsappReminders" checked={values.whatsappReminders} onChange={(event) => setValue("whatsappReminders", event.target.checked)} className="mt-0.5 h-4 w-4 accent-[#5147dc]" />
               <span>Aceita receber lembretes de consulta por WhatsApp.</span>
@@ -234,7 +248,7 @@ export function NewPatientForm({ saving, onSubmit, onCancel, onOpenExisting }: {
         {serverError ? (
           <p role="alert" className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[7px] border border-[#ffd7d7] bg-[#fff7f7] px-3 py-2 text-xs font-semibold text-[#b42318]">
             {serverError.message}
-            {serverError.existingPatientId ? <button type="button" className="underline underline-offset-2" onClick={() => onOpenExisting(serverError.existingPatientId!)}>Abrir cadastro existente</button> : null}
+            {serverError.existingPatientId && onOpenExisting ? <button type="button" className="underline underline-offset-2" onClick={() => onOpenExisting(serverError.existingPatientId!)}>Abrir cadastro existente</button> : null}
           </p>
         ) : null}
         <p aria-live="polite" className={cn("text-xs font-semibold text-[#b42318]", errorCount && "mb-2")}>{errorCount ? `${errorCount} ${errorCount === 1 ? "campo precisa" : "campos precisam"} de correção` : ""}</p>
@@ -242,7 +256,7 @@ export function NewPatientForm({ saving, onSubmit, onCancel, onOpenExisting }: {
           <p className="text-xs text-muted-foreground">* Campos obrigatórios</p>
           <div className="flex gap-2">
             <Button disabled={saving} type="button" variant="secondary" onClick={onCancel}>Cancelar</Button>
-            <Button disabled={saving} type="submit">{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{saving ? "Salvando..." : "Salvar cliente"}</Button>
+            <Button disabled={saving} type="submit">{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{saving ? "Salvando..." : editing ? "Salvar dados" : "Salvar cliente"}</Button>
           </div>
         </div>
       </footer>

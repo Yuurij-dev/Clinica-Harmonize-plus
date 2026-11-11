@@ -48,7 +48,7 @@ import {
   StatusBadge,
 } from "./shared";
 import { useCan, useCurrentRole } from "./current-user";
-import { NewPatientForm, type NewPatientResult } from "./new-patient-form";
+import { PatientForm, type NewPatientResult } from "./new-patient-form";
 import { PatientDetail } from "./patient-detail";
 import { useAnamnesisStartGate, type AnamnesisOpenMode } from "./anamnesis-start-gate";
 import { buildCustomerJourney } from "@/lib/customer-journey";
@@ -539,7 +539,7 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
         </div>
       </Modal>
       <Modal open={openCreate} onClose={onCreateClose} title="Novo cliente" description="Cadastre o cliente. O perfil poderá ser completado depois." panelClassName="max-w-2xl flex flex-col overflow-hidden" bodyClassName="flex min-h-0 flex-1 flex-col p-0 sm:p-0">
-        {openCreate ? <NewPatientForm saving={isSaving} onSubmit={savePatient} onCancel={onCreateClose} onOpenExisting={(id) => { onCreateClose(); setSelectedPatientName(id); router.push(`/clientes?patient=${encodeURIComponent(id)}`); }} /> : null}
+        {openCreate ? <PatientForm saving={isSaving} onSubmit={savePatient} onCancel={onCreateClose} onOpenExisting={(id) => { onCreateClose(); setSelectedPatientName(id); router.push(`/clientes?patient=${encodeURIComponent(id)}`); }} /> : null}
       </Modal>
     </div>
   );

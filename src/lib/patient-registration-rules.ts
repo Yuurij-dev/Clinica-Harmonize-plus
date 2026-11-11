@@ -102,7 +102,9 @@ export function isMinorBirthDate(birthDate: string, now = clinicReferenceDate())
 
 // Única fonte das regras do cadastro, usada pelo modal e pela API. Campo oculto (responsável, convênio) não é validado.
 // Devolve { campo: mensagem } só com o que está inválido.
-export function validateRegistration(values: RegistrationValues, now = clinicReferenceDate()): Record<string, string> {
+// `editing`: edição de cliente já cadastrado; o CPF deixa de ser obrigatório (cadastros antigos podem não ter) e o aceite de
+// privacidade não é exigido de novo.
+export function validateRegistration(values: RegistrationValues, now = clinicReferenceDate(), options: { editing?: boolean } = {}): Record<string, string> {
   const errors: Record<string, string> = {};
   const name = values.name.trim();
   if (!name) errors.name = "Informe o nome completo.";
@@ -114,7 +116,7 @@ export function validateRegistration(values: RegistrationValues, now = clinicRef
   const minor = birth.ok && birth.age < 18;
 
   const cpfFilled = values.cpf.replace(/\D/g, "").length > 0;
-  if (!minor && !cpfFilled) errors.cpf = "Informe o CPF do cliente.";
+  if (!minor && !cpfFilled && !options.editing) errors.cpf = "Informe o CPF do cliente.";
   else if (cpfFilled && !validCpf(values.cpf)) errors.cpf = "CPF inválido. Confira os números digitados.";
 
   if (!minor && !values.phone.replace(/\D/g, "")) errors.phone = "Informe o telefone ou WhatsApp.";
@@ -143,6 +145,6 @@ export function validateRegistration(values: RegistrationValues, now = clinicRef
     if (!values.insuranceProvider.trim()) errors.insuranceProvider = "Informe a operadora do convênio.";
     if (!values.insuranceCardNumber.trim()) errors.insuranceCardNumber = "Informe o número da carteirinha.";
   }
-  if (!values.privacyConsent) errors.privacyConsent = "Confirme que a política de privacidade foi apresentada.";
+  if (!values.privacyConsent && !options.editing) errors.privacyConsent = "Confirme que a política de privacidade foi apresentada.";
   return errors;
 }

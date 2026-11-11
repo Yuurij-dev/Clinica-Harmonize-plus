@@ -30,7 +30,6 @@ import { Card } from "@/components/ui/card";
 import { SlidingIndicator } from "@/components/ui/sliding-indicator";
 import { ScrollFade } from "@/components/ui/scroll-fade";
 import { AnimatedPage } from "./animated-page";
-import { MaskedInput } from "@/components/ui/masked-input";
 import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -48,9 +47,9 @@ import { useCan, useCurrentRole } from "./current-user";
 import { appointmentSlotError, appointmentWithinStartWindow, canRequestAppointmentStart, clinicNow, latestAppointmentStart, matchesProcedureAppointment } from "@/lib/clinic-time";
 import { mergePatientAppointments } from "@/lib/patient-appointments";
 import { FormField, fieldClassName } from "@/components/ui/modal";
-import { formatCpf, formatInteger, formatPhone } from "@/lib/input-masks";
 import { isMaskedCpf } from "@/lib/patient-cpf-mask";
-import { sexOptions } from "@/lib/patient-registration-rules";
+import { formValuesFromRecord, type PatientEditRecord } from "@/lib/patient-update-rules";
+import { PatientForm, type NewPatientResult } from "./new-patient-form";
 import { PatientOverview, PatientTreatments, type PatientJourneySummary } from "./patient-profile-views";
 import { ClinicTimePicker } from "./clinic-time-picker";
 import { clinicDateKey, type EncounterItem } from "@/lib/clinical-record-rules";
@@ -683,69 +682,61 @@ export function PatientDetail({
   );
 }
 
-// Edição dos dados cadastrais (antes na sub-aba "Dados"); agora um modal aberto pelo cabeçalho.
+// Edição dos dados cadastrais (antes na sub-aba "Dados"); modal aberto pelo cabeçalho. Usa o mesmo formulário do "Novo cliente",
+// preenchido com GET /api/patients/:id?form=edit (a lista só traz o resumo do cliente).
 function PatientEditModal({ patient, open, onClose, onUpdated }: { patient: Patient; open: boolean; onClose: () => void; onUpdated: (patient: Patient) => void }) {
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [invalidFields, setInvalidFields] = useState<Set<string>>(new Set());
-  const cpfMasked = isMaskedCpf(patient.cpf);
+  // `loaded` guarda de qual cliente e de qual carga veio o registro; o formulário só monta com dados do cliente atual.
+  const [loaded, setLoaded] = useState<{ patientId: string; seq: number; data: PatientEditRecord } | null>(null);
+  const record = loaded && loaded.patientId === patient.id ? loaded.data : null;
+  const [loadError, setLoadError] = useState("");
+  const [reloadToken, setReloadToken] = useState(0);
 
-  async function savePatient(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const name = String(form.get("name") ?? "").trim();
-    const cpf = String(form.get("cpf") ?? "").trim();
-    const phone = String(form.get("phone") ?? "").trim();
-    const age = Number(form.get("age"));
-    const sex = String(form.get("sex") ?? "");
-    const nextInvalidFields = new Set<string>();
-    if (!name) nextInvalidFields.add("name");
-    if (cpf && cpf.replace(/\D/g, "").length !== 11) nextInvalidFields.add("cpf");
-    if (!phone) nextInvalidFields.add("phone");
-    if (!Number.isInteger(age) || age < 0 || age > 130) nextInvalidFields.add("age");
-    if (nextInvalidFields.size) {
-      setInvalidFields(nextInvalidFields);
-      setError(nextInvalidFields.has("cpf") ? "Informe um CPF válido com 11 números." : "Revise os campos destacados antes de salvar.");
-      window.setTimeout(() => setInvalidFields(new Set()), 450);
-      return;
-    }
+  useEffect(() => {
+    if (!open || !patient.id) return;
+    let cancelled = false;
+    const patientId = patient.id;
+    getCachedJson<{ patient: PatientEditRecord }>(`/api/patients/${encodeURIComponent(patient.id)}?form=edit`)
+      .then((data) => { if (!cancelled) { setLoaded((current) => ({ patientId, seq: (current?.seq ?? 0) + 1, data: data.patient })); setLoadError(""); } })
+      .catch(() => { if (!cancelled) setLoadError("Não foi possível carregar os dados do cliente."); });
+    return () => { cancelled = true; };
+  }, [open, patient.id, reloadToken]);
+
+  async function save(payload: Record<string, unknown>): Promise<NewPatientResult> {
     setSaving(true);
-    setError("");
     try {
-      // CPF mascarado (recepção): campo vazio = manter o atual, então não enviamos o CPF.
-      const keepCpf = cpfMasked && !cpf;
-      const response = await fetch(`/api/patients/${patient.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, ...(keepCpf ? {} : { cpf }), phone, age, sex }) });
-      const data = await response.json().catch(() => null) as { patient?: Patient; message?: string } | null;
+      const response = await fetch(`/api/patients/${patient.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const data = await response.json().catch(() => null) as { patient?: { name: string; cpf: string | null; phone: string; age: number; sex: string | null }; message?: string; fields?: Record<string, string> } | null;
       if (!response.ok || !data?.patient) {
-        setError(data?.message ?? "Não foi possível atualizar os dados.");
-        if (response.status === 409 || data?.message?.toLowerCase().includes("cpf")) {
-          setInvalidFields(new Set(["cpf"]));
-          window.setTimeout(() => setInvalidFields(new Set()), 450);
-        }
-        return;
+        const message = data?.message ?? "Não foi possível atualizar os dados.";
+        return { ok: false, message, fields: data?.fields ?? (response.status === 409 ? { cpf: message } : undefined) };
       }
-      onUpdated({ ...patient, ...data.patient });
+      const { name, cpf, phone, age, sex } = data.patient;
+      onUpdated({ ...patient, name, cpf: cpf ?? "", phone, age, sex });
+      // Só depois do sucesso: lista de clientes, registro individual (inclui ?form=edit) e histórico.
       invalidateClientCache("/api/patients", `/api/patients/${patient.id}`, `/api/patients/${patient.id}/history`);
+      setLoaded(null);
       toast.success("Dados atualizados.");
       onClose();
+      return { ok: true };
     } catch {
-      setError("Não foi possível atualizar os dados. Verifique a conexão.");
+      return { ok: false, message: "Não foi possível atualizar os dados. Verifique a conexão." };
     } finally {
       setSaving(false);
     }
   }
 
+  // Fechar sem salvar descarta o registro carregado: ao reabrir sempre se busca de novo.
+  const closeModal = () => { setLoaded(null); onClose(); };
+  const cpfMasked = isMaskedCpf(record?.cpf);
   return (
-    <Modal open={open} onClose={() => { if (!saving) { setError(""); onClose(); } }} title="Editar dados" description={`Atualize os dados cadastrais de ${patient.name}.`}>
-      <form className="grid gap-4 sm:grid-cols-2" noValidate onSubmit={savePatient} key={`${patient.id}-${open}`}>
-        <FormField label="Nome"><input className={cn(fieldClassName, invalidFields.has("name") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} name="name" defaultValue={patient.name} required /></FormField>
-        <FormField label="CPF"><MaskedInput className={cn(fieldClassName, invalidFields.has("cpf") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={formatCpf} name="cpf" inputMode="numeric" maxLength={14} placeholder={cpfMasked ? `${patient.cpf} (em branco mantém)` : "000.000.000-00"} defaultValue={cpfMasked ? "" : patient.cpf ?? ""} /></FormField>
-        <FormField label="Telefone"><MaskedInput className={cn(fieldClassName, invalidFields.has("phone") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={formatPhone} name="phone" inputMode="tel" maxLength={15} placeholder="(00) 00000-0000" defaultValue={patient.phone} required /></FormField>
-        <FormField label="Idade"><MaskedInput className={cn(fieldClassName, invalidFields.has("age") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={(value) => formatInteger(value, 3)} name="age" inputMode="numeric" maxLength={3} defaultValue={String(patient.age)} required /></FormField>
-        <FormField label="Sexo"><select className={fieldClassName} name="sex" defaultValue={patient.sex ?? ""}><option value="">Não informado</option>{sexOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></FormField>
-        {error ? <p role="alert" className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{error}</p> : null}
-        <div className="flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" disabled={saving} onClick={() => { setError(""); onClose(); }}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{saving ? "Salvando..." : "Salvar dados"}</Button></div>
-      </form>
+    <Modal open={open} onClose={() => { if (!saving) closeModal(); }} title="Editar dados" description={`Atualize os dados cadastrais de ${patient.name}.`} panelClassName="max-w-2xl flex flex-col overflow-hidden" bodyClassName="flex min-h-0 flex-1 flex-col p-0 sm:p-0">
+      {record ? (
+        <PatientForm key={`${patient.id}-${loaded?.seq}`} mode="edit" saving={saving} onSubmit={save} onCancel={closeModal} maskedCpf={cpfMasked ? record.cpf ?? undefined : undefined} consentAt={record.privacyConsentAt ? String(record.privacyConsentAt) : null}
+          initialValues={{ ...formValuesFromRecord(record), cpf: cpfMasked ? "" : record.cpf ?? "" }} />
+      ) : loadError ? (
+        <div className="space-y-3 p-6"><p role="alert" className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318]">{loadError}</p><div className="flex justify-end gap-2"><Button type="button" variant="secondary" onClick={closeModal}>Fechar</Button><Button type="button" onClick={() => { setLoadError(""); setReloadToken((token) => token + 1); }}>Tentar novamente</Button></div></div>
+      ) : <div className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Carregando dados...</div>}
     </Modal>
   );
 }

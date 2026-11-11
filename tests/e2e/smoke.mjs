@@ -5008,8 +5008,8 @@ async function patientSex() {
   check("Sexo: GET devolve Feminino", r.status === 200 && r.data.patient?.sex === "Feminino", JSON.stringify(r.data).slice(0, 120));
   r = await api("PATCH", `/api/patients/${p.id}`, { name: `Sexo M ${run}`, phone: "11999990065", age: 31, sex: "Masculino" });
   const g = await api("GET", `/api/patients/${p.id}`);
-  check("Sexo: PATCH com Masculino persiste", r.status === 200 && g.data.patient?.sex === "Masculino" && g.data.patient?.name === `Sexo M ${run}` && g.data.patient?.age === 31, `${r.status} ${g.data.patient?.sex}`);
-  r = await api("PATCH", `/api/patients/${p.id}`, { name: `Sexo M2 ${run}`, phone: "11999990065", age: 32 });
+  check("Sexo: PATCH com Masculino persiste", r.status === 200 && g.data.patient?.sex === "Masculino" && g.data.patient?.name === `Sexo M ${run}`, `${r.status} ${g.data.patient?.sex}`);
+  r = await api("PATCH", `/api/patients/${p.id}`, { name: `Sexo Mb ${run}`, phone: "11999990065", age: 32 });
   check("Sexo: PATCH sem o campo mantém o valor", r.status === 200 && (await dbSex(p.id)) === "Masculino", `${r.status} ${await dbSex(p.id)}`);
   r = await api("PATCH", `/api/patients/${p.id}`, { name: `Sexo X ${run}`, phone: "11999990065", age: 32, sex: "X" });
   check("Sexo: PATCH com X dá 400 e não altera", r.status === 400 && (await dbSex(p.id)) === "Masculino", `${r.status} ${await dbSex(p.id)}`);
@@ -5019,7 +5019,7 @@ async function patientSex() {
   r = await api("POST", "/api/patients", { ...base(), name: `Sexo N ${run}` });
   const n = r.data.patient;
   const g3 = await api("GET", `/api/patients/${n?.id}`);
-  const pr = await api("PATCH", `/api/patients/${n?.id}`, { name: `Sexo N2 ${run}`, phone: "11999990064", age: 33 });
+  const pr = await api("PATCH", `/api/patients/${n?.id}`, { name: `Sexo Nb ${run}`, phone: "11999990064", age: 33 });
   check("Sexo: paciente sem sex vem null e PATCH sem sex funciona", r.status === 201 && g3.data.patient?.sex === null && pr.status === 200 && (await dbSex(n.id)) === null, `${r.status} ${g3.data.patient?.sex} ${pr.status}`);
 }
 
@@ -5076,11 +5076,11 @@ async function patientCpfMask() {
     check("CPF (máscara): no banco o CPF original foi mantido após os PATCH do STAFF, mas nome/idade mudaram", digits(stored.cpf) === cpf && stored.name === `${nameKey} D` && stored.age === 36, `${JSON.stringify(stored)} esperado=${cpf}`);
     const fresh = randomCpf();
     const staffNew = await withSession(staff.cookie, () => api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36, cpf: fresh }));
-    check("CPF (máscara): STAFF consegue informar um CPF completo novo (e vê mascarado)", staffNew.status === 200 && staffNew.data.patient?.cpf === `***.***.***-${fresh.slice(-2)}` && (await prisma.patient.findUnique({ where: { id: target.id }, select: { cpf: true } })).cpf === fresh, `${staffNew.status} ${staffNew.data.patient?.cpf}`);
+    check("CPF (máscara): STAFF consegue informar um CPF completo novo (e vê mascarado)", staffNew.status === 200 && staffNew.data.patient?.cpf === `***.***.***-${fresh.slice(-2)}` && (await prisma.patient.findUnique({ where: { id: target.id }, select: { cpf: true } })).cpf?.replace(/[^0-9]/g, "") === fresh, `${staffNew.status} ${staffNew.data.patient?.cpf}`);
     r = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36, cpf });
     check("CPF (máscara): ADMIN volta ao CPF original e vê completo", r.status === 200 && digits(r.data.patient?.cpf) === cpf, `${r.status} ${r.data.patient?.cpf}`);
     r = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36, cpf: masked });
-    check("CPF (máscara): ADMIN enviando CPF mascarado não grava o valor mascarado", r.status === 200 && (await prisma.patient.findUnique({ where: { id: target.id }, select: { cpf: true } })).cpf?.replace(/D/g, "") === cpf, r.status);
+    check("CPF (máscara): ADMIN enviando CPF mascarado não grava o valor mascarado", r.status === 200 && (await prisma.patient.findUnique({ where: { id: target.id }, select: { cpf: true } })).cpf?.replace(/[^0-9]/g, "") === cpf, r.status);
     r = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36 });
     check("CPF (máscara): ADMIN sem cpf no PATCH mantém o CPF", r.status === 200 && digits(r.data.patient?.cpf) === cpf);
     r = await api("PATCH", `/api/patients/${target.id}`, { name: `${nameKey} D`, phone: "11999990077", age: 36, cpf: "" });
@@ -8199,7 +8199,252 @@ async function security2fa() {
   }
 }
 
+// Editar dados do cliente: PATCH /api/patients/:id (todos os campos do cadastro) e GET /api/patients/:id?form=edit.
+async function editPatientData() {
+  const ptBr = (d) => `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+  const now = new Date();
+  const yearsAgo = (n) => new Date(now.getFullYear() - n, now.getMonth(), now.getDate() - 10);
+  const digits = (value) => String(value ?? "").replace(/[^0-9]/g, "");
+  const fmtCpf = (c) => `${c.slice(0, 3)}.${c.slice(3, 6)}.${c.slice(6, 9)}-${c.slice(9)}`;
+  const maskOf = (c) => `***.***.***-${c.slice(-2)}`;
+  const staffEmail = `e2e-staff-edit-${run}@example.com`;
+  const staffPassword = `E2e-${run}-Staff9!`;
+  const otherMail = `e2e-edit-b-${run}@example.com`;
+  const otherPass = `Edit-${run}-Aa1!`;
+  const otherClinicName = `zz Edit ${run}`;
+  const nm = (s) => `zz Edit ${s} ${run}`;
+  const mineWhere = { name: { startsWith: "zz Edit ", endsWith: ` ${run}` } };
+  const membership = await prisma.clinicMembership.findFirst({ where: { user: { email } }, select: { clinicId: true, clinic: { select: { rolePermissions: true } } } });
+  const savedMatrix = membership.clinic.rolePermissions;
+  let team = null;
+  try {
+    const cpf = randomCpf();
+    let r = await api("POST", "/api/patients", { ...regDefaults, name: nm("base"), phone: "11999990201", cpf, email: `edit-${run}@example.invalid`, sex: "Feminino" });
+    const p = r.data.patient;
+    if (r.status !== 201) { check("Editar dados: paciente base criado", false, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`); return; }
+    const url = `/api/patients/${p.id}`;
+    const form = async () => (await api("GET", `${url}?form=edit`)).data.patient;
+    const db = () => prisma.patient.findUnique({ where: { id: p.id } });
+    const beforeDb = await db();
+
+    // 1. corpo antigo
+    r = await api("PATCH", url, { name: nm("antigo"), cpf, phone: "11999990202", age: 41, sex: "Feminino" });
+    check("Editar dados: corpo antigo {name,cpf,phone,age,sex} responde 200, grava nome/telefone e ignora age (registro já tem birthDate)", r.status === 200 && r.data.patient?.name === nm("antigo") && r.data.patient?.age === beforeDb.age && r.data.patient?.phone === "(11) 99999-0202", `${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+    let f = await form();
+    check("Editar dados: corpo antigo não apagou e-mail nem data de nascimento", f?.email === `edit-${run}@example.invalid` && String(f?.birthDate).startsWith("1990-01-10"), JSON.stringify({ e: f?.email, b: f?.birthDate }));
+    r = await api("PATCH", url, { age: 200 });
+    check("Editar dados: age:200 com birthDate no registro é ignorado (200, idade segue derivada)", r.status === 200 && (await db()).age === beforeDb.age, `${r.status} ${JSON.stringify(r.data)}`);
+    const noBirth = await prisma.patient.create({ data: { clinicId: membership.clinicId, name: nm("semdata"), phone: "(11) 99999-0210", age: 20 } });
+    r = await api("PATCH", `/api/patients/${noBirth.id}`, { age: 200 });
+    check("Editar dados: age:200 em paciente sem birthDate = 400", r.status === 400, r.status);
+    r = await api("PATCH", `/api/patients/${noBirth.id}`, { age: 45 });
+    check("Editar dados: age:45 em paciente sem birthDate grava", r.status === 200 && (await prisma.patient.findUnique({ where: { id: noBirth.id } })).age === 45, r.status);
+    r = await api("PATCH", url, { sex: "Marciano" });
+    check("Editar dados: sexo inválido = 400", r.status === 400, r.status);
+
+    // 2. parcial
+    r = await api("PATCH", url, { city: "Campinas" });
+    f = await form();
+    check("Editar dados: parcial só com city responde 200 e preserva o resto", r.status === 200 && f.city === "Campinas" && f.name === nm("antigo") && f.age === beforeDb.age && digits(f.cpf) === cpf && f.email === `edit-${run}@example.invalid` && f.phone === "(11) 99999-0202", `${r.status} ${JSON.stringify(f).slice(0, 250)}`);
+    r = await api("PATCH", url, {});
+    check("Editar dados: corpo vazio {} responde 200 sem mudar nada", r.status === 200 && (await form()).city === "Campinas", `${r.status} ${JSON.stringify(r.data)}`);
+    for (const bodyRaw of [null, [1], "x"]) {
+      const resp = await fetch(`${baseUrl}${url}`, { method: "PATCH", headers: { "Content-Type": "application/json", cookie }, body: JSON.stringify(bodyRaw) });
+      check(`Editar dados: corpo ${JSON.stringify(bodyRaw)} = 400`, resp.status === 400, resp.status);
+    }
+
+    // 3. todos os campos novos
+    const full = {
+      name: nm("completo"), birthDate: ptBr(yearsAgo(35)), phone: "(11) 98888-7777", email: `Novo-${run}@Example.Invalid`, socialName: "Nome Social", sex: "Feminino", profession: "Designer", referralSource: "Instagram",
+      postalCode: "13010-000", address: "Rua das Flores", addressNumber: "123", addressComplement: "Apto 4", neighborhood: "Centro", city: "Campinas", state: "sp",
+      emergencyContactName: "Contato Emerg", emergencyContactPhone: "11977776666", emergencyContactRelationship: "Irmã", whatsappReminders: true,
+      careType: "Convênio", insuranceProvider: "Operadora E2E", insuranceCardNumber: "99887766",
+    };
+    r = await api("PATCH", url, full);
+    check("Editar dados: todos os campos novos respondem 200", r.status === 200, `${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+    f = await form();
+    const expectedForm = { name: nm("completo"), phone: "(11) 98888-7777", email: `novo-${run}@example.invalid`, socialName: "Nome Social", sex: "Feminino", profession: "Designer", referralSource: "Instagram", postalCode: "13010000", address: "Rua das Flores", addressNumber: "123", addressComplement: "Apto 4", neighborhood: "Centro", city: "Campinas", state: "SP", emergencyContactName: "Contato Emerg", emergencyContactPhone: "(11) 97777-6666", emergencyContactRelationship: "Irmã", whatsappReminders: true, careType: "Convênio", insuranceProvider: "Operadora E2E", insuranceCardNumber: "99887766" };
+    const diffs = Object.entries(expectedForm).filter(([k, v]) => f[k] !== v).map(([k, v]) => `${k}: ${JSON.stringify(f[k])} != ${JSON.stringify(v)}`);
+    check("Editar dados: GET ?form=edit devolve todos os campos gravados (normalizados)", diffs.length === 0, diffs.join("; "));
+    r = await api("GET", `${url}`);
+    check("Editar dados: GET do paciente reflete nome e idade novos", r.data.patient?.name === nm("completo") && r.data.patient?.age === 35, `${r.data.patient?.name} ${r.data.patient?.age}`);
+    r = await api("GET", "/api/patients?q=" + encodeURIComponent(nm("completo")));
+    check("Editar dados: lista de pacientes traz o nome novo", r.data.patients?.some((x) => x.id === p.id), r.status);
+
+    // 4. idade derivada
+    r = await api("PATCH", url, { birthDate: ptBr(yearsAgo(35)), age: 99 });
+    check("Editar dados: idade derivada da birthDate (35, mesmo enviando age 99 junto)", r.status === 200 && (await db()).age === 35, `${r.status} ${(await db()).age}`);
+    for (const [label, value] of [["data futura", ptBr(new Date(now.getFullYear() + 1, 0, 10))], ["31/02", "31/02/1990"], ["texto", "abc"], ["formato ISO", "1990-01-10"], ["ano 1800", "01/01/1800"]]) {
+      const before = (await db()).birthDate?.toISOString();
+      r = await api("PATCH", url, { birthDate: value });
+      check(`Editar dados: birthDate ${label} = 400 e nada muda`, r.status === 400 && (await db()).birthDate?.toISOString() === before, `${r.status} ${r.data?.message}`);
+    }
+
+    // 5. menor e responsável
+    const guardian = { legalGuardianName: "zz Edit Responsavel", legalGuardianCpf: randomCpf(), legalGuardianPhone: "11966665555", legalGuardianRelationship: "Mãe" };
+    const minorBirth = ptBr(yearsAgo(8));
+    r = await api("PATCH", url, { birthDate: minorBirth });
+    check("Editar dados: virar menor sem responsável = 400 com fields", r.status === 400 && r.data.fields && Object.keys(r.data.fields).some((k) => k.startsWith("legalGuardian")), `${r.status} ${JSON.stringify(r.data)}`);
+    r = await api("PATCH", url, { birthDate: minorBirth, ...guardian, legalGuardianCpf: "" });
+    check("Editar dados: menor com responsável sem CPF = 400", r.status === 400, r.status);
+    r = await api("PATCH", url, { birthDate: minorBirth, ...guardian, legalGuardianRelationship: "" });
+    check("Editar dados: menor com responsável sem parentesco = 400", r.status === 400, r.status);
+    const afterBad = await db();
+    check("Editar dados: tentativas inválidas de menor não gravaram nada", afterBad.age === 35 && afterBad.legalGuardianName === null, JSON.stringify({ a: afterBad.age, g: afterBad.legalGuardianName }));
+    r = await api("PATCH", url, { birthDate: minorBirth, ...guardian });
+    f = await form();
+    check("Editar dados: menor com os 4 dados do responsável = 200 e age 8", r.status === 200 && f.age === 8 && f.legalGuardianName === "zz Edit Responsavel" && digits(f.legalGuardianCpf) === guardian.legalGuardianCpf && f.legalGuardianPhone === "(11) 96666-5555" && f.legalGuardianRelationship === "Mãe", `${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+    check("Editar dados: resposta do PATCH não vaza dados do responsável nem auditLog", !JSON.stringify(r.data).includes(guardian.legalGuardianCpf) && !("auditLog" in (r.data.patient ?? {})) && !("legalGuardianName" in (r.data.patient ?? {})), Object.keys(r.data.patient ?? {}).join(","));
+    r = await api("PATCH", url, { legalGuardianName: "Outro Nome" });
+    check("Editar dados: legalGuardian* sem birthDate = 400 com fields e não grava", r.status === 400 && r.data.fields?.legalGuardianName && (await form()).legalGuardianName === "zz Edit Responsavel", `${r.status} ${JSON.stringify(r.data)}`);
+    r = await api("PATCH", url, { city: "Santos" });
+    check("Editar dados: PATCH sem birthDate não mexe no responsável", r.status === 200 && (await form()).legalGuardianName === "zz Edit Responsavel", r.status);
+    r = await api("PATCH", url, { birthDate: ptBr(yearsAgo(30)) });
+    f = await form();
+    check("Editar dados: virar maior apaga todos os dados do responsável", r.status === 200 && f.age === 30 && !f.legalGuardianName && !f.legalGuardianCpf && !f.legalGuardianPhone && !f.legalGuardianRelationship, JSON.stringify({ s: r.status, f }).slice(0, 300));
+    r = await api("PATCH", url, { birthDate: ptBr(yearsAgo(30)), ...guardian });
+    check("Editar dados: maior enviando responsável não grava responsável", r.status === 200 && !(await form()).legalGuardianName, r.status);
+
+    // 6. convênio x particular
+    r = await api("PATCH", url, { careType: "Convênio", insuranceProvider: "", insuranceCardNumber: "" });
+    check("Editar dados: Convênio sem operadora/carteirinha = 400", r.status === 400, `${r.status} ${r.data?.message}`);
+    r = await api("PATCH", url, { careType: "Convênio", insuranceProvider: "Op", insuranceCardNumber: "" });
+    check("Editar dados: Convênio sem carteirinha = 400", r.status === 400, r.status);
+    r = await api("PATCH", url, { careType: "Convênio", insuranceProvider: "Op X", insuranceCardNumber: "555" });
+    f = await form();
+    check("Editar dados: Convênio completo grava operadora e carteirinha", r.status === 200 && f.careType === "Convênio" && f.insuranceProvider === "Op X" && f.insuranceCardNumber === "555", JSON.stringify(f).slice(0, 200));
+    r = await api("PATCH", url, { careType: "Particular", insuranceProvider: "Op X", insuranceCardNumber: "555" });
+    f = await form();
+    check("Editar dados: Particular limpa operadora e carteirinha", r.status === 200 && f.careType === "Particular" && f.insuranceProvider === null && f.insuranceCardNumber === null, JSON.stringify({ c: f.careType, p: f.insuranceProvider, n: f.insuranceCardNumber }));
+
+    // 7. validações
+    for (const [label, extra] of [["e-mail sem @", { email: "naoemail" }], ["e-mail com espaço", { email: "a b@example.invalid" }], ["CPF com dígito errado", { cpf: cpf.slice(0, 10) + String((Number(cpf[10]) + 1) % 10) }], ["CPF repetido 111", { cpf: "111.111.111-11" }], ["telefone DDD 00", { phone: "00999990101" }], ["telefone vazio", { phone: "" }], ["nome vazio", { name: "" }], ["nome com número", { name: "Fulano 123" }]]) {
+      const snap = await db();
+      r = await api("PATCH", url, extra);
+      const after = await db();
+      check(`Editar dados: ${label} = 400 e nada muda`, r.status === 400 && after.email === snap.email && after.cpf === snap.cpf && after.phone === snap.phone && after.name === snap.name, `${r.status} ${r.data?.message}`);
+    }
+    for (const key of ["address", "city", "profession", "socialName", "referralSource", "neighborhood", "addressComplement", "emergencyContactName"]) {
+      r = await api("PATCH", url, { [key]: "x".repeat(201) });
+      check(`Editar dados: ${key} com 201 caracteres = 400`, r.status === 400, `${r.status} ${r.data?.message}`);
+    }
+    r = await api("PATCH", url, { address: "x".repeat(200) });
+    check("Editar dados: texto com exatamente 200 caracteres é aceito", r.status === 200, r.status);
+    r = await api("PATCH", url, { address: "", profession: "  " });
+    f = await form();
+    check("Editar dados: texto vazio limpa o campo (null)", r.status === 200 && f.address === null && f.profession === null, JSON.stringify({ a: f.address, p: f.profession }));
+    r = await api("PATCH", url, { email: "" });
+    check("Editar dados: e-mail vazio limpa o e-mail", r.status === 200 && (await form()).email === null, r.status);
+
+    // 8. CPF duplicado e isolamento por clínica
+    const cpf2 = randomCpf();
+    r = await api("POST", "/api/patients", { ...regDefaults, name: nm("outro"), phone: "11999990203", cpf: cpf2 });
+    const p2 = r.data.patient;
+    r = await api("PATCH", url, { cpf: cpf2 });
+    check("Editar dados: CPF de outro paciente da mesma clínica = 409", r.status === 409, `${r.status} ${JSON.stringify(r.data)}`);
+    check("Editar dados: 409 não alterou o CPF", digits((await db()).cpf) === cpf, (await db()).cpf);
+    r = await api("PATCH", url, { cpf });
+    check("Editar dados: reenviar o próprio CPF não dá 409", r.status === 200, r.status);
+    r = await api("PATCH", url, { cpf: fmtCpf(cpf) });
+    check("Editar dados: próprio CPF já formatado também é aceito", r.status === 200, r.status);
+    const [d1, d2] = await Promise.all([api("PATCH", `/api/patients/${p2.id}`, { cpf }), api("PATCH", `/api/patients/${p2.id}`, { cpf })]);
+    check("Editar dados: clique duplo com CPF duplicado não grava (ambos 409)", d1.status === 409 && d2.status === 409 && digits((await prisma.patient.findUnique({ where: { id: p2.id } })).cpf) === cpf2, `${d1.status}/${d2.status}`);
+
+    // 9. mass assignment e consentimento
+    const snapDb = await db();
+    const mass = await api("PATCH", url, { city: "Mass", clinicId: "outra", id: "x", status: "Inativo", privacyConsentAt: "2000-01-01T00:00:00Z", privacyConsent: false, totalValue: 999999, manualJourneyStage: "Pós", auditLog: [{ x: 1 }], createdAt: "2000-01-01T00:00:00Z", lastVisit: "2000-01-01", nextReturn: "2030-01-01", chiefComplaint: "hack" });
+    const afterMass = await db();
+    const changedKeys = ["id", "clinicId", "status", "privacyConsentAt", "totalValue", "manualJourneyStage", "createdAt", "lastVisit", "nextReturn"].filter((k) => JSON.stringify(afterMass[k]) !== JSON.stringify(snapDb[k]));
+    check("Editar dados: mass assignment (clinicId, id, status, privacyConsentAt, totalValue...) não muda nada", mass.status === 200 && changedKeys.length === 0 && afterMass.city === "Mass" && JSON.stringify(afterMass.auditLog) === JSON.stringify(snapDb.auditLog), `${mass.status} mudou: ${changedKeys.join(",")}`);
+    check("Editar dados: privacyConsent:false no corpo é ignorado (aceite continua)", afterMass.privacyConsentAt !== null && JSON.stringify(afterMass.privacyConsentAt) === JSON.stringify(beforeDb.privacyConsentAt), String(afterMass.privacyConsentAt));
+    check("Editar dados: paciente continua na clínica de teste", afterMass.clinicId === membership.clinicId);
+    r = await api("GET", `${url}?form=edit`);
+    check("Editar dados: ?form=edit não traz auditLog, id, status nem valores financeiros", r.status === 200 && !["auditLog", "id", "clinicId", "status", "totalValue"].some((k) => k in r.data.patient), Object.keys(r.data.patient ?? {}).join(","));
+    r = await api("PATCH", "/api/patients/nao-e-um-id", { city: "X" });
+    check("Editar dados: id inválido = 404 no PATCH", r.status === 404, r.status);
+    r = await api("GET", "/api/patients/nao-e-um-id?form=edit");
+    check("Editar dados: id inválido = 404 no GET ?form=edit", r.status === 404, r.status);
+
+    // 10. sem sessão
+    const anon = await withSession("", async () => ({ g: await api("GET", `${url}?form=edit`), p: await api("PATCH", url, { city: "Anon" }) }));
+    check("Editar dados: sem login = 401 no GET ?form=edit e no PATCH", anon.g.status === 401 && anon.p.status === 401, `${anon.g.status}/${anon.p.status}`);
+
+    // 11. CPF mascarado (STAFF sem cpf-full) e permissão patients:manage
+    const gCpf = randomCpf();
+    r = await api("PATCH", url, { cpf, birthDate: minorBirth, legalGuardianName: "zz Edit Responsavel", legalGuardianCpf: gCpf, legalGuardianPhone: "11966665555", legalGuardianRelationship: "Pai", city: "Mass" });
+    check("Editar dados: preparo do menor com responsável para o teste do STAFF", r.status === 200, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
+    r = await api("GET", `${url}?form=edit`);
+    check("Editar dados: ADMIN vê CPF do paciente e do responsável completos no ?form=edit", digits(r.data.patient?.cpf) === cpf && digits(r.data.patient?.legalGuardianCpf) === gCpf, `${r.data.patient?.cpf} ${r.data.patient?.legalGuardianCpf}`);
+    r = await api("POST", "/api/team", { name: "E2E Atendente Edit", email: staffEmail, password: staffPassword, role: "STAFF", cpf: randomCpf(), address: "Rua A, 1", country: "Brasil", state: "SP", city: "São Paulo" });
+    team = r.status === 201 ? r.data.member : null;
+    const staff = team ? await loginAs(staffEmail, staffPassword) : null;
+    if (staff?.status !== 200) check("Editar dados: usuário STAFF criado", false, `team ${r.status} login ${staff?.status}`);
+    else {
+      const s = await withSession(staff.cookie, async () => {
+        const o = {};
+        o.form = await api("GET", `${url}?form=edit`);
+        o.keepEmpty = await api("PATCH", url, { cpf: "", city: "Staff1" });
+        o.keepMasked = await api("PATCH", url, { cpf: maskOf(cpf), city: "Staff2" });
+        o.keepGuardianEmpty = await api("PATCH", url, { birthDate: minorBirth, legalGuardianName: "zz Edit Responsavel", legalGuardianCpf: "", legalGuardianPhone: "11966665555", legalGuardianRelationship: "Pai" });
+        return o;
+      });
+      const sp = s.form.data.patient;
+      check("Editar dados: STAFF recebe CPF do paciente e do responsável mascarados no ?form=edit", s.form.status === 200 && sp?.cpf === maskOf(cpf) && sp?.legalGuardianCpf === maskOf(gCpf) && !JSON.stringify(s.form.data).includes(cpf) && !JSON.stringify(s.form.data).includes(gCpf), `${s.form.status} ${sp?.cpf} ${sp?.legalGuardianCpf}`);
+      const dbS = await db();
+      check("Editar dados: STAFF com cpf vazio ou mascarado = 200 e mantém o CPF atual", s.keepEmpty.status === 200 && s.keepMasked.status === 200 && digits(dbS.cpf) === cpf && digits(dbS.legalGuardianCpf) === gCpf && dbS.city === "Staff2", `${s.keepEmpty.status}/${s.keepMasked.status} ${dbS.cpf} ${dbS.legalGuardianCpf}`);
+      check("Editar dados: STAFF com CPF do responsável vazio junto da data mantém o CPF do responsável", s.keepGuardianEmpty.status === 200 && digits((await db()).legalGuardianCpf) === gCpf, `${s.keepGuardianEmpty.status} ${JSON.stringify(s.keepGuardianEmpty.data).slice(0, 150)}`);
+      check("Editar dados: resposta do PATCH do STAFF traz CPF mascarado", s.keepEmpty.data.patient?.cpf === maskOf(cpf), s.keepEmpty.data.patient?.cpf);
+
+      await prisma.clinic.update({ where: { id: membership.clinicId }, data: { rolePermissions: { ...(savedMatrix && typeof savedMatrix === "object" ? savedMatrix : {}), STAFF: { "patients:manage": false } } } });
+      const staff2 = await loginAs(staffEmail, `${staffPassword}-nova`);
+      if (staff2.status !== 200) check("Editar dados: novo login do STAFF", false, `${staff2.status} ${JSON.stringify(staff2.data)}`);
+      const denied = await withSession(staff2.cookie, async () => ({ patch: await api("PATCH", url, { city: "Negado" }), form: await api("GET", `${url}?form=edit`), get: await api("GET", url) }));
+      check("Editar dados: STAFF sem patients:manage = 403 no PATCH e no ?form=edit (GET normal segue 200)", denied.patch.status === 403 && denied.form.status === 403 && denied.get.status === 200 && (await db()).city === "Staff2", `${denied.patch.status}/${denied.form.status}/${denied.get.status}`);
+      check("Editar dados: 403 não vaza dados no corpo", !JSON.stringify(denied.form.data).includes(nm("completo")) && !JSON.stringify(denied.form.data).includes("Staff2"));
+      await prisma.clinic.update({ where: { id: membership.clinicId }, data: { rolePermissions: savedMatrix } });
+    }
+
+    // 12. outra clínica
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinicName, name: "Admin Edit B", email: otherMail, password: otherPass }));
+    const other = reg.status === 201 ? await loginAs(otherMail, otherPass) : null;
+    if (other?.status !== 200) check("Editar dados: clínica B criada", false, `${reg.status}/${other?.status}`);
+    else {
+      const snapA = await db();
+      const o = await withSession(other.cookie, async () => {
+        const out = {};
+        out.patchForeign = await api("PATCH", url, { name: "Invasor", cpf: randomCpf(), city: "Invadida" });
+        out.formForeign = await api("GET", `${url}?form=edit`);
+        out.same = await api("POST", "/api/patients", { ...regDefaults, name: `zz Edit B ${run}`, phone: "11999990204", cpf });
+        const sameId = out.same.data.patient?.id;
+        if (sameId) {
+          out.upd = await api("PATCH", `/api/patients/${sameId}`, { cpf: "", city: "B" });
+          out.upd2 = await api("PATCH", `/api/patients/${sameId}`, { cpf, city: "B2" });
+        }
+        return out;
+      });
+      const afterA = await db();
+      check("Editar dados: PATCH em paciente de outra clínica = 404 e nada muda", o.patchForeign.status === 404 && afterA.name === snapA.name && afterA.city === snapA.city && afterA.cpf === snapA.cpf, `${o.patchForeign.status}`);
+      check("Editar dados: GET ?form=edit de outra clínica = 404 sem vazar dados", o.formForeign.status === 404 && !JSON.stringify(o.formForeign.data).includes(snapA.name), `${o.formForeign.status}`);
+      check("Editar dados: mesmo CPF em OUTRA clínica é permitido (criar e atualizar)", o.same.status === 201 && o.upd?.status === 200 && o.upd2?.status === 200, `${o.same.status} ${o.upd?.status} ${o.upd2?.status}`);
+      check("Editar dados: paciente da clínica B não afetou o paciente da A", (await db()).city === snapA.city && digits((await db()).cpf) === cpf);
+    }
+  } finally {
+    await prisma.clinic.update({ where: { id: membership.clinicId }, data: { rolePermissions: savedMatrix } }).catch(() => {});
+    if (team) await api("DELETE", "/api/team", { membershipId: team.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: staffEmail } } });
+    await prisma.user.deleteMany({ where: { email: staffEmail } });
+    const clinicB = await prisma.clinicMembership.findFirst({ where: { user: { email: otherMail }, clinic: { name: otherClinicName } }, select: { clinicId: true, userId: true } });
+    if (clinicB) {
+      await prisma.patient.deleteMany({ where: { clinicId: clinicB.clinicId } });
+      await prisma.clinic.delete({ where: { id: clinicB.clinicId } }).catch((error) => console.error(`Limpeza da clínica B falhou: ${error.message.slice(0, 120)}`));
+      await prisma.user.deleteMany({ where: { id: clinicB.userId, email: otherMail } }).catch(() => {});
+    }
+    await prisma.patient.deleteMany({ where: mineWhere });
+  }
+}
+
 const suites = {
+  editar_dados_cliente: { needs: [], run: () => editPatientData() },
   seguranca_2fa: { needs: [], run: () => security2fa() },
   verificacao_email_cadastro: { needs: [], run: () => signupEmailVerification() },
   chave_email_clientes: { needs: [], run: () => patientEmailsSwitch() },
