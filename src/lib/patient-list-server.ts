@@ -63,7 +63,7 @@ export async function currentStagesFor(clinicId: string, patients: StagePatient[
 }
 
 export const patientListSelect = {
-  id: true, name: true, cpf: true, phone: true, age: true, status: true, manualJourneyStage: true,
+  id: true, name: true, cpf: true, phone: true, age: true, sex: true, status: true, manualJourneyStage: true,
   lastVisit: true, nextReturn: true, totalValue: true, createdAt: true,
   procedureRecords: { orderBy: { performedAt: "desc" }, take: 1, select: { id: true } },
 } satisfies Prisma.PatientSelect;
@@ -83,6 +83,6 @@ export async function withCurrentStage<T extends StagePatient>(clinicId: string,
 
 // Resposta do cadastro e da edição: campos da lista + data de nascimento (sem auditLog nem dados do responsável).
 export const patientCreatedSelect = {
-  id: true, name: true, cpf: true, phone: true, age: true, birthDate: true, status: true, manualJourneyStage: true,
+  id: true, name: true, cpf: true, phone: true, age: true, sex: true, birthDate: true, status: true, manualJourneyStage: true,
   lastVisit: true, nextReturn: true, totalValue: true, createdAt: true,
 } satisfies Prisma.PatientSelect;
