@@ -1,7 +1,7 @@
 "use client";
 
 import { type FormEvent, useEffect, useMemo, useState } from "react";
-import { Archive, ArchiveRestore, ChevronDown, Loader2, PackagePlus, PencilLine, ShoppingCart, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, ChevronDown, Loader2, PackagePlus, PencilLine, Plus, ShoppingCart, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -16,6 +16,7 @@ import { useCan } from "./current-user";
 import { invalidateFinanceCache } from "./finance-section";
 import { PurchaseFormModal } from "./purchases-panel";
 import { EmptyState, LoadingTable, MiniTable, SectionIntro } from "./shared";
+import { StockCatalogPicker } from "./stock-catalog-picker";
 import { SectionWarning, useStockAlerts, warningTabClass } from "./stock-alerts";
 import { formatDateOnly, invalidateStockCache, type StockMaterial } from "./stock-shared";
 
@@ -121,11 +122,11 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
           <MiniTable
             columns={[kindLabel.singular, "Unidade", "Saldo", "Mínimo", "Custo", "Situação", "Ação"]}
             rows={visibleMaterials.map((material) => [
-              <div key="name"><p className="font-bold text-foreground">{material.name}</p><p className="text-xs text-muted-foreground">{material.supplier}</p></div>,
+              <div key="name"><p className="font-bold text-foreground">{material.name}</p>{material.supplier ? <p className="text-xs text-muted-foreground">{material.supplier}</p> : null}</div>,
               material.unit,
               <strong key="balance">{formatQuantity(material.balance, material.unit)}</strong>,
               formatQuantity(material.minStock, material.unit),
-              `${currency.format(material.costCents / 100)} / ${material.unit}`,
+              material.costCents === 0 ? "Sem custo" : `${currency.format(material.costCents / 100)} / ${material.unit}`,
               material.archivedAt ? <Badge key="status" variant="slate">Arquivado</Badge> : material.belowMinimum ? <Badge key="status" variant="amber">Abaixo do mínimo</Badge> : <Badge key="status" variant="green">OK</Badge>,
               <Button key="open" size="sm" variant="secondary" onClick={() => { setOpenWithLot(false); setOpenId(material.id); }}>Abrir</Button>,
             ])}
@@ -133,10 +134,10 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
         </div>
       ) : kindMaterials.length ? <EmptyState title={`Nenhum ${kindWord} encontrado`} description={`Nenhum ${kindWord} corresponde à situação selecionada. Ajuste o filtro para ver outros resultados.`} /> : <EmptyState title={`Nenhum ${kindWord} cadastrado`} description={`Cadastre os ${kindLabel.plural.toLocaleLowerCase("pt-BR")} da clínica para controlar saldo, lotes e validades.`} />}
 
-      {editing ? <MaterialFormModal material={"id" in editing ? editing : null} kind={editing.kind} onClose={() => setEditing(null)} onSaved={(material, created) => {
+      {editing ? <MaterialFormModal material={"id" in editing ? editing : null} kind={editing.kind} onClose={() => setEditing(null)} onSaved={(material, created, alreadyInStock) => {
         setEditing(null);
         refresh(material.id);
-        onSaved?.(created ? `${material.name} foi adicionado ao estoque.` : `${material.name} foi atualizado.`);
+        onSaved?.(alreadyInStock ? `${material.name}: esse item já estava no estoque.` : created ? `${material.name} foi adicionado ao estoque.` : `${material.name} foi atualizado.`);
         if (created) setNextStep(material);
       }} /> : null}
       {nextStep ? <NextStepModal material={nextStep} onClose={() => setNextStep(null)} onPurchase={() => { setPurchaseFor(nextStep); setNextStep(null); }} onLot={() => { setOpenWithLot(true); setOpenId(nextStep.id); setNextStep(null); }} /> : null}
@@ -151,10 +152,12 @@ export function StockSection({ onSaved }: { onSaved?: (message: string, undo?: (
   );
 }
 
-function MaterialFormModal({ material, kind, onClose, onSaved }: { material: StockMaterial | null; kind: StockKind; onClose: () => void; onSaved: (material: StockMaterial, created: boolean) => void }) {
+function MaterialFormModal({ material, kind, onClose, onSaved }: { material: StockMaterial | null; kind: StockKind; onClose: () => void; onSaved: (material: StockMaterial, created: boolean, alreadyInStock?: boolean) => void }) {
   const word = stockKindLabels[kind].singular.toLocaleLowerCase("pt-BR");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Item novo começa pela escolha no catálogo; "personalizado" abre o formulário completo.
+  const [step, setStep] = useState<"choose" | "custom">(material ? "custom" : "choose");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -181,6 +184,28 @@ function MaterialFormModal({ material, kind, onClose, onSaved }: { material: Sto
       return;
     }
     onSaved(data.product, !material);
+  }
+
+  if (step === "choose") {
+    return (
+      <Modal open onClose={onClose} panelClassName="max-w-2xl" title={`Novo ${word}`} description={`Escolha um ${word} do catálogo ou crie um personalizado.`}>
+        <div className="space-y-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Etapa 1 de 2 · Escolha do catálogo ou crie um personalizado</p>
+          <button
+            type="button"
+            onClick={() => setStep("custom")}
+            className="flex w-full items-center gap-3 rounded-lg border border-dashed border-primary/50 bg-primary/5 p-4 text-left transition hover:border-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground"><Plus className="h-5 w-5" aria-hidden="true" /></span>
+            <span className="min-w-0">
+              <strong className="block text-sm text-foreground">Criar {word} personalizado</strong>
+              <span className="block text-xs text-muted-foreground">Não está no catálogo? Informe nome, fornecedor, unidade e custo.</span>
+            </span>
+          </button>
+          <StockCatalogPicker kind={kind} autoFocus onChosen={(product, created) => onSaved(product, created, !created)} />
+        </div>
+      </Modal>
+    );
   }
 
   return (
@@ -324,13 +349,13 @@ function MaterialDetailModal({ productId, startWithInitialBalance = false, onClo
   }
 
   return (
-    <Modal open onClose={onClose} title={detail?.name ?? "Item"} description={detail ? `${(stockKindLabels[detail.kind] ?? stockKindLabels.material).singular} · ${detail.supplier}` : undefined}>
+    <Modal open onClose={onClose} title={detail?.name ?? "Item"} description={detail ? [(stockKindLabels[detail.kind] ?? stockKindLabels.material).singular, detail.supplier].filter(Boolean).join(" · ") : undefined}>
       {!detail ? <div className="grid place-items-center py-10"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div> : (
         <div className="space-y-5">
           <div className="grid gap-3 sm:grid-cols-3">
             <Card className="p-3"><p className="text-[10px] font-bold uppercase text-muted-foreground">Saldo</p><p className="mt-1 text-lg font-black text-foreground">{formatQuantity(detail.balance, detail.unit)}</p></Card>
             <Card className="p-3"><p className="text-[10px] font-bold uppercase text-muted-foreground">Mínimo</p><p className="mt-1 text-lg font-black text-foreground">{formatQuantity(detail.minStock, detail.unit)}</p></Card>
-            <Card className="p-3"><p className="text-[10px] font-bold uppercase text-muted-foreground">Custo</p><p className="mt-1 text-lg font-black text-foreground">{currency.format(detail.costCents / 100)}</p></Card>
+            <Card className="p-3"><p className="text-[10px] font-bold uppercase text-muted-foreground">Custo</p><p className="mt-1 text-lg font-black text-foreground">{detail.costCents === 0 ? "Sem custo" : currency.format(detail.costCents / 100)}</p></Card>
           </div>
           {detail.belowMinimum && !detail.archivedAt ? <p className="rounded-[7px] bg-warning/10 px-3 py-2 text-xs font-semibold text-warning">Saldo abaixo do estoque mínimo.</p> : null}
 

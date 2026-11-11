@@ -233,7 +233,9 @@ function ConfigureStep({ editing, selection, procedures, materials, onBack, onSa
   const fail = (message: string, field: string | null = null) => { setError(message); setErrorField(field); };
   const uploaded = useRef<{ file: File; assetId: string } | null>(null);
   const previewRef = useRef<string | null>(null);
-  const materialOptions = materials;
+  // Itens escolhidos do catálogo na ficha técnica entram na lista na hora, sem sair do formulário.
+  const [catalogMaterials, setCatalogMaterials] = useState<Array<Product & { id: string }>>([]);
+  const materialOptions = useMemo(() => [...materials, ...catalogMaterials.filter((added) => !materials.some((material) => material.id === added.id))], [materials, catalogMaterials]);
 
   // Libera a pré-visualização ao fechar.
   useEffect(() => () => { if (previewRef.current) URL.revokeObjectURL(previewRef.current); }, []);
@@ -374,7 +376,7 @@ function ConfigureStep({ editing, selection, procedures, materials, onBack, onSa
         <FormField label="Duração (minutos)" htmlFor="procedure-duration"><MaskedInput {...invalidProps("duration")} id="procedure-duration" className={fieldClassName} formatter={(value) => formatInteger(value, 4)} name="duration" inputMode="numeric" defaultValue={editing ? String(editing.durationMinutes) : ""} placeholder="60" required /></FormField>
       </div>
 
-      <TechnicalSheetEditor materials={materialOptions} defaultValue={editing?.technicalSheet ?? []} materialsNeedReview={editing?.materialsNeedReview} />
+      <TechnicalSheetEditor materials={materialOptions} defaultValue={editing?.technicalSheet ?? []} materialsNeedReview={editing?.materialsNeedReview} onCatalogProduct={(product) => setCatalogMaterials((current) => current.some((item) => item.id === product.id) ? current : [...current, product])} />
 
       {error ? <p id="procedure-form-error" role="alert" className="rounded-[7px] bg-destructive/10 px-3 py-2 text-xs font-semibold text-destructive">{error}</p> : null}
       <div className="flex flex-col-reverse justify-end gap-2 sm:flex-row">

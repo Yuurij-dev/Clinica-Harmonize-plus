@@ -5,6 +5,8 @@ import { CirclePlus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { fieldClassName } from "@/components/ui/modal";
 import { parseQuantity, validateQuantity, type StockKind } from "@/lib/stock-rules";
+import { StockCatalogButton } from "./stock-catalog-picker";
+import type { StockMaterial } from "./stock-shared";
 
 export type TechnicalSheetItem = { productId: string; name: string; unit: string; quantity: number; archived?: boolean };
 type MaterialOption = { id: string; name: string; kind?: StockKind; unit: string; archivedAt?: string | null };
@@ -26,7 +28,8 @@ export function readTechnicalSheet(form: FormData, materials: MaterialOption[]) 
   return { items };
 }
 
-export function TechnicalSheetEditor({ materials, defaultValue = [], materialsNeedReview = false }: { materials: MaterialOption[]; defaultValue?: TechnicalSheetItem[]; materialsNeedReview?: boolean }) {
+// `onCatalogProduct`: o pai inclui o item criado a partir do catálogo em `materials` (também usado para validar a quantidade).
+export function TechnicalSheetEditor({ materials, defaultValue = [], materialsNeedReview = false, onCatalogProduct }: { materials: MaterialOption[]; defaultValue?: TechnicalSheetItem[]; materialsNeedReview?: boolean; onCatalogProduct?: (product: StockMaterial) => void }) {
   const [rows, setRows] = useState<Row[]>(() => defaultValue.map((item, index) => ({
     key: index,
     productId: item.productId,
@@ -78,6 +81,17 @@ export function TechnicalSheetEditor({ materials, defaultValue = [], materialsNe
             <Button type="button" variant="secondary" size="sm" className="h-8 px-2.5 text-xs [&_svg]:size-3.5" disabled={!sectionOptions.length} onClick={() => { setRows((current) => [...current, { key: nextKey, productId: "", quantity: "1", kind: section.kind }]); setNextKey((current) => current + 1); }}>
               <CirclePlus className="h-3.5 w-3.5" />{section.addLabel}
             </Button>
+            {onCatalogProduct ? (
+              <StockCatalogButton
+                kind={section.kind}
+                className="ml-2"
+                onChosen={(product) => {
+                  onCatalogProduct(product);
+                  setRows((current) => current.some((row) => row.productId === product.id) ? current : [...current, { key: nextKey, productId: product.id, quantity: "1", kind: section.kind }]);
+                  setNextKey((current) => current + 1);
+                }}
+              />
+            ) : null}
             {!sectionOptions.length ? <p className="text-[10px] text-muted-foreground">{section.emptyMessage}</p> : null}
           </section>
         );
