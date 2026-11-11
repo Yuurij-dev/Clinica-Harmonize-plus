@@ -180,8 +180,8 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
 // Casca visual compartilhada com a página pública do convite: painel de marca + cartão branco.
 export function AuthShell({ action, children }: { action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <main className="grid min-h-screen w-full overflow-hidden bg-white text-[#17134d] lg:grid-cols-[52%_48%]">
-      <section className="relative flex min-h-[270px] items-center justify-center overflow-hidden bg-[#4938f4] px-6 py-8 text-center text-white sm:min-h-[360px] sm:px-10 sm:py-12 lg:min-h-screen lg:px-14 lg:py-16">
+    <main className="grid min-h-screen w-full lg:h-screen overflow-hidden bg-white text-[#17134d] lg:grid-cols-[52%_48%]">
+      <section className="relative flex min-h-[270px] items-center justify-center overflow-hidden bg-[#4938f4] px-6 py-8 text-center text-white sm:min-h-[360px] sm:px-10 sm:py-12 lg:h-screen lg:px-14 lg:py-16">
         <div aria-hidden="true" className="absolute inset-0 bg-center bg-no-repeat" style={{ backgroundImage: "url('/login-brand-background.png')", backgroundSize: "100% 100%" }} />
         <div className="hp-brand-enter relative z-10 flex w-full max-w-xl flex-col items-center">
           <h1 className="w-full max-w-[260px] sm:max-w-[340px] lg:max-w-[420px]">
@@ -193,7 +193,7 @@ export function AuthShell({ action, children }: { action?: React.ReactNode; chil
         </div>
       </section>
 
-      <section className="relative flex min-h-[520px] items-center justify-center overflow-hidden bg-[#f8faff] px-4 py-6 sm:min-h-[640px] sm:px-8 sm:py-10 lg:min-h-screen lg:px-10 lg:py-12 xl:px-14">
+      <section className="relative flex min-h-[520px] items-center justify-center overflow-hidden bg-[#f8faff] lg:items-start lg:overflow-y-auto px-4 py-6 sm:min-h-[640px] sm:px-8 sm:py-10 lg:h-screen lg:px-10 lg:py-12 xl:px-14">
         <BrandOutline className="pointer-events-none absolute inset-0 h-full w-full text-[#5147dc] opacity-[0.055]" />
         <div className="hp-panel-enter relative z-10 my-auto w-full max-w-[520px] rounded-[8px] border border-white/80 bg-white/95 px-6 py-8 shadow-[0_18px_55px_rgba(38,48,112,0.14)] sm:px-10 sm:py-10 lg:px-12 lg:py-12">
             {children}
