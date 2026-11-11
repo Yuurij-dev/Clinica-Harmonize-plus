@@ -107,13 +107,13 @@ export function FinanceMovements({ reference, initialRange, onBack }: { referenc
         <div className="mb-4 flex gap-1 border-b border-border" role="tablist" aria-label="Tipo de movimentação">
           {tabs.map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={tab === value} className={cn("-mb-px border-b-2 px-4 py-2 text-sm font-semibold transition-colors", tab === value ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground")} onClick={() => reset(() => { setTab(value); setCategory(""); })}>{label}</button>)}
         </div>
-        <div className="mb-4 flex flex-wrap items-end gap-3">
+        <div className="mb-4 flex flex-wrap items-end gap-3 lg:flex-nowrap">
           <DateRangeFilter startDate={from} endDate={to} onStartDateChange={(value) => reset(() => setFrom(value))} onEndDateChange={(value) => reset(() => setTo(value))} />
-          <select className={`${fieldClassName} h-10 w-auto`} value={category} onChange={(event) => reset(() => setCategory(event.target.value))} aria-label="Filtrar por categoria">
+          <select className={`${fieldClassName} h-10`} style={{ width: "auto" }} value={category} onChange={(event) => reset(() => setCategory(event.target.value))} aria-label="Filtrar por categoria">
             <option value="">Todas as categorias</option>
             {categories.filter((name) => tab === "all" || (tab === "revenue" ? name === "Receita" : name !== "Receita")).map((name) => <option key={name}>{name}</option>)}
           </select>
-          <label className="relative min-w-[200px] flex-1 sm:max-w-xs">
+          <label className="relative min-w-[200px] flex-1 lg:max-w-sm">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
             <input className={`${fieldClassName} h-10 pl-9`} value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder="Buscar por descrição..." aria-label="Buscar por descrição" />
           </label>

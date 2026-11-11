@@ -177,7 +177,8 @@ test("next recurring due date respects start, end and frequency", () => {
   assert.equal(nextRecurringDue({ frequency: "weekly", weekday: 1, startsOn: "2026-01-01", endsOn: null }, "2026-10-09"), "2026-10-12");
   assert.equal(nextRecurringDue({ frequency: "yearly", dayOfMonth: 29, month: 2, startsOn: "2026-01-01", endsOn: null }, "2026-10-09"), "2027-02-28");
   assert.equal(isRecurringActive(null, "2026-10-09"), true);
-  assert.equal(isRecurringActive("2026-10-09", "2026-10-09"), true);
+  assert.equal(isRecurringActive("2026-10-10", "2026-10-09"), true);
+  assert.equal(isRecurringActive("2026-10-09", "2026-10-09"), false);
   assert.equal(isRecurringActive("2026-10-08", "2026-10-09"), false);
 });
 
