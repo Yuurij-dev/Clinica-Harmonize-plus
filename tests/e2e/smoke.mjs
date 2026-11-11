@@ -7149,7 +7149,138 @@ async function laborCostAdmin() {
   }
 }
 
+// Catálogo padrão de materiais e produtos: GET/POST /api/stock-catalog.
+async function stockCatalog() {
+  const mail = (t) => `e2e-catmat-${t}-${run}@example.invalid`;
+  const pw = `E2e-${run}-Cat9!`;
+  const otherClinicName = `Clínica Catálogo ${run}`;
+  const emails = [mail("pro"), mail("staff"), mail("outro")];
+  const created = [];
+  const clinicId = (await prisma.clinicMembership.findFirst({ where: { user: { email } }, select: { clinicId: true } }))?.clinicId;
+  if (!clinicId) { check("catálogo de materiais: clínica de teste encontrada", false); return; }
+  const dbCount = (cid, name) => prisma.product.count({ where: { clinicId: cid, name } });
+  const list = (query = "") => api("GET", `/api/stock-catalog${query}`);
+  const post = (slug) => api("POST", "/api/stock-catalog", { slug });
+  try {
+    // Sem sessão e permissões.
+    const anon = await withSession("", () => Promise.all([list(), post("seringa-3-ml")]));
+    check("catálogo de materiais: sem sessão GET e POST devolvem 401", anon.every((x) => x.status === 401), anon.map((x) => x.status).join("/"));
+    for (const [tag, role] of [["pro", "PROFESSIONAL"], ["staff", "STAFF"]]) {
+      const made = await api("POST", "/api/team", { name: `E2E Cat ${tag}`, email: mail(tag), password: pw, role, cpf: randomCpf() });
+      if (made.status === 201) created.push(made.data.member);
+      const sess = made.status === 201 ? await loginAs(mail(tag), pw) : null;
+      if (sess?.status !== 200) { check(`catálogo de materiais: login ${role}`, false, `${made.status} ${sess?.status}`); continue; }
+      const res = await withSession(sess.cookie, () => Promise.all([list(), post("seringa-3-ml")]));
+      check(`catálogo de materiais: ${role} recebe 403 no GET e no POST`, res.every((x) => x.status === 403), res.map((x) => x.status).join("/"));
+    }
+    check("catálogo de materiais: POST negado não criou item", await dbCount(clinicId, "Seringa 3 ml") === 0);
+
+    // GET: lista e filtros.
+    let r = await list("?limit=100");
+    const keys = r.data.items?.[0] ? Object.keys(r.data.items[0]).sort().join() : "";
+    check("catálogo de materiais: GET lista com total e campos do contrato", r.status === 200 && r.data.total > 0 && r.data.items.length > 0 && keys === "archived,category,enabled,kind,name,productId,slug,unit" && r.data.items.every((i) => i.enabled === false && i.productId === null), `${r.status} ${keys}`);
+    r = await list("?q=seringa");
+    check("catálogo de materiais: q=seringa acha só seringas", r.status === 200 && r.data.items.length > 0 && r.data.items.every((i) => i.name.toLowerCase().includes("seringa")) && r.data.items.some((i) => i.slug === "seringa-3-ml"), JSON.stringify(r.data.items?.map((i) => i.slug)));
+    r = await list("?q=AGULHA");
+    check("catálogo de materiais: q sem distinção de caixa (agulha)", r.status === 200 && r.data.items.length > 0 && r.data.items.every((i) => i.name.toLowerCase().includes("agulha")), r.data.total);
+    r = await list("?q=canula");
+    check("catálogo de materiais: q sem acento acha 'Cânula'", r.status === 200 && r.data.items.some((i) => i.name.startsWith("Cânula")), r.data.total);
+    r = await list("?q=zzzinexistente");
+    check("catálogo de materiais: q sem resultado devolve total 0", r.status === 200 && r.data.total === 0 && r.data.items.length === 0, JSON.stringify(r.data));
+    const [mat, prod] = await Promise.all([list("?kind=material&limit=100"), list("?kind=produto&limit=100")]);
+    check("catálogo de materiais: kind filtra material e produto sem sobrepor", mat.data.items.length > 0 && prod.data.items.length > 0 && mat.data.items.every((i) => i.kind === "material") && prod.data.items.every((i) => i.kind === "produto") && mat.data.total + prod.data.total === (await list("?limit=1")).data.total, `${mat.data.total}/${prod.data.total}`);
+    const p1 = await list("?limit=3&offset=0"), p2 = await list("?limit=3&offset=3");
+    check("catálogo de materiais: limit/offset paginam sem repetir", p1.data.items.length === 3 && p2.data.items.length === 3 && p1.data.items.every((a) => !p2.data.items.some((b) => b.slug === a.slug)) && p1.data.total === p2.data.total, `${p1.data.items.length}/${p2.data.items.length}`);
+
+    // POST: entradas inválidas.
+    for (const [label, body] of [["sem slug", {}], ["slug numérico", { slug: 5 }], ["slug vazio", { slug: "" }], ["corpo nulo", null]]) {
+      r = await api("POST", "/api/stock-catalog", body ?? undefined);
+      check(`catálogo de materiais: ${label} devolve 400`, r.status === 400, r.status);
+    }
+    r = await post(`nao-existe-${run}`);
+    check("catálogo de materiais: slug desconhecido devolve 404 e nada é criado", r.status === 404, r.status);
+
+    // POST cria.
+    r = await post("seringa-3-ml");
+    const prodA = r.data.product;
+    check("catálogo de materiais: POST cria (201, created true, custo 0, sem fornecedor, mínimo 0, saldo 0)", r.status === 201 && r.data.created === true && prodA?.name === "Seringa 3 ml" && prodA.kind === "material" && prodA.unit === "unidade" && prodA.costCents === 0 && prodA.supplier === "" && prodA.minStock === 0 && prodA.balance === 0, `${r.status} ${JSON.stringify(r.data)}`);
+    r = await list("?q=seringa");
+    const marked = r.data.items?.find((i) => i.slug === "seringa-3-ml");
+    check("catálogo de materiais: GET marca enabled com o productId; os demais seguem desmarcados", marked?.enabled === true && marked.productId === prodA?.id && r.data.items.filter((i) => i.enabled).length === 1, JSON.stringify(marked));
+
+    // Repetir.
+    r = await post("seringa-3-ml");
+    check("catálogo de materiais: POST repetido devolve 200 created false com o mesmo produto", r.status === 200 && r.data.created === false && r.data.product?.id === prodA?.id, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
+    check("catálogo de materiais: repetir não duplica no banco", await dbCount(clinicId, "Seringa 3 ml") === 1);
+
+    // Corrida.
+    const race = await Promise.all([post("agulha-30g"), post("agulha-30g")]);
+    const statuses = race.map((x) => x.status).sort().join();
+    check("catálogo de materiais: 2 POST simultâneos criam um só (201+200 ou 200+200)", (statuses === "200,201" || statuses === "200,200") && race.every((x) => x.data.product?.id) && race[0].data.product.id === race[1].data.product.id && race.filter((x) => x.data.created).length <= 1, `${statuses} ${race.map((x) => x.data.product?.id).join("/")}`);
+    check("catálogo de materiais: corrida deixou um só Product no banco", await dbCount(clinicId, "Agulha 30G (13 mm)") === 1);
+
+    // Arquivado.
+    r = await post("gaze-esteril");
+    const gauze = r.data.product;
+    r = await api("PATCH", `/api/products/${gauze.id}`, { archived: true });
+    check("catálogo de materiais: item arquivado pela rota existente", r.status === 200, r.status);
+    r = await post("gaze-esteril");
+    check("catálogo de materiais: POST de item arquivado devolve 409 com a mensagem", r.status === 409 && r.data.message === "Este item está arquivado no estoque. Desarquive-o para usar.", `${r.status} ${JSON.stringify(r.data)}`);
+    check("catálogo de materiais: 409 não criou duplicado", await dbCount(clinicId, "Gaze estéril") === 1);
+    r = await list("?q=gaze");
+    check("catálogo de materiais: item arquivado não aparece como enabled", r.data.items?.find((i) => i.slug === "gaze-esteril")?.enabled === false, JSON.stringify(r.data.items?.map((i) => [i.slug, i.enabled])));
+    r = await api("PATCH", `/api/products/${gauze.id}`, { archived: false });
+    r = await post("gaze-esteril");
+    check("catálogo de materiais: desarquivado volta a devolver 200 created false", r.status === 200 && r.data.created === false && r.data.product?.id === gauze.id, `${r.status}`);
+
+    // Funciona como item de estoque.
+    r = await api("GET", "/api/products");
+    check("catálogo de materiais: item criado aparece em GET /api/products", r.data.products?.some((x) => x.id === prodA.id && x.name === "Seringa 3 ml" && x.kind === "material"), r.status);
+    r = await api("POST", "/api/purchases", { supplier: "Fornecedor", purchasedOn: day(0), paymentMethod: "Pix", installments: 1, items: [{ productId: prodA.id, lotCode: `CAT${run}`, expiresOn: day(200), quantity: 10, unitPriceCents: 250 }] });
+    check("catálogo de materiais: compra com custo e lote aceita o item", r.status === 201, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
+    r = await api("GET", `/api/products/${prodA.id}`);
+    check("catálogo de materiais: compra atualizou custo (250) e saldo (10) com lote", r.data.product?.costCents === 250 && r.data.product.lots?.reduce((s, l) => s + l.balance, 0) === 10 && r.data.product.lots.some((l) => l.code === `CAT${run}` || l.lotCode === `CAT${run}`), JSON.stringify(r.data.product).slice(0, 250));
+    r = await post("seringa-3-ml");
+    check("catálogo de materiais: POST depois da compra devolve o mesmo item com saldo 10 e custo preservado", r.status === 200 && r.data.created === false && r.data.product?.balance === 10 && r.data.product.costCents === 250, JSON.stringify(r.data.product));
+
+    // Isolamento entre clínicas.
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinicName, name: "E2E Externo Cat", phone: "11999990033", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: mail("outro"), password: pw }));
+    const other = reg.status === 201 ? await loginAs(mail("outro"), pw) : null;
+    if (other?.status !== 200) { check("catálogo de materiais: segunda clínica criada", false, `${reg.status} ${other?.status}`); return; }
+    const otherClinic = await prisma.clinic.findFirst({ where: { name: otherClinicName }, select: { id: true } });
+    const asOther = (fn) => withSession(other.cookie, fn);
+    r = await asOther(() => list("?q=seringa"));
+    check("catálogo de materiais: admin de outra clínica não vê enabled da clínica de teste", r.status === 200 && r.data.items.length > 0 && r.data.items.every((i) => i.enabled === false && i.productId === null), JSON.stringify(r.data.items?.map((i) => [i.slug, i.enabled])));
+    r = await asOther(() => post("seringa-3-ml"));
+    check("catálogo de materiais: outra clínica cria o seu próprio Product (201, id diferente)", r.status === 201 && r.data.created === true && r.data.product?.id !== prodA.id && r.data.product?.balance === 0, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
+    const otherProd = await prisma.product.findUnique({ where: { id: r.data.product.id }, select: { clinicId: true } });
+    check("catálogo de materiais: Product da outra clínica pertence a ela", otherProd?.clinicId === otherClinic?.id && await dbCount(clinicId, "Seringa 3 ml") === 1);
+    r = await list("?q=seringa");
+    check("catálogo de materiais: clínica de teste segue com o próprio productId", r.data.items?.find((i) => i.slug === "seringa-3-ml")?.productId === prodA.id, JSON.stringify(r.data.items?.find((i) => i.slug === "seringa-3-ml")));
+    r = await asOther(() => api("GET", "/api/products"));
+    check("catálogo de materiais: estoque da outra clínica não traz itens da clínica de teste", r.data.products?.length === 1 && r.data.products[0].balance === 0, JSON.stringify(r.data.products?.map((x) => x.name)));
+  } finally {
+    for (const member of created) await api("DELETE", "/api/team", { membershipId: member.id });
+    const other = await prisma.clinic.findFirst({ where: { name: otherClinicName }, select: { id: true } });
+    if (other) {
+      await prisma.stockMovement.deleteMany({ where: { clinicId: other.id } });
+      await prisma.expense.deleteMany({ where: { clinicId: other.id } });
+      await prisma.purchase.deleteMany({ where: { clinicId: other.id } });
+      await prisma.product.deleteMany({ where: { clinicId: other.id } });
+    }
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: emails } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinicName } });
+    await prisma.user.deleteMany({ where: { email: { in: emails } } });
+    // Itens do catálogo, compras, lotes e movimentos criados na clínica de teste.
+    await prisma.stockMovement.deleteMany({ where: { clinicId } });
+    await prisma.expense.deleteMany({ where: { clinicId, category: "Estoque" } });
+    await prisma.purchase.deleteMany({ where: { clinicId } });
+    await prisma.product.deleteMany({ where: { clinicId, name: { in: ["Seringa 3 ml", "Agulha 30G (13 mm)", "Gaze estéril"] } } });
+  }
+}
+
 const suites = {
+  catalogo_materiais: { needs: [], run: () => stockCatalog() },
   setup_wizard: { needs: [], run: () => setupWizard() },
   mao_de_obra_admin: { needs: [], run: () => laborCostAdmin() },
   enviar_orcamento: { needs: [], run: () => sendQuote() },
