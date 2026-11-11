@@ -12,7 +12,7 @@ const CID = "cid.apps.googleusercontent.com";
 const config = { clientId: CID, clientSecret: "s", redirectUri: "https://app/cb" };
 const claims = (over = {}) => ({ iss: "https://accounts.google.com", aud: CID, exp: Math.floor(Date.now() / 1000) + 3600, nonce: "N", sub: "sub-1", email: "ana@x.com", email_verified: true, name: "Ana", ...over });
 const flowToken = (intent = "signup") => rules.signOauthFlow({ state: "ST", nonce: "N", codeVerifier: "V", intent }, secret);
-const profile = { clinicName: "Clínica Harmonia", name: "Ana Souza", phone: "(11) 99999-0000", profession: "Dentista", practiceArea: "Harmonização facial", hasSecretary: "Sim" };
+const profile = { clinicName: "Clínica Harmonia", name: "Ana Souza" };
 
 function fakeDb() {
   const db = { users: [], identities: [], clinics: [], memberships: [] };
@@ -31,7 +31,7 @@ function fakeSignupRepo(db, { failAfterClinic = false } = {}) {
           draft.clinics.push({ id: `c${draft.clinics.length + 1}`, name: input.clinicName, slug: input.slug, trialStartedAt: input.trialStartedAt, trialEndsAt: input.trialEndsAt });
           if (failAfterClinic) throw new Error("falha");
           const id = `u${draft.users.length + 1}`;
-          draft.users.push({ id, email: input.user.email, passwordHash: input.user.passwordHash, role: "ADMIN", phone: input.user.phone, profession: input.user.profession, practiceArea: input.user.practiceArea, hasSecretary: input.user.hasSecretary, name: input.user.name });
+          draft.users.push({ id, email: input.user.email, passwordHash: input.user.passwordHash, role: "ADMIN", name: input.user.name });
           draft.identities.push({ userId: id, sub: input.sub });
           draft.memberships.push({ userId: id, clinicId: draft.clinics.at(-1).id, role: "ADMIN", isOwner: true });
           return id;
@@ -124,7 +124,7 @@ test("conclusao: cria Clinic+User ADMIN+Identity+membership owner atomicamente, 
   assert.equal(db.clinics.length, 1);
   assert.equal(db.clinics[0].slug, "clinica-harmonia-abcdef12");
   assert.equal(db.clinics[0].trialEndsAt.getTime() - db.clinics[0].trialStartedAt.getTime(), 3 * 24 * 3600 * 1000);
-  assert.deepEqual([db.users[0].email, db.users[0].role, db.users[0].passwordHash, db.users[0].hasSecretary, db.users[0].phone], ["ana@x.com", "ADMIN", "unusable", true, "(11) 99999-0000"]);
+  assert.deepEqual([db.users[0].email, db.users[0].role, db.users[0].passwordHash, db.users[0].name], ["ana@x.com", "ADMIN", "unusable", "Ana Souza"]);
   assert.deepEqual(db.identities, [{ userId: r.userId, sub: "sub-1" }]);
   assert.deepEqual(db.memberships, [{ userId: r.userId, clinicId: db.clinics[0].id, role: "ADMIN", isOwner: true }]);
 });
@@ -150,7 +150,7 @@ test("conclusao: dados invalidos => recusa sem tocar o banco nem gerar hash", as
   const db = fakeDb();
   let hashed = 0;
   const run = (body) => signup.completeGoogleSignup(fakeSignupRepo(db), { pending, profile: body, makePasswordHash: async () => { hashed++; return "h"; }, newSuffix: () => "s" });
-  for (const body of [null, {}, { ...profile, clinicName: "" }, { ...profile, clinicName: "a".repeat(101) }, { ...profile, name: " " }, { ...profile, phone: "" }, { ...profile, profession: "" }, { ...profile, practiceArea: "" }, { ...profile, hasSecretary: "talvez" }, { ...profile, hasSecretary: true }]) {
+  for (const body of [null, {}, { ...profile, clinicName: "" }, { ...profile, clinicName: "a".repeat(101) }, { ...profile, name: " " }, { ...profile, name: 5 }]) {
     const r = await run(body);
     assert.equal(r.ok, false);
     assert.equal(r.code, "invalid_profile");
@@ -170,10 +170,10 @@ test("conclusao: corrida P2002 vira account_exists", async () => {
   assert.deepEqual(await complete(repo, pending, profile), { ok: false, code: "account_exists" });
 });
 
-test("regras do cadastro de clinica: mesmas do register (limites, Sim/Nao, slug)", () => {
-  assert.equal(clinicRules.parseClinicProfile({ ...profile, hasSecretary: "Não" }).value.hasSecretary, false);
+test("regras do cadastro de clinica: mesmas do register (limites, so clinica e nome, slug)", () => {
+  assert.deepEqual(clinicRules.parseClinicProfile({ ...profile, phone: "x", profession: "y", hasSecretary: "Sim" }).value, { clinicName: "Clínica Harmonia", name: "Ana Souza" });
   assert.equal(clinicRules.parseClinicProfile({ ...profile, clinicName: "" }).code, "clinic_name");
-  assert.equal(clinicRules.parseClinicProfile({ ...profile, phone: "" }).code, "fields");
+  assert.equal(clinicRules.parseClinicProfile({ ...profile, name: "" }).code, "fields");
   assert.equal(clinicRules.parseClinicProfile({ ...profile, clinicName: "a".repeat(100) }).ok, true);
   assert.equal(clinicRules.slugPart("Clínica São João!"), "clinica-sao-joao");
   assert.equal(clinicRules.slugPart("!!!"), "clinica");

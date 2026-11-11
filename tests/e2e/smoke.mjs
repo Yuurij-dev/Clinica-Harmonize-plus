@@ -274,7 +274,7 @@ async function journeyDeletePermissions() {
 
     // Outra clínica: 404 e a jornada continua.
     const jOther = await mkJourney(patient.id, "outra-clinica");
-    let r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990022", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    let r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const outsider = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (outsider?.status === 200) {
       r = await withSession(outsider.cookie, () => del(patient.id, jOther.id));
@@ -450,7 +450,7 @@ async function journeyDeleteGaps() {
     check("jornada excluída (lacunas): PATCH restaura jornada arquivada", r.status === 200 && r.data.restored === true, `${r.status}`);
 
     // --- Trial vencido ---
-    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: trialClinic, name: "E2E Trial JDG", phone: "11999990079", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: trialEmail, password: trialPassword }));
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: trialClinic, name: "E2E Trial JDG", email: trialEmail, password: trialPassword }));
     if (reg.status === 201) {
       const tClinic = (await prisma.clinicMembership.findFirst({ where: { user: { email: trialEmail } }, select: { clinicId: true } })).clinicId;
       const tPatient = await prisma.patient.create({ data: { clinicId: tClinic, name: `Trial JDG ${run}`, phone: "11999990080", age: 30 } });
@@ -1061,7 +1061,7 @@ async function evaluationRequiredGaps() {
   const staffPassword = `E2e-${run}-Staff9!`;
   let team = null;
   try {
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990020", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const before = await prisma.evaluation.findUnique({ where: { id: dId }, select: { updatedAt: true, clinicalNotes: true } });
@@ -1314,7 +1314,7 @@ async function anamnesis() {
   const otherClinic = `E2E Clínica Externa ${run}`;
   let team = null;
   try {
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990020", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const probe = await withSession(other.cookie, async () => {
@@ -1549,7 +1549,7 @@ async function clinicalFiles() {
   const staffPassword = `E2e-${run}-Staff9!`;
   let team = null;
   try {
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990020", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const o = await withSession(other.cookie, async () => ({
@@ -2456,7 +2456,7 @@ async function procedureCatalog() {
   const proEmail = `e2e-cat-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
   const members = [];
   try {
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990021", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const o = await withSession(other.cookie, async () => ({
@@ -2818,7 +2818,7 @@ async function procedureCatalogGaps() {
   const material = (await api("POST", "/api/products", { name: `Material Cat ${run}`, kind: "material", unit: "frasco", costCents: 1000, supplier: "Fornecedor", minStock: 0 })).data.product;
   const material2 = (await api("POST", "/api/products", { name: `Material Cat2 ${run}`, kind: "material", unit: "frasco", costCents: 1000, supplier: "Fornecedor", minStock: 0 })).data.product;
   try {
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo2", phone: "11999990022", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo2", email: otherEmail, password: otherPassword }));
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const foreign = await withSession(other.cookie, async () => ({
@@ -3141,7 +3141,7 @@ async function paginationSuite() {
   const proEmail = `e2e-pg-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
   const members = [];
   try {
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990020", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const probe = await withSession(other.cookie, async () => {
@@ -3201,7 +3201,7 @@ async function paginationGaps() {
   const staffEmail = `e2e-pgx-staff-${run}@example.com`, staffPassword = `E2e-${run}-Stf99!`;
   const proEmail = `e2e-pgx-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
   const members = [];
-  const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: gapClinic, name: "E2E Lacunas", phone: "11999990030", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: gapEmail, password: gapPassword }));
+  const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: gapClinic, name: "E2E Lacunas", email: gapEmail, password: gapPassword }));
   const gap = reg.status === 201 ? await loginAs(gapEmail, gapPassword) : null;
   if (gap?.status !== 200) { check("paginação (lacunas): clínica de apoio criada", false, `register ${reg.status}`); return; }
   try {
@@ -3490,7 +3490,7 @@ async function activeProcedures() {
     }
 
     // Outra clínica: a sessão dela nunca aparece aqui, e a nossa não aparece lá.
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990022", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status !== 200) { check("procedimentos ativos: clínica externa criada", false, `register ${r.status}`); return; }
     const X = await withSession(other.cookie, async () => {
@@ -3619,7 +3619,7 @@ async function facialEvaluation() {
   const otherPassword = `E2e-${run}-Outra9!`;
   const otherClinic = `E2E Facial Externa ${run}`;
   try {
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo Facial", phone: "11999990032", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo Facial", email: otherEmail, password: otherPassword }));
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const res = await withSession(other.cookie, async () => [
@@ -3750,7 +3750,7 @@ async function scheduleConflicts() {
   // Clínicas diferentes não interferem.
   const otherEmail = `e2e-conf-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E Conflito Externa ${run}`;
   try {
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo3", phone: "11999990023", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo3", email: otherEmail, password: otherPassword }));
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const result = await withSession(other.cookie, async () => {
@@ -4130,7 +4130,7 @@ async function scheduleConflictGaps() {
     check("lacunas(f): 409 por profissional (POST e PATCH) não cita paciente, procedimento nem id do outro paciente", first.status === 201 && byPro.status === 409 && viaPatch.status === 409 && !text.includes("E2E ConfG") && !text.includes("Segredo") && !text.includes(occupant.id), text);
     const otherEmail = `e2e-confg-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E ConfG Externa ${run}`;
     try {
-      const r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo G", phone: "11999990044", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+      const r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo G", email: otherEmail, password: otherPassword }));
       const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
       if (other?.status === 200) {
         const theirs = await withSession(other.cookie, async () => {
@@ -4364,7 +4364,7 @@ async function sessionMaterials() {
   const otherPassword = `E2e-${run}-Outra9!`;
   const otherClinic = `E2E Mat Externa ${run}`;
   try {
-    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990020", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const other = reg.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const before = JSON.stringify(await dbSession(first.id));
@@ -4704,7 +4704,7 @@ async function sessionMaterialsGaps() {
   const otherPassword = `E2e-${run}-Outra9!`;
   const otherClinic = `E2E MG Externa ${run}`;
   try {
-    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990021", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const other = reg.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const foreign = await withSession(other.cookie, async () => {
@@ -4804,7 +4804,7 @@ async function pendingStock(patient) {
   // Outra clínica: não vê e não conclui.
   const otherEmail = `e2e-pend-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E Pend Externa ${run}`;
   try {
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990020", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const ext = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     const res = ext?.status === 200 ? await withSession(ext.cookie, async () => [await api("GET", "/api/stock/pending"), await api("POST", `/api/stock/pending/${out.id}`, {})]) : null;
     check("pendências: outra clínica não vê a pendência e concluir => 400", res && !JSON.stringify(res[0].data).includes(prod.name) && res[1].status === 400, res ? `${res[0].status} ${res[1].status}` : `registro ${r.status}`);
@@ -5222,7 +5222,7 @@ async function mobilePhotos() {
   let staffTeam = null;
   let proTeam = null;
   try {
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990120", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const otherToken = r.status === 201 ? (await mobileLogin(otherEmail, otherPassword)).data?.token : null;
     if (otherToken) {
       const before = await prisma.evaluationPhoto.count({ where: { evaluation: { patientId: patient.id } } });
@@ -5593,7 +5593,7 @@ async function mobilePhotosGaps() {
     check("depois do PUT do editor o app continua enviando para a mesma avaliação (sortOrder = máximo + 1)", afterStaleUp.status === 201 && afterStaleUp.data.evaluation.id === ed && afterStaleUp.data.photo.sortOrder === 2, `${afterStaleUp.status} ${afterStaleUp.data.photo?.sortOrder}`);
 
     // ===== Trial vencido e outra clínica =====
-    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: trialClinic, name: "E2E Trial", phone: "11999990130", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: trialEmail, password: trialPass }));
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: trialClinic, name: "E2E Trial", email: trialEmail, password: trialPass }));
     if (reg.status === 201) {
       const tClinic = (await prisma.clinicMembership.findFirst({ where: { user: { email: trialEmail } }, select: { clinicId: true } })).clinicId;
       const tPatient = await prisma.patient.create({ data: { clinicId: tClinic, name: `Trial Pac ${run}`, phone: "11999990131", age: 30 } });
@@ -5737,7 +5737,7 @@ async function journeyStageFilter() {
   check("etapa: jornada de outro paciente nunca aparece", jOther?.id && !everyone.includes(jOther.id));
   const clinicBMail = `e2e-etapa-${run}@example.com`;
   const clinicBPass = `Etapa-${run}-Aa1!`;
-  const registered = await withSession("", () => api("POST", "/api/auth/register", { clinicName: `zz Etapa ${run}`, name: "Admin Etapa B", phone: "11999990000", profession: "Biomédica", practiceArea: "Estética", hasSecretary: "Sim", email: clinicBMail, password: clinicBPass }));
+  const registered = await withSession("", () => api("POST", "/api/auth/register", { clinicName: `zz Etapa ${run}`, name: "Admin Etapa B", email: clinicBMail, password: clinicBPass }));
   try {
     const sessionB = await loginAs(clinicBMail, clinicBPass);
     check("etapa: clínica B criada para isolamento", registered.status === 201 && sessionB.status === 200, `${registered.status}/${sessionB.status}`);
@@ -5826,7 +5826,7 @@ async function googleSignup() {
   const sign = (typ, p) => new SignJWT({ typ, ...p }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime(Math.floor(Date.now() / 1000) + 600).sign(key);
   const prefix = `e2e-gsu-${run}`;
   const mailOf = (t) => `${prefix}-${t}@example.invalid`;
-  const profile = { clinicName: `${prefix} Clínica`, name: "Dona E2E", phone: "11999990000", profession: "Biomédica", practiceArea: "Estética", hasSecretary: "Sim" };
+  const profile = { clinicName: `${prefix} Clínica`, name: "Dona E2E" };
   const post = async (cookieValue, body) => {
     const res = await fetch(`${baseUrl}/api/auth/google/signup/complete`, {
       method: "POST",
@@ -5849,10 +5849,10 @@ async function googleSignup() {
 
     const invalid = await post(good, { ...profile, clinicName: "   " });
     check("cadastro Google: perfil inválido = 400 invalid_profile, cookie mantido e nada criado", invalid.status === 400 && invalid.data?.code === "invalid_profile" && !clears(invalid) && await prisma.user.count({ where: { email: { startsWith: prefix } } }) === 0, `${invalid.status} ${JSON.stringify(invalid.data)}`);
-    const badSecretary = await post(good, { ...profile, hasSecretary: "talvez" });
-    check("cadastro Google: campo obrigatório inválido (hasSecretary) = 400 invalid_profile", badSecretary.status === 400 && badSecretary.data?.code === "invalid_profile", `${badSecretary.status}`);
+    const noName = await post(good, { ...profile, name: "  " });
+    check("cadastro Google: nome vazio = 400 invalid_profile", noName.status === 400 && noName.data?.code === "invalid_profile", `${noName.status}`);
     // E-mail/sub vêm só do cookie: o corpo não pode trocá-los.
-    const [a, b] = await Promise.all([post(good, { ...profile, email: mailOf("hacker") }), post(good, { ...profile, email: mailOf("hacker") })]);
+    const [a, b] = await Promise.all([post(good, { ...profile, email: mailOf("hacker"), phone: "119", profession: "X", practiceArea: "Y", hasSecretary: "talvez" }), post(good, { ...profile, email: mailOf("hacker") })]);
     const wins = [a, b].filter((r) => r.status === 201);
     const losers = [a, b].filter((r) => r.status === 409);
     check("cadastro Google: clique duplo = um 201 e um 409 account_exists", wins.length === 1 && losers.length === 1 && losers[0].data?.code === "account_exists", `${a.status}/${b.status}`);
@@ -6015,7 +6015,7 @@ async function invitations() {
     check("aceite sem sessão devolve 401", r.status === 401, r.status);
 
     // --- Conta existente em outra clínica: aceite com sessão, isolamento ---
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: outClinic, name: "E2E Externo", phone: "11999990077", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: outEmail, password: pw }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: outClinic, name: "E2E Externo", email: outEmail, password: pw }));
     const outsider = r.status === 201 ? await loginAs(outEmail, pw) : null;
     if (outsider?.status !== 200) { check("conta de outra clínica criada para os convites", false, `registro ${r.status}`); }
     else {
@@ -6432,7 +6432,7 @@ async function financeiro(state) {
   const otherEmail = `e2e-fin-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E Financeiro Externa ${run}`;
   const fresh = (await api("POST", "/api/payments", { patientId: state.patient.id, value: 1, method: "Pix", status: "Pendente", installments: "A vista" })).data.payment;
   try {
-    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990023", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const other = reg.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const res = await withSession(other.cookie, async () => ({ rec: await api("PATCH", `/api/payments/${fresh.id}`, { action: "receive" }), edit: await api("PATCH", `/api/payments/${fresh.id}`, { value: 9 }), acc: await api("GET", "/api/finance/accounts?kind=receivable&status=all"), mov: await api("GET", "/api/finance/movements?pageSize=50"), sum: await api("GET", "/api/finance/summary?period=month") }));
@@ -6570,7 +6570,7 @@ async function teamMemberDetail() {
     // 404 inexistente e outra clínica
     r = await api("GET", `/api/team/inexistente-${run}`);
     check("detalhe do profissional: id inexistente devolve 404", r.status === 404, r.status);
-    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990023", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const foreign = await prisma.clinicMembership.findFirst({ where: { user: { email: otherEmail } }, select: { id: true } });
     if (reg.status === 201 && foreign) {
       r = await api("GET", `/api/team/${foreign.id}`);
@@ -6659,7 +6659,7 @@ async function collaboratorEdit() {
     // 404
     r = await api("PATCH", `/api/team/inexistente-${run}`, { name: "Nome Ok", cpf });
     check("editar colaborador: id inexistente devolve 404", r.status === 404, r.status);
-    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo Edit", phone: "11999990024", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: pw }));
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo Edit", email: otherEmail, password: pw }));
     const foreign = await prisma.clinicMembership.findFirst({ where: { user: { email: otherEmail } }, select: { id: true, clinicId: true, user: { select: { name: true } } } });
     if (reg.status === 201 && foreign) {
       r = await api("PATCH", `/api/team/${foreign.id}`, { name: "Invadido", cpf });
@@ -6774,7 +6774,7 @@ async function collaboratorPhoto() {
     check("foto colaborador: pedidos invalidos nao alteraram a foto", Buffer.compare(before, afterBad) === 0, `${before.length} ${afterBad.length}`);
 
     // outra clinica
-    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo Foto", phone: "11999990025", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: pw }));
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo Foto", email: otherEmail, password: pw }));
     const foreign = await prisma.clinicMembership.findFirst({ where: { user: { email: otherEmail } }, select: { id: true, clinicId: true, userId: true } });
     if (reg.status === 201 && foreign) {
       r = await raw("GET", url(foreign.id));
@@ -6941,7 +6941,7 @@ async function sendQuote() {
       check("envio: STAFF não alterou sentAt", +(await read(qMail.id)).sentAt === +after.sentAt && sentBefore === null);
     } else check("envio: usuário STAFF criado", false, `team ${r.status} login ${staff?.status}`);
 
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990061", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const o = await withSession(other.cookie, () => api("POST", `/api/quotes/${qMail.id}/send`));
@@ -7014,7 +7014,7 @@ async function patientEmailsSwitch() {
       } else check(`chave: usuário ${role} criado`, false, `team ${t.status} login ${s?.status}`);
     }
 
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990071", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const o = await withSession(other.cookie, async () => ({ set: await setKey(false), get: await getSettings() }));
@@ -7136,7 +7136,7 @@ async function setupWizard() {
     check("setup: dismiss/start depois de concluído não reabre o assistente", r.status === 200 && r.data.status === "completed", `${r.status} ${r.data.status}`);
 
     // Isolamento: admin de outra clínica.
-    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990071", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", email: otherEmail, password: otherPassword }));
     const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
     if (other?.status === 200) {
       const homeBefore = await setupRow();
@@ -7218,7 +7218,7 @@ async function laborCostAdmin() {
       check("mão de obra admin: PROFESSIONAL sem settings:team recebe 403 e não altera", r.status === 403 && (await labor(owner.id)) === 12345, r.status);
     } else check("login PROFESSIONAL para mão de obra", false, proSess.status);
     // (6) outra clínica
-    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo Mao", phone: "11999990031", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: pw }));
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo Mao", email: otherEmail, password: pw }));
     const other = reg.status === 201 ? await loginAs(otherEmail, pw) : null;
     if (other?.status === 200) {
       r = await withSession(other.cookie, () => api("PATCH", "/api/team", { membershipId: owner.id, laborCostCents: 1 }));
@@ -7344,7 +7344,7 @@ async function stockCatalog() {
     check("catálogo de materiais: POST depois da compra devolve o mesmo item com saldo 10 e custo preservado", r.status === 200 && r.data.created === false && r.data.product?.balance === 10 && r.data.product.costCents === 250, JSON.stringify(r.data.product));
 
     // Isolamento entre clínicas.
-    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinicName, name: "E2E Externo Cat", phone: "11999990033", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: mail("outro"), password: pw }));
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinicName, name: "E2E Externo Cat", email: mail("outro"), password: pw }));
     const other = reg.status === 201 ? await loginAs(mail("outro"), pw) : null;
     if (other?.status !== 200) { check("catálogo de materiais: segunda clínica criada", false, `${reg.status} ${other?.status}`); return; }
     const otherClinic = await prisma.clinic.findFirst({ where: { name: otherClinicName }, select: { id: true } });
@@ -7391,7 +7391,8 @@ async function signupEmailVerification() {
   const mailOf = (t) => `${prefix}-${t}@example.invalid`;
   const pw = `E2e-${run}-Veri9!`;
   const passwordHash = await hash(pw, 4);
-  const profile = { clinicName: `${prefix} Clínica`, name: "Dona Verif", phone: "11999990000", profession: "Biomédica", practiceArea: "Estética", hasSecretary: true };
+  const profile = { clinicName: `${prefix} Clínica`, name: "Dona Verif" };
+  const legacyProfile = { ...profile, clinicName: `${prefix} Antiga`, phone: "11999990000", profession: "Biomédica", practiceArea: "Estética", hasSecretary: true };
   const post = async (path, body) => {
     const res = await fetch(`${baseUrl}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), redirect: "manual" });
     const text = await res.text();
@@ -7408,7 +7409,7 @@ async function signupEmailVerification() {
     const isBad = (x) => x.status === 400 && x.data.message === BAD && Object.keys(x.data).join() === "message";
     const isGen = (x) => x.status === 429 && x.data.message === GENERIC && Object.keys(x.data).join() === "message";
     const snap = async (mail) => JSON.stringify(await pend(mail));
-    const base = { clinicName: profile.clinicName, name: "Dona Verif", phone: "11999990000", profession: "Biomédica", practiceArea: "Estética", hasSecretary: "Sim", email: mailOf("reg"), password: pw };
+    const base = { clinicName: profile.clinicName, name: "Dona Verif", email: mailOf("reg"), password: pw };
     let r = await post("/api/auth/register", { ...base, password: "curta" });
     check("cadastro: senha curta = 400", r.status === 400, r.status);
     r = await post("/api/auth/register", { ...base, password: "é".repeat(40) + "A1!" });
@@ -7419,6 +7420,25 @@ async function signupEmailVerification() {
     check("cadastro: nome de clínica vazio = 400", r.status === 400, r.status);
     r = await post("/api/auth/register", { ...base, email: email });
     check("cadastro: e-mail já existente = 409 e nenhum pendente criado", r.status === 409 && await prisma.pendingSignup.count({ where: { email } }) === 0, r.status);
+    const weak = [["sem maiúscula", "abcdef1!x"], ["sem minúscula", "ABCDEF1!X"], ["sem número", "Abcdefg!x"], ["sem especial", "Abcdefg12"], ["curta", "Ab1!xyz"], [">72 bytes", "Ab1!" + "a".repeat(70)]];
+    for (const [label, bad] of weak) {
+      r = await post("/api/auth/register", { ...base, password: bad });
+      check(`cadastro: senha ${label} = 400 com mensagem e nenhum pendente`, r.status === 400 && typeof r.data.message === "string" && r.data.message.length > 10 && await prisma.pendingSignup.count({ where: { email: base.email } }) === 0, `${r.status} ${r.text}`);
+    }
+    r = await post("/api/auth/register", { ...base, name: "   " });
+    check("cadastro: nome vazio = 400 'Preencha todos os campos'", r.status === 400 && /Preencha todos os campos/.test(r.data.message), `${r.status} ${r.text}`);
+    r = await post("/api/auth/register", { clinicName: base.clinicName, name: "X", email: "", password: pw });
+    check("cadastro: e-mail ausente = 400", r.status === 400, r.status);
+    const leg = mailOf("legacy");
+    await seed(leg, { profile: legacyProfile });
+    r = await verify(leg, "123456");
+    const legUser = await prisma.user.findUnique({ where: { email: leg }, include: { memberships: { include: { clinic: true } } } });
+    check("verify: pendente antigo com campos extras no perfil cria a conta (extras ignorados)", r.status === 201 && legUser?.memberships[0]?.clinic.name === legacyProfile.clinicName && legUser.name === "Dona Verif", `${r.status} ${r.text}`);
+    const slim = mailOf("slim");
+    await seed(slim, { profile: { clinicName: `${prefix} Nova`, name: "Só Dois" } });
+    r = await verify(slim, "123456");
+    check("verify: perfil novo só com clinicName+name cria a conta", r.status === 201 && await prisma.user.count({ where: { email: slim } }) === 1, `${r.status} ${r.text}`);
+
     const big = { ...base, clinicName: "x".repeat(11 * 1024) };
     for (const p of ["/api/auth/register", "/api/auth/register/verify", "/api/auth/register/resend"]) {
       r = await post(p, big);
@@ -7492,7 +7512,7 @@ async function signupEmailVerification() {
     check("verify: código certo (com espaço) = 201 {created:true} sem vazar hash", r.status === 201 && r.data.created === true && !leaks(r), `${r.status} ${r.text}`);
     const user = await prisma.user.findUnique({ where: { email: ok }, include: { memberships: { include: { clinic: true } } } });
     const m = user?.memberships[0];
-    check("verify: criou usuário ADMIN verificado, clínica, membership owner e apagou o pendente", user?.role === "ADMIN" && !!user.emailVerifiedAt && user.memberships.length === 1 && m.isOwner && m.role === "ADMIN" && m.clinic.name === profile.clinicName && user.hasSecretary === true && await pend(ok) === null, JSON.stringify({ role: user?.role, n: user?.memberships.length }));
+    check("verify: criou usuário ADMIN verificado, clínica, membership owner e apagou o pendente", user?.role === "ADMIN" && !!user.emailVerifiedAt && user.memberships.length === 1 && m.isOwner && m.role === "ADMIN" && m.clinic.name === profile.clinicName && await pend(ok) === null, JSON.stringify({ role: user?.role, n: user?.memberships.length }));
     const lg = await post("/api/auth/login", { login: ok, password: pw });
     check("verify: login com a senha do cadastro funciona", lg.status === 200 && lg.data.user?.clinic?.name === profile.clinicName, `${lg.status}`);
     r = await verify(ok, "123456");

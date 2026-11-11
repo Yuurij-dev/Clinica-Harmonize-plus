@@ -6,10 +6,6 @@ export const TRIAL_DAYS = 3;
 export type ClinicProfile = {
   clinicName: string;
   name: string;
-  phone: string;
-  profession: string;
-  practiceArea: string;
-  hasSecretary: boolean;
 };
 
 export const CLINIC_NAME_MESSAGE = "Informe um nome para a clínica com até 100 caracteres.";
@@ -39,10 +35,6 @@ export function parseClinicProfile(body: Record<string, unknown> | null | undefi
   const clinicName = text(body?.clinicName);
   if (!clinicName || clinicName.length > 100) return { ok: false, code: "clinic_name", message: CLINIC_NAME_MESSAGE };
   const name = text(body?.name);
-  const phone = text(body?.phone);
-  const profession = text(body?.profession);
-  const practiceArea = text(body?.practiceArea);
-  const hasSecretary = body?.hasSecretary === "Sim" ? true : body?.hasSecretary === "Não" ? false : null;
-  if (!name || !phone || !profession || !practiceArea || hasSecretary === null) return { ok: false, code: "fields", message: CLINIC_FIELDS_MESSAGE };
-  return { ok: true, value: { clinicName, name, phone, profession, practiceArea, hasSecretary } };
+  if (!name) return { ok: false, code: "fields", message: CLINIC_FIELDS_MESSAGE };
+  return { ok: true, value: { clinicName, name } };
 }

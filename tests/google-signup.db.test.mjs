@@ -58,7 +58,7 @@ const opts = { skip: skipReason ?? false };
 const tag = `zz-e2e-gsu-${Date.now()}`;
 const mail = (label) => `${tag}-${label}@example.invalid`;
 const repo = prisma ? prismaSignupRepo : null;
-const profile = { clinicName: `${tag} Clinica`, name: "Dona Teste", phone: "11999990000", profession: "Biomedica", practiceArea: "Estetica", hasSecretary: "Sim" };
+const profile = { clinicName: `${tag} Clinica`, name: "Dona Teste" };
 
 let suffixN = 0;
 const run = (pending, prof = profile, hashCalls = { n: 0 }, now = new Date()) =>
@@ -151,8 +151,7 @@ test("perfil invalido: recusado sem criar nada e sem gerar hash", opts, async ()
   const bad = [
     { ...profile, clinicName: "   " },
     { ...profile, clinicName: "x".repeat(101) },
-    { ...profile, phone: "" },
-    { ...profile, hasSecretary: "talvez" },
+    { ...profile, name: "  " },
   ];
   for (const prof of bad) {
     const result = await run({ sub: `${tag}-sub-bad`, email: mail("bad"), name: "N" }, prof, hashCalls);

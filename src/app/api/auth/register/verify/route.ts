@@ -26,8 +26,9 @@ const DUMMY_HASH = "0".repeat(64);
 function readProfile(value: unknown): ClinicProfile | null {
   const p = value as Partial<ClinicProfile> | null;
   if (!p || typeof p !== "object") return null;
-  if (typeof p.clinicName !== "string" || typeof p.name !== "string" || typeof p.phone !== "string" || typeof p.profession !== "string" || typeof p.practiceArea !== "string" || typeof p.hasSecretary !== "boolean") return null;
-  return { clinicName: p.clinicName, name: p.name, phone: p.phone, profession: p.profession, practiceArea: p.practiceArea, hasSecretary: p.hasSecretary };
+  // Tolerante: pendentes antigos trazem campos extras (phone etc.) que sao ignorados.
+  if (typeof p.clinicName !== "string" || typeof p.name !== "string") return null;
+  return { clinicName: p.clinicName, name: p.name };
 }
 
 // Etapa 2: confere o codigo e so entao cria a conta. Limites por janela de 24 h: 5 palpites por codigo

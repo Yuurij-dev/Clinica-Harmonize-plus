@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { parseClinicProfile } from "@/lib/clinic-signup-rules";
 import { getAuthSecret } from "@/lib/auth-secret";
+import { PASSWORD_RULE_MESSAGE, isStrongPassword } from "@/lib/password-rules";
 import { isEmailDeliveryReady, sendSignupCodeEmail } from "@/lib/email";
 import { prisma } from "@/lib/prisma";
 import { createPasswordAccount, readLimitedJson } from "@/lib/signup-account";
@@ -35,10 +36,6 @@ export async function POST(request: Request) {
   const body = read.body as {
     clinicName?: string;
     name?: string;
-    phone?: string;
-    profession?: string;
-    practiceArea?: string;
-    hasSecretary?: string;
     email?: string;
     password?: string;
   } | null;
@@ -51,9 +48,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ message: parsed.message }, { status: 400 });
   }
 
-  if (!parsed.ok || !email || password.length < 8) {
-    return NextResponse.json({ message: "Preencha todos os campos e informe uma senha com pelo menos 8 caracteres." }, { status: 400 });
+  if (!parsed.ok || !email || !password) {
+    return NextResponse.json({ message: "Preencha todos os campos." }, { status: 400 });
   }
+  if (!isStrongPassword(password)) return NextResponse.json({ message: PASSWORD_RULE_MESSAGE }, { status: 400 });
   if (!passwordWithinBcryptLimit(password)) return NextResponse.json({ message: "A senha pode ter no máximo 72 bytes (cerca de 72 caracteres, menos se usar acentos ou emojis)." }, { status: 400 });
   if (!isPlausibleEmail(email)) return NextResponse.json({ message: "Digite um e-mail válido." }, { status: 400 });
   const profile = parsed.value;
