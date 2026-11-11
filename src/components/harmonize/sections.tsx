@@ -1988,7 +1988,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const [rolePermissionsSaving, setRolePermissionsSaving] = useState(false);
   const [rolePermissionsDirty, setRolePermissionsDirty] = useState(false);
   const [rolePermissionsError, setRolePermissionsError] = useState("");
-  const cachedCostSettings = canManageSettings ? readClientCache<{ settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoCompleteAppointmentsEnabled: boolean; autoAdvancePatientJourneyEnabled: boolean; allowAppointmentsOutsideHours: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings") : undefined;
+  const cachedCostSettings = canManageSettings ? readClientCache<{ emailProviderReady?: boolean; settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; patientEmailsEnabled?: boolean; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoCompleteAppointmentsEnabled: boolean; autoAdvancePatientJourneyEnabled: boolean; allowAppointmentsOutsideHours: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings") : undefined;
   const [costSettings, setCostSettings] = useState(() => ({
     laborCost: cachedCostSettings?.settings?.laborCost ?? 0,
     facilityCost: cachedCostSettings?.settings?.facilityCost ?? 0,
@@ -2015,6 +2015,9 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const [appointmentNotificationsEnabled, setAppointmentNotificationsEnabled] = useState(cachedCostSettings?.settings?.appointmentNotificationsEnabled ?? true);
   const [appointmentNotificationSoundEnabled, setAppointmentNotificationSoundEnabled] = useState(cachedCostSettings?.settings?.appointmentNotificationSoundEnabled ?? true);
   const [stockNotificationsEnabled, setStockNotificationsEnabled] = useState(cachedCostSettings?.settings?.stockNotificationsEnabled ?? true);
+  const [patientEmailsEnabled, setPatientEmailsEnabled] = useState(cachedCostSettings?.settings?.patientEmailsEnabled ?? true);
+  const [emailProviderReady, setEmailProviderReady] = useState(cachedCostSettings?.emailProviderReady ?? false);
+  const [patientEmailsFeedback, setPatientEmailsFeedback] = useState<{ success: boolean; message: string } | null>(null);
   const [requireCancellationReason, setRequireCancellationReason] = useState(cachedCostSettings?.settings?.requireCancellationReason ?? false);
   const [autoMarkMissedAppointmentsEnabled, setAutoMarkMissedAppointmentsEnabled] = useState(cachedCostSettings?.settings?.autoMarkMissedAppointmentsEnabled ?? true);
   const [autoCompleteAppointmentsEnabled, setAutoCompleteAppointmentsEnabled] = useState(cachedCostSettings?.settings?.autoCompleteAppointmentsEnabled ?? true);
@@ -2074,6 +2077,21 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
     }
   }
 
+  async function togglePatientEmails(enabled: boolean) {
+    const previous = patientEmailsEnabled;
+    setPatientEmailsFeedback(null);
+    setPatientEmailsEnabled(enabled);
+    const saved = await persistClinicPreference("patientEmailsEnabled", enabled);
+    setCostSettingsSuccess("");
+    setCostSettingsError("");
+    if (saved) {
+      setPatientEmailsFeedback({ success: true, message: enabled ? "Envio de e-mails aos clientes ativado." : "Envio de e-mails aos clientes desativado." });
+    } else {
+      setPatientEmailsEnabled(previous);
+      setPatientEmailsFeedback({ success: false, message: "Não foi possível salvar. A configuração anterior foi mantida." });
+    }
+  }
+
   useEffect(() => {
     if (!canManageTeam) return;
     let active = true;
@@ -2115,7 +2133,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   useEffect(() => {
     if (!canManageSettings) return;
     let active = true;
-    getCachedJson<{ settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoCompleteAppointmentsEnabled: boolean; autoAdvancePatientJourneyEnabled: boolean; allowAppointmentsOutsideHours: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings")
+    getCachedJson<{ emailProviderReady?: boolean; settings?: { name?: string; cnpj?: string | null; phone?: string | null; email?: string | null; address?: string | null; appointmentNotificationsEnabled: boolean; appointmentNotificationSoundEnabled: boolean; stockNotificationsEnabled: boolean; patientEmailsEnabled?: boolean; requireCancellationReason: boolean; autoMarkMissedAppointmentsEnabled: boolean; autoCompleteAppointmentsEnabled: boolean; autoAdvancePatientJourneyEnabled: boolean; allowAppointmentsOutsideHours: boolean; laborCost: number; facilityCost: number; medicationCost: number; appointmentToleranceMinutes: number; openingTime: string; closingTime: string; professionalOpeningTime: string; professionalClosingTime: string; professionalHourlyCost: number } }>("/api/clinic/cost-settings")
       .then((data) => {
         if (!active) return;
         const settings = data.settings ?? {
@@ -2123,6 +2141,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
           appointmentNotificationsEnabled: true,
           appointmentNotificationSoundEnabled: true,
           stockNotificationsEnabled: true,
+          patientEmailsEnabled: true,
           requireCancellationReason: false,
           autoMarkMissedAppointmentsEnabled: true,
           autoCompleteAppointmentsEnabled: true,
@@ -2152,6 +2171,8 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
         setAppointmentNotificationsEnabled(settings.appointmentNotificationsEnabled ?? true);
         setAppointmentNotificationSoundEnabled(settings.appointmentNotificationSoundEnabled ?? true);
         setStockNotificationsEnabled(settings.stockNotificationsEnabled ?? true);
+        setPatientEmailsEnabled(settings.patientEmailsEnabled ?? true);
+        setEmailProviderReady(data.emailProviderReady ?? false);
         setRequireCancellationReason(settings.requireCancellationReason ?? false);
         setAutoMarkMissedAppointmentsEnabled(settings.autoMarkMissedAppointmentsEnabled ?? true);
         setAutoCompleteAppointmentsEnabled(settings.autoCompleteAppointmentsEnabled ?? true);
@@ -2624,10 +2645,20 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
               <CardContent className="space-y-3 pt-4">
                 {[
                   ["WhatsApp", "Confirmações e lembretes de agendamentos"],
-                  ["E-mail", "Envio de comunicações para pacientes"],
                   ["Calendário", "Sincronização externa da agenda"],
                 ].map(([name, description]) => <div className="flex flex-col gap-3 rounded-md border border-border/70 p-4 sm:flex-row sm:items-center sm:justify-between" key={name}><div><p className="text-sm font-bold text-foreground">{name}</p><p className="mt-1 text-xs text-muted-foreground">{description}</p></div><Badge variant="amber">Indisponível</Badge></div>)}
-                <p className="text-xs leading-5 text-muted-foreground">Nenhum provedor de integração está configurado nesta versão. As opções de confirmação e reagendamento online ficam desativadas até a conexão estar disponível.</p>
+                <div className="rounded-md border border-border/70 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div><p className="text-sm font-bold text-foreground">E-mail</p><p className="mt-1 text-xs text-muted-foreground">Envio de comunicações para pacientes</p></div>
+                    {costSettingsLoading ? <LoadingSkeleton className="h-6 w-24" /> : !emailProviderReady ? <Badge variant="amber">Provedor não configurado</Badge> : <Badge variant={patientEmailsEnabled ? "green" : "slate"}>{patientEmailsEnabled ? "Ativo" : "Desativado"}</Badge>}
+                  </div>
+                  <p className="mt-3 text-xs leading-5 text-muted-foreground">Envia ao cliente a confirmação, a remarcação e o cancelamento de agendamentos e o orçamento. Só envia para pacientes com e-mail cadastrado.</p>
+                  <div className="mt-2">
+                    <SettingsToggle label="Enviar e-mails aos clientes" description={emailProviderReady ? "Desligue para a clínica parar de enviar e-mails aos clientes." : "O envio ainda não foi configurado neste ambiente."} checked={patientEmailsEnabled} disabled={costSettingsLoading || !emailProviderReady} saving={savingPreference === "patientEmailsEnabled"} onChange={(enabled) => void togglePatientEmails(enabled)} />
+                  </div>
+                  {patientEmailsFeedback ? <p className={cn("mt-2 text-xs font-medium", patientEmailsFeedback.success ? "text-success" : "text-destructive")} role={patientEmailsFeedback.success ? "status" : "alert"}>{patientEmailsFeedback.message}</p> : null}
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">O envio de e-mails depende do provedor configurado no ambiente. WhatsApp e calendário ainda não estão disponíveis; as opções de confirmação e reagendamento online ficam desativadas até a conexão estar disponível.</p>
               </CardContent>
             </Card>
           ) : null}

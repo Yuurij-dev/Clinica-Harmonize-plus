@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { buildQuotePdf } from "@/lib/quote-pdf";
 import { parseQuoteDetails, proposalRowsFromQuote, quoteFinancialSnapshot } from "@/lib/quote-proposal";
 import { sendQuoteEmail } from "@/lib/patient-emails";
+import { PATIENT_EMAILS_DISABLED_MESSAGE, patientEmailsAllowed } from "@/lib/patient-email-rules";
 
 // Envia o orçamento ao paciente por e-mail com o PDF anexado. Não muda o status; só registra sentAt/sentBy se o e-mail saiu.
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -22,10 +23,11 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
   const patient = quote.patientId
     ? await prisma.patient.findFirst({
         where: { id: quote.patientId, clinicId: user.clinicId },
-        select: { name: true, email: true, clinic: { select: { name: true, phone: true, cnpj: true, address: true } } },
+        select: { name: true, email: true, clinic: { select: { name: true, phone: true, cnpj: true, address: true, patientEmailsEnabled: true } } },
       })
     : null;
   if (!patient || !patient.clinic) return NextResponse.json({ message: "Paciente do orçamento não encontrado." }, { status: 404 });
+  if (!patientEmailsAllowed(patient.clinic)) return NextResponse.json({ message: PATIENT_EMAILS_DISABLED_MESSAGE }, { status: 409 });
   const to = patient.email?.trim();
   if (!to) return NextResponse.json({ message: "O paciente não tem e-mail cadastrado. Cadastre um e-mail para enviar o orçamento." }, { status: 422 });
 

@@ -6955,6 +6955,81 @@ async function sendQuote() {
   }
 }
 
+// Chave "e-mails aos clientes" (Clinic.patientEmailsEnabled). E-mails de teste são sempre @example.invalid/@example.com.
+async function patientEmailsSwitch() {
+  const msg = "O envio de e-mails aos clientes está desativado nas configurações da clínica.";
+  const getSettings = async () => (await api("GET", "/api/clinic/cost-settings")).data;
+  const setKey = (enabled) => api("PATCH", "/api/clinic/preferences", { key: "patientEmailsEnabled", enabled });
+  const clinicId = (await prisma.clinic.findFirst({ where: { name: testClinicName }, select: { id: true } }))?.id;
+  const dbKey = (id) => prisma.clinic.findUnique({ where: { id }, select: { patientEmailsEnabled: true } }).then((c) => c?.patientEmailsEnabled);
+  const read = (id) => prisma.quote.findUnique({ where: { id }, select: { sentAt: true } });
+  const staffEmail = `e2e-chave-staff-${run}@example.com`, staffPassword = `E2e-${run}-Staff9!`;
+  const profEmail = `e2e-chave-prof-${run}@example.com`, profPassword = `E2e-${run}-Prof9!`;
+  const otherEmail = `e2e-chave-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E Chave Externa ${run}`;
+  const members = [];
+  try {
+    await prisma.clinic.update({ where: { id: clinicId }, data: { patientEmailsEnabled: true } });
+    let g = await getSettings();
+    check("chave: GET traz patientEmailsEnabled true por padrão e emailProviderReady booleano", g.settings?.patientEmailsEnabled === true && typeof g.emailProviderReady === "boolean", JSON.stringify(g).slice(0, 200));
+
+    const p = (await api("POST", "/api/patients", { ...regDefaults, name: `Chave Com ${run}`, phone: "11999990070", age: 33, cpf: randomCpf(), email: `e2e-chave-${run}@example.invalid` })).data.patient;
+    const mkQuote = async () => (await api("POST", "/api/quotes", { patientId: p.id, items: "Botox (1x)", total: 99.9, expires: "30/12/2030" })).data.quote;
+    check("chave: paciente criado", p?.id);
+    if (!p?.id) return;
+
+    let r = await setKey(false);
+    g = await getSettings();
+    check("chave: PATCH false devolve 200 e GET reflete false", r.status === 200 && r.data.settings?.patientEmailsEnabled === false && g.settings?.patientEmailsEnabled === false && await dbKey(clinicId) === false, `${r.status} ${JSON.stringify(r.data)}`);
+
+    const q1 = await mkQuote();
+    r = await api("POST", `/api/quotes/${q1?.id}/send`);
+    check("chave desligada: envio devolve 409 com a mensagem exata e sentAt segue null", r.status === 409 && r.data.message === msg && (await read(q1.id)).sentAt === null, `${r.status} ${JSON.stringify(r.data)}`);
+
+    r = await api("POST", "/api/appointments", { patientId: p.id, procedure: "Retorno", professional: "Teste", time: "09:00", date: day(5) });
+    check("chave desligada: agendamento continua 201", r.status === 201 && r.data.appointment?.status === "Agendado", r.status);
+    r = await api("POST", "/api/quotes", { patientId: p.id, items: "Botox (1x)", total: 50 });
+    check("chave desligada: orçamento Pendente continua 201", r.status === 201 && r.data.quote?.status === "Pendente" && r.data.quote?.total === 50, `${r.status} ${r.data.quote?.status}`);
+
+    r = await setKey(true);
+    g = await getSettings();
+    check("chave: PATCH true devolve 200 e GET reflete true", r.status === 200 && g.settings?.patientEmailsEnabled === true, `${r.status} ${JSON.stringify(r.data)}`);
+    r = await api("POST", `/api/quotes/${q1.id}/send`);
+    check("chave ligada: envio volta a 200 e grava sentAt", r.status === 200 && r.data.ok === true && (await read(q1.id)).sentAt !== null, `${r.status} ${JSON.stringify(r.data)}`);
+
+    for (const [label, body] of [["enabled string", { key: "patientEmailsEnabled", enabled: "false" }], ["enabled ausente", { key: "patientEmailsEnabled" }], ["chave desconhecida", { key: "naoExiste", enabled: false }], ["chave ausente", { enabled: true }]]) {
+      r = await api("PATCH", "/api/clinic/preferences", body);
+      check(`chave: ${label} devolve 400`, r.status === 400, r.status);
+    }
+    check("chave: valores inválidos não alteraram a chave", await dbKey(clinicId) === true);
+
+    r = await withSession("", () => setKey(false));
+    check("chave: PATCH sem sessão devolve 401", r.status === 401, r.status);
+    for (const [role, mail, pass] of [["PROFESSIONAL", profEmail, profPassword], ["STAFF", staffEmail, staffPassword]]) {
+      const t = await api("POST", "/api/team", { name: `E2E Chave ${role}`, email: mail, password: pass, role, cpf: randomCpf(), address: "Rua A, 1", country: "Brasil", state: "SP", city: "São Paulo" });
+      if (t.data.member) members.push(t.data.member);
+      const s = t.status === 201 ? await loginAs(mail, pass) : null;
+      if (s?.status === 200) {
+        const d = await withSession(s.cookie, () => setKey(false));
+        check(`chave: ${role} devolve 403 e a chave não muda`, d.status === 403 && await dbKey(clinicId) === true, d.status);
+      } else check(`chave: usuário ${role} criado`, false, `team ${t.status} login ${s?.status}`);
+    }
+
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Externo", phone: "11999990071", profession: "Esteta", practiceArea: "Estética", hasSecretary: "Não", email: otherEmail, password: otherPassword }));
+    const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    if (other?.status === 200) {
+      const o = await withSession(other.cookie, async () => ({ set: await setKey(false), get: await getSettings() }));
+      const otherId = (await prisma.clinic.findFirst({ where: { name: otherClinic }, select: { id: true } }))?.id;
+      check("chave: admin de outra clínica desliga só a própria", o.set.status === 200 && o.get.settings?.patientEmailsEnabled === false && await dbKey(otherId) === false && await dbKey(clinicId) === true && (await getSettings()).settings?.patientEmailsEnabled === true, `${o.set.status} ${JSON.stringify(o.get.settings)}`);
+    } else check("chave: segunda clínica criada", false, `registro ${r.status} login ${other?.status}`);
+  } finally {
+    await prisma.clinic.update({ where: { id: clinicId }, data: { patientEmailsEnabled: true } });
+    for (const m of members) await api("DELETE", "/api/team", { membershipId: m.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [otherEmail, staffEmail, profEmail] } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: [otherEmail, staffEmail, profEmail] } } });
+  }
+}
+
 // Assistente de configuração: GET/PATCH /api/setup (permissão, validação, conclusão por dados reais, finish, isolamento).
 async function setupWizard() {
   const me = await prisma.user.findUnique({ where: { email: email.toLowerCase() }, select: { id: true } });
@@ -7305,6 +7380,7 @@ async function stockCatalog() {
 }
 
 const suites = {
+  chave_email_clientes: { needs: [], run: () => patientEmailsSwitch() },
   catalogo_materiais: { needs: [], run: () => stockCatalog() },
   setup_wizard: { needs: [], run: () => setupWizard() },
   mao_de_obra_admin: { needs: [], run: () => laborCostAdmin() },

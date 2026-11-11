@@ -55,6 +55,7 @@ model Clinic {
   appointmentNotificationsEnabled Boolean                @default(true)
   appointmentNotificationSoundEnabled Boolean            @default(true)
   stockNotificationsEnabled   Boolean                    @default(true)
+  patientEmailsEnabled        Boolean                    @default(true)
   requireCancellationReason   Boolean                    @default(false)
   autoMarkMissedAppointmentsEnabled Boolean                @default(true)
   autoCompleteAppointmentsEnabled Boolean                  @default(true)

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { canForUser } from "@/lib/permissions";
 import { parseClockMinutes } from "@/lib/clinic-time";
+import { isEmailDeliveryReady } from "@/lib/email";
 import { prisma } from "@/lib/prisma";
 
 type ClinicSettings = {
@@ -13,6 +14,7 @@ type ClinicSettings = {
   appointmentNotificationsEnabled: boolean;
   appointmentNotificationSoundEnabled: boolean;
   stockNotificationsEnabled: boolean;
+  patientEmailsEnabled: boolean;
   requireCancellationReason: boolean;
   autoMarkMissedAppointmentsEnabled: boolean;
   autoCompleteAppointmentsEnabled: boolean;
@@ -40,6 +42,7 @@ async function loadClinicSettings(clinicId: string): Promise<ClinicSettings | nu
       'appointmentNotificationsEnabled', to_jsonb(c)->'appointmentNotificationsEnabled',
       'appointmentNotificationSoundEnabled', to_jsonb(c)->'appointmentNotificationSoundEnabled',
       'stockNotificationsEnabled', to_jsonb(c)->'stockNotificationsEnabled',
+      'patientEmailsEnabled', COALESCE(to_jsonb(c)->'patientEmailsEnabled', 'true'::jsonb),
       'requireCancellationReason', COALESCE(to_jsonb(c)->'requireCancellationReason', 'false'::jsonb),
       'autoMarkMissedAppointmentsEnabled', COALESCE(to_jsonb(c)->'autoMarkMissedAppointmentsEnabled', 'true'::jsonb),
       'autoCompleteAppointmentsEnabled', COALESCE(to_jsonb(c)->'autoCompleteAppointmentsEnabled', 'true'::jsonb),
@@ -67,7 +70,7 @@ export async function GET() {
   if (!canForUser(user, "settings:manage")) return NextResponse.json({ message: "Acesso restrito à administração da clínica." }, { status: 403 });
 
   const settings = await loadClinicSettings(user.clinicId);
-  return NextResponse.json({ settings });
+  return NextResponse.json({ settings, emailProviderReady: isEmailDeliveryReady() });
 }
 
 export async function PATCH(request: Request) {

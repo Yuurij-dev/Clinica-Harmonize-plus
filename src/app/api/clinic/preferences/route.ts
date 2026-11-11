@@ -7,6 +7,7 @@ import { currentStagesFor } from "@/lib/patient-list-server";
 const preferenceKeys = [
   "appointmentNotificationsEnabled",
   "stockNotificationsEnabled",
+  "patientEmailsEnabled",
   "requireCancellationReason",
   "autoMarkMissedAppointmentsEnabled",
   "autoCompleteAppointmentsEnabled",
