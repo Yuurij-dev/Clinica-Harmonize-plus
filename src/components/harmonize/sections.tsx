@@ -2665,7 +2665,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
                     )}
                   </div>
                   <p className="mt-3 text-xs leading-5 text-muted-foreground">Envia ao cliente a confirmação, a remarcação e o cancelamento de agendamentos e o orçamento. Só envia para pacientes com e-mail cadastrado. {emailProviderReady ? "Desligue para parar de enviar e-mails aos clientes." : "O envio ainda não foi configurado neste ambiente."}</p>
-                  {patientEmailsFeedback ? <p className={cn("mt-2 text-xs font-medium", patientEmailsFeedback.success ? "text-success" : "text-destructive")} role={patientEmailsFeedback.success ? "status" : "alert"}>{patientEmailsFeedback.message}</p> : null}
+                  {patientEmailsFeedback ? <p className={cn("mt-2 text-xs font-medium", patientEmailsFeedback.success && patientEmailsEnabled ? "text-success" : "text-destructive")} role={patientEmailsFeedback.success ? "status" : "alert"}>{patientEmailsFeedback.message}</p> : null}
                 </div>
                 <p className="text-xs leading-5 text-muted-foreground">O envio de e-mails depende do provedor configurado no ambiente. WhatsApp e calendário ainda não estão disponíveis; as opções de confirmação e reagendamento online ficam desativadas até a conexão estar disponível.</p>
               </CardContent>
