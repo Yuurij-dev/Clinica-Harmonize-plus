@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CountUp } from "@/components/ui/count-up";
 import { fieldClassName } from "@/components/ui/modal";
-import { addDays, addMonths, type FinancePeriod, type FlowGranularity } from "@/lib/finance-rules";
+import { addDays, addMonths, periodRange, type FinancePeriod, type FlowGranularity } from "@/lib/finance-rules";
 import { cn } from "@/lib/utils";
 import { useCan } from "./current-user";
 import { ErrorNote, ExpenseFormModal, FinanceHeader, financeKey, formatCents, formatDate, LoadingBlock, useFinanceResource } from "./finance-shared";
@@ -39,8 +39,8 @@ function variation(current: number, previous: number) {
 }
 
 function compactCurrency(value: number) {
-  if (value >= 1000) return `R$ ${(value / 1000).toFixed(value % 1000 ? 1 : 0).replace(".", ",")}k`;
-  return `R$ ${value}`;
+  if (value >= 1000) return `R$ ${(value / 1000).toFixed(value % 1000 ? 1 : 0).replace(".", ",")}k`;
+  return `R$ ${value}`;
 }
 
 export function FinanceDashboard({ period, date, today, onPeriod, onDate, onGo }: { period: FinancePeriod; date: string; today: string; onPeriod: (period: FinancePeriod) => void; onDate: (date: string) => void; onGo: (view: "movimentacoes" | "recorrentes" | "contas", tab?: "receber" | "pagar", range?: { from: string; to: string }) => void }) {
@@ -54,14 +54,18 @@ export function FinanceDashboard({ period, date, today, onPeriod, onDate, onGo }
   const summaryState = useFinanceResource<Summary>(financeKey("/api/finance/summary", { period, date: dateParam }), true);
   const flowState = useFinanceResource<Flow>(financeKey("/api/finance/flow", { granularity, period, date: dateParam }), true);
   const summary = summaryState.data;
-  const recentKey = summary && (canRevenue || canExpense) ? financeKey("/api/finance/movements", { type: "all", from: summary.range.start, to: summary.range.end, sort: "desc", page: 1, pageSize: 4 }) : null;
+  // Só o que já aconteceu: despesas com vencimento futuro não entram nas recentes.
+  const recentTo = summary ? (summary.range.end < today ? summary.range.end : today) : "";
+  const recentFuture = Boolean(summary && summary.range.start > today);
+  const recentKey = summary && !recentFuture && (canRevenue || canExpense) ? financeKey("/api/finance/movements", { type: "all", from: summary.range.start, to: recentTo, sort: "desc", page: 1, pageSize: 4 }) : null;
   const recentState = useFinanceResource<MovementsResponse>(recentKey, true);
   const recurringState = useFinanceResource<RecurringList>(canExpense ? recurringKey : null);
 
   function shift(direction: 1 | -1) {
     onDate(period === "month" ? addMonths(date, direction, 1) : addDays(date, direction * (period === "week" ? 7 : 1)));
   }
-  const dateLabel = period === "month" ? monthLabel(date) : summary && period === "week" ? `${formatDate(summary.range.start).slice(0, 5)} – ${formatDate(summary.range.end).slice(0, 5)}` : formatDate(date);
+  const weekRange = periodRange("week", date);
+  const dateLabel = period === "month" ? monthLabel(date) : period === "week" ? `${formatDate(weekRange.start).slice(0, 5)} – ${formatDate(weekRange.end)}` : formatDate(date);
 
   const totals = summary?.totals;
   const previous = summary?.previousTotals;
@@ -88,7 +92,7 @@ export function FinanceDashboard({ period, date, today, onPeriod, onDate, onGo }
           </div>
           <div className="flex items-center gap-1 rounded-[8px] border border-input bg-white px-1 shadow-sm">
             <Button size="icon" variant="ghost" aria-label="Período anterior" onClick={() => shift(-1)}><ChevronLeft className="h-4 w-4" /></Button>
-            <span className="min-w-[110px] text-center text-sm font-semibold text-foreground" aria-live="polite">{dateLabel}</span>
+            <span className="min-w-[110px] whitespace-nowrap px-1 text-center text-sm font-semibold text-foreground" aria-live="polite">{dateLabel}</span>
             <Button size="icon" variant="ghost" aria-label="Próximo período" onClick={() => shift(1)}><ChevronRight className="h-4 w-4" /></Button>
           </div>
           {date !== today ? <Button size="sm" variant="ghost" onClick={() => onDate(today)}>Voltar para hoje</Button> : null}
@@ -118,30 +122,30 @@ export function FinanceDashboard({ period, date, today, onPeriod, onDate, onGo }
       </div>
 
       <Card className="mt-5">
-        <CardHeader>
-          <div className="flex flex-wrap items-center gap-3">
-            <CardTitle className="text-base">Fluxo financeiro</CardTitle>
-            <span className="flex items-center gap-1 text-xs text-muted-foreground"><span className="h-2 w-2 rounded-full" style={{ background: revenueColor }} />Receitas</span>
-            <span className="flex items-center gap-1 text-xs text-muted-foreground"><span className="h-2 w-2 rounded-full" style={{ background: expenseColor }} />Despesas</span>
+        <CardHeader className="flex-wrap items-center">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <CardTitle className="whitespace-nowrap text-base">Fluxo financeiro</CardTitle>
+            <span className="flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground"><span className="h-2 w-2 rounded-full" style={{ background: revenueColor }} />Receitas</span>
+            <span className="flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground"><span className="h-2 w-2 rounded-full" style={{ background: expenseColor }} />Despesas</span>
           </div>
-          <select className={`${fieldClassName} h-9 w-auto`} value={granularity} onChange={(event) => setGranularity(event.target.value as FlowGranularity)} aria-label="Agrupamento do fluxo">
+          <select className={`${fieldClassName} h-9 shrink-0`} style={{ width: "auto" }} value={granularity} onChange={(event) => setGranularity(event.target.value as FlowGranularity)} aria-label="Agrupamento do fluxo">
             {(Object.keys(granularityLabels) as FlowGranularity[]).map((value) => <option key={value} value={value}>{granularityLabels[value]}</option>)}
           </select>
         </CardHeader>
         <CardContent>
           {flowState.loading ? <LoadingBlock className="h-64" /> : flowState.error ? <ErrorNote message={flowState.error} onRetry={flowState.reload} /> : chartEmpty ? <EmptyState title="Sem movimentações no período" description="Receitas e despesas pagas aparecem aqui." /> : (
-            <div className={cn("h-64 transition-opacity", flowStale && "opacity-40")} aria-busy={flowStale} role="img" aria-label="Gráfico de barras com receitas e despesas por período">
+            <div className="overflow-x-auto"><div className={cn("h-64 transition-opacity", flowStale && "opacity-40")} style={{ minWidth: series.length > 10 ? series.length * 34 : undefined }} aria-busy={flowStale} role="img" aria-label="Gráfico de barras com receitas e despesas por período">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barGap={4}>
+                <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barGap={2} barCategoryGap="15%">
                   <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="#e8e9f2" />
                   <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} interval="preserveStartEnd" />
-                  <YAxis tickLine={false} axisLine={false} fontSize={11} width={56} tickFormatter={(value) => compactCurrency(Number(value))} />
+                  <YAxis tickLine={false} axisLine={false} fontSize={11} width={68} tickFormatter={(value) => compactCurrency(Number(value))} />
                   <Tooltip cursor={{ fill: "rgba(109, 90, 230, 0.06)" }} formatter={(value) => formatCents(Math.round(Number(value) * 100))} />
                   <Bar dataKey="Receitas" fill={revenueColor} radius={[4, 4, 0, 0]} maxBarSize={28} />
                   <Bar dataKey="Despesas" fill={expenseColor} radius={[4, 4, 0, 0]} maxBarSize={28} />
                 </BarChart>
               </ResponsiveContainer>
-            </div>
+            </div></div>
           )}
         </CardContent>
       </Card>
@@ -150,7 +154,7 @@ export function FinanceDashboard({ period, date, today, onPeriod, onDate, onGo }
         <Card>
           <CardHeader><CardTitle className="text-base">Movimentações recentes</CardTitle><Button size="sm" variant="ghost" className="text-primary" onClick={() => onGo("movimentacoes", undefined, summary ? { from: summary.range.start, to: summary.range.end } : undefined)}>Ver todas<ArrowRight className="h-3.5 w-3.5" /></Button></CardHeader>
           <CardContent>
-            {!recentKey ? <p className="text-sm text-muted-foreground">{summaryState.error ? "Indisponível." : canRevenue || canExpense ? "Carregando..." : "Sem permissão para ver movimentações."}</p> : recentState.loading ? <LoadingBlock className="py-4" /> : recentState.error ? <ErrorNote message={recentState.error} onRetry={recentState.reload} /> : recent.length ? (
+            {!recentKey ? <p className="text-sm text-muted-foreground">{recentFuture ? "Nenhuma movimentação neste período." : summaryState.error ? "Indisponível." : canRevenue || canExpense ? "Carregando..." : "Sem permissão para ver movimentações."}</p> : recentState.loading ? <LoadingBlock className="py-4" /> : recentState.error ? <ErrorNote message={recentState.error} onRetry={recentState.reload} /> : recent.length ? (
               <ul className="space-y-3">
                 {recent.map((item) => (
                   <li key={`${item.kind}-${item.id}`} className="flex items-center gap-3">
@@ -184,7 +188,7 @@ export function FinanceDashboard({ period, date, today, onPeriod, onDate, onGo }
         <Card>
           <CardHeader><CardTitle className="text-base">Contas a pagar e receber</CardTitle><Button size="sm" variant="ghost" className="text-primary" onClick={() => onGo("contas", canRevenue ? "receber" : "pagar")}>Ver todas<ArrowRight className="h-3.5 w-3.5" /></Button></CardHeader>
           <CardContent className="space-y-3">
-            {!canRevenue && !canExpense ? <p className="text-sm text-muted-foreground">Sem permissão para ver contas.</p> : !summary ? <LoadingBlock className="py-4" /> : <>
+            {!canRevenue && !canExpense ? <p className="text-sm text-muted-foreground">Sem permissão para ver contas.</p> : !summary ? (summaryState.error ? <ErrorNote message={summaryState.error} onRetry={summaryState.reload} /> : <LoadingBlock className="py-4" />) : <>
               {canRevenue ? <AccountBlock tone="green" label="A receber" value={summary.totals.pendingReceivableCents} count={summary.counts.pendingReceivable} onClick={() => onGo("contas", "receber")} /> : null}
               {canExpense ? <AccountBlock tone="red" label="A pagar" value={summary.totals.payableCents} count={summary.counts.payable} onClick={() => onGo("contas", "pagar")} /> : null}
             </>}

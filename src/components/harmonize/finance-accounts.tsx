@@ -102,12 +102,12 @@ function AccountsList({ kind }: { kind: AccountsTab }) {
 
       <Card className="p-4">
         <h3 className="mb-3 text-sm font-bold text-foreground">{receivable ? "Contas a receber" : "Contas a pagar"}</h3>
-        <div className="mb-4 flex flex-wrap items-end gap-3">
+        <div className="mb-4 flex flex-wrap items-end gap-3 lg:flex-nowrap">
           <DateRangeFilter startDate={from} endDate={to} onStartDateChange={(value) => reset(() => setFrom(value))} onEndDateChange={(value) => reset(() => setTo(value))} />
-          <select className={`${fieldClassName} h-10 w-auto`} value={status} onChange={(event) => reset(() => setStatus(event.target.value))} aria-label="Filtrar por situação">
+          <select className={`${fieldClassName} h-10`} style={{ width: "auto" }} value={status} onChange={(event) => reset(() => setStatus(event.target.value))} aria-label="Filtrar por situação">
             {statusFilters.map(([value, label]) => <option key={value} value={value}>{label(receivable)}</option>)}
           </select>
-          <label className="relative min-w-[200px] flex-1 sm:max-w-xs">
+          <label className="relative min-w-[200px] flex-1 lg:max-w-sm">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
             <input className={`${fieldClassName} h-10 pl-9`} value={queryInput} onChange={(event) => setQueryInput(event.target.value)} placeholder={receivable ? "Buscar por paciente ou descrição..." : "Buscar por descrição..."} aria-label="Buscar" />
           </label>
