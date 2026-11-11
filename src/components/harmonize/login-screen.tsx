@@ -75,6 +75,7 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
   const [registerValues, setRegisterValues] = useState(initialRegisterValues);
   const [invalidFields, setInvalidFields] = useState<string[]>([]);
   const [ruleShake, setRuleShake] = useState(0);
+  const [emailTaken, setEmailTaken] = useState(false);
   const [error, setError] = useState(() => (googleStatus && googleStatus !== "signup" ? googleMessages[Object.hasOwn(googleMessages, googleStatus) ? googleStatus : "error"] : ""));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notice, setNotice] = useState("");
@@ -114,11 +115,18 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
 
   async function handleRegisterSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    // Autofill/colar pode preencher o input sem disparar o onChange: sincroniza com o valor real do campo.
+    const form = event.currentTarget;
+    const domValue = (field: keyof RegisterValues) => form.querySelector<HTMLInputElement>(`#register-field-${field} input`)?.value;
+    const current = { ...registerValues };
+    (["clinicName", "name", "email", "password"] as const).forEach((field) => { const value = domValue(field); if (value !== undefined) current[field] = value; });
+    if (JSON.stringify(current) !== JSON.stringify(registerValues)) setRegisterValues(current);
+    setEmailTaken(false);
     const invalid = [
-      !registerValues.clinicName.trim() && "clinicName",
-      !registerValues.name.trim() && "name",
-      !/^[^s@]+@[^s@]+.[^s@]+$/.test(registerValues.email.trim()) && "email",
-      !isStrongPassword(registerValues.password) && "password",
+      !current.clinicName.trim() && "clinicName",
+      !current.name.trim() && "name",
+      !EMAIL_PATTERN.test(current.email.trim()) && "email",
+      !isStrongPassword(current.password) && "password",
     ].filter((field): field is string => Boolean(field));
     if (invalid.length) {
       setInvalidFields(invalid);
@@ -132,8 +140,18 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
     }
     setInvalidFields([]);
     setIsSubmitting(true);
-    const result = await onRegister(registerValues);
+    const result = await onRegister(current);
     if (result.error) {
+      if (result.error.startsWith("Já existe uma conta")) {
+        // E-mail em uso: aponta o campo (borda vermelha + shake) em vez de uma mensagem solta.
+        setEmailTaken(true);
+        setInvalidFields(["email"]);
+        setError("");
+        revealValidationTarget("register-field-email");
+        document.getElementById("register-field-email")?.querySelector("input")?.focus({ preventScroll: true });
+        setIsSubmitting(false);
+        return;
+      }
       setError(result.error);
       setIsSubmitting(false);
       return;
@@ -187,7 +205,7 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
       ) : mode === "login" ? (
         <div className="mx-auto w-full max-w-[360px]"><LoginForm error={error} notice={notice} isSubmitting={isSubmitting} login={login} onLoginChange={setLogin} onPasswordChange={setPassword} onSubmit={handleLoginSubmit} password={password} setShowPassword={setShowPassword} showPassword={showPassword} /></div>
       ) : (
-        <RegisterForm error={error} isSubmitting={isSubmitting} onBack={openLogin} invalidFields={invalidFields} ruleShake={ruleShake} onChange={(field, value) => { setRegisterValues((current) => ({ ...current, [field]: value })); setInvalidFields((current) => current.filter((item) => item !== field)); }} onSubmit={handleRegisterSubmit} values={registerValues} setShowPassword={setShowPassword} showPassword={showPassword} />
+        <RegisterForm error={error} isSubmitting={isSubmitting} onBack={openLogin} invalidFields={invalidFields} ruleShake={ruleShake} onChange={(field, value) => { setRegisterValues((current) => ({ ...current, [field]: value })); setInvalidFields((current) => current.filter((item) => item !== field)); if (field === "email") setEmailTaken(false); }} emailTaken={emailTaken} onSubmit={handleRegisterSubmit} values={registerValues} setShowPassword={setShowPassword} showPassword={showPassword} />
       )}
     </AuthShell>
   );
@@ -275,6 +293,7 @@ function SignupHeader({ icon: Icon, subtitle, title }: { icon: typeof Mail; subt
   return <header className="mb-7 text-center"><div aria-hidden="true" className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-full bg-[#eeecff] text-[#5147dc]"><Icon className="h-6 w-6" /></div><h2 className="text-2xl font-black tracking-[0] text-[#211960]">{title}</h2><p className="mt-2 text-[13px] leading-5 text-[#7783a8]">{subtitle}</p><div aria-hidden="true" className="mx-auto mt-4 h-[3px] w-10 rounded-full bg-[#5147dc]" /></header>;
 }
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const clinicField = { help: "Como sua clínica será identificada na plataforma.", icon: Building2, label: "Nome da clínica", placeholder: "Ex.: Clínica Harmonia" };
 const personField = { help: "Será usado para comunicação e acesso à plataforma.", icon: UserRound, label: "Seu nome completo", placeholder: "Como podemos te chamar?" };
 
@@ -371,7 +390,7 @@ function PasswordStrength({ id, password, highlightMissing = false, shakeTick = 
   );
 }
 
-function RegisterForm({ error, invalidFields, ruleShake, isSubmitting, onBack, onChange, onSubmit, values, setShowPassword, showPassword }: { error: string; invalidFields: string[]; ruleShake: number; isSubmitting: boolean; onBack: () => void; onChange: (field: keyof RegisterValues, value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; values: RegisterValues; setShowPassword: (value: boolean) => void; showPassword: boolean }) {
+function RegisterForm({ error, emailTaken, invalidFields, ruleShake, isSubmitting, onBack, onChange, onSubmit, values, setShowPassword, showPassword }: { error: string; emailTaken: boolean; invalidFields: string[]; ruleShake: number; isSubmitting: boolean; onBack: () => void; onChange: (field: keyof RegisterValues, value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; values: RegisterValues; setShowPassword: (value: boolean) => void; showPassword: boolean }) {
   const strengthId = useId();
   return (
     <div className="mx-auto w-full max-w-[400px]">
@@ -379,7 +398,7 @@ function RegisterForm({ error, invalidFields, ruleShake, isSubmitting, onBack, o
       <form className="space-y-5" data-autofill="allow" noValidate onSubmit={onSubmit}>
         <TextField {...clinicField} error="Preencha o nome da clínica." requiredMark fieldId="register-field-clinicName" invalid={invalidFields.includes("clinicName")} onChange={(value) => onChange("clinicName", value)} value={values.clinicName} autoComplete="organization" maxLength={100} />
         <TextField {...personField} error="Preencha seu nome completo." requiredMark fieldId="register-field-name" invalid={invalidFields.includes("name")} onChange={(value) => onChange("name", value)} value={values.name} autoComplete="name" />
-        <TextField error={values.email.trim() ? "Informe um e-mail válido." : "Preencha o e-mail."} requiredMark fieldId="register-field-email" invalid={invalidFields.includes("email")} help="Enviaremos novidades e informações importantes." icon={Mail} label="E-mail" onChange={(value) => onChange("email", value)} placeholder="nome@dominio.com" type="email" value={values.email} autoComplete="email" />
+        <TextField error={emailTaken ? "Já existe uma conta com este e-mail. Use outro e-mail ou entre na sua conta." : values.email.trim() ? "Informe um e-mail válido." : "Preencha o e-mail."} requiredMark fieldId="register-field-email" invalid={invalidFields.includes("email")} help="Enviaremos novidades e informações importantes." icon={Mail} label="E-mail" onChange={(value) => onChange("email", value)} placeholder="nome@dominio.com" type="email" value={values.email} autoComplete="email" />
         <div>
           <PasswordField describedBy={strengthId} requiredMark fieldId="register-field-password" invalid={invalidFields.includes("password")} label="Senha" onChange={(value) => onChange("password", value)} password={values.password} placeholder="Crie uma senha segura" setShowPassword={setShowPassword} showPassword={showPassword} touch />
           <PasswordStrength highlightMissing={ruleShake > 0} id={strengthId} password={values.password} shakeTick={ruleShake} />
