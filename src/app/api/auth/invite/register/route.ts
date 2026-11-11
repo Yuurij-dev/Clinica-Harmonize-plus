@@ -1,6 +1,6 @@
 import { hash } from "bcryptjs";
 import { NextResponse } from "next/server";
-import { createSession, sessionCookieName } from "@/lib/auth";
+import { completeLogin } from "@/lib/auth-session";
 import { registerByInvite } from "@/lib/invitations";
 import { prismaInvitationRepo } from "@/lib/invitations-db";
 
@@ -14,16 +14,9 @@ export async function POST(request: Request) {
   });
   if (!result.ok) return NextResponse.json({ message: result.message }, { status: result.status, headers: { "Cache-Control": "no-store" } });
 
-  // Mesmos atributos de cookie do login por senha.
+  // Conta nova de convite não tem 2FA: sessão normal (se exigir 2FA, cai no assistente obrigatório).
+  const login = await completeLogin({ request, userId: result.userId, origin: "password" });
   const response = NextResponse.json({ ok: true, alreadyInOtherClinic: result.alreadyInOtherClinic }, { status: 201, headers: { "Cache-Control": "no-store" } });
-  response.cookies.set({
-    name: sessionCookieName,
-    value: await createSession(result.userId),
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    maxAge: 60 * 60 * 24 * 7,
-    path: "/",
-  });
+  login.apply(response);
   return response;
 }

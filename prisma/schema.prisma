@@ -39,7 +39,12 @@ model User {
   // Clínica ativa de quem pertence a 2+ clínicas; null ou sem membership cai na mais antiga (ver pickMembership).
   activeClinicId             String?
   avatar                     UserAvatar?
-  activeClinic               Clinic?            @relation("UserActiveClinic", fields: [activeClinicId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  mfaSetting                 MfaSetting?
+  mfaRecoveryCodes           MfaRecoveryCode[]
+  trustedDevices             TrustedDevice[]
+  authSessions               AuthSession[]
+  securityEvents             SecurityEvent[]
+  activeClinic              Clinic?            @relation("UserActiveClinic", fields: [activeClinicId], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@index([activeClinicId])
 }
@@ -1001,4 +1006,78 @@ model PendingSignup {
   createdAt    DateTime @default(now()) @db.Timestamptz(6)
 
   @@index([expiresAt])
+}
+
+model MfaSetting {
+  id             String    @id @default(cuid())
+  userId         String    @unique
+  secretEnc      String
+  enabledAt      DateTime? @db.Timestamptz(6)
+  lastUsedStep   BigInt?
+  failedAttempts Int       @default(0)
+  lockedUntil    DateTime? @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model MfaRecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String
+  usedAt    DateTime? @db.Timestamptz(6)
+  createdAt DateTime  @default(now()) @db.Timestamptz(6)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([codeHash, userId])
+  @@index([userId])
+}
+
+model TrustedDevice {
+  id           String        @id @default(cuid())
+  userId       String
+  tokenHash    String        @unique
+  label        String
+  userAgent    String?
+  createdAt    DateTime      @default(now()) @db.Timestamptz(6)
+  lastUsedAt   DateTime      @default(now()) @db.Timestamptz(6)
+  expiresAt    DateTime      @db.Timestamptz(6)
+  revokedAt    DateTime?     @db.Timestamptz(6)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  authSessions AuthSession[]
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AuthSession {
+  id              String         @id @default(cuid())
+  userId          String
+  createdAt       DateTime       @default(now()) @db.Timestamptz(6)
+  lastSeenAt      DateTime       @default(now()) @db.Timestamptz(6)
+  expiresAt       DateTime       @db.Timestamptz(6)
+  revokedAt       DateTime?      @db.Timestamptz(6)
+  userAgent       String?
+  ip              String?
+  trustedDeviceId String?
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  trustedDevice   TrustedDevice? @relation(fields: [trustedDeviceId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([trustedDeviceId])
+}
+
+model SecurityEvent {
+  id        String   @id @default(cuid())
+  userId    String?
+  type      String
+  success   Boolean
+  ip        String?
+  userAgent String?
+  detail    String?
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([userId, createdAt])
 }

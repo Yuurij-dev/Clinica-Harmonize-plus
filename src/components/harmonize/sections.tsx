@@ -18,6 +18,7 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
+  LockKeyhole,
   MessageCircle,
   MoreVertical,
   PencilLine,
@@ -65,6 +66,7 @@ import { cleanSearchQuery, defaultPatientPageSize, patientListKey, patientPageSi
 import { capitalizeFirst, formatDayBR, agendaDayInvalidationKey, agendaPeriodKey, agendaPeriodRange, dayInRange, shiftAgendaDay, type AgendaRange } from "@/lib/agenda-period-rules";
 import { PaginationBar } from "./clinical-pagination";
 import { TeamInvitations } from "./team-invitations";
+import { SecuritySettings } from "./security-settings";
 import { TeamMemberDetail } from "./team-member-detail";
 import { usePatientLookup, type LookupPatient } from "./use-patient-lookup";
 import { createDefaultRolePermissionMatrix, permissionGroups, roleLabels, roles, runningAppointmentStatuses, type Role, type RolePermissionMatrix } from "@/lib/permissions";
@@ -2404,11 +2406,13 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
     { label: "Custos e orçamento", icon: CircleDollarSign },
     { label: "Notificações", icon: Bell },
     { label: "Segurança e permissões", icon: ShieldCheck },
+    { label: "Segurança da conta", icon: LockKeyhole },
     { label: "Integrações", icon: PlugZap },
   ];
   const normalizeSettingsSearch = (value: string) => value.toLocaleLowerCase("pt-BR").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const normalizedSettingsSearch = normalizeSettingsSearch(settingsSearch.trim());
-  const hasSettingsSectionPermission = (label: string) => label === "Segurança e permissões" ? canManageRolePermissions : label === "Profissionais e equipe" ? canManageTeam : label === "Custos e orçamento" ? canManageTeam : canManageSettings;
+  // "Segurança da conta" é da própria conta (2FA, dispositivos, sessões): não depende de nenhuma permissão de gestão.
+  const hasSettingsSectionPermission = (label: string) => label === "Segurança da conta" ? true : label === "Segurança e permissões" ? canManageRolePermissions : label === "Profissionais e equipe" ? canManageTeam : label === "Custos e orçamento" ? canManageTeam : canManageSettings;
   const permittedSettingsNavigation = settingsNavigation.filter((item) => hasSettingsSectionPermission(item.label));
   const displayedSettingsSection = permittedSettingsNavigation.some((item) => item.label === activeSettingsSection) ? activeSettingsSection : permittedSettingsNavigation[0]?.label ?? "";
   const isSearchingClinicPreferences = displayedSettingsSection === "Dados da clínica" && Boolean(normalizedSettingsSearch);
@@ -2430,6 +2434,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
     "Custos e orçamento": "Buscar custos e orçamento",
     Notificações: "Buscar notificações",
     "Segurança e permissões": "Buscar segurança e permissões",
+    "Segurança da conta": "Buscar segurança da conta",
     Integrações: "Buscar integrações",
   };
   const searchLabel = settingsSearchPlaceholder[displayedSettingsSection] ?? "Buscar nas configurações";
@@ -2638,6 +2643,8 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
               </CardContent>
             </Card>
           ) : null}
+
+          {displayedSettingsSection === "Segurança da conta" ? <SecuritySettings /> : null}
 
           {displayedSettingsSection === "Integrações" ? (
             <Card className="border-border/70">

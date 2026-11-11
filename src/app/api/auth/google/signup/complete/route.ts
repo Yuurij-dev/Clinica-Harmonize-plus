@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { createSession, sessionCookieName } from "@/lib/auth";
+import { completeLogin } from "@/lib/auth-session";
 import { getAuthSecret } from "@/lib/auth-secret";
 import { GOOGLE_SIGNUP_COOKIE, GOOGLE_SIGNUP_PATH, verifyPendingSignup } from "@/lib/google-oauth-rules";
 import { makeUnusablePasswordHash } from "@/lib/google-oauth-repo";
@@ -40,15 +40,8 @@ export async function POST(request: Request) {
   // Uso unico: apagado em qualquer desfecho definitivo.
   response.cookies.set({ ...cookieBase, name: GOOGLE_SIGNUP_COOKIE, value: "", maxAge: 0 });
   if (result.ok) {
-    response.cookies.set({
-      name: sessionCookieName,
-      value: await createSession(result.userId),
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 60 * 60 * 24 * 7,
-      path: "/",
-    });
+    // Conta nova (Google): sem 2FA ainda, então sessão normal.
+    (await completeLogin({ request, userId: result.userId, origin: "google" })).apply(response);
   }
   return response;
 }

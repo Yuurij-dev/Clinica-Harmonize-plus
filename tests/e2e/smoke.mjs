@@ -15,6 +15,7 @@ const email = process.env.TEST_ACCOUNT_EMAIL;
 const password = process.env.TEST_ACCOUNT_PASSWORD;
 const run = Date.now().toString(36).replace(/\d/g, (digit) => "abcdefghij"[digit]); // só letras: nomes de paciente não aceitam números
 const results = [];
+const runStartedAt = new Date();
 const prisma = new PrismaClient();
 // Avaliação completa: para CONCLUIR, a API exige queixa, objetivo, os 5 campos da anamnese rápida e observações.
 const fullAssessment = { chiefComplaint: "Queixa", patientGoal: "Obj", allergies: "Não", pregnancyStatus: "Não", anticoagulantUse: "Não", autoimmuneDiseases: "Não", previousProcedures: "Não", clinicalNotes: "Obs" };
@@ -23,6 +24,9 @@ let cookie = "";
 let accountName = "";
 
 async function api(method, path, body) {
+  // Cadastro: o .env local tem provedor de e-mail (Resend), e /api/auth/register então enviaria e-mail de verdade.
+  // O roteiro cria a conta direto no banco (mesmo efeito do modo "direct" do cadastro, sem e-mail). A rota real é coberta por verificacao_email_cadastro.
+  if (method === "POST" && path === "/api/auth/register") return registerWithoutEmail(body);
   const response = await fetch(`${baseUrl}${path}`, {
     method,
     headers: { ...(body ? { "Content-Type": "application/json" } : {}), ...(cookie ? { cookie } : {}) },
@@ -46,11 +50,151 @@ const day = (offset) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sa
 const randomCpf = () => { const d = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10)); if (d.every((x) => x === d[0])) d[0] = (d[0] + 1) % 10; for (let n = 9; n < 11; n += 1) { const sum = d.reduce((t, x, i) => t + x * (n + 1 - i), 0); d.push(((sum * 10) % 11) % 10); } return d.join(""); };
 const regDefaults = { birthDate: "10/01/1990", privacyConsent: true };
 
+// ---------------------------------------------------------------------------------------------
+// 2FA no roteiro. Proprietário/ADMIN são OBRIGADOS a ter 2FA: sem ele a API devolve 401 em quase toda rota.
+// Por isso o roteiro ativa o 2FA UMA vez por conta (pelo fluxo real: setup/start com senha -> lê MfaSetting.secretEnc
+// -> decryptMfaSecret (mesma AUTH_SECRET) -> TOTP -> setup/confirm) e guarda o segredo SÓ em memória (nunca logado).
+// Logins seguintes: login -> {mfaRequired} -> TOTP -> /api/auth/mfa/verify com trustDevice (cookie harmonize_td guardado
+// em memória): os demais logins da mesma conta pulam o TOTP. Se o dispositivo for revogado, cai no TOTP de novo.
+// A conta de teste começa e termina SEM 2FA/sessões/histórico (resetTestAccountSecurity).
+// ---------------------------------------------------------------------------------------------
+const mfaLib = {
+  ...(await import(new URL("../../src/lib/mfa-crypto.ts", import.meta.url).href)),
+  ...(await import(new URL("../../src/lib/totp.ts", import.meta.url).href)),
+};
+const mfaSecrets = new Map(); // userId -> segredo base32
+const trustTokens = new Map(); // userId -> valor do cookie harmonize_td
+const touchedUsers = new Set(); // contas que o roteiro ativou/entrou: limpas no fim
+const e2eUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+
+// Cliente HTTP com cookie jar próprio (todos os cookies) e cabeçalho Origin (as rotas /api/security exigem same-origin).
+function newJar() {
+  const c = {};
+  return {
+    c,
+    async call(method, path, body, extra = {}) {
+      const headers = { "content-type": "application/json", origin: baseUrl, "user-agent": e2eUserAgent, ...extra };
+      const cookieHeader = Object.entries(c).map(([k, v]) => `${k}=${v}`).join("; ");
+      if (cookieHeader) headers.cookie = cookieHeader;
+      for (const k of Object.keys(headers)) if (headers[k] === null || headers[k] === undefined) delete headers[k];
+      const r = await fetch(`${baseUrl}${path}`, { method, redirect: "manual", headers, body: body === undefined ? undefined : JSON.stringify(body) });
+      for (const sc of r.headers.getSetCookie()) {
+        const [kv] = sc.split(";");
+        const i = kv.indexOf("=");
+        const k = kv.slice(0, i), v = kv.slice(i + 1);
+        if (!v || /Max-Age=0/i.test(sc)) delete c[k]; else c[k] = v;
+      }
+      const text = await r.text();
+      let d; try { d = JSON.parse(text); } catch { d = text.slice(0, 200); }
+      return { s: r.status, d, h: r.headers };
+    },
+  };
+}
+
+async function userIdOf(loginName) {
+  return (await prisma.user.findUnique({ where: { email: String(loginName).trim().toLowerCase() }, select: { id: true } }))?.id ?? null;
+}
+
+// Código TOTP válido AGORA. Zera o replay/bloqueio da conta no banco (só nos logins "de apoio" do roteiro, para não esperar 30 s
+// entre logins); as partes que testam replay e bloqueio de verdade não usam esta função.
+async function helperTotp(userId) {
+  const secret = mfaSecrets.get(userId);
+  if (!secret) throw new Error("2FA da conta sem segredo conhecido pelo roteiro.");
+  await prisma.mfaSetting.updateMany({ where: { userId }, data: { lastUsedStep: null, failedAttempts: 0, lockedUntil: null } });
+  return mfaLib.totpAtStep(secret, mfaLib.totpStep(Date.now()));
+}
+
+async function activateMfa(jar, userId, pw) {
+  const start = await jar.call("POST", "/api/security/mfa/setup/start", { password: pw });
+  if (start.s !== 200) throw new Error(`Ativação do 2FA (start) falhou: ${start.s}`);
+  const setting = await prisma.mfaSetting.findUnique({ where: { userId }, select: { secretEnc: true } });
+  const secret = mfaLib.decryptMfaSecret(setting.secretEnc);
+  mfaSecrets.set(userId, secret);
+  touchedUsers.add(userId);
+  const confirm = await jar.call("POST", "/api/security/mfa/setup/confirm", { code: mfaLib.totpAtStep(secret, mfaLib.totpStep(Date.now())) });
+  if (confirm.s !== 200) throw new Error(`Ativação do 2FA (confirm) falhou: ${confirm.s}`);
+  return confirm.d.recoveryCodes;
+}
+
+// Login completo de uma conta pelo fluxo real (senha -> [troca de senha do primeiro acesso] -> [TOTP] -> sessão).
+// Se a conta é proprietário/ADMIN e ainda sem 2FA, ativa o 2FA e segue com a mesma sessão.
+async function fullLogin(loginName, secret) {
+  const id = await userIdOf(loginName);
+  if (id) touchedUsers.add(id);
+  const jar = newJar();
+  if (id && trustTokens.has(id)) jar.c.harmonize_td = trustTokens.get(id);
+  let r = await jar.call("POST", "/api/auth/login", { login: loginName, password: secret });
+  let usedPassword = secret;
+  if (r.s === 200 && r.d.passwordChangeRequired) {
+    usedPassword = `${secret}-nova`;
+    r = await jar.call("POST", "/api/auth/change-password", { password: usedPassword });
+  }
+  if (r.s === 200 && r.d.mfaRequired) {
+    if (!id || !mfaSecrets.has(id)) throw new Error(`Conta ${loginName} pede 2FA e o roteiro não tem o segredo.`);
+    r = await jar.call("POST", "/api/auth/mfa/verify", { code: await helperTotp(id), trustDevice: true });
+  }
+  const sessionCookie = jar.c.harmonize_session ? `harmonize_session=${jar.c.harmonize_session}` : "";
+  if (id && jar.c.harmonize_td) trustTokens.set(id, jar.c.harmonize_td);
+  if (r.s === 200 && sessionCookie && id) {
+    const me = await jar.call("GET", "/api/auth/me");
+    if (me.s === 200 && me.d.mfaSetupRequired) await activateMfa(jar, id, usedPassword);
+  }
+  return { status: r.s, cookie: sessionCookie, data: r.d };
+}
+
+// Estado base da conta de teste: sem 2FA, sessões, dispositivos nem histórico. Recusa se a conta não estiver só na clínica de teste.
+async function resetTestAccountSecurity() {
+  const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() }, select: { id: true, memberships: { select: { clinic: { select: { name: true } } } } } });
+  if (!user || user.memberships.length !== 1 || user.memberships[0].clinic.name !== testClinicName) throw new Error("Conta de teste fora da clínica de teste: limpeza de segurança recusada.");
+  await wipeSecurityOf([user.id]);
+  mfaSecrets.delete(user.id);
+  trustTokens.delete(user.id);
+}
+
+async function wipeSecurityOf(userIds) {
+  await prisma.$transaction([
+    prisma.securityEvent.deleteMany({ where: { userId: { in: userIds } } }),
+    prisma.authSession.deleteMany({ where: { userId: { in: userIds } } }),
+    prisma.trustedDevice.deleteMany({ where: { userId: { in: userIds } } }),
+    prisma.mfaRecoveryCode.deleteMany({ where: { userId: { in: userIds } } }),
+    prisma.mfaSetting.deleteMany({ where: { userId: { in: userIds } } }),
+  ]);
+}
+
+// Cadastro sem e-mail (ver api()).
+async function registerWithoutEmail(body) {
+  const { hash } = await import("bcryptjs");
+  const mail = String(body?.email ?? "").trim().toLowerCase();
+  if (!mail || !body?.password || !String(body?.clinicName ?? "").trim()) return { status: 400, data: { message: "dados inválidos" } };
+  if (await prisma.user.findUnique({ where: { email: mail }, select: { id: true } })) return { status: 409, data: { message: "Já existe uma conta com este e-mail." } };
+  const now = new Date();
+  const clinic = await prisma.clinic.create({ data: { name: String(body.clinicName).trim(), slug: `e2e-${randomBytes(8).toString("hex")}`, trialStartedAt: now, trialEndsAt: new Date(now.getTime() + 3 * 86_400_000) } });
+  const user = await prisma.user.create({ data: { name: String(body.name ?? "E2E"), email: mail, passwordHash: await hash(String(body.password), 4), emailVerifiedAt: now, role: "ADMIN" } });
+  await prisma.clinicMembership.create({ data: { userId: user.id, clinicId: clinic.id, role: "ADMIN", isOwner: true } });
+  return { status: 201, data: { success: true } };
+}
+
+// Login do app com a conta que exige 2FA: se a API pedir o código (401 mfaRequired) ou a ativação (403), o roteiro cumpre o 2FA e repete.
+async function mobileFetch(loginName, secret, rawBody) {
+  const post = (extra) => fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: rawBody ?? JSON.stringify({ login: loginName, password: secret, ...extra }) });
+  const first = await post({});
+  if (rawBody !== undefined) return first;
+  const peek = await first.clone().json().catch(() => null);
+  const needsCode = first.status === 401 && peek?.mfaRequired === true;
+  const needsSetup = first.status === 403 && peek?.mfaSetupRequired === true;
+  if (!needsCode && !needsSetup) return first;
+  if (needsSetup && (await fullLogin(loginName, secret)).status !== 200) return first;
+  const id = await userIdOf(loginName);
+  if (!id || !mfaSecrets.has(id)) return first;
+  return post({ mfaCode: await helperTotp(id) });
+}
+
 async function login() {
-  const response = await api("POST", "/api/auth/login", { login: email, password });
+  const response = await fullLogin(email, password);
   if (response.status !== 200) throw new Error(`Login da conta de teste falhou (${response.status}): ${JSON.stringify(response.data)}`);
   if (response.data.user?.clinic?.name !== testClinicName) throw new Error(`A conta de teste não está na "${testClinicName}". Abortado para não mexer em clínica real.`);
   accountName = response.data.user.name;
+  cookie = response.cookie;
 }
 
 async function patientsAndPayments() {
@@ -818,15 +962,9 @@ async function withSession(sessionCookie, fn) {
 }
 
 async function loginAs(loginName, secret) {
-  return withSession("", async () => {
-    const response = await api("POST", "/api/auth/login", { login: loginName, password: secret });
-    // Colaborador novo entra com sessão de primeiro acesso: troca a senha para obter a sessão completa.
-    if (response.status === 200 && response.data.passwordChangeRequired) {
-      const changed = await api("POST", "/api/auth/change-password", { password: `${secret}-nova` });
-      return { status: changed.status, cookie, data: changed.data };
-    }
-    return { status: response.status, cookie, data: response.data };
-  });
+  // Colaborador novo entra com sessão de primeiro acesso: fullLogin troca a senha para obter a sessão completa e,
+  // para proprietário/ADMIN (2FA obrigatório), cumpre/ativa o 2FA.
+  return fullLogin(loginName, secret);
 }
 
 // Avaliação: campos obrigatórios ao concluir (API) e dados da anamnese que alimentam o pré-preenchimento (tela).
@@ -5069,7 +5207,7 @@ async function mobilePhotos() {
   const jpg = (width, height) => sharp({ create: { width, height, channels: 3, background: { r: 200, g: 120, b: 90 } } }).jpeg().toBuffer();
   const png = (width, height) => sharp({ create: { width, height, channels: 3, background: { r: 20, g: 120, b: 90 } } }).png().toBuffer();
   const mobileLogin = async (loginName, secret) => {
-    const response = await fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ login: loginName, password: secret }) });
+    const response = await mobileFetch(loginName, secret);
     return { status: response.status, data: await response.json().catch(() => null), setCookie: response.headers.getSetCookie() };
   };
   const call = (token, method, path, { form, json } = {}) => fetch(`${baseUrl}${path}`, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(json ? { "Content-Type": "application/json" } : {}) }, body: form ?? (json ? JSON.stringify(json) : undefined) });
@@ -5273,7 +5411,7 @@ async function mobilePhotosGaps() {
   const { hash } = await import("bcryptjs");
   const jpg = (width, height, extra) => { const s = sharp({ create: { width, height, channels: 3, background: { r: 200, g: 120, b: 90 } } }); return (extra ? s.jpeg().withMetadata(extra) : s.jpeg()).toBuffer(); };
   const mobileLogin = async (loginName, secret, rawBody) => {
-    const response = await fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: rawBody ?? JSON.stringify({ login: loginName, password: secret }) });
+    const response = await mobileFetch(loginName, secret, rawBody);
     return { status: response.status, data: await response.json().catch(() => null), headers: response.headers };
   };
   const raw = async (headers, method, path, body) => { const response = await fetch(`${baseUrl}${path}`, { method, headers, body, redirect: "manual" }); const text = await response.text(); let data; try { data = JSON.parse(text); } catch { data = text.slice(0, 120); } return { status: response.status, data, headers: response.headers }; };
@@ -6112,7 +6250,7 @@ async function activeClinic() {
   const home = (await prisma.clinicMembership.findFirst({ where: { userId: me.id, clinic: { name: testClinicName } }, select: { clinicId: true } })).clinicId;
   const nameB = `E2E Clinica Ativa B ${run}`, nameC = `E2E Clinica Ativa Alheia ${run}`;
   const activeInDb = async () => (await prisma.user.findUnique({ where: { id: me.id }, select: { activeClinicId: true } })).activeClinicId;
-  const freshLogin = async () => { const r = await api("POST", "/api/auth/login", { login: email, password }); if (r.status !== 200) throw new Error(`login ${r.status}`); return r; };
+  const freshLogin = async () => { const r = await fullLogin(email, password); if (r.status !== 200) throw new Error(`login ${r.status}`); cookie = r.cookie; return r; };
   const sessionClinic = async () => (await api("GET", "/api/auth/me")).data.user?.clinic?.id;
   let clinicB, clinicC;
   try {
@@ -7570,7 +7708,499 @@ async function signupEmailVerification() {
   }
 }
 
+// Segurança: 2FA TOTP, dispositivos confiáveis, sessões revogáveis e histórico, pelos fluxos reais (login -> TOTP -> verify).
+// Só @example.invalid, prefixo e2e-sec-<run>, clínica própria (não toca a clínica de teste). Limpeza no finally.
+// Não cobre o callback real do Google (exige o Google): só o cadastro/aceite com cookie assinado, como em cadastro_google.
+async function security2fa() {
+  const { hash } = await import("bcryptjs");
+  const { SignJWT } = await import("jose");
+  const authSecret = process.env.AUTH_SECRET ?? "";
+  const prefix = `e2e-sec-${run}`;
+  const pw = `E2e-${run}-Sec9!`;
+  const passwordHash = await hash(pw, 4);
+  const mail = (tag) => `${prefix}-${tag}@example.invalid`;
+  const bodies = []; // toda resposta JSON, para varrer segredos no fim
+  const call = async (jar, method, path, body, extra) => { const r = await jar.call(method, path, body, extra); bodies.push({ path, text: JSON.stringify(r.d) }); return r; };
+  const seen = { secrets: new Set(), recovery: new Set(), td: new Set(), codes: new Set(), tokens: new Set() };
+  const sidOf = (jar) => JSON.parse(Buffer.from(jar.c.harmonize_session.split(".")[1], "base64url").toString()).sid;
+  const rawGet = async (path, headers) => { const r = await fetch(`${baseUrl}${path}`, { headers, redirect: "manual" }); return r.status; };
+  const stepNow = () => mfaLib.totpStep(Date.now());
+  const codeFor = (u, delta = 0) => mfaLib.totpAtStep(u.secret, stepNow() + delta);
+  const resetMfa = (u) => prisma.mfaSetting.updateMany({ where: { userId: u.id }, data: { lastUsedStep: null, failedAttempts: 0, lockedUntil: null } });
+  // Código do passo atual depois de zerar replay/bloqueio no banco (u.lastStep guarda o passo, para testar replay e passo seguinte).
+  const fresh = async (u) => { await resetMfa(u); u.lastStep = stepNow(); const c = mfaLib.totpAtStep(u.secret, u.lastStep); seen.codes.add(c); return c; };
+  const wrongCode = (u) => { for (;;) { const c = String(Math.floor(Math.random() * 1e6)).padStart(6, "0"); if (![-1, 0, 1].map((d) => codeFor(u, d)).includes(c)) return c; } };
+  const pending = async (u, cookies = {}, secret = pw) => { const jar = newJar(); Object.assign(jar.c, cookies); const r = await call(jar, "POST", "/api/auth/login", { login: u.email, password: secret }); return { jar, r }; };
+  const session = async (u, { trust = false, cookies = {} } = {}) => {
+    const { jar, r } = await pending(u, cookies);
+    if (r.d?.mfaRequired) await call(jar, "POST", "/api/auth/mfa/verify", { code: await fresh(u), trustDevice: trust });
+    if (jar.c.harmonize_session) seen.tokens.add(jar.c.harmonize_session);
+    if (jar.c.harmonize_td) seen.td.add(jar.c.harmonize_td);
+    return jar;
+  };
+  const enable = async (u) => {
+    const jar = await session(u);
+    u.recovery = await activateMfa(jar, u.id, pw);
+    u.secret = mfaSecrets.get(u.id);
+    seen.secrets.add(u.secret);
+    u.recovery.forEach((c) => seen.recovery.add(c));
+    return jar;
+  };
+  const overview = async (jar) => (await call(jar, "GET", "/api/security/overview")).d;
+  const eventsOf = async (jar) => { const out = []; let cursor = null; for (let i = 0; i < 40; i += 1) { const r = await call(jar, "GET", `/api/security/events?limit=50${cursor ? `&cursor=${cursor}` : ""}`); out.push(...(r.d.events ?? [])); cursor = r.d.nextCursor; if (!cursor) break; } return out; };
+  const dbEvents = (u, type) => prisma.securityEvent.count({ where: { userId: u.id, ...(type ? { type } : {}) } });
+  let clinic = null;
+  const created = [];
+  try {
+    clinic = await prisma.clinic.create({ data: { name: `${prefix} Clínica`, slug: `${prefix}-clinica` } });
+    const mk = async (tag, role, isOwner = false) => {
+      const user = await prisma.user.create({ data: { name: `Sec ${tag}`, email: mail(tag), passwordHash, role, emailVerifiedAt: new Date() } });
+      await prisma.clinicMembership.create({ data: { userId: user.id, clinicId: clinic.id, role, isOwner } });
+      created.push(user.id); touchedUsers.add(user.id);
+      return { id: user.id, email: user.email, tag };
+    };
+    const owner = await mk("owner", "ADMIN", true), adm2 = await mk("adm", "ADMIN"), staff = await mk("staff", "STAFF");
+    const pro = await mk("pro", "PROFESSIONAL"), pro2 = await mk("pro2", "PROFESSIONAL"), proD = await mk("prod", "PROFESSIONAL"), proL = await mk("prol", "PROFESSIONAL");
+    const proM = await mk("prom", "PROFESSIONAL"), proM2 = await mk("prom2", "PROFESSIONAL"), proN = await mk("pron", "PROFESSIONAL");
+
+    // ===== 1) Sem 2FA: entra normal =====
+    for (const u of [staff, proN]) {
+      const jar = newJar();
+      const r = await call(jar, "POST", "/api/auth/login", { login: u.email, password: pw });
+      const me = await call(jar, "GET", "/api/auth/me");
+      check(`2FA: ${u.tag} sem 2FA entra normal (200, user, sessão, sem mfaRequired)`, r.s === 200 && !r.d.mfaRequired && r.d.user?.email === u.email && Boolean(jar.c.harmonize_session) && !jar.c.harmonize_mfa && me.s === 200 && me.d.mfaSetupRequired === false, `${r.s} ${JSON.stringify(Object.keys(r.d))}`);
+    }
+    const jN = await session(proN);
+    const ovN = await overview(jN);
+    check("2FA: PROFESSIONAL sem 2FA acessa rotas comuns (/api/patients 200) e o resumo mostra 2FA desativado e não obrigatório", (await call(jN, "GET", "/api/patients")).s === 200 && ovN.mfa?.enabled === false && ovN.mfa?.required === false);
+
+    // ===== 14) proprietário/ADMIN sem 2FA ficam bloqueados =====
+    {
+      const jo = newJar();
+      const r = await call(jo, "POST", "/api/auth/login", { login: owner.email, password: pw });
+      const me = await call(jo, "GET", "/api/auth/me");
+      const blocked = [await call(jo, "GET", "/api/patients"), await call(jo, "GET", "/api/quotes"), await call(jo, "GET", "/api/security/events"), await call(jo, "DELETE", "/api/security/sessions"), await call(jo, "DELETE", "/api/security/trusted-devices")];
+      check("2FA obrigatório: owner sem 2FA entra (200), mas /api/patients, orçamentos, histórico e revogações dão 401", r.s === 200 && blocked.every((x) => x.s === 401), `${r.s} ${blocked.map((x) => x.s)}`);
+      check("2FA obrigatório: /api/auth/me devolve 200 com mfaSetupRequired true, sem sid no corpo", me.s === 200 && me.d.mfaSetupRequired === true && me.d.user?.email === owner.email && !JSON.stringify(me.d).includes("sessionId"), `${me.s} ${JSON.stringify(me.d).slice(0, 120)}`);
+      const ov = await call(jo, "GET", "/api/security/overview");
+      check("2FA obrigatório: /api/security/overview responde 200 (required true, enabled false) para o assistente", ov.s === 200 && ov.d.mfa?.required === true && ov.d.mfa?.enabled === false, ov.s);
+      const outStart = await call(jo, "POST", "/api/security/mfa/setup/start", { password: pw });
+      check("2FA obrigatório: setup/start funciona com o 2FA ainda pendente (200, QR SVG e chave manual)", outStart.s === 200 && /^<(svg|\?xml)/.test(outStart.d.qrSvg ?? "") && typeof outStart.d.manualKey === "string" && outStart.d.manualKey.replace(/[\s-]/g, "").length >= 32, `${outStart.s}`);
+      const lo = await call(jo, "POST", "/api/auth/logout");
+      check("2FA obrigatório: logout funciona mesmo bloqueado e derruba a sessão", lo.s === 200 && (await call(jo, "GET", "/api/auth/me")).s === 401);
+      const ja = newJar();
+      await call(ja, "POST", "/api/auth/login", { login: adm2.email, password: pw });
+      check("2FA obrigatório: ADMIN que não é dono também fica bloqueado (me.mfaSetupRequired, /api/patients 401)", (await call(ja, "GET", "/api/auth/me")).d.mfaSetupRequired === true && (await call(ja, "GET", "/api/patients")).s === 401);
+      // Ativa o owner (fluxo real) e confere que libera.
+      const j2 = newJar();
+      await call(j2, "POST", "/api/auth/login", { login: owner.email, password: pw });
+      owner.recovery = await activateMfa(j2, owner.id, pw);
+      owner.secret = mfaSecrets.get(owner.id);
+      seen.secrets.add(owner.secret); owner.recovery.forEach((c) => seen.recovery.add(c));
+      check("2FA obrigatório: depois de ativar, /api/patients passa a responder 200 na mesma sessão", (await call(j2, "GET", "/api/patients")).s === 200 && (await call(j2, "GET", "/api/auth/me")).d.mfaSetupRequired === false);
+      const dis = await call(j2, "POST", "/api/security/mfa/disable", { password: pw, code: await fresh(owner) });
+      check("2FA obrigatório: owner NÃO pode desativar (403 mfa_required) e o 2FA continua ativo", dis.s === 403 && dis.d.code === "mfa_required" && (await prisma.mfaSetting.findUnique({ where: { userId: owner.id } }))?.enabledAt !== null, `${dis.s} ${dis.d.code}`);
+    }
+
+    // ===== 6) Ativação (PROFESSIONAL opta pelo 2FA) =====
+    const a1 = await session(pro), a2 = await session(pro); // duas sessões: ao ativar, só a que ativa continua
+    {
+      const noPw = await call(a1, "POST", "/api/security/mfa/setup/start", {});
+      const badPw = await call(a1, "POST", "/api/security/mfa/setup/start", { password: "senha-errada" });
+      check("ativação: start sem senha = 403 password_required; senha errada = 403 invalid_password", noPw.s === 403 && noPw.d.code === "password_required" && badPw.s === 403 && badPw.d.code === "invalid_password", `${noPw.s}/${badPw.s}`);
+      check("ativação: nenhuma linha de 2FA é criada antes de reautenticar", await prisma.mfaSetting.count({ where: { userId: pro.id } }) === 0);
+      const st = await call(a1, "POST", "/api/security/mfa/setup/start", { password: pw });
+      const row = await prisma.mfaSetting.findUnique({ where: { userId: pro.id } });
+      pro.secret = mfaLib.decryptMfaSecret(row.secretEnc); mfaSecrets.set(pro.id, pro.secret); seen.secrets.add(pro.secret);
+      check("ativação: start devolve QR (SVG) e chave manual; segredo fica cifrado (v1:) e PENDENTE no banco", st.s === 200 && /^<(svg|\?xml)/.test(st.d.qrSvg ?? "") && st.d.manualKey?.replace(/[\s-]/g, "") === pro.secret && row.secretEnc.startsWith("v1:") && !row.secretEnc.includes(pro.secret) && row.enabledAt === null, `${st.s}`);
+      const ov = await overview(a1);
+      check("ativação: com segredo pendente o resumo mostra setupPending e 2FA ainda não ativo", ov.mfa?.setupPending === true && ov.mfa?.enabled === false);
+      const bad = await call(a1, "POST", "/api/security/mfa/setup/confirm", { code: wrongCode(pro) });
+      check("ativação: confirm com código errado = 400 genérico, nada ativa e a outra sessão continua", bad.s === 400 && bad.d.message === "Código inválido ou expirado." && (await prisma.mfaSetting.findUnique({ where: { userId: pro.id } })).enabledAt === null && (await call(a2, "GET", "/api/auth/me")).s === 200, `${bad.s} ${bad.d.message}`);
+      const good = await fresh(pro);
+      const dbl = await Promise.all([call(a1, "POST", "/api/security/mfa/setup/confirm", { code: good }), call(a1, "POST", "/api/security/mfa/setup/confirm", { code: good })]);
+      const winner = dbl.find((x) => x.s === 200);
+      check("ativação: confirm com clique duplo = exatamente um 200 (o outro recusado) e 10 códigos de recuperação no banco", dbl.filter((x) => x.s === 200).length === 1 && dbl.filter((x) => x.s !== 200).every((x) => [400, 409].includes(x.s)) && await prisma.mfaRecoveryCode.count({ where: { userId: pro.id, usedAt: null } }) === 10, dbl.map((x) => x.s).join());
+      pro.recovery = winner?.d.recoveryCodes ?? []; pro.recovery.forEach((c) => seen.recovery.add(c));
+      check("ativação: 10 códigos xxxxx-xxxxx distintos, guardados só como hash (nenhum igual ao texto)", pro.recovery.length === 10 && new Set(pro.recovery).size === 10 && pro.recovery.every((c) => /^[a-z0-9]{5}-[a-z0-9]{5}$/i.test(c)) && (await prisma.mfaRecoveryCode.count({ where: { userId: pro.id, codeHash: { in: pro.recovery } } })) === 0, JSON.stringify(pro.recovery.slice(0, 1)));
+      check("ativação: as OUTRAS sessões foram revogadas (401 imediato) e a que ativou segue (200)", (await call(a2, "GET", "/api/auth/me")).s === 401 && (await call(a1, "GET", "/api/auth/me")).s === 200);
+      const ov2 = await overview(a1);
+      check("ativação: resumo mostra enabled, enabledAt e 10 códigos restantes", ov2.mfa?.enabled === true && Boolean(ov2.mfa?.enabledAt) && ov2.mfa?.recoveryCodesRemaining === 10 && ov2.mfa?.setupPending === false, JSON.stringify(ov2.mfa));
+      check("ativação: start/confirm de novo com 2FA ativo = 409 (não sobrescreve o segredo)", (await call(a1, "POST", "/api/security/mfa/setup/start", { password: pw })).s === 409 && (await call(a1, "POST", "/api/security/mfa/setup/confirm", { code: codeFor(pro, 1) })).s === 409 && mfaLib.decryptMfaSecret((await prisma.mfaSetting.findUnique({ where: { userId: pro.id } })).secretEnc) === pro.secret);
+      check("ativação: grava MFA_ENABLED no histórico", await dbEvents(pro, "MFA_ENABLED") === 1);
+    }
+
+    // ===== 2, 3, 4) login com 2FA =====
+    let usedCode;
+    {
+      const { jar, r } = await pending(pro);
+      check("login com 2FA: senha certa devolve {mfaRequired:true}, cookie harmonize_mfa e NENHUMA sessão", r.s === 200 && r.d.mfaRequired === true && !r.d.user && Boolean(jar.c.harmonize_mfa) && !jar.c.harmonize_session, `${r.s} ${JSON.stringify(r.d)}`);
+      check("login com 2FA: antes de verificar, /me, /api/patients e /api/security/overview dão 401", [await call(jar, "GET", "/api/auth/me"), await call(jar, "GET", "/api/patients"), await call(jar, "GET", "/api/security/overview")].every((x) => x.s === 401));
+      const wrongs = [await call(jar, "POST", "/api/auth/mfa/verify", { code: wrongCode(pro) }), await call(jar, "POST", "/api/auth/mfa/verify", {}), await call(jar, "POST", "/api/auth/mfa/verify", { code: 123456 }), await call(jar, "POST", "/api/auth/mfa/verify", { code: ["1", "2"] }), await call(jar, "POST", "/api/auth/mfa/verify", { recoveryCode: "xxxxx-yyyyy" })];
+      check("TOTP incorreto/ausente/mal formatado: 401 com a mesma mensagem genérica e sem sessão", wrongs.every((x) => x.s === 401 && x.d.message === "Código inválido ou expirado.") && !jar.c.harmonize_session, wrongs.map((x) => `${x.s}:${x.d.message}`).join(" | "));
+      usedCode = await fresh(pro);
+      const v = await call(jar, "POST", "/api/auth/mfa/verify", { code: usedCode });
+      if (jar.c.harmonize_session) seen.tokens.add(jar.c.harmonize_session);
+      check("TOTP correto: 200 com user, sessão completa; cookie harmonize_mfa apagado; sem dispositivo confiável", v.s === 200 && v.d.user?.email === pro.email && Boolean(jar.c.harmonize_session) && !jar.c.harmonize_mfa && !jar.c.harmonize_td, `${v.s}`);
+      check("TOTP correto: a sessão agora vale em rotas comuns", (await call(jar, "GET", "/api/auth/me")).s === 200 && (await call(jar, "GET", "/api/patients")).s === 200);
+      const again = await call(jar, "POST", "/api/auth/mfa/verify", { code: codeFor(pro, 1) });
+      check("verify sem o cookie pendente (já trocado) = 401 mfa_expired", again.s === 401 && again.d.code === "mfa_expired", `${again.s}`);
+      const noCookie = await call(newJar(), "POST", "/api/auth/mfa/verify", { code: codeFor(pro, 1), userId: pro.id });
+      check("verify sem cookie nenhum = 401 mfa_expired (userId nunca vem do corpo)", noCookie.s === 401 && noCookie.d.code === "mfa_expired", `${noCookie.s}`);
+    }
+
+    // ===== 5) replay e tokens que não valem como sessão =====
+    {
+      const { jar } = await pending(pro);
+      const replay = await call(jar, "POST", "/api/auth/mfa/verify", { code: usedCode });
+      check("replay: reutilizar o mesmo código (mesmo passo) = 401", replay.s === 401 && !jar.c.harmonize_session, replay.s);
+      const mfaTok = jar.c.harmonize_mfa;
+      const asCookie = await rawGet("/api/auth/me", { cookie: `harmonize_session=${mfaTok}` }), asBearer = await rawGet("/api/auth/me", { authorization: `Bearer ${mfaTok}` }), asCookiePatients = await rawGet("/api/patients", { cookie: `harmonize_session=${mfaTok}` });
+      check("token mfaPending (cookie harmonize_mfa) NÃO vale como sessão (cookie, Bearer, rota comum = 401)", [asCookie, asBearer, asCookiePatients].every((s) => s === 401), `${asCookie}/${asBearer}/${asCookiePatients}`);
+      const nextCode = mfaLib.totpAtStep(pro.secret, pro.lastStep + 1);
+      seen.codes.add(nextCode);
+      const next = await call(jar, "POST", "/api/auth/mfa/verify", { code: nextCode });
+      check("replay: o passo seguinte (janela ±1) é aceito (200)", next.s === 200, next.s);
+      if (authSecret.length >= 32) {
+        const key = new TextEncoder().encode(authSecret);
+        const sign = (payload) => new SignJWT(payload).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime("10m").sign(key);
+        const goodSid = sidOf(jar);
+        const forged = [
+          ["sem sid (JWT antigo)", { userId: pro.id }],
+          ["sid inexistente", { userId: pro.id, sid: "sid-que-nao-existe" }],
+          ["passwordChangeOnly com sid válido", { userId: pro.id, sid: goodSid, passwordChangeOnly: true }],
+          ["mfaPending com sid válido", { userId: pro.id, sid: goodSid, mfaPending: true }],
+          ["sid de OUTRO usuário", { userId: owner.id, sid: goodSid }],
+        ];
+        const out = [];
+        for (const [label, payload] of forged) out.push([label, await rawGet("/api/auth/me", { cookie: `harmonize_session=${await sign(payload)}` })]);
+        const control = await rawGet("/api/auth/me", { cookie: `harmonize_session=${await sign({ userId: pro.id, sid: goodSid })}` });
+        check("sessão: JWT sem sid, sid inexistente, passwordChangeOnly/mfaPending e sid de outro usuário = 401 (o mesmo método com claims corretos = 200)", out.every(([, s]) => s === 401) && control === 200, `${JSON.stringify(out)} controle=${control}`);
+      } else check("sessão: SEM AUTH_SECRET no ambiente do teste (tokens forjados não testados)", false);
+    }
+
+    // ===== 9) dispositivo confiável =====
+    const pro2Jar = await enable(pro2);
+    let tdPro2;
+    {
+      const { jar, r } = await pending(pro);
+      const v = await call(jar, "POST", "/api/auth/mfa/verify", { code: await fresh(pro), trustDevice: true });
+      const td = jar.c.harmonize_td; if (td) seen.td.add(td);
+      const dev = await prisma.trustedDevice.findFirst({ where: { userId: pro.id }, orderBy: { createdAt: "desc" } });
+      const days = dev ? (dev.expiresAt.getTime() - Date.now()) / 86_400_000 : 0;
+      check("dispositivo confiável: verify com trustDevice cria o cookie harmonize_td e a linha (token só como hash, ~30 dias)", r.s === 200 && v.s === 200 && Boolean(td) && td.length >= 32 && dev && dev.tokenHash !== td && !JSON.stringify(dev).includes(td) && days > 29.9 && days < 30.1, `${v.s} ${days.toFixed(2)}d`);
+      const { jar: jTrusted, r: rt } = await pending(pro, { harmonize_td: td });
+      check("dispositivo confiável: o próximo login com o cookie PULA o TOTP (200 com user e sessão)", rt.s === 200 && !rt.d.mfaRequired && rt.d.user?.email === pro.email && (await call(jTrusted, "GET", "/api/patients")).s === 200, `${rt.s} ${JSON.stringify(Object.keys(rt.d))}`);
+      const ovT = await overview(jTrusted);
+      check("dispositivo confiável: a sessão iniciada por ele aparece como trusted, o dispositivo como current, sem tokenHash nem o token", ovT.sessions?.some((s) => s.current && s.trusted) && ovT.trustedDevices?.some((d) => d.current) && !JSON.stringify(ovT).includes("tokenHash") && !JSON.stringify(ovT).includes(td));
+      const pro2v = await pending(pro2); await call(pro2v.jar, "POST", "/api/auth/mfa/verify", { code: await fresh(pro2), trustDevice: true });
+      tdPro2 = pro2v.jar.c.harmonize_td; if (tdPro2) seen.td.add(tdPro2);
+      const foreign = await pending(pro, { harmonize_td: tdPro2 }), garbage = await pending(pro, { harmonize_td: `lixo-qualquer-${"x".repeat(40)}` });
+      check("dispositivo confiável: cookie de OUTRO usuário e cookie inválido NÃO pulam o TOTP", foreign.r.d.mfaRequired === true && !foreign.jar.c.harmonize_session && garbage.r.d.mfaRequired === true && !garbage.jar.c.harmonize_session);
+      await prisma.trustedDevice.updateMany({ where: { userId: pro.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+      const expired = await pending(pro, { harmonize_td: td });
+      check("dispositivo confiável: expirado (expiresAt no passado) volta a pedir o TOTP", expired.r.d.mfaRequired === true && !expired.jar.c.harmonize_session);
+      // Revogação individual.
+      const jd = await session(pro, { trust: true });
+      const ovd = await overview(jd);
+      const mine = ovd.trustedDevices.find((d) => d.current);
+      const tdMine = jd.c.harmonize_td;
+      check("dispositivo confiável: o expirado não aparece no resumo; o novo aparece como current com rótulo (navegador/SO)", Boolean(mine) && ovd.trustedDevices.length === 1 && /Chrome|Windows/.test(mine.label), JSON.stringify(ovd.trustedDevices));
+      const foreignId = (await overview(pro2Jar)).trustedDevices[0]?.id;
+      const delForeign = await call(jd, "DELETE", `/api/security/trusted-devices/${foreignId}`);
+      check("dispositivo confiável (IDOR): apagar dispositivo de outro usuário = 404 e ele continua valendo", Boolean(foreignId) && delForeign.s === 404 && (await pending(pro2, { harmonize_td: tdPro2 })).r.d.mfaRequired !== true, delForeign.s);
+      const delMine = await call(jd, "DELETE", `/api/security/trusted-devices/${mine.id}`);
+      const after = await pending(pro, { harmonize_td: tdMine });
+      check("dispositivo confiável: revogação individual = 200, apaga o cookie do atual e o próximo login com ele pede TOTP", delMine.s === 200 && !jd.c.harmonize_td && after.r.d.mfaRequired === true, `${delMine.s}`);
+      check("dispositivo confiável: revogar de novo e id inexistente = 404", (await call(jd, "DELETE", `/api/security/trusted-devices/${mine.id}`)).s === 404 && (await call(jd, "DELETE", "/api/security/trusted-devices/nao-existe")).s === 404);
+      // Revogação em massa.
+      const t1 = await session(pro, { trust: true }), t2 = await session(pro, { trust: true });
+      const tokens = [t1.c.harmonize_td, t2.c.harmonize_td];
+      const all = await call(t1, "DELETE", "/api/security/trusted-devices");
+      const pend = await Promise.all(tokens.map((t) => pending(pro, { harmonize_td: t })));
+      check("dispositivo confiável: remover todos = 200 (removed>=2) e nenhum dos cookies pula mais o TOTP", all.s === 200 && all.d.removed >= 2 && pend.every((p) => p.r.d.mfaRequired === true) && (await prisma.trustedDevice.count({ where: { userId: pro.id, revokedAt: null } })) === 0, `${all.s} ${all.d.removed}`);
+    }
+
+    // ===== 10) código de recuperação =====
+    {
+      const jt = await session(pro, { trust: true }); // dispositivo confiável que a recuperação deve revogar
+      const tdOld = jt.c.harmonize_td;
+      const { jar } = await pending(pro);
+      const v = await call(jar, "POST", "/api/auth/mfa/verify", { recoveryCode: pro.recovery[0], trustDevice: true });
+      check("recuperação: código válido entra (200), informa 9 restantes e NÃO cria dispositivo confiável", v.s === 200 && v.d.recoveryCodesRemaining === 9 && Boolean(jar.c.harmonize_session) && !jar.c.harmonize_td, `${v.s} ${v.d.recoveryCodesRemaining}`);
+      check("recuperação: revoga os dispositivos confiáveis (o cookie antigo volta a pedir o código)", (await pending(pro, { harmonize_td: tdOld })).r.d.mfaRequired === true);
+      const reuse = await pending(pro); const rr = await call(reuse.jar, "POST", "/api/auth/mfa/verify", { recoveryCode: pro.recovery[0] });
+      check("recuperação: uso único (reutilizar = 401 genérico) e o resumo mostra 9 restantes", rr.s === 401 && rr.d.message === "Código inválido ou expirado." && (await overview(jar)).mfa?.recoveryCodesRemaining === 9, rr.s);
+      const [pa, pb] = await Promise.all([pending(pro), pending(pro)]);
+      const race = await Promise.all([call(pa.jar, "POST", "/api/auth/mfa/verify", { recoveryCode: pro.recovery[1] }), call(pb.jar, "POST", "/api/auth/mfa/verify", { recoveryCode: pro.recovery[1] })]);
+      check("recuperação: mesmo código em duas requisições simultâneas = só um 200", race.filter((x) => x.s === 200).length === 1 && race.filter((x) => x.s === 401).length === 1, race.map((x) => x.s).join());
+      check("recuperação: grava RECOVERY_CODE_USED e ACCOUNT_RECOVERY", await dbEvents(pro, "RECOVERY_CODE_USED") >= 2 && await dbEvents(pro, "ACCOUNT_RECOVERY") >= 2);
+      // Regenerar
+      const noPass = await call(jar, "POST", "/api/security/mfa/recovery/regenerate", { code: await fresh(pro) });
+      const badPass = await call(jar, "POST", "/api/security/mfa/recovery/regenerate", { password: "errada", code: await fresh(pro) });
+      const badCode = await call(jar, "POST", "/api/security/mfa/recovery/regenerate", { password: pw, code: wrongCode(pro) });
+      const recAsCode = await call(jar, "POST", "/api/security/mfa/recovery/regenerate", { password: pw, code: pro.recovery[2] });
+      check("regenerar: sem senha = 403, senha errada = 403 invalid_password, código errado = 400, recuperação no lugar do TOTP = 400", noPass.s === 403 && badPass.s === 403 && badPass.d.code === "invalid_password" && badCode.s === 400 && recAsCode.s === 400, `${noPass.s}/${badPass.s}/${badCode.s}/${recAsCode.s}`);
+      const tdBefore = await session(pro, { trust: true });
+      const regen = await call(jar, "POST", "/api/security/mfa/recovery/regenerate", { password: pw, code: await fresh(pro) });
+      const fresh10 = regen.d.recoveryCodes ?? []; fresh10.forEach((c) => seen.recovery.add(c));
+      const oldTry = await pending(pro); const ro = await call(oldTry.jar, "POST", "/api/auth/mfa/verify", { recoveryCode: pro.recovery[2] });
+      const newTry = await pending(pro); const rn = await call(newTry.jar, "POST", "/api/auth/mfa/verify", { recoveryCode: fresh10[0] });
+      check("regenerar: devolve 10 novos, os antigos deixam de valer, os novos valem e os dispositivos confiáveis são revogados", regen.s === 200 && fresh10.length === 10 && fresh10.every((c) => !pro.recovery.includes(c)) && ro.s === 401 && rn.s === 200 && rn.d.recoveryCodesRemaining === 9 && (await pending(pro, { harmonize_td: tdBefore.c.harmonize_td })).r.d.mfaRequired === true, `${regen.s} ${ro.s} ${rn.s}`);
+      check("regenerar: grava RECOVERY_CODES_REGENERATED", await dbEvents(pro, "RECOVERY_CODES_REGENERATED") === 1);
+      pro.recovery = fresh10;
+    }
+
+    // ===== 7, 8) desativar (usuário NÃO obrigado) =====
+    {
+      const jd = await enable(proD);
+      const trusted = await session(proD, { trust: true });
+      const other = await session(proD);
+      const dNoPw = await call(jd, "POST", "/api/security/mfa/disable", { code: await fresh(proD) });
+      const dBadPw = await call(jd, "POST", "/api/security/mfa/disable", { password: "senha-errada", code: await fresh(proD) });
+      const dBadCode = await call(jd, "POST", "/api/security/mfa/disable", { password: pw, code: wrongCode(proD) });
+      check("desativar: sem senha = 403, senha errada = 403 invalid_password, código errado = 400; o 2FA continua ativo", dNoPw.s === 403 && dBadPw.s === 403 && dBadPw.d.code === "invalid_password" && dBadCode.s === 400 && (await prisma.mfaSetting.count({ where: { userId: proD.id, enabledAt: { not: null } } })) === 1, `${dNoPw.s}/${dBadPw.s}/${dBadCode.s}`);
+      const ok = await call(jd, "POST", "/api/security/mfa/disable", { password: pw, code: await fresh(proD) });
+      check("desativar: senha + código = 200; apaga segredo, códigos e dispositivos; revoga as OUTRAS sessões e mantém a atual", ok.s === 200 && await prisma.mfaSetting.count({ where: { userId: proD.id } }) === 0 && await prisma.mfaRecoveryCode.count({ where: { userId: proD.id } }) === 0 && await prisma.trustedDevice.count({ where: { userId: proD.id } }) === 0 && (await call(other, "GET", "/api/auth/me")).s === 401 && (await call(trusted, "GET", "/api/auth/me")).s === 401 && (await call(jd, "GET", "/api/auth/me")).s === 200, `${ok.s}`);
+      const lg = await pending(proD);
+      check("desativar: depois, o login volta a ser só senha; grava MFA_DISABLED; desativar de novo = 409", lg.r.s === 200 && !lg.r.d.mfaRequired && await dbEvents(proD, "MFA_DISABLED") === 1 && (await call(jd, "POST", "/api/security/mfa/disable", { password: pw, code: "123456" })).s === 409);
+    }
+
+    // ===== 11) bloqueio =====
+    {
+      await enable(proL);
+      const trusted = await session(proL, { trust: true });
+      const { jar } = await pending(proL);
+      await resetMfa(proL);
+      const st = [];
+      for (let i = 0; i < 6; i += 1) st.push((await call(jar, "POST", "/api/auth/mfa/verify", { code: wrongCode(proL) })).s);
+      const lockedGood = await call(jar, "POST", "/api/auth/mfa/verify", { code: codeFor(proL) });
+      const row = await prisma.mfaSetting.findUnique({ where: { userId: proL.id } });
+      const minutes = row.lockedUntil ? (row.lockedUntil.getTime() - Date.now()) / 60_000 : 0;
+      check("bloqueio: 5 códigos errados = 401 e o 6º = 429; com o bloqueio, nem o código certo entra (429)", st.slice(0, 5).every((s) => s === 401) && st[5] === 429 && lockedGood.s === 429 && !jar.c.harmonize_session, `${st.join()} / ${lockedGood.s}`);
+      check("bloqueio: dura ~15 min, a mensagem 429 é genérica e só 5 MFA_FAILED são gravados", minutes > 13 && minutes <= 15.1 && lockedGood.d.message === "Muitas tentativas. Tente novamente em alguns minutos." && await dbEvents(proL, "MFA_FAILED") === 5, `${minutes.toFixed(1)}min ${await dbEvents(proL, "MFA_FAILED")}`);
+      const viaTd = await pending(proL, { harmonize_td: trusted.c.harmonize_td });
+      check("bloqueio: login em dispositivo confiável continua funcionando durante o bloqueio", viaTd.r.s === 200 && !viaTd.r.d.mfaRequired && (await call(viaTd.jar, "GET", "/api/auth/me")).s === 200);
+      await resetMfa(proL);
+      const afterUnlock = await call(jar, "POST", "/api/auth/mfa/verify", { code: codeFor(proL) });
+      check("bloqueio: expirado/zerado o prazo, o código certo entra (200)", afterUnlock.s === 200, afterUnlock.s);
+      const p2 = await pending(proL); await resetMfa(proL);
+      await call(p2.jar, "POST", "/api/auth/mfa/verify", { code: wrongCode(proL) }); await call(p2.jar, "POST", "/api/auth/mfa/verify", { code: wrongCode(proL) });
+      const two = (await prisma.mfaSetting.findUnique({ where: { userId: proL.id } })).failedAttempts;
+      await call(p2.jar, "POST", "/api/auth/mfa/verify", { code: codeFor(proL) });
+      check("bloqueio: 2 falhas contam 2 e o acerto zera o contador", two === 2 && (await prisma.mfaSetting.findUnique({ where: { userId: proL.id } })).failedAttempts === 0, `${two}`);
+      const p3 = await pending(proL); await resetMfa(proL);
+      const burst = await Promise.all(Array.from({ length: 8 }, () => call(p3.jar, "POST", "/api/auth/mfa/verify", { code: wrongCode(proL) })));
+      const n401 = burst.filter((x) => x.s === 401).length, n429 = burst.filter((x) => x.s === 429).length;
+      check("bloqueio: 8 tentativas erradas SIMULTÂNEAS não passam de 5 verificações (o resto 429) e a conta trava", n401 <= 5 && n401 + n429 === 8 && (await prisma.mfaSetting.findUnique({ where: { userId: proL.id } })).lockedUntil !== null, `${n401}x401 ${n429}x429`);
+      await resetMfa(proL);
+    }
+
+    // ===== 12) sessões =====
+    {
+      const A = await session(pro), B = await session(pro), C = await session(pro);
+      const ov = await overview(A);
+      const cur = ov.sessions.filter((s) => s.current);
+      const keys = Object.keys(ov.sessions[0] ?? {});
+      check("sessões: lista as sessões do usuário, uma só marcada current (a própria), sem ip/userAgent crus", ov.sessions.length >= 3 && cur.length === 1 && cur[0].id === sidOf(A) && !keys.includes("ip") && !keys.includes("userAgent") && /xxx|—/.test(ov.sessions[0].ipMasked ?? "") && /Chrome/.test(cur[0].browser ?? ""), `${ov.sessions.length} ${keys.join()}`);
+      const sidB = sidOf(B);
+      const revB = await call(A, "DELETE", `/api/security/sessions/${sidB}`);
+      check("sessões: revogar outra sessão = 200 (loggedOut false) e a revogada recebe 401 NA HORA", revB.s === 200 && revB.d.loggedOut === false && (await call(B, "GET", "/api/auth/me")).s === 401 && (await call(B, "GET", "/api/patients")).s === 401, `${revB.s}`);
+      check("sessões: revogar a mesma de novo, id inexistente, id enorme e id com byte nulo = 404", [(await call(A, "DELETE", `/api/security/sessions/${sidB}`)).s, (await call(A, "DELETE", "/api/security/sessions/nao-existe")).s, (await call(A, "DELETE", `/api/security/sessions/${"x".repeat(300)}`)).s, (await call(A, "DELETE", "/api/security/sessions/%00")).s].every((s) => s === 404));
+      const pro2Sid = sidOf(pro2Jar);
+      const idor = await call(A, "DELETE", `/api/security/sessions/${pro2Sid}`);
+      check("sessões (IDOR): revogar sessão de OUTRO usuário = 404 e ela continua valendo", idor.s === 404 && (await call(pro2Jar, "GET", "/api/auth/me")).s === 200 && (await prisma.authSession.findUnique({ where: { id: pro2Sid } })).revokedAt === null, idor.s);
+      const others = await call(A, "DELETE", "/api/security/sessions");
+      check("sessões: encerrar todas as outras (200, revoked>=1): a C cai; a A e a de outro usuário continuam", others.s === 200 && others.d.revoked >= 1 && (await call(C, "GET", "/api/auth/me")).s === 401 && (await call(A, "GET", "/api/auth/me")).s === 200 && (await call(pro2Jar, "GET", "/api/auth/me")).s === 200, `${others.s} ${others.d.revoked}`);
+      const oldCookie = A.c.harmonize_session;
+      const own = await call(A, "DELETE", `/api/security/sessions/${sidOf(A)}`);
+      check("sessões: encerrar a PRÓPRIA = logout (loggedOut true, cookie apagado, cookie antigo = 401)", own.s === 200 && own.d.loggedOut === true && !A.c.harmonize_session && (await rawGet("/api/auth/me", { cookie: `harmonize_session=${oldCookie}` })) === 401);
+      const D = await session(pro); const dCookie = D.c.harmonize_session; const dSid = sidOf(D);
+      const lo = await call(D, "POST", "/api/auth/logout");
+      check("logout: 200, AuthSession revogada no banco e o cookie antigo (replay) = 401", lo.s === 200 && (await prisma.authSession.findUnique({ where: { id: dSid } })).revokedAt !== null && (await rawGet("/api/auth/me", { cookie: `harmonize_session=${dCookie}` })) === 401);
+      const garbage = newJar(); garbage.c.harmonize_session = "lixo";
+      check("logout: sem cookie ou com cookie lixo = 200 sem erro", (await call(newJar(), "POST", "/api/auth/logout")).s === 200 && (await call(garbage, "POST", "/api/auth/logout")).s === 200);
+      check("sessões: as revogações gravam SESSION_REVOKED", await dbEvents(pro, "SESSION_REVOKED") >= 3);
+    }
+
+    // ===== 13) isolamento entre usuários =====
+    {
+      const A = await session(pro);
+      const ov = await overview(A);
+      const sessIds = ov.sessions.map((s) => s.id), devIds = ov.trustedDevices.map((d) => d.id);
+      const sessOwners = await prisma.authSession.findMany({ where: { id: { in: sessIds } }, select: { userId: true } });
+      const devOwners = await prisma.trustedDevice.findMany({ where: { id: { in: devIds } }, select: { userId: true } });
+      check("isolamento: sessões e dispositivos listados pertencem só ao usuário logado", sessOwners.length === sessIds.length && sessOwners.every((x) => x.userId === pro.id) && devOwners.every((x) => x.userId === pro.id));
+      const evs = await eventsOf(A);
+      const rows = await prisma.securityEvent.findMany({ where: { id: { in: evs.map((e) => e.id) } }, select: { userId: true } });
+      const total = await prisma.securityEvent.count({ where: { userId: pro.id } });
+      check("isolamento: o histórico devolve exatamente os eventos do próprio usuário (nenhum de outro)", rows.length === evs.length && rows.every((r) => r.userId === pro.id) && evs.length === total, `${evs.length} vs ${total}`);
+      const pro2Event = await prisma.securityEvent.findFirst({ where: { userId: pro2.id }, select: { id: true } });
+      const withForeignCursor = await call(A, "GET", `/api/security/events?limit=50&cursor=${pro2Event.id}`);
+      const leaked = withForeignCursor.s === 200 ? await prisma.securityEvent.count({ where: { id: { in: (withForeignCursor.d.events ?? []).map((e) => e.id) }, userId: { not: pro.id } } }) : 0;
+      check("isolamento: cursor com id de evento de OUTRO usuário não vaza eventos dele", withForeignCursor.s < 500 && leaked === 0, `${withForeignCursor.s} vazados=${leaked}`);
+      const devPro2 = await prisma.trustedDevice.count({ where: { userId: pro2.id, revokedAt: null } });
+      await call(A, "DELETE", "/api/security/trusted-devices"); await call(A, "DELETE", "/api/security/sessions");
+      check("isolamento: remover dispositivos/sessões de A não toca nos de B (dispositivos ativos e sessão de B intactos)", devPro2 > 0 && await prisma.trustedDevice.count({ where: { userId: pro2.id, revokedAt: null } }) === devPro2 && (await call(pro2Jar, "GET", "/api/auth/me")).s === 200);
+    }
+
+    // ===== 15) CSRF =====
+    {
+      const A = await session(pro), keep = await session(pro);
+      const evil = await call(A, "DELETE", "/api/security/sessions", undefined, { origin: "http://evil.example" });
+      const noOrigin = await call(A, "DELETE", "/api/security/sessions", undefined, { origin: null });
+      const crossSite = await call(A, "DELETE", "/api/security/sessions", undefined, { "sec-fetch-site": "cross-site" });
+      const startEvil = await call(A, "POST", "/api/security/mfa/setup/start", { password: pw }, { origin: "http://evil.example" });
+      const disableEvil = await call(A, "POST", "/api/security/mfa/disable", { password: pw, code: await fresh(pro) }, { origin: "http://evil.example" });
+      const logoutEvil = await call(A, "POST", "/api/auth/logout", undefined, { origin: "http://evil.example" });
+      const tdEvil = await call(A, "DELETE", "/api/security/trusted-devices", undefined, { origin: "http://evil.example" });
+      const all = [evil, noOrigin, crossSite, startEvil, disableEvil, logoutEvil, tdEvil];
+      check("CSRF: DELETE/POST /api/security/* e logout com Origin de outro site, sem Origin ou Sec-Fetch-Site cross-site = 403", all.every((x) => x.s === 403), all.map((x) => x.s).join());
+      check("CSRF: nada foi alterado pelas requisições recusadas (outra sessão viva, sessão atual viva, 2FA ativo)", (await call(keep, "GET", "/api/auth/me")).s === 200 && (await call(A, "GET", "/api/auth/me")).s === 200 && (await prisma.mfaSetting.count({ where: { userId: pro.id, enabledAt: { not: null } } })) === 1);
+      const sameOk = await call(A, "DELETE", "/api/security/trusted-devices/nao-existe", undefined, { origin: null, "sec-fetch-site": "same-origin" });
+      const originOk = await call(A, "DELETE", "/api/security/trusted-devices/nao-existe");
+      check("CSRF: same-origin legítimo passa (Sec-Fetch-Site same-origin ou Origin igual ao host = 404 do recurso, não 403)", sameOk.s === 404 && originOk.s === 404, `${sameOk.s}/${originOk.s}`);
+      check("CSRF: leituras (GET overview/events) não exigem Origin", (await call(A, "GET", "/api/security/overview", undefined, { origin: null })).s === 200 && (await call(A, "GET", "/api/security/events", undefined, { origin: null })).s === 200);
+    }
+
+    // ===== 17) app mobile =====
+    {
+      const mob = async (loginName, secret, extra = {}) => { const r = await fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ login: loginName, password: secret, ...extra }) }); return { status: r.status, data: await r.json().catch(() => null), cache: r.headers.get("cache-control") }; };
+      const bearerMe = (token) => rawGet("/api/auth/me", { authorization: `Bearer ${token}` });
+      const noCode = await mob(pro.email, pw), badCode = await mob(pro.email, pw, { mfaCode: wrongCode(pro) }), junk = await mob(pro.email, pw, { mfaCode: "abc" }), badPw = await mob(pro.email, "errada");
+      check("mobile: usuário com 2FA sem mfaCode = 401 mfaRequired (sem token); código errado/lixo = 401 mfaRequired", noCode.status === 401 && noCode.data.mfaRequired === true && !noCode.data.token && badCode.status === 401 && badCode.data.mfaRequired === true && junk.status === 401 && !badCode.data.token && !junk.data.token, `${noCode.status}/${badCode.status}/${junk.status}`);
+      check("mobile: senha errada continua com a mensagem de credenciais, sem revelar o 2FA", badPw.status === 401 && badPw.data.message === "Usuário ou senha inválidos." && !("mfaRequired" in badPw.data));
+      const mcode = await fresh(pro);
+      const ok = await mob(pro.email, pw, { mfaCode: mcode });
+      const claims = ok.data?.token ? JSON.parse(Buffer.from(ok.data.token.split(".")[1], "base64url").toString()) : {};
+      if (ok.data?.token) seen.tokens.add(ok.data.token);
+      const days = ok.data?.expiresAt ? (Date.parse(ok.data.expiresAt) - Date.now()) / 86_400_000 : 0;
+      check("mobile: código válido = 200 com token que carrega sid de uma AuthSession ativa, ~3 dias, no-store, e o Bearer autentica", ok.status === 200 && claims.userId === pro.id && typeof claims.sid === "string" && (await prisma.authSession.findFirst({ where: { id: claims.sid, userId: pro.id, revokedAt: null } })) !== null && days > 2.9 && days < 3.1 && /no-store/.test(ok.cache ?? "") && await bearerMe(ok.data.token) === 200, `${ok.status} ${days.toFixed(2)}`);
+      const replay = await mob(pro.email, pw, { mfaCode: mcode });
+      check("mobile: o mesmo código de novo (replay) = 401", replay.status === 401 && !replay.data.token, replay.status);
+      const viaRecovery = await mob(pro.email, pw, { mfaCode: pro.recovery[1] });
+      check("mobile: código de recuperação no mfaCode entra (200) e é de uso único (2ª vez = 401)", viaRecovery.status === 200 && Boolean(viaRecovery.data.token) && (await mob(pro.email, pw, { mfaCode: pro.recovery[1] })).status === 401, viaRecovery.status);
+      const web = await session(pro);
+      const revoked = await call(web, "DELETE", `/api/security/sessions/${claims.sid}`);
+      check("mobile: revogar a sessão do app pela tela de segurança invalida o Bearer na hora (401)", revoked.s === 200 && await bearerMe(ok.data.token) === 401, `${revoked.s}`);
+      const plain = await mob(proN.email, pw);
+      check("mobile: usuário SEM 2FA entra só com senha (200) e o token tem sid", plain.status === 200 && Boolean(plain.data.token) && JSON.parse(Buffer.from(plain.data.token.split(".")[1], "base64url").toString()).sid !== undefined);
+      const need = await mob(adm2.email, pw);
+      check("mobile: ADMIN que exige 2FA e ainda não ativou = 403 mfaSetupRequired, sem token", need.status === 403 && need.data.mfaSetupRequired === true && !need.data.token, `${need.status}`);
+      const unknownBefore = await prisma.securityEvent.count({ where: { userId: null } });
+      await mob(`ninguem-${run}@example.invalid`, pw);
+      await call(newJar(), "POST", "/api/auth/login", { login: `ninguem-${run}@example.invalid`, password: pw });
+      check("login de usuário inexistente NÃO grava evento de segurança (sem vazar enumeração)", await prisma.securityEvent.count({ where: { userId: null } }) === unknownBefore);
+    }
+
+    // ===== 18) troca de senha do primeiro acesso =====
+    {
+      const jm = await enable(proM);
+      const trusted = await session(proM, { trust: true });
+      const other = await session(proM);
+      await prisma.user.update({ where: { id: proM.id }, data: { mustChangePassword: true } });
+      const { jar, r } = await pending(proM, { harmonize_td: trusted.c.harmonize_td });
+      const gated = [await call(jar, "GET", "/api/auth/me"), await call(jar, "GET", "/api/patients"), await call(jar, "GET", "/api/security/overview")];
+      check("troca de senha: primeiro acesso devolve passwordChangeRequired e essa sessão NÃO vale em rota nenhuma (401)", r.s === 200 && r.d.passwordChangeRequired === true && gated.every((x) => x.s === 401), `${r.s} ${gated.map((x) => x.s)}`);
+      const newPw = `${pw}-nova`;
+      const same = await call(jar, "POST", "/api/auth/change-password", { password: pw }), short = await call(jar, "POST", "/api/auth/change-password", { password: "curta" });
+      check("troca de senha: senha igual à inicial e senha curta = 400", same.s === 400 && short.s === 400, `${same.s}/${short.s}`);
+      const ch = await call(jar, "POST", "/api/auth/change-password", { password: newPw });
+      const tds = await prisma.trustedDevice.findMany({ where: { userId: proM.id }, select: { revokedAt: true } });
+      check("troca de senha: com 2FA ativo, não abre sessão (mfaRequired), revoga TODAS as sessões e dispositivos confiáveis", ch.s === 200 && ch.d.mfaRequired === true && !jar.c.harmonize_session && (await call(jm, "GET", "/api/auth/me")).s === 401 && (await call(other, "GET", "/api/auth/me")).s === 401 && (await call(trusted, "GET", "/api/auth/me")).s === 401 && tds.length > 0 && tds.every((t) => t.revokedAt !== null), `${ch.s} ${JSON.stringify(ch.d)}`);
+      const viaOldTd = await pending(proM, { harmonize_td: trusted.c.harmonize_td }, newPw);
+      check("troca de senha: o dispositivo confiável antigo volta a pedir TOTP (senha nova) e PASSWORD_CHANGED é registrado", viaOldTd.r.d.mfaRequired === true && !viaOldTd.jar.c.harmonize_session && await dbEvents(proM, "PASSWORD_CHANGED") === 1);
+      const vv = await call(jar, "POST", "/api/auth/mfa/verify", { code: await fresh(proM) });
+      const oldLogin = await call(newJar(), "POST", "/api/auth/login", { login: proM.email, password: pw });
+      const reuseChange = await call(jar, "POST", "/api/auth/change-password", { password: `${newPw}-x` });
+      check("troca de senha: o TOTP conclui o login; a senha antiga = 401; a rota de troca não pode ser reutilizada (401/403)", vv.s === 200 && oldLogin.s === 401 && [401, 403].includes(reuseChange.s), `${vv.s}/${oldLogin.s}/${reuseChange.s}`);
+      // Sem 2FA: sessão direta e outras sessões revogadas.
+      const o1 = await session(proM2), o2 = await session(proM2);
+      await prisma.user.update({ where: { id: proM2.id }, data: { mustChangePassword: true } });
+      const m2 = await pending(proM2);
+      const ch2 = await call(m2.jar, "POST", "/api/auth/change-password", { password: newPw });
+      check("troca de senha (sem 2FA): abre sessão nova (200) e derruba as outras sessões do usuário", ch2.s === 200 && !ch2.d.mfaRequired && (await call(m2.jar, "GET", "/api/auth/me")).s === 200 && (await call(o1, "GET", "/api/auth/me")).s === 401 && (await call(o2, "GET", "/api/auth/me")).s === 401, `${ch2.s}`);
+    }
+
+    // ===== 19) Google: cookies assinados (o callback real exige o Google e não é testável aqui) =====
+    if (authSecret.length >= 32) {
+      const key = new TextEncoder().encode(authSecret);
+      const gmail = mail("google");
+      const pend = await new SignJWT({ typ: "google_signup_pending", sub: `${prefix}-sub`, email: gmail, name: "Google Sec" }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime(Math.floor(Date.now() / 1000) + 600).sign(key);
+      const jar = newJar();
+      jar.c.harmonize_google_signup = pend;
+      const done = await call(jar, "POST", "/api/auth/google/signup/complete", { clinicName: `${prefix} Google`, name: "Google Sec" });
+      const guser = await prisma.user.findUnique({ where: { email: gmail }, select: { id: true } });
+      if (guser) { created.push(guser.id); touchedUsers.add(guser.id); }
+      const gsid = jar.c.harmonize_session ? sidOf(jar) : null;
+      const row = gsid ? await prisma.authSession.findUnique({ where: { id: gsid } }) : null;
+      const me = await call(jar, "GET", "/api/auth/me");
+      check("Google (cadastro): abre sessão com sid (AuthSession), registra LOGIN_GOOGLE e, sendo dono, cai no 2FA obrigatório (me.mfaSetupRequired, /api/patients 401)", done.s === 201 && Boolean(guser) && row?.userId === guser.id && me.d.mfaSetupRequired === true && (await call(jar, "GET", "/api/patients")).s === 401 && await prisma.securityEvent.count({ where: { userId: guser.id, type: "LOGIN_GOOGLE" } }) === 1, `${done.s}`);
+      if (guser && gsid) {
+        const st = await call(jar, "POST", "/api/security/mfa/setup/start", {});
+        check("Google (conta só-Google): sem senha, sessão recente reautentica o início da ativação (200)", st.s === 200, st.s);
+        await prisma.mfaSetting.deleteMany({ where: { userId: guser.id } });
+        await prisma.authSession.update({ where: { id: gsid }, data: { createdAt: new Date(Date.now() - 11 * 60_000) } });
+        const old = await call(jar, "POST", "/api/security/mfa/setup/start", {});
+        check("Google (conta só-Google): sessão com mais de 10 min NÃO reautentica (403 reauth_required)", old.s === 403 && old.d.code === "reauth_required", `${old.s} ${old.d.code}`);
+      }
+      const tampered = await new SignJWT({ typ: "google_signup_pending", sub: "x", email: mail("hacker"), name: "x" }).setProtectedHeader({ alg: "HS256" }).setIssuedAt().setExpirationTime("10m").sign(new TextEncoder().encode("outro-segredo-qualquer-com-mais-de-32-bytes!!"));
+      const forgedGoogle = newJar(); forgedGoogle.c.harmonize_google_signup = tampered;
+      const fg = await call(forgedGoogle, "POST", "/api/auth/google/signup/complete", { clinicName: `${prefix} Hack`, name: "x" });
+      check("Google: cookie pendente assinado com outro segredo não cria conta nem sessão (400)", fg.s === 400 && !forgedGoogle.c.harmonize_session && await prisma.user.count({ where: { email: mail("hacker") } }) === 0, `${fg.s}`);
+    } else check("Google: SEM AUTH_SECRET no ambiente do teste (parte ignorada)", false);
+
+    // ===== 16) histórico e vazamento de segredos =====
+    {
+      const A = await session(pro);
+      await call(newJar(), "POST", "/api/auth/login", { login: pro.email, password: "errada-de-proposito" });
+      const evs = await eventsOf(A);
+      const types = new Set(evs.map((e) => e.type));
+      const wanted = ["LOGIN", "LOGIN_FAILED", "MFA_VERIFIED", "MFA_FAILED", "MFA_ENABLED", "TRUSTED_DEVICE_ADDED", "TRUSTED_DEVICE_REMOVED", "SESSION_REVOKED", "RECOVERY_CODE_USED", "ACCOUNT_RECOVERY", "RECOVERY_CODES_REGENERATED"];
+      check("histórico: contém os tipos esperados dos fluxos reais", wanted.every((t) => types.has(t)), `faltam: ${wanted.filter((t) => !types.has(t)).join()}`);
+      const shapeOk = evs.every((e) => Object.keys(e).sort().join() === "createdAt,detail,device,id,ipMasked,success,type") && evs.every((e, i) => i === 0 || Date.parse(evs[i - 1].createdAt) >= Date.parse(e.createdAt)) && evs.every((e) => typeof e.success === "boolean" && /xxx|—/.test(e.ipMasked));
+      check("histórico: só campos enxutos (id, type, success, createdAt, ipMasked, device, detail), do mais novo ao mais antigo, IP mascarado", shapeOk && evs.some((e) => e.type === "LOGIN_FAILED" && e.success === false) && evs.some((e) => e.type === "LOGIN" && e.success === true), `${evs.length}`);
+      const p1 = await call(A, "GET", "/api/security/events?limit=3");
+      const p2 = await call(A, "GET", `/api/security/events?limit=3&cursor=${p1.d.nextCursor}`);
+      const big = await call(A, "GET", "/api/security/events?limit=1000"), nan = await call(A, "GET", "/api/security/events?limit=abc"), badCursor = await call(A, "GET", "/api/security/events?cursor=%00zzz");
+      check("histórico: paginação por cursor (3 + 3 sem repetir), limit alto limitado a 50, limit inválido usa 20, cursor inválido não dá 500", p1.d.events.length === 3 && p2.d.events.length === 3 && !p2.d.events.some((e) => p1.d.events.some((f) => f.id === e.id)) && big.d.events.length <= 50 && nan.d.events.length <= 20 && badCursor.s < 500, `${p1.d.events.length}/${p2.d.events.length}/${big.d.events.length}/${nan.d.events.length}/${badCursor.s}`);
+      const mut = [await call(A, "POST", "/api/security/events", {}), await call(A, "DELETE", "/api/security/events"), await call(A, "PATCH", "/api/security/events", {}), await call(A, "PUT", "/api/security/events", {})];
+      check("histórico: somente leitura (POST/PUT/PATCH/DELETE = 405)", mut.every((x) => x.s === 405), mut.map((x) => x.s).join());
+      // Varredura de segredos: nenhuma resposta traz campos internos; respostas que não são de ativação não trazem segredo/códigos.
+      const issuing = /\/mfa\/setup\/(start|confirm)|\/recovery\/regenerate/;
+      const internals = bodies.filter((b) => /secretEnc|tokenHash|codeHash|passwordHash|"ip":|userAgent/.test(b.text));
+      const strings = [...seen.secrets, ...seen.recovery, ...seen.td, ...seen.tokens].filter(Boolean);
+      const leaks = bodies.filter((b) => !issuing.test(b.path)).filter((b) => strings.some((s) => b.text.includes(s)) || [...seen.codes].some((c) => b.text.includes(`"${c}"`)));
+      check("segredos: NENHUMA resposta traz secretEnc, tokenHash, codeHash, passwordHash, IP cru ou user-agent cru", internals.length === 0 && bodies.length > 100, `${internals.slice(0, 2).map((b) => b.path).join()} (${bodies.length} respostas varridas)`);
+      check("segredos: fora de start/confirm/regenerate, nenhuma resposta repete segredo TOTP, código de recuperação, token de dispositivo/sessão ou código TOTP usado", leaks.length === 0 && strings.length > 10, leaks.slice(0, 3).map((b) => b.path).join());
+      const details = await prisma.securityEvent.findMany({ where: { userId: { in: created } }, select: { detail: true } });
+      const dirty = details.filter((d) => d.detail && (strings.some((s) => d.detail.includes(s)) || [...seen.codes].some((c) => d.detail.includes(c)) || d.detail.includes(pw)));
+      check("segredos: nenhum detalhe de evento no banco contém senha, segredo, código TOTP/recuperação ou token", dirty.length === 0 && details.length > 50, `${dirty.length} sujos de ${details.length}`);
+    }
+
+    // ===== tela: Configurações > Segurança =====
+    await withPage(async (page, pageErrors) => {
+      await page.goto(`${baseUrl}/configuracoes`);
+      await page.getByText("Segurança da conta", { exact: true }).first().click();
+      await page.getByText("Verificação em duas etapas").first().waitFor();
+      const text = await page.locator("body").innerText();
+      check("tela Segurança: mostra 2FA, dispositivos confiáveis, sessões ativas e histórico, sem erro de JavaScript", ["Verificação em duas etapas", "Dispositivos confiáveis", "Sessões ativas", "Histórico de segurança"].every((t) => text.includes(t)) && !/secretEnc|tokenHash/.test(text) && pageErrors.length === 0, pageErrors.join(" | ") || text.slice(0, 80));
+    });
+  } finally {
+    const users = (await prisma.user.findMany({ where: { email: { startsWith: prefix } }, select: { id: true } })).map((u) => u.id);
+    const all = [...new Set([...created, ...users])];
+    const clinics = (await prisma.clinic.findMany({ where: { name: { startsWith: prefix } }, select: { id: true } })).map((c) => c.id);
+    await wipeSecurityOf(all).catch(() => undefined);
+    await prisma.clinicMembership.deleteMany({ where: { OR: [{ clinicId: { in: clinics } }, { userId: { in: all } }] } });
+    await prisma.userIdentity.deleteMany({ where: { userId: { in: all } } });
+    await prisma.user.deleteMany({ where: { id: { in: all } } });
+    await prisma.clinic.deleteMany({ where: { id: { in: clinics } } });
+    for (const id of all) { touchedUsers.delete(id); mfaSecrets.delete(id); trustTokens.delete(id); }
+  }
+}
+
 const suites = {
+  seguranca_2fa: { needs: [], run: () => security2fa() },
   verificacao_email_cadastro: { needs: [], run: () => signupEmailVerification() },
   chave_email_clientes: { needs: [], run: () => patientEmailsSwitch() },
   catalogo_materiais: { needs: [], run: () => stockCatalog() },
@@ -7636,7 +8266,8 @@ async function main() {
   const selected = selectSuites(process.argv.slice(2));
   const alive = await fetch(`${baseUrl}/login`).catch(() => null);
   if (!alive?.ok) throw new Error(`Servidor fora do ar em ${baseUrl}. Rode npm run dev.`);
-  await login();
+  await resetTestAccountSecurity(); // estado base: sem 2FA/sessões/histórico (recusa fora da clínica de teste)
+  await login(); // ativa o 2FA da conta de teste pelo fluxo real e entra
   await resetTestClinic();
 
   const state = {};
@@ -7654,5 +8285,11 @@ main().catch((error) => {
   process.exitCode = 1;
 }).finally(async () => {
   if (email) await resetTestClinic().catch((error) => { console.error(`Limpeza da clínica de teste falhou: ${error.message}`); process.exitCode = 1; });
+  // Devolve a conta de teste ao estado base (sem 2FA) e limpa o 2FA/sessões/histórico das contas que o roteiro criou/usou.
+  if (email) await resetTestAccountSecurity().catch((error) => { console.error(`Limpeza de segurança da conta de teste falhou: ${error.message}`); process.exitCode = 1; });
+  const others = [...touchedUsers];
+  // Eventos de contas que outras partes do roteiro apagaram durante a execução ficam com userId nulo (SetNull): só os criados por este roteiro (user-agent do roteiro ou "node").
+  await prisma.securityEvent.deleteMany({ where: { userId: null, createdAt: { gte: runStartedAt }, OR: [{ userAgent: e2eUserAgent }, { userAgent: "node" }, { userAgent: null }] } }).catch(() => undefined);
+  if (others.length) await wipeSecurityOf(others).catch((error) => { console.error(`Limpeza de segurança das contas do roteiro falhou: ${error.message}`); process.exitCode = 1; });
   await prisma.$disconnect();
 });

@@ -8,13 +8,21 @@ const lockMinutes = 15;
 const dummyHash = "$2b$12$1pnI5DgbUzucx00jr7W1tuKML9ukG7YnizYFDQLTJ.5bLXy.G0e/m";
 
 export type LoginResult =
-  | { ok: false; status: 400 | 401 | 403 | 429; message: string }
+  | { ok: false; status: 400 | 401 | 403 | 429; message: string; /** só quando a senha errada era de um usuário existente (para LOGIN_FAILED) */ failedUserId?: string }
   | {
       ok: true;
       user: { id: string; name: string; email: string; mustChangePassword: boolean };
       role: "ADMIN" | "PROFESSIONAL" | "STAFF";
       clinic: { id: string; name: string; trialEndsAt: Date | null };
     };
+
+// Incremento atômico: tentativas simultâneas contam todas; ao chegar em 10, bloqueia por 15 minutos. Também usado na reautenticação por senha.
+export async function registerPasswordFailure(userId: string) {
+  const updated = await prisma.user.update({ where: { id: userId }, data: { failedLogins: { increment: 1 } }, select: { failedLogins: true } });
+  if (updated.failedLogins >= maxFailedLogins) {
+    await prisma.user.update({ where: { id: userId }, data: { failedLogins: 0, lockedUntil: new Date(Date.now() + lockMinutes * 60_000) } });
+  }
+}
 
 // Validação de usuário/senha compartilhada pelo login da web (cookie) e do app (token): bloqueio de 10 falhas por 15 minutos incluso.
 export async function authenticateLogin(rawLogin: unknown, rawPassword: unknown): Promise<LoginResult> {
@@ -36,14 +44,8 @@ export async function authenticateLogin(rawLogin: unknown, rawPassword: unknown)
   }
   if (!user || !(await compare(password, user.passwordHash))) {
     if (!user) await compare(password, dummyHash);
-    if (user) {
-      // Incremento atômico: tentativas simultâneas contam todas.
-      const updated = await prisma.user.update({ where: { id: user.id }, data: { failedLogins: { increment: 1 } }, select: { failedLogins: true } });
-      if (updated.failedLogins >= maxFailedLogins) {
-        await prisma.user.update({ where: { id: user.id }, data: { failedLogins: 0, lockedUntil: new Date(Date.now() + lockMinutes * 60_000) } });
-      }
-    }
-    return { ok: false, status: 401, message: "Usuário ou senha inválidos." };
+    if (user) await registerPasswordFailure(user.id);
+    return { ok: false, status: 401, message: "Usuário ou senha inválidos.", ...(user ? { failedUserId: user.id } : {}) };
   }
   if (user.failedLogins || user.lockedUntil) {
     await prisma.user.update({ where: { id: user.id }, data: { failedLogins: 0, lockedUntil: null } });

@@ -2,7 +2,8 @@ import { compare, hash } from "bcryptjs";
 import { jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { createSession, invalidateUserAuthCache, sessionCookieName } from "@/lib/auth";
+import { invalidateUserAuthCache, sessionCookieName } from "@/lib/auth";
+import { completeLogin, recordSecurityEvent, revokeUserSessions, revokeUserTrustedDevices } from "@/lib/auth-session";
 import { getAuthSecret } from "@/lib/auth-secret";
 import { prisma } from "@/lib/prisma";
 import { pickMembership } from "@/lib/active-clinic-rules";
@@ -45,15 +46,13 @@ export async function POST(request: Request) {
   await prisma.user.update({ where: { id: user.id }, data: { passwordHash, mustChangePassword: false } });
   invalidateUserAuthCache(user.id);
 
-  const response = NextResponse.json({ success: true, clinicName: membership.clinic.name });
-  response.cookies.set({
-    name: sessionCookieName,
-    value: await createSession(user.id),
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    maxAge: 60 * 60 * 24 * 7,
-    path: "/",
-  });
+  // Troca de senha derruba todas as sessões e dispositivos confiáveis; a sessão nova (com 2FA, se houver) nasce depois.
+  await revokeUserSessions(user.id, { request, reason: "troca de senha" });
+  await revokeUserTrustedDevices(user.id, { request, reason: "troca de senha" });
+  await recordSecurityEvent({ userId: user.id, type: "PASSWORD_CHANGED", request });
+
+  const login = await completeLogin({ request, userId: user.id, origin: "password" });
+  const response = NextResponse.json({ success: true, clinicName: membership.clinic.name, ...(login.mfaRequired ? { mfaRequired: true } : {}) });
+  login.apply(response);
   return response;
 }

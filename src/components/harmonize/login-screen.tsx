@@ -13,11 +13,14 @@ import {
   LockKeyhole,
   Mail,
   MailCheck,
+  ShieldCheck,
   UserRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { revealValidationTarget } from "@/components/harmonize/reveal-validation-target";
+import { OtpInput } from "@/components/harmonize/otp-input";
 import { PASSWORD_RULE_LABELS, PASSWORD_RULE_MESSAGE, isStrongPassword, passwordChecks, passwordStrength } from "@/lib/password-rules";
+import { emptyOtp, formatRecoveryInput, isLowOnRecoveryCodes, isRecoveryInputComplete } from "@/lib/security-ui-rules";
 
 export type RegisterValues = {
   clinicName: string;
@@ -36,11 +39,17 @@ export type RegisterResult = {
   error?: string;
 };
 
+// Segundo estágio do login (2FA). `expired`: o cookie de verificação venceu e o login recomeça.
+export type MfaVerifyInput = { code?: string; recoveryCode?: string; trustDevice: boolean };
+export type MfaVerifyResult = { error?: string; expired?: boolean; recoveryCodesRemaining?: number };
+
 type LoginScreenProps = {
-  initialMode?: "login" | "register";
+  initialMode?: "login" | "register" | "mfa";
   googleStatus?: string;
-  onLogin: (credentials: { login: string; password: string }) => Promise<{ error?: string; passwordChangeRequired?: boolean }>;
-  onChangePassword: (password: string) => Promise<{ error?: string }>;
+  onLogin: (credentials: { login: string; password: string }) => Promise<{ error?: string; passwordChangeRequired?: boolean; mfaRequired?: boolean }>;
+  onChangePassword: (password: string) => Promise<{ error?: string; mfaRequired?: boolean }>;
+  onVerifyMfa: (input: MfaVerifyInput) => Promise<MfaVerifyResult>;
+  onEnterApp: () => void;
   onRegister: (values: RegisterValues) => Promise<RegisterResult>;
   onVerifyEmail: (values: { email: string; password: string; code: string }) => Promise<VerifyResult>;
   onResendCode: (email: string) => Promise<{ error?: string }>;
@@ -67,8 +76,8 @@ const googleMessages: Record<string, string> = {
   error: "Não foi possível entrar com o Google. Tente novamente.",
 };
 
-export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onChangePassword, onRegister, onVerifyEmail, onResendCode, onGoogleSignup }: LoginScreenProps) {
-  const [mode, setMode] = useState<"login" | "register" | "verify-email" | "change-password" | "google-signup">(googleStatus === "signup" ? "google-signup" : initialMode);
+export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onChangePassword, onVerifyMfa, onEnterApp, onRegister, onVerifyEmail, onResendCode, onGoogleSignup }: LoginScreenProps) {
+  const [mode, setMode] = useState<"login" | "register" | "verify-email" | "change-password" | "google-signup" | "mfa">(googleStatus === "signup" ? "google-signup" : initialMode);
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -105,12 +114,38 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
       setIsSubmitting(false);
       return;
     }
+    if (result.mfaRequired) {
+      setError("");
+      setPassword("");
+      setMode("mfa");
+      setIsSubmitting(false);
+      return;
+    }
     if (!result.error) {
       setError("");
       return;
     }
     setError(result.error);
     setIsSubmitting(false);
+  }
+
+  // Depois da troca da senha provisória o servidor pode pedir o 2FA antes de abrir a sessão.
+  async function handlePasswordSubmit(newPassword: string) {
+    const result = await onChangePassword(newPassword);
+    if (result.mfaRequired) { setError(""); setMode("mfa"); }
+    return result;
+  }
+
+  async function handleMfaVerify(input: MfaVerifyInput): Promise<MfaVerifyResult> {
+    const result = await onVerifyMfa(input);
+    if (result.expired) {
+      setPassword("");
+      setNotice("");
+      setError(result.error ?? "A verificação expirou. Entre novamente.");
+      setMode("login");
+      return {};
+    }
+    return result;
   }
 
   async function handleRegisterSubmit(event: FormEvent<HTMLFormElement>) {
@@ -197,7 +232,9 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
       </Button>
     }>
       {mode === "change-password" ? (
-        <div className="mx-auto w-full max-w-[360px]"><FirstAccessPasswordForm onSubmit={onChangePassword} /></div>
+        <div className="mx-auto w-full max-w-[360px]"><FirstAccessPasswordForm onSubmit={handlePasswordSubmit} /></div>
+      ) : mode === "mfa" ? (
+        <div className="mx-auto w-full max-w-[360px]"><MfaVerifyForm onBack={openLogin} onEnter={onEnterApp} onVerify={handleMfaVerify} /></div>
       ) : mode === "google-signup" ? (
         <GoogleSignupForm error={error} isSubmitting={isSubmitting} onBack={openLogin} onChange={(field, value) => setRegisterValues((current) => ({ ...current, [field]: value }))} onSubmit={handleGoogleSignupSubmit} values={registerValues} />
       ) : mode === "verify-email" ? (
@@ -309,6 +346,99 @@ function GoogleSignupForm({ error, isSubmitting, onBack, onChange, onSubmit, val
         <p className="text-center text-[13px] font-semibold text-[#26305a]">Já tem uma conta? <button className="inline-flex min-h-11 items-center px-1 font-bold text-[#5147dc] hover:underline focus-visible:outline-2 focus-visible:outline-[#5147dc]" onClick={onBack} type="button">Acessar</button></p>
       </form>
     </div>
+  );
+}
+
+// Etapa "Verifique sua identidade": código do app autenticador (6 campos) ou código de recuperação (xxxxx-xxxxx).
+function MfaVerifyForm({ onBack, onEnter, onVerify }: { onBack: () => void; onEnter: () => void; onVerify: (input: MfaVerifyInput) => Promise<MfaVerifyResult> }) {
+  const [method, setMethod] = useState<"totp" | "recovery">("totp");
+  const [cells, setCells] = useState(emptyOtp);
+  const [recovery, setRecovery] = useState("");
+  const [trustDevice, setTrustDevice] = useState(false);
+  const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [focusSignal, setFocusSignal] = useState(0);
+  const [recoveryRemaining, setRecoveryRemaining] = useState<number | null>(null);
+  const [helpMessage, setHelpMessage] = useState("");
+  const recoveryRef = useRef<HTMLInputElement>(null);
+  const feedbackId = useId();
+  const trustHelpId = useId();
+
+  const code = cells.join("");
+  const ready = method === "totp" ? code.length === cells.length : isRecoveryInputComplete(recovery);
+
+  function switchMethod(next: "totp" | "recovery") {
+    setMethod(next);
+    setError("");
+    setCells(emptyOtp());
+    setRecovery("");
+    if (next === "recovery") window.setTimeout(() => recoveryRef.current?.focus(), 0);
+    else setFocusSignal((tick) => tick + 1);
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!ready || isSubmitting) return;
+    setIsSubmitting(true);
+    setError("");
+    const result = await onVerify(method === "totp" ? { code, trustDevice } : { recoveryCode: recovery, trustDevice: false });
+    if (result.error) {
+      setError(result.error);
+      setCells(emptyOtp());
+      setRecovery("");
+      setFocusSignal((tick) => tick + 1);
+      if (method === "recovery") window.setTimeout(() => recoveryRef.current?.focus(), 0);
+      setIsSubmitting(false);
+      return;
+    }
+    // Código de recuperação usado: mostra quantos restam antes de entrar.
+    if (typeof result.recoveryCodesRemaining === "number") {
+      setRecoveryRemaining(result.recoveryCodesRemaining);
+      setIsSubmitting(false);
+      return;
+    }
+    onEnter(); // Sucesso: o app abre já autenticado.
+  }
+
+  if (recoveryRemaining !== null) {
+    const low = isLowOnRecoveryCodes(recoveryRemaining);
+    return (
+      <>
+        <SignupHeader icon={ShieldCheck} subtitle="Você entrou com um código de recuperação." title="Acesso confirmado" />
+        <p aria-live="polite" className={`rounded-[8px] px-3 py-3 text-xs font-semibold leading-5 ${low ? "bg-[#fff6e5] text-[#9a5b00]" : "bg-[#e7f4ef] text-[#16805d]"}`} role="status">
+          {recoveryRemaining === 0 ? "Você não tem mais códigos de recuperação." : `Restam ${recoveryRemaining} ${recoveryRemaining === 1 ? "código" : "códigos"} de recuperação.`}{low ? " Gere novos códigos em Configurações > Segurança para não ficar sem acesso." : ""}
+        </p>
+        <Button className="mt-5 h-[42px] w-full rounded-[10px] bg-[#4938f4] px-4 text-[13px] font-bold hover:bg-[#3d2de0]" onClick={onEnter} size="lg" type="button"><ArrowRight className="h-4 w-4" />Continuar</Button>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <SignupHeader icon={ShieldCheck} subtitle="Para proteger sua conta, confirme sua identidade utilizando seu aplicativo autenticador." title="Verifique sua identidade" />
+      <form data-autofill="allow" onSubmit={handleSubmit}>
+        {method === "totp" ? (
+          <div>
+            <span className="mb-2 block text-[11px] font-bold text-[#2d3654]">Código de 6 dígitos</span>
+            <OtpInput autoFocus describedBy={feedbackId} disabled={isSubmitting} focusSignal={focusSignal} invalid={Boolean(error)} onChange={(next) => { setCells(next); setError(""); }} value={cells} variant="auth" />
+          </div>
+        ) : (
+          <label className="block"><span className="mb-1 block text-[11px] font-bold text-[#2d3654]">Código de recuperação</span><span className="flex h-12 items-center rounded-[8px] border border-[#dfe7f2] bg-[#f5f8ff] px-3 transition focus-within:border-[#5947ee] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(89,71,238,0.08)]"><input aria-describedby={feedbackId} aria-invalid={Boolean(error) || undefined} autoCapitalize="none" autoComplete="off" autoCorrect="off" className="w-full bg-transparent text-center text-lg font-black tracking-[0.18em] text-[#172033] outline-none placeholder:font-semibold placeholder:tracking-normal placeholder:text-[#c3cad9]" disabled={isSubmitting} maxLength={11} onChange={(event) => { setRecovery(formatRecoveryInput(event.target.value)); setError(""); }} placeholder="xxxxx-xxxxx" ref={recoveryRef} spellCheck={false} type="text" value={recovery} /></span></label>
+        )}
+        <div aria-live="polite" id={feedbackId} role="status">{error ? <div className="mt-4"><ErrorMessage>{error}</ErrorMessage></div> : null}</div>
+        {method === "totp" ? (
+          <label className="mt-5 flex cursor-pointer items-start gap-3">
+            <input aria-describedby={trustHelpId} checked={trustDevice} className="mt-0.5 h-4 w-4 shrink-0 accent-[#4938f4]" disabled={isSubmitting} onChange={(event) => setTrustDevice(event.target.checked)} type="checkbox" />
+            <span><span className="block text-[13px] font-bold text-[#26305a]">Confiar neste dispositivo por 30 dias</span><span className="mt-1 block text-[11px] leading-4 text-[#7783a8]" id={trustHelpId}>Não solicitaremos novamente o código de verificação neste dispositivo durante os próximos 30 dias.</span></span>
+          </label>
+        ) : <p className="mt-4 text-[11px] leading-4 text-[#7783a8]">Cada código de recuperação vale uma única vez. Neste acesso o dispositivo não será salvo como confiável.</p>}
+        <Button className="mt-5 h-[42px] w-full rounded-[10px] bg-[#4938f4] px-4 text-[13px] font-bold hover:bg-[#3d2de0]" disabled={isSubmitting || !ready} size="lg" type="submit"><ArrowRight className="h-4 w-4" />{isSubmitting ? "Verificando..." : "Verificar e continuar"}</Button>
+      </form>
+      <button className="mt-4 inline-flex min-h-11 w-full items-center justify-center text-xs font-bold text-[#5147dc] hover:underline focus-visible:outline-2 focus-visible:outline-[#5147dc]" disabled={isSubmitting} onClick={() => switchMethod(method === "totp" ? "recovery" : "totp")} type="button">{method === "totp" ? "Utilizar código de recuperação" : "Utilizar código do aplicativo autenticador"}</button>
+      <button className="inline-flex min-h-11 w-full items-center justify-center text-xs font-medium text-[#4938f4] hover:underline focus-visible:outline-2 focus-visible:outline-[#5147dc]" onClick={() => setHelpMessage("Procure o administrador da clínica para recuperar o acesso à sua conta.")} type="button">Não consegue acessar sua conta? Fale com o suporte</button>
+      {helpMessage ? <p aria-live="polite" className="mt-1 text-center text-xs leading-5 text-[#7783a8]">{helpMessage}</p> : null}
+      <button className="mt-1 inline-flex min-h-11 w-full items-center justify-center text-xs font-medium text-[#7783a8] hover:underline focus-visible:outline-2 focus-visible:outline-[#5147dc]" disabled={isSubmitting} onClick={onBack} type="button">Voltar ao login</button>
+    </>
   );
 }
 

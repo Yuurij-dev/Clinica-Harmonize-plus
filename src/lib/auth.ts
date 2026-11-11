@@ -4,11 +4,16 @@ import { parseBearerToken } from "./bearer-rules";
 import { getAuthSecret } from "./auth-secret";
 import { prisma } from "./prisma";
 import { pickMembership } from "./active-clinic-rules";
+import { mfaRequiredForMemberships } from "./mfa-rules";
 import { canForUser, normalizeRolePermissionMatrix, type Permission, type RolePermissionMatrix } from "./permissions";
 
 export const sessionCookieName = "harmonize_session";
-// shortcut: cache em memória por instância; quem sai da equipe ainda passa por até 15s; usar sessão no banco se exigirem revogação imediata.
+// Cache em memória por instância (chave userId:sid) com o estado da sessão. Revogar na mesma instância limpa na hora (invalidateUserAuthCache);
+// em OUTRAS instâncias uma sessão revogada ainda vale por até 15s (janela documentada do cache).
 const authCacheTtl = 15_000;
+const authCacheMaxEntries = 5000;
+// lastSeenAt da sessão só é regravado se estiver mais velho que isto (evita escrita a cada request).
+const lastSeenRefreshMs = 5 * 60_000;
 
 type AuthenticatedUser = {
   id: string;
@@ -20,10 +25,15 @@ type AuthenticatedUser = {
   trialExpired: boolean;
   rolePermissions: RolePermissionMatrix;
   clinic: { id: string; name: string; slug: string; trialEndsAt: Date | null };
+  /** id da AuthSession (claim sid); não expor ao cliente. */
+  sessionId: string;
+  /** Exige 2FA e ainda não ativou: só rotas com allowMfaSetup enxergam este usuário. */
+  mfaSetupRequired: boolean;
 };
 
 type CurrentUserOptions = {
   requireActiveTrial?: boolean;
+  allowMfaSetup?: boolean;
 };
 
 const globalAuthCache = globalThis as typeof globalThis & {
@@ -32,13 +42,23 @@ const globalAuthCache = globalThis as typeof globalThis & {
 const authCache = globalAuthCache.harmonizeAuthCache ?? new Map();
 if (!globalAuthCache.harmonizeAuthCache) globalAuthCache.harmonizeAuthCache = authCache;
 
-// ttl: a web usa 7d; o app mobile usa um token mais curto (3d). Não há revogação antes do vencimento (a mitigação é o TTL curto);
-// invalidar tokens na troca de senha exigiria tokenVersion/passwordChangedAt no schema (backlog).
-export async function createSession(userId: string, ttl = "7d") {
-  return new SignJWT({ userId })
+// Ao inserir: remove expiradas e, se ainda passar do limite, as mais antigas (Map preserva a ordem de inserção).
+function sweepAuthCache() {
+  const now = Date.now();
+  for (const [key, entry] of authCache) if (entry.expiresAt <= now) authCache.delete(key);
+  let excess = authCache.size - authCacheMaxEntries + 1;
+  for (const key of authCache.keys()) {
+    if (excess-- <= 0) break;
+    authCache.delete(key);
+  }
+}
+
+// JWT de sessão: sempre com sid (AuthSession), por isso revogável. O vencimento do JWT acompanha AuthSession.expiresAt.
+export async function signSessionToken(userId: string, sid: string, expiresAt: Date) {
+  return new SignJWT({ userId, sid })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime(ttl)
+    .setExpirationTime(Math.floor(expiresAt.getTime() / 1000))
     .sign(getAuthSecret());
 }
 
@@ -50,8 +70,10 @@ export async function createPasswordChangeSession(userId: string) {
     .sign(getAuthSecret());
 }
 
+/** Limpa o cache de todas as sessões (sids) do usuário nesta instância. */
 export function invalidateUserAuthCache(userId: string) {
-  authCache.delete(userId);
+  const prefix = `${userId}:`;
+  for (const key of [...authCache.keys()]) if (key.startsWith(prefix)) authCache.delete(key);
 }
 
 export function invalidateAllUserAuthCache() {
@@ -62,31 +84,23 @@ export function userCan(user: AuthenticatedUser, permission: Permission) {
   return canForUser(user, permission);
 }
 
-// userId de um JWT válido; sessão de troca de senha (passwordChangeOnly) nunca vale, seja qual for a origem.
-async function verifiedUserId(token: string | null | undefined) {
+// userId+sid de um JWT válido; passwordChangeOnly e mfaPending nunca valem como sessão; JWT sem sid é rejeitado.
+async function verifiedSession(token: string | null | undefined) {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, getAuthSecret());
-    if (typeof payload.userId !== "string" || payload.passwordChangeOnly === true) return null;
-    return payload.userId;
+    if (typeof payload.userId !== "string" || typeof payload.sid !== "string" || !payload.sid) return null;
+    if (payload.passwordChangeOnly === true || payload.mfaPending === true) return null;
+    return { userId: payload.userId, sid: payload.sid };
   } catch {
     return null;
   }
 }
 
-export async function getCurrentUser({ requireActiveTrial = false }: CurrentUserOptions = {}) {
-  // Web: cookie. App mobile: "Authorization: Bearer <jwt>" (mesmo JWT). Cookie válido tem prioridade; cookie inválido/expirado cai para o Bearer.
-  const cookieToken = (await cookies()).get(sessionCookieName)?.value;
-  const userId = await verifiedUserId(cookieToken) ?? await verifiedUserId(parseBearerToken((await headers()).get("authorization")));
-  if (!userId) return null;
-
-  const cached = authCache.get(userId);
-  if (cached?.expiresAt && cached.expiresAt > Date.now()) {
-    const cachedUser = cached.pending ? await cached.pending : cached.value ?? null;
-    return requireActiveTrial && cachedUser?.trialExpired ? null : cachedUser;
-  }
-
-  const pending = prisma.user.findUnique({
+async function loadAuthenticatedUser(userId: string, sid: string): Promise<AuthenticatedUser | null> {
+  const [session, user] = await Promise.all([
+    prisma.authSession.findUnique({ where: { id: sid }, select: { userId: true, expiresAt: true, revokedAt: true, lastSeenAt: true } }),
+    prisma.user.findUnique({
       where: { id: userId },
       select: {
         id: true,
@@ -94,36 +108,69 @@ export async function getCurrentUser({ requireActiveTrial = false }: CurrentUser
         email: true,
         role: true,
         activeClinicId: true,
+        mfaSetting: { select: { enabledAt: true } },
         memberships: {
           orderBy: { id: "asc" },
           select: { role: true, isOwner: true, clinic: { select: { id: true, name: true, slug: true, trialEndsAt: true, rolePermissions: true } } },
         },
       },
-    }).then((user): AuthenticatedUser | null => {
-    const membership = user ? pickMembership(user.memberships, user.activeClinicId) : undefined;
-    if (!user || !membership) return null;
-    return {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: membership.role,
-      isOwner: membership.isOwner,
-      clinicId: membership.clinic.id,
-      trialExpired: Boolean(membership.clinic.trialEndsAt && membership.clinic.trialEndsAt.getTime() <= Date.now()),
-      rolePermissions: normalizeRolePermissionMatrix(membership.clinic.rolePermissions),
-      clinic: { id: membership.clinic.id, name: membership.clinic.name, slug: membership.clinic.slug, trialEndsAt: membership.clinic.trialEndsAt },
-    };
-  });
+    }),
+  ]);
+  if (!session || session.userId !== userId || session.revokedAt || session.expiresAt.getTime() <= Date.now()) return null;
+  const membership = user ? pickMembership(user.memberships, user.activeClinicId) : undefined;
+  if (!user || !membership) return null;
+  if (Date.now() - session.lastSeenAt.getTime() > lastSeenRefreshMs) {
+    void prisma.authSession.updateMany({ where: { id: sid, revokedAt: null }, data: { lastSeenAt: new Date() } }).catch(() => undefined);
+  }
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: membership.role,
+    isOwner: membership.isOwner,
+    clinicId: membership.clinic.id,
+    trialExpired: Boolean(membership.clinic.trialEndsAt && membership.clinic.trialEndsAt.getTime() <= Date.now()),
+    rolePermissions: normalizeRolePermissionMatrix(membership.clinic.rolePermissions),
+    clinic: { id: membership.clinic.id, name: membership.clinic.name, slug: membership.clinic.slug, trialEndsAt: membership.clinic.trialEndsAt },
+    sessionId: sid,
+    mfaSetupRequired: mfaRequiredForMemberships(user.memberships) && !user.mfaSetting?.enabledAt,
+  };
+}
+
+export async function getCurrentUser({ requireActiveTrial = false, allowMfaSetup = false }: CurrentUserOptions = {}) {
+  // Web: cookie. App mobile: "Authorization: Bearer <jwt>" (mesmo JWT). Cookie válido tem prioridade; cookie inválido/expirado cai para o Bearer.
+  const cookieToken = (await cookies()).get(sessionCookieName)?.value;
+  const session = await verifiedSession(cookieToken) ?? await verifiedSession(parseBearerToken((await headers()).get("authorization")));
+  if (!session) return null;
+  const { userId, sid } = session;
+  const cacheKey = `${userId}:${sid}`;
+  const finish = (user: AuthenticatedUser | null) => {
+    if (!user) return null;
+    if (user.mfaSetupRequired && !allowMfaSetup) return null;
+    return requireActiveTrial && user.trialExpired ? null : user;
+  };
+
+  const cached = authCache.get(cacheKey);
+  if (cached?.expiresAt && cached.expiresAt > Date.now()) {
+    return finish(cached.pending ? await cached.pending : cached.value ?? null);
+  }
+
+  const pending = loadAuthenticatedUser(userId, sid);
   const entry = { expiresAt: Date.now() + authCacheTtl, pending };
-  authCache.set(userId, entry);
+  sweepAuthCache();
+  authCache.set(cacheKey, entry);
   let user: AuthenticatedUser | null;
   try {
     user = await pending;
   } catch (error) {
     // Falha momentânea do banco não pode virar 401 em cache por 15 s; deixa a rota responder 500.
-    if (authCache.get(userId) === entry) authCache.delete(userId);
+    if (authCache.get(cacheKey) === entry) authCache.delete(cacheKey);
     throw error;
   }
-  authCache.set(userId, { expiresAt: Date.now() + authCacheTtl, value: user });
-  return requireActiveTrial && user?.trialExpired ? null : user;
+  // Só grava o resultado se a entrada não foi invalidada (revogação) enquanto a consulta rodava.
+  if (authCache.get(cacheKey) === entry) authCache.set(cacheKey, { expiresAt: Date.now() + authCacheTtl, value: user });
+  return finish(user);
 }
+
+/** Claims (userId, sid) de um JWT de sessão válido, sem consultar o banco. Usado pelo logout para revogar mesmo se getCurrentUser devolver null. */
+export const readSessionClaims = verifiedSession;

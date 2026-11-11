@@ -37,6 +37,7 @@ import { splitMobileSections } from "@/lib/mobile-nav-rules";
 import { CurrentRoleProvider } from "./current-user";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
 import { ClinicChooser, type UserClinic } from "./clinic-chooser";
+import { MfaRequiredGate } from "./mfa-setup-wizard";
 import { clientsHomeEvent, setupInviteEvent } from "@/lib/section-events";
 import { agendaPeriodKey, agendaPeriodRange } from "@/lib/agenda-period-rules";
 import { clinicToday } from "@/lib/clinic-time";
@@ -92,13 +93,13 @@ function markClinicChosen(userId: string) {
   try { window.sessionStorage.setItem(clinicChosenKey, userId); } catch { /* sem sessionStorage: a escolha só reaparece no próximo reload */ }
 }
 
-type SessionCheck = { status: number; user?: CurrentUser; clinics?: UserClinic[] };
+type SessionCheck = { status: number; user?: CurrentUser; clinics?: UserClinic[]; mfaSetupRequired?: boolean };
 let sessionCheck: Promise<SessionCheck> | null = null;
 
 function getSessionCheck() {
   if (!sessionCheck) {
     sessionCheck = fetch("/api/auth/me", { cache: "no-store" })
-      .then(async (response) => ({ status: response.status, ...(response.ok ? await response.json() as { user?: CurrentUser; clinics?: UserClinic[] } : {}) }))
+      .then(async (response) => ({ status: response.status, ...(response.ok ? await response.json() as { user?: CurrentUser; clinics?: UserClinic[]; mfaSetupRequired?: boolean } : {}) }))
       .finally(() => { sessionCheck = null; });
   }
   return sessionCheck;
@@ -134,6 +135,8 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const [startup, setStartup] = useState<StartupState>({ status: "checking-session", sessionConfirmed: false, message: "Validando seu acesso..." });
   const [startupAttempt, setStartupAttempt] = useState(0);
   const [clinics, setClinics] = useState<UserClinic[]>([]);
+  // Proprietário/administrador sem 2FA: o assistente de ativação ocupa a tela antes de qualquer dado da clínica.
+  const [mfaSetupRequired, setMfaSetupRequired] = useState(false);
   const [clinicChoice, setClinicChoice] = useState<{ userId: string; activeClinicId: string } | null>(null);
   const [agendaFocus, setAgendaFocus] = useState<AgendaFocus | null>(null);
   const [settingsFocusSection, setSettingsFocusSection] = useState<string | null>(null);
@@ -212,6 +215,10 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
           throw new Error("Não foi possível validar sua sessão. Tente novamente.");
         }
 
+        if (session.mfaSetupRequired) {
+          setMfaSetupRequired(true);
+          return;
+        }
         const user = session.user;
         sessionConfirmed = true;
         const userClinics = session.clinics ?? [];
@@ -357,6 +364,10 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       setCreateDialog(null);
       router.replace("/login");
     }
+  }
+
+  if (mfaSetupRequired) {
+    return <MfaRequiredGate onDone={() => { setMfaSetupRequired(false); setStartupAttempt((attempt) => attempt + 1); }} onLogout={() => { void logout(); }} />;
   }
 
   if (clinicChoice) {

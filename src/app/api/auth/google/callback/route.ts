@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createSession, getCurrentUser, sessionCookieName } from "@/lib/auth";
+import { getCurrentUser } from "@/lib/auth";
+import { completeLogin } from "@/lib/auth-session";
 import { getAuthSecret } from "@/lib/auth-secret";
 import { exchangeCodeForIdToken, getGoogleConfig, verifyGoogleIdToken } from "@/lib/google-oauth";
 import { makeUnusablePasswordHash, prismaGoogleRepo } from "@/lib/google-oauth-repo";
@@ -25,7 +26,8 @@ export async function GET(request: Request) {
     repo: prismaGoogleRepo,
     invitations: prismaInvitationRepo,
     getSessionUser: async () => {
-      const user = await getCurrentUser();
+      // allowMfaSetup: quem está no assistente de 2FA obrigatório ainda pode vincular o Google. Sem bypass: aqui só se lê id/e-mail para vincular a identidade; nenhum dado é exposto.
+      const user = await getCurrentUser({ allowMfaSetup: true });
       return user ? { id: user.id, email: user.email } : null;
     },
     makePasswordHash: makeUnusablePasswordHash,
@@ -36,7 +38,9 @@ export async function GET(request: Request) {
     flowToken,
   });
 
-  const response = NextResponse.redirect(new URL(result.redirect, request.url), 302);
+  // Login com 2FA ativo (sem dispositivo confiável): sem sessão; cookie harmonize_mfa e a tela de verificação.
+  const login = result.sessionUserId ? await completeLogin({ request, userId: result.sessionUserId, origin: "google" }) : null;
+  const response = NextResponse.redirect(new URL(login?.mfaRequired ? "/login?mfa=1" : result.redirect, request.url), 302);
   response.headers.set("Cache-Control", "no-store");
   // Cookie de fluxo e de uso unico: apagado em qualquer desfecho.
   response.cookies.set({ name: oauthCookieName, value: "", httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: 0, path: "/api/auth/google" });
@@ -64,16 +68,6 @@ export async function GET(request: Request) {
       path: GOOGLE_SIGNUP_PATH,
     });
   }
-  if (result.sessionUserId) {
-    response.cookies.set({
-      name: sessionCookieName,
-      value: await createSession(result.sessionUserId),
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 60 * 60 * 24 * 7,
-      path: "/",
-    });
-  }
+  login?.apply(response);
   return response;
 }
