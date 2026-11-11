@@ -46,7 +46,7 @@ import {
   SectionIntro,
   StatusBadge,
 } from "./shared";
-import { useCan } from "./current-user";
+import { useCan, useCurrentRole } from "./current-user";
 import { NewPatientForm, type NewPatientResult } from "./new-patient-form";
 import { PatientDetail } from "./patient-detail";
 import { useAnamnesisStartGate, type AnamnesisOpenMode } from "./anamnesis-start-gate";
@@ -173,8 +173,8 @@ function calendarDateToPtBR(value: string) {
   return year && month && day ? `${day}/${month}/${year}` : "";
 }
 
-function AnimatedOptionSelect({ name, options, placeholder, disabled = false, invalid = false, onChange }: { name: string; options: string[]; placeholder: string; disabled?: boolean; invalid?: boolean; onChange: () => void }) {
-  const [value, setValue] = useState("");
+function AnimatedOptionSelect({ name, options, placeholder, defaultValue = "", disabled = false, invalid = false, onChange }: { name: string; options: string[]; placeholder: string; defaultValue?: string; disabled?: boolean; invalid?: boolean; onChange: () => void }) {
+  const [value, setValue] = useState(defaultValue);
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const menuId = `${name}-options`;
@@ -541,7 +541,7 @@ export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose
   );
 }
 
-export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved, focus }: CreateProps & { focus?: ScheduleFocus | null }) {
+export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved, focus, currentUserName }: CreateProps & { focus?: ScheduleFocus | null; currentUserName?: string }) {
   // Período inicial (foco vindo de outra tela abre o dia) e o que já está em cache para ele, para a primeira pintura sem espera.
   const [initial] = useState(() => {
     // No celular a agenda abre no Dia (uma coluna na largura da tela); no desktop continua na Semana.
@@ -597,6 +597,9 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   const [cancellationReasonError, setCancellationReasonError] = useState("");
   const [deleteSaving, setDeleteSaving] = useState(false);
   const canRun = useCan("appointment:run");
+  const currentRole = useCurrentRole();
+  // Profissional ou administrador já começa o novo agendamento como responsável (continua editável); key remonta o campo quando a lista chega.
+  const defaultProfessional = (currentRole === "PROFESSIONAL" || currentRole === "ADMIN") && currentUserName && professionalChoices.includes(currentUserName) ? currentUserName : "";
   // Profissionais da equipe (estáveis ao navegar) mais os que aparecem nos agendamentos carregados.
   const professionalOptions = useMemo(() => ["Todos", ...new Set([...professionalChoices, ...appointmentRows.map((item) => item.professional)])], [professionalChoices, appointmentRows]);
   const activeProfessional = professionalOptions.includes(professional) ? professional : "Todos";
@@ -1070,7 +1073,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
             </div>
           </FormField>
           <div className="relative"><FormField label="Horário"><ClinicTimePicker openingTime={openingTime} closingTime={closingTime} latestTime={allowAppointmentsOutsideHours ? undefined : latestAppointmentStart(closingTime)} allowOutsideHours={allowAppointmentsOutsideHours} value={appointmentTime} invalid={invalidAppointmentFields.has("time")} onChange={(value) => { setAppointmentTime(value); clearAppointmentField("time"); }} /></FormField><input name="time" type="hidden" value={appointmentTime} required /></div>
-          <FormField label="Profissional"><AnimatedOptionSelect name="professional" options={professionalChoices} placeholder={professionalLoading ? "Carregando profissionais..." : professionalChoices.length ? "Selecione o profissional" : "Nenhum profissional cadastrado"} disabled={professionalLoading || !professionalChoices.length} invalid={invalidAppointmentFields.has("professional")} onChange={() => clearAppointmentField("professional")} /></FormField>
+          <FormField label="Profissional"><AnimatedOptionSelect key={defaultProfessional} name="professional" options={professionalChoices} defaultValue={defaultProfessional} placeholder={professionalLoading ? "Carregando profissionais..." : professionalChoices.length ? "Selecione o profissional" : "Nenhum profissional cadastrado"} disabled={professionalLoading || !professionalChoices.length} invalid={invalidAppointmentFields.has("professional")} onChange={() => clearAppointmentField("professional")} /></FormField>
           <div className="sm:col-span-2"><FormField label="Tipo de consulta"><AnimatedOptionSelect name="procedure" options={appointmentTypeOptions} placeholder="Selecione o tipo de consulta" invalid={invalidAppointmentFields.has("procedure")} onChange={() => clearAppointmentField("procedure")} /></FormField></div>
           {appointmentFormError ? <p role="alert" className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{appointmentFormError}</p> : null}
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || professionalLoading || !professionalChoices.length || !selectedPatientId} type="submit">{isSaving || professionalLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{isSaving ? "Salvando..." : professionalLoading ? "Carregando dados..." : "Criar agendamento"}</Button></div>
