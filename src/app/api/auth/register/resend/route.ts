@@ -33,8 +33,7 @@ export async function POST(request: Request) {
     });
     if (reserved.count === 0) return neutral();
 
-    const name = (pending.profile as { name?: unknown } | null)?.name;
-    await sendSignupCodeEmail({ to: email, code, name: typeof name === "string" ? name : "", ttlMinutes: CODE_TTL_MS / 60_000 });
+    await sendSignupCodeEmail({ to: email, code, ttlMinutes: CODE_TTL_MS / 60_000 });
     return neutral();
   } catch (error) {
     console.error("[register-resend]", (error as { code?: unknown } | null)?.code);

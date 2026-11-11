@@ -110,7 +110,7 @@ export async function POST(request: Request) {
       pendingId = pending.id;
     }
 
-    const sent = await sendSignupCodeEmail({ to: email, code, name: profile.name, ttlMinutes: CODE_TTL_MS / 60_000 });
+    const sent = await sendSignupCodeEmail({ to: email, code, ttlMinutes: CODE_TTL_MS / 60_000 });
     if (!sent.sent) {
       // Mantem a linha e os contadores; so invalida o codigo que o usuario nunca recebeu.
       await prisma.pendingSignup.updateMany({ where: { id: pendingId }, data: { codeHash: "", expiresAt: INVALIDATED_AT } });

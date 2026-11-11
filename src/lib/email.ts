@@ -147,14 +147,13 @@ export async function sendInvitationEmail(
 
 // Codigo de verificacao do cadastro. O codigo so aparece no corpo do e-mail (nunca em log nem na resposta da API).
 export async function sendSignupCodeEmail(
-  input: { to: string; code: string; name: string; ttlMinutes: number },
+  input: { to: string; code: string; ttlMinutes: number },
   deps: { env?: Env; fetchImpl?: typeof fetch } = {},
 ): Promise<EmailResult> {
   const env = deps.env ?? process.env;
   if (!isEmailDeliveryReady(env)) return { sent: false, reason: "not_configured" };
   const body = composeEmail({
     preheader: `Seu código de verificação é ${input.code}.`,
-    greeting: input.name,
     blocks: [
       heading("Verifique seu e-mail"),
       paragraph("Use o código abaixo para concluir a criação da sua conta no Harmonize+."),
