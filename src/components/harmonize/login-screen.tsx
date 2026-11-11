@@ -16,6 +16,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { revealValidationTarget } from "@/components/harmonize/reveal-validation-target";
 import { PASSWORD_RULE_LABELS, PASSWORD_RULE_MESSAGE, isStrongPassword, passwordChecks, passwordStrength } from "@/lib/password-rules";
 
 export type RegisterValues = {
@@ -72,6 +73,7 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [registerValues, setRegisterValues] = useState(initialRegisterValues);
+  const [invalidFields, setInvalidFields] = useState<string[]>([]);
   const [error, setError] = useState(() => (googleStatus && googleStatus !== "signup" ? googleMessages[Object.hasOwn(googleMessages, googleStatus) ? googleStatus : "error"] : ""));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notice, setNotice] = useState("");
@@ -111,10 +113,22 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
 
   async function handleRegisterSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!isStrongPassword(registerValues.password)) {
-      setError(PASSWORD_RULE_MESSAGE);
+    const invalid = [
+      !registerValues.clinicName.trim() && "clinicName",
+      !registerValues.name.trim() && "name",
+      !registerValues.email.trim() && "email",
+      !isStrongPassword(registerValues.password) && "password",
+    ].filter((field): field is string => Boolean(field));
+    if (invalid.length) {
+      setInvalidFields(invalid);
+      setError(invalid[0] === "password" ? PASSWORD_RULE_MESSAGE : "Preencha os campos destacados.");
+      // Rola ate o primeiro campo com erro, foca e faz o shake (mesmo padrao das outras telas).
+      const first = `register-field-${invalid[0]}`;
+      revealValidationTarget(first);
+      document.getElementById(first)?.querySelector("input")?.focus({ preventScroll: true });
       return;
     }
+    setInvalidFields([]);
     setIsSubmitting(true);
     const result = await onRegister(registerValues);
     if (result.error) {
@@ -171,7 +185,7 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
       ) : mode === "login" ? (
         <div className="mx-auto w-full max-w-[360px]"><LoginForm error={error} notice={notice} isSubmitting={isSubmitting} login={login} onLoginChange={setLogin} onPasswordChange={setPassword} onSubmit={handleLoginSubmit} password={password} setShowPassword={setShowPassword} showPassword={showPassword} /></div>
       ) : (
-        <RegisterForm error={error} isSubmitting={isSubmitting} onBack={openLogin} onChange={(field, value) => setRegisterValues((current) => ({ ...current, [field]: value }))} onSubmit={handleRegisterSubmit} values={registerValues} setShowPassword={setShowPassword} showPassword={showPassword} />
+        <RegisterForm error={error} isSubmitting={isSubmitting} onBack={openLogin} invalidFields={invalidFields} onChange={(field, value) => { setRegisterValues((current) => ({ ...current, [field]: value })); setInvalidFields((current) => current.filter((item) => item !== field)); }} onSubmit={handleRegisterSubmit} values={registerValues} setShowPassword={setShowPassword} showPassword={showPassword} />
       )}
     </AuthShell>
   );
@@ -355,17 +369,17 @@ function PasswordStrength({ id, password }: { id: string; password: string }) {
   );
 }
 
-function RegisterForm({ error, isSubmitting, onBack, onChange, onSubmit, values, setShowPassword, showPassword }: { error: string; isSubmitting: boolean; onBack: () => void; onChange: (field: keyof RegisterValues, value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; values: RegisterValues; setShowPassword: (value: boolean) => void; showPassword: boolean }) {
+function RegisterForm({ error, invalidFields, isSubmitting, onBack, onChange, onSubmit, values, setShowPassword, showPassword }: { error: string; invalidFields: string[]; isSubmitting: boolean; onBack: () => void; onChange: (field: keyof RegisterValues, value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; values: RegisterValues; setShowPassword: (value: boolean) => void; showPassword: boolean }) {
   const strengthId = useId();
   return (
     <div className="mx-auto w-full max-w-[400px]">
       <SignupHeader icon={UserRound} subtitle="Leva menos de 1 minuto para começar." title="Crie sua conta" />
       <form className="space-y-5" data-autofill="allow" onSubmit={onSubmit}>
-        <TextField {...clinicField} onChange={(value) => onChange("clinicName", value)} value={values.clinicName} autoComplete="organization" maxLength={100} />
-        <TextField {...personField} onChange={(value) => onChange("name", value)} value={values.name} autoComplete="name" />
-        <TextField help="Enviaremos novidades e informações importantes." icon={Mail} label="E-mail" onChange={(value) => onChange("email", value)} placeholder="nome@dominio.com" type="email" value={values.email} autoComplete="email" />
+        <TextField {...clinicField} fieldId="register-field-clinicName" invalid={invalidFields.includes("clinicName")} onChange={(value) => onChange("clinicName", value)} value={values.clinicName} autoComplete="organization" maxLength={100} />
+        <TextField {...personField} fieldId="register-field-name" invalid={invalidFields.includes("name")} onChange={(value) => onChange("name", value)} value={values.name} autoComplete="name" />
+        <TextField fieldId="register-field-email" invalid={invalidFields.includes("email")} help="Enviaremos novidades e informações importantes." icon={Mail} label="E-mail" onChange={(value) => onChange("email", value)} placeholder="nome@dominio.com" type="email" value={values.email} autoComplete="email" />
         <div>
-          <PasswordField describedBy={strengthId} label="Senha" onChange={(value) => onChange("password", value)} password={values.password} placeholder="Crie uma senha segura" setShowPassword={setShowPassword} showPassword={showPassword} touch />
+          <PasswordField describedBy={strengthId} fieldId="register-field-password" invalid={invalidFields.includes("password")} label="Senha" onChange={(value) => onChange("password", value)} password={values.password} placeholder="Crie uma senha segura" setShowPassword={setShowPassword} showPassword={showPassword} touch />
           <PasswordStrength id={strengthId} password={values.password} />
         </div>
         {error ? <div role="alert"><ErrorMessage>{error}</ErrorMessage></div> : null}
@@ -382,14 +396,14 @@ function RegisterForm({ error, isSubmitting, onBack, onChange, onSubmit, values,
 }
 
 // `help` (opcional): texto de ajuda abaixo do campo, ligado ao input por aria-describedby.
-export function TextField({ compact = false, help, icon: Icon, label, onChange, placeholder, type = "text", value, autoComplete, maxLength, readOnly = false }: { compact?: boolean; help?: string; icon?: typeof Mail; label: string; onChange: (value: string) => void; placeholder: string; type?: string; value: string; autoComplete?: string; maxLength?: number; readOnly?: boolean }) {
+export function TextField({ compact = false, help, icon: Icon, label, onChange, placeholder, type = "text", value, autoComplete, maxLength, readOnly = false, invalid = false, fieldId }: { invalid?: boolean; fieldId?: string; compact?: boolean; help?: string; icon?: typeof Mail; label: string; onChange: (value: string) => void; placeholder: string; type?: string; value: string; autoComplete?: string; maxLength?: number; readOnly?: boolean }) {
   const helpId = useId();
-  return <div><label className="block"><span className={`block font-bold text-[#2d3654] ${compact ? "mb-1 text-[11px]" : "mb-2 text-xs"}`}>{label}</span><span className={`flex ${compact ? "h-9 gap-2 px-3 text-xs" : "h-12 gap-3 px-4 text-sm"} items-center rounded-[8px] border border-[#dfe7f2] ${readOnly ? "bg-[#eef1f7]" : "bg-[#f5f8ff]"} text-[#68728a] transition focus-within:border-[#5947ee] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(89,71,238,0.08)]`}>{Icon ? <Icon aria-hidden="true" className="h-4 w-4 shrink-0 text-[#7885ab]" /> : null}<input aria-describedby={help ? helpId : undefined} className="w-full bg-transparent font-semibold text-[#172033] outline-none placeholder:text-[#9aa5b8]" autoComplete={autoComplete} maxLength={maxLength} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} readOnly={readOnly} required type={type} value={value} /></span></label>{help ? <p className="mt-1.5 text-[11px] leading-4 text-[#7783a8]" id={helpId}>{help}</p> : null}</div>;
+  return <div><label className="block"><span className={`block font-bold text-[#2d3654] ${compact ? "mb-1 text-[11px]" : "mb-2 text-xs"}`}>{label}</span><span id={fieldId} className={`flex ${compact ? "h-9 gap-2 px-3 text-xs" : "h-12 gap-3 px-4 text-sm"} items-center rounded-[8px] border ${invalid ? "border-[#d92d20]" : "border-[#dfe7f2]"} ${readOnly ? "bg-[#eef1f7]" : "bg-[#f5f8ff]"} text-[#68728a] transition focus-within:border-[#5947ee] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(89,71,238,0.08)]`}>{Icon ? <Icon aria-hidden="true" className="h-4 w-4 shrink-0 text-[#7885ab]" /> : null}<input aria-invalid={invalid || undefined} aria-describedby={help ? helpId : undefined} className="w-full bg-transparent font-semibold text-[#172033] outline-none placeholder:text-[#9aa5b8]" autoComplete={autoComplete} maxLength={maxLength} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} readOnly={readOnly} required type={type} value={value} /></span></label>{help ? <p className="mt-1.5 text-[11px] leading-4 text-[#7783a8]" id={helpId}>{help}</p> : null}</div>;
 }
 
 // `describedBy` (opcional): id de um bloco de ajuda/checklist renderizado pelo chamador. `touch`: botao de olho com alvo de 44px.
-export function PasswordField({ compact = false, describedBy, label = "Senha", onChange, password, placeholder = "Digite sua senha", setShowPassword, showPassword, autoComplete = label === "Senha" ? "new-password" : "current-password", minLength, touch = false }: { compact?: boolean; describedBy?: string; label?: string; onChange: (value: string) => void; password: string; placeholder?: string; setShowPassword: (value: boolean) => void; showPassword: boolean; autoComplete?: string; minLength?: number; touch?: boolean }) {
-  return <label className="block"><span className={`block font-bold text-[#2d3654] ${compact ? "mb-1 text-[11px]" : "mb-2 text-xs"}`}>{label}</span><span className={`flex ${compact ? "h-9 gap-2 px-3 text-xs" : "h-12 gap-3 px-4 text-sm"} items-center rounded-[8px] border border-[#dfe7f2] bg-[#f5f8ff] text-[#68728a] transition focus-within:border-[#5947ee] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(89,71,238,0.08)]`}><LockKeyhole aria-hidden="true" className="h-4 w-4 shrink-0 text-[#7885ab]" /><input aria-describedby={describedBy} className="w-full bg-transparent font-semibold text-[#172033] outline-none placeholder:text-[#9aa5b8]" autoComplete={autoComplete} minLength={minLength} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} required type={showPassword ? "text" : "password"} value={password} /><button className={`grid shrink-0 place-items-center rounded-full text-[#7b8499] transition hover:bg-[#eef4fb] hover:text-[#5947ee] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#5947ee] ${touch ? "-mr-2 h-11 w-11" : "h-8 w-8"}`} aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"} aria-pressed={showPassword} onClick={() => setShowPassword(!showPassword)} type="button">{showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></span></label>;
+export function PasswordField({ compact = false, describedBy, label = "Senha", onChange, password, placeholder = "Digite sua senha", setShowPassword, showPassword, autoComplete = label === "Senha" ? "new-password" : "current-password", minLength, touch = false, invalid = false, fieldId }: { invalid?: boolean; fieldId?: string; compact?: boolean; describedBy?: string; label?: string; onChange: (value: string) => void; password: string; placeholder?: string; setShowPassword: (value: boolean) => void; showPassword: boolean; autoComplete?: string; minLength?: number; touch?: boolean }) {
+  return <label className="block"><span className={`block font-bold text-[#2d3654] ${compact ? "mb-1 text-[11px]" : "mb-2 text-xs"}`}>{label}</span><span id={fieldId} className={`flex ${compact ? "h-9 gap-2 px-3 text-xs" : "h-12 gap-3 px-4 text-sm"} items-center rounded-[8px] border ${invalid ? "border-[#d92d20] bg-[#fff8f7]" : "border-[#dfe7f2] bg-[#f5f8ff]"} text-[#68728a] transition focus-within:border-[#5947ee] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(89,71,238,0.08)]`}><LockKeyhole aria-hidden="true" className="h-4 w-4 shrink-0 text-[#7885ab]" /><input aria-invalid={invalid || undefined} aria-describedby={describedBy} className="w-full bg-transparent font-semibold text-[#172033] outline-none placeholder:text-[#9aa5b8]" autoComplete={autoComplete} minLength={minLength} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} required type={showPassword ? "text" : "password"} value={password} /><button className={`grid shrink-0 place-items-center rounded-full text-[#7b8499] transition hover:bg-[#eef4fb] hover:text-[#5947ee] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#5947ee] ${touch ? "-mr-2 h-11 w-11" : "h-8 w-8"}`} aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"} aria-pressed={showPassword} onClick={() => setShowPassword(!showPassword)} type="button">{showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></span></label>;
 }
 
 function FirstAccessPasswordForm({ onSubmit }: { onSubmit: (password: string) => Promise<{ error?: string }> }) {
