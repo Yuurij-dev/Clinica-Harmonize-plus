@@ -2650,12 +2650,22 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
                 <div className="rounded-md border border-border/70 p-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div><p className="text-sm font-bold text-foreground">E-mail</p><p className="mt-1 text-xs text-muted-foreground">Envio de comunicações para pacientes</p></div>
-                    {costSettingsLoading ? <LoadingSkeleton className="h-6 w-24" /> : !emailProviderReady ? <Badge variant="amber">Provedor não configurado</Badge> : <Badge variant={patientEmailsEnabled ? "green" : "slate"}>{patientEmailsEnabled ? "Ativo" : "Desativado"}</Badge>}
+                    {costSettingsLoading ? <LoadingSkeleton className="h-8 w-32" /> : !emailProviderReady ? <Badge variant="amber">Provedor não configurado</Badge> : (
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={patientEmailsEnabled}
+                        aria-label="Enviar e-mails aos clientes"
+                        disabled={savingPreference === "patientEmailsEnabled"}
+                        onClick={() => void togglePatientEmails(!patientEmailsEnabled)}
+                        className={cn("relative flex h-8 w-32 shrink-0 items-center rounded-full border border-transparent text-xs font-semibold transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60", patientEmailsEnabled ? "bg-success/10 text-success" : "bg-muted text-muted-foreground")}
+                      >
+                        <span className={cn("absolute inset-y-0 flex w-full items-center transition-all duration-200", patientEmailsEnabled ? "justify-start pl-4" : "justify-end pr-4")}>{patientEmailsEnabled ? "Ativo" : "Desativado"}</span>
+                        <span aria-hidden="true" className={cn("absolute top-1 h-6 w-6 rounded-full shadow transition-all duration-200 ease-out", patientEmailsEnabled ? "left-[calc(100%-1.75rem)] bg-success" : "left-1 bg-muted-foreground/60")} />
+                      </button>
+                    )}
                   </div>
-                  <p className="mt-3 text-xs leading-5 text-muted-foreground">Envia ao cliente a confirmação, a remarcação e o cancelamento de agendamentos e o orçamento. Só envia para pacientes com e-mail cadastrado.</p>
-                  <div className="mt-2">
-                    <SettingsToggle label="Enviar e-mails aos clientes" description={emailProviderReady ? "Desligue para a clínica parar de enviar e-mails aos clientes." : "O envio ainda não foi configurado neste ambiente."} checked={patientEmailsEnabled} disabled={costSettingsLoading || !emailProviderReady} saving={savingPreference === "patientEmailsEnabled"} onChange={(enabled) => void togglePatientEmails(enabled)} />
-                  </div>
+                  <p className="mt-3 text-xs leading-5 text-muted-foreground">Envia ao cliente a confirmação, a remarcação e o cancelamento de agendamentos e o orçamento. Só envia para pacientes com e-mail cadastrado. {emailProviderReady ? "Desligue para parar de enviar e-mails aos clientes." : "O envio ainda não foi configurado neste ambiente."}</p>
                   {patientEmailsFeedback ? <p className={cn("mt-2 text-xs font-medium", patientEmailsFeedback.success ? "text-success" : "text-destructive")} role={patientEmailsFeedback.success ? "status" : "alert"}>{patientEmailsFeedback.message}</p> : null}
                 </div>
                 <p className="text-xs leading-5 text-muted-foreground">O envio de e-mails depende do provedor configurado no ambiente. WhatsApp e calendário ainda não estão disponíveis; as opções de confirmação e reagendamento online ficam desativadas até a conexão estar disponível.</p>
