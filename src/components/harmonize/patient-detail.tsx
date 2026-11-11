@@ -50,6 +50,7 @@ import { mergePatientAppointments } from "@/lib/patient-appointments";
 import { FormField, fieldClassName } from "@/components/ui/modal";
 import { formatCpf, formatInteger, formatPhone } from "@/lib/input-masks";
 import { isMaskedCpf } from "@/lib/patient-cpf-mask";
+import { sexOptions } from "@/lib/patient-registration-rules";
 import { PatientOverview, PatientTreatments, type PatientJourneySummary } from "./patient-profile-views";
 import { ClinicTimePicker } from "./clinic-time-picker";
 import { clinicDateKey, type EncounterItem } from "@/lib/clinical-record-rules";
@@ -696,6 +697,7 @@ function PatientEditModal({ patient, open, onClose, onUpdated }: { patient: Pati
     const cpf = String(form.get("cpf") ?? "").trim();
     const phone = String(form.get("phone") ?? "").trim();
     const age = Number(form.get("age"));
+    const sex = String(form.get("sex") ?? "");
     const nextInvalidFields = new Set<string>();
     if (!name) nextInvalidFields.add("name");
     if (cpf && cpf.replace(/\D/g, "").length !== 11) nextInvalidFields.add("cpf");
@@ -712,7 +714,7 @@ function PatientEditModal({ patient, open, onClose, onUpdated }: { patient: Pati
     try {
       // CPF mascarado (recepção): campo vazio = manter o atual, então não enviamos o CPF.
       const keepCpf = cpfMasked && !cpf;
-      const response = await fetch(`/api/patients/${patient.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, ...(keepCpf ? {} : { cpf }), phone, age }) });
+      const response = await fetch(`/api/patients/${patient.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, ...(keepCpf ? {} : { cpf }), phone, age, sex }) });
       const data = await response.json().catch(() => null) as { patient?: Patient; message?: string } | null;
       if (!response.ok || !data?.patient) {
         setError(data?.message ?? "Não foi possível atualizar os dados.");
@@ -740,6 +742,7 @@ function PatientEditModal({ patient, open, onClose, onUpdated }: { patient: Pati
         <FormField label="CPF"><MaskedInput className={cn(fieldClassName, invalidFields.has("cpf") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={formatCpf} name="cpf" inputMode="numeric" maxLength={14} placeholder={cpfMasked ? `${patient.cpf} (em branco mantém)` : "000.000.000-00"} defaultValue={cpfMasked ? "" : patient.cpf ?? ""} /></FormField>
         <FormField label="Telefone"><MaskedInput className={cn(fieldClassName, invalidFields.has("phone") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={formatPhone} name="phone" inputMode="tel" maxLength={15} placeholder="(00) 00000-0000" defaultValue={patient.phone} required /></FormField>
         <FormField label="Idade"><MaskedInput className={cn(fieldClassName, invalidFields.has("age") && "border-[#d92d20] animate-[hp-shake_0.42s_ease-in-out]")} formatter={(value) => formatInteger(value, 3)} name="age" inputMode="numeric" maxLength={3} defaultValue={String(patient.age)} required /></FormField>
+        <FormField label="Sexo"><select className={fieldClassName} name="sex" defaultValue={patient.sex ?? ""}><option value="">Não informado</option>{sexOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></FormField>
         {error ? <p role="alert" className="rounded-[7px] bg-[#fff4f4] px-3 py-2 text-xs font-semibold text-[#b42318] sm:col-span-2">{error}</p> : null}
         <div className="flex justify-end gap-2 sm:col-span-2"><Button type="button" variant="secondary" disabled={saving} onClick={() => { setError(""); onClose(); }}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{saving ? "Salvando..." : "Salvar dados"}</Button></div>
       </form>

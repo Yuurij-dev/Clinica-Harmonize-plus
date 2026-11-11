@@ -108,6 +108,7 @@ type ApiPatient = {
   cpf: string | null;
   phone: string;
   age: number;
+  sex?: string | null;
   status: string;
   createdAt?: string;
   lastVisit: string | null;
@@ -276,6 +277,7 @@ function mapApiPatient(patient: ApiPatient): Patient {
     cpf: patient.cpf ?? "",
     phone: patient.phone,
     age: patient.age,
+    sex: patient.sex ?? null,
     status: patient.status,
     createdAt: patient.createdAt,
     lastVisit: patient.lastVisit ? displayDate(patient.lastVisit) : "Primeiro contato",

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { birthDateFromPtBr, calculateAge, referralSources, relationshipOptions, sexOptions, clinicReferenceDate, fieldMaxLength, isMinorBirthDate, normalizeName, validNameFormat, phoneError, validBrazilianPhone, validCpf, validateRegistration } from "../src/lib/patient-registration-rules.ts";
+import { birthDateFromPtBr, calculateAge, referralSources, relationshipOptions, sexOptions, clinicReferenceDate, fieldMaxLength, isMinorBirthDate, normalizeName, validNameFormat, phoneError, validBrazilianPhone, validCpf, validateRegistration, parseSexUpdate } from "../src/lib/patient-registration-rules.ts";
 
 const now = new Date(2026, 10, 3, 10, 0, 0); // 03/11/2026
 const adult = { name: "Maria Silva", birthDate: "10/05/1990", cpf: "529.982.247-25", phone: "(11) 91234-5678", email: "", postalCode: "", emergencyContactPhone: "",
@@ -153,4 +153,13 @@ test("sex is a closed list; empty is allowed", () => {
   assert.ok(validateRegistration({ ...adult, sex: "Outro gênero" }, now).sex);
   assert.ok(validateRegistration({ ...adult, sex: "feminino" }, now).sex);
   assert.deepEqual(validateRegistration({ ...adult, sex: "" }, now), {});
+});
+
+test("parseSexUpdate: ausente mantém, vazio limpa, fora da lista é inválido", () => {
+  assert.deepEqual(parseSexUpdate(undefined), { ok: true, sex: undefined });
+  assert.deepEqual(parseSexUpdate(""), { ok: true, sex: null });
+  assert.deepEqual(parseSexUpdate("Feminino"), { ok: true, sex: "Feminino" });
+  assert.deepEqual(parseSexUpdate("Outro"), { ok: true, sex: "Outro" });
+  assert.equal(parseSexUpdate("Xyz").ok, false);
+  assert.equal(parseSexUpdate(1).ok, false);
 });
