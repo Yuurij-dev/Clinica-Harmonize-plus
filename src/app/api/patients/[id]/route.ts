@@ -4,6 +4,7 @@ import { duplicateCpfResponse, rejectInvalidCpf } from "@/lib/patient-cpf";
 import { canSeeFullCpf, cpfForRole, isMaskedCpf } from "@/lib/patient-cpf-mask";
 import { patientCreatedSelect, patientListSelect, withCurrentStage } from "@/lib/patient-list-server";
 import { isPatientIdFormat } from "@/lib/patient-list-rules";
+import { parseSexUpdate } from "@/lib/patient-registration-rules";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
 
@@ -31,7 +32,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const denied = denyUnless(user, "patients:manage");
   if (denied) return denied;
 
-  const body = await request.json().catch(() => null) as { name?: string; cpf?: string; phone?: string; age?: number } | null;
+  const body = await request.json().catch(() => null) as { name?: string; cpf?: string; phone?: string; age?: number; sex?: unknown } | null;
+  const sexUpdate = parseSexUpdate(body?.sex);
+  if (!sexUpdate.ok) return NextResponse.json({ message: "Escolha uma das opções de sexo." }, { status: 400 });
   const name = body?.name?.trim();
   // cpf ausente ou mascarado (STAFF não vê o CPF inteiro) = manter o CPF atual; "" = limpar, exceto para STAFF, que não
   // apaga um CPF que não enxerga (o pedido vazio é ignorado e o CPF é mantido, sem erro).
@@ -50,7 +53,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   const patient = await prisma.patient.updateMany({
     where: { id, clinicId: user.clinicId },
-    data: { name, cpf, phone, age },
+    data: { name, cpf, phone, age, sex: sexUpdate.sex },
   }).catch((error: unknown) => duplicateCpfResponse(error) ?? Promise.reject(error));
   if (patient instanceof NextResponse) return patient;
   if (!patient.count) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });

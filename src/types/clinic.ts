@@ -25,6 +25,7 @@ export type Patient = {
   cpf?: string;
   phone: string;
   age: number;
+  sex?: string | null;
   status: string;
   createdAt?: string;
   lastVisit: string;

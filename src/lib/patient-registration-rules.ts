@@ -78,6 +78,15 @@ export const referralSources = ["Indicação de paciente", "Indicação de profi
 export const relationshipOptions = ["Mãe", "Pai", "Avó", "Avô", "Madrasta", "Padrasto", "Irmã", "Irmão", "Tia", "Tio", "Cônjuge", "Filha", "Filho", "Responsável legal", "Outro"] as const;
 const inList = (list: readonly string[], value: string) => list.includes(value);
 
+// Sexo na edição: undefined = manter o atual, "" = limpar (null), valor fora da lista = inválido.
+export function parseSexUpdate(value: unknown): { ok: true; sex: string | null | undefined } | { ok: false } {
+  if (value === undefined) return { ok: true, sex: undefined };
+  if (typeof value !== "string") return { ok: false };
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: true, sex: null };
+  return inList(sexOptions, trimmed) ? { ok: true, sex: trimmed } : { ok: false };
+}
+
 export type RegistrationValues = {
   name: string; birthDate: string; cpf: string; phone: string; email: string; postalCode: string;
   emergencyContactPhone: string;

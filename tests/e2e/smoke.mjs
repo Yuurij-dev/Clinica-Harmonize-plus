@@ -4860,6 +4860,31 @@ async function pendingStock(patient) {
 }
 
 // CPF mascarado para STAFF: listas, lookup, detalhe, PATCH, POST e orçamentos. ADMIN vê completo e pode limpar.
+async function patientSex() {
+  const base = () => ({ ...regDefaults, phone: "11999990066", age: 30, cpf: randomCpf() });
+  const dbSex = async (id) => (await prisma.patient.findUnique({ where: { id }, select: { sex: true } }))?.sex;
+  let r = await api("POST", "/api/patients", { ...base(), name: `Sexo F ${run}`, sex: "Feminino" });
+  const p = r.data.patient;
+  check("Sexo: POST com Feminino devolve sex", r.status === 201 && p?.sex === "Feminino", `${r.status} ${p?.sex}`);
+  r = await api("GET", `/api/patients/${p.id}`);
+  check("Sexo: GET devolve Feminino", r.status === 200 && r.data.patient?.sex === "Feminino", JSON.stringify(r.data).slice(0, 120));
+  r = await api("PATCH", `/api/patients/${p.id}`, { name: `Sexo M ${run}`, phone: "11999990065", age: 31, sex: "Masculino" });
+  const g = await api("GET", `/api/patients/${p.id}`);
+  check("Sexo: PATCH com Masculino persiste", r.status === 200 && g.data.patient?.sex === "Masculino" && g.data.patient?.name === `Sexo M ${run}` && g.data.patient?.age === 31, `${r.status} ${g.data.patient?.sex}`);
+  r = await api("PATCH", `/api/patients/${p.id}`, { name: `Sexo M2 ${run}`, phone: "11999990065", age: 32 });
+  check("Sexo: PATCH sem o campo mantém o valor", r.status === 200 && (await dbSex(p.id)) === "Masculino", `${r.status} ${await dbSex(p.id)}`);
+  r = await api("PATCH", `/api/patients/${p.id}`, { name: `Sexo X ${run}`, phone: "11999990065", age: 32, sex: "X" });
+  check("Sexo: PATCH com X dá 400 e não altera", r.status === 400 && (await dbSex(p.id)) === "Masculino", `${r.status} ${await dbSex(p.id)}`);
+  r = await api("PATCH", `/api/patients/${p.id}`, { name: `Sexo E ${run}`, phone: "11999990065", age: 32, sex: "" });
+  const g2 = await api("GET", `/api/patients/${p.id}`);
+  check("Sexo: PATCH com vazio vira null", r.status === 200 && g2.data.patient?.sex === null && (await dbSex(p.id)) === null, `${r.status} ${g2.data.patient?.sex}`);
+  r = await api("POST", "/api/patients", { ...base(), name: `Sexo N ${run}` });
+  const n = r.data.patient;
+  const g3 = await api("GET", `/api/patients/${n?.id}`);
+  const pr = await api("PATCH", `/api/patients/${n?.id}`, { name: `Sexo N2 ${run}`, phone: "11999990064", age: 33 });
+  check("Sexo: paciente sem sex vem null e PATCH sem sex funciona", r.status === 201 && g3.data.patient?.sex === null && pr.status === 200 && (await dbSex(n.id)) === null, `${r.status} ${g3.data.patient?.sex} ${pr.status}`);
+}
+
 async function patientCpfMask() {
   const staffEmail = `e2e-staff-cpf-${run}@example.com`;
   const staffPassword = `E2e-${run}-Staff9!`;
@@ -7294,7 +7319,7 @@ const suites = {
   cadastro_google: { needs: [], run: () => googleSignup() },
   jornadas_etapa: { needs: [], run: () => journeyStageFilter() },
   cadastro_cliente: { needs: [], run: () => patientRegistration() },
-  pacientes: { needs: [], run: async (state) => { Object.assign(state, await patientsAndPayments()); await patientCpfMask(); } },
+  pacientes: { needs: [], run: async (state) => { Object.assign(state, await patientsAndPayments()); await patientCpfMask(); await patientSex(); } },
   orcamentos: { needs: ["pacientes"], run: async (state) => { state.quote = await quotesAndProcedures(state.patient); await quoteCents(); } },
   agenda: { needs: ["pacientes"], run: (state) => appointments(state.patient) },
   jornadas: { needs: ["orcamentos"], run: async (state) => { await journeys(state.patient, state.quote); await journeyDeletePermissions(); await journeyDeleteGaps(); } },
