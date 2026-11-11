@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import {
   ArrowRight,
@@ -28,7 +28,11 @@ export type RegisterValues = {
 
 export type GoogleSignupValues = Omit<RegisterValues, "email" | "password">;
 
+// createdButLoginFailed: a conta foi criada mas o login automático falhou; o usuário entra manualmente.
+export type VerifyResult = { error?: string; createdButLoginFailed?: boolean };
+
 export type RegisterResult = {
+  verificationRequired?: boolean;
   error?: string;
 };
 
@@ -38,6 +42,8 @@ type LoginScreenProps = {
   onLogin: (credentials: { login: string; password: string }) => Promise<{ error?: string; passwordChangeRequired?: boolean }>;
   onChangePassword: (password: string) => Promise<{ error?: string }>;
   onRegister: (values: RegisterValues) => Promise<RegisterResult>;
+  onVerifyEmail: (values: { email: string; password: string; code: string }) => Promise<VerifyResult>;
+  onResendCode: (email: string) => Promise<{ error?: string }>;
   onGoogleSignup: (values: GoogleSignupValues) => Promise<RegisterResult>;
 };
 
@@ -68,14 +74,15 @@ const googleMessages: Record<string, string> = {
 const professionOptions = ["Médico(a)", "Dentista", "Biomédico(a)", "Esteticista", "Outro"];
 const practiceAreaOptions = ["Harmonização facial", "Dermatologia", "Odontologia estética", "Estética corporal", "Outra área"];
 
-export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onChangePassword, onRegister, onGoogleSignup }: LoginScreenProps) {
-  const [mode, setMode] = useState<"login" | "register" | "change-password" | "google-signup">(googleStatus === "signup" ? "google-signup" : initialMode);
+export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onChangePassword, onRegister, onVerifyEmail, onResendCode, onGoogleSignup }: LoginScreenProps) {
+  const [mode, setMode] = useState<"login" | "register" | "verify-email" | "change-password" | "google-signup">(googleStatus === "signup" ? "google-signup" : initialMode);
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [registerValues, setRegisterValues] = useState(initialRegisterValues);
   const [error, setError] = useState(() => (googleStatus && googleStatus !== "signup" ? googleMessages[Object.hasOwn(googleMessages, googleStatus) ? googleStatus : "error"] : ""));
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [notice, setNotice] = useState("");
 
   function openRegister() {
     setError("");
@@ -121,6 +128,26 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
     }
     setError("");
     setIsSubmitting(false);
+    if (result.verificationRequired) setMode("verify-email");
+  }
+
+  // Conta criada mas login automático falhou: volta ao login com o e-mail preenchido (não é erro de código).
+  async function handleVerifyCode(code: string): Promise<VerifyResult> {
+    const email = registerValues.email.trim().toLowerCase();
+    // Sem a senha em memória (ex.: estado perdido) a verificação não tem como concluir: recomeça pelo formulário.
+    if (!registerValues.password) {
+      setError("Sua sessão de cadastro foi perdida. Preencha o formulário novamente para receber um novo código.");
+      setMode("register");
+      return {};
+    }
+    const result = await onVerifyEmail({ email, password: registerValues.password, code });
+    if (!result.createdButLoginFailed) return result;
+    setLogin(email);
+    setPassword("");
+    setError("");
+    setNotice("Conta criada! Faça login com seu e-mail e senha.");
+    setMode("login");
+    return {};
   }
 
   async function handleGoogleSignupSubmit(event: FormEvent<HTMLFormElement>) {
@@ -143,8 +170,10 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
         <div className="mx-auto w-full max-w-[360px]"><FirstAccessPasswordForm onSubmit={onChangePassword} /></div>
       ) : mode === "google-signup" ? (
         <GoogleSignupForm error={error} isSubmitting={isSubmitting} onBack={openLogin} onChange={(field, value) => setRegisterValues((current) => ({ ...current, [field]: value }))} onSubmit={handleGoogleSignupSubmit} values={registerValues} />
+      ) : mode === "verify-email" ? (
+        <div className="mx-auto w-full max-w-[360px]"><VerifyEmailForm email={registerValues.email.trim().toLowerCase()} onChangeEmail={openRegister} onResend={onResendCode} onVerify={handleVerifyCode} /></div>
       ) : mode === "login" ? (
-        <div className="mx-auto w-full max-w-[360px]"><LoginForm error={error} isSubmitting={isSubmitting} login={login} onLoginChange={setLogin} onPasswordChange={setPassword} onSubmit={handleLoginSubmit} password={password} setShowPassword={setShowPassword} showPassword={showPassword} /></div>
+        <div className="mx-auto w-full max-w-[360px]"><LoginForm error={error} notice={notice} isSubmitting={isSubmitting} login={login} onLoginChange={setLogin} onPasswordChange={setPassword} onSubmit={handleLoginSubmit} password={password} setShowPassword={setShowPassword} showPassword={showPassword} /></div>
       ) : (
         <RegisterForm error={error} isSubmitting={isSubmitting} onBack={openLogin} onChange={(field, value) => setRegisterValues((current) => ({ ...current, [field]: value }))} onSubmit={handleRegisterSubmit} values={registerValues} setShowPassword={setShowPassword} showPassword={showPassword} />
       )}
@@ -184,7 +213,7 @@ export function BrandOutline({ className }: { className: string }) {
   </svg>;
 }
 
-function LoginForm({ error, isSubmitting, login, onLoginChange, onPasswordChange, onSubmit, password, setShowPassword, showPassword }: { error: string; isSubmitting: boolean; login: string; onLoginChange: (value: string) => void; onPasswordChange: (value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; password: string; setShowPassword: (value: boolean) => void; showPassword: boolean }) {
+function LoginForm({ error, notice, isSubmitting, login, onLoginChange, onPasswordChange, onSubmit, password, setShowPassword, showPassword }: { error: string; notice?: string; isSubmitting: boolean; login: string; onLoginChange: (value: string) => void; onPasswordChange: (value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; password: string; setShowPassword: (value: boolean) => void; showPassword: boolean }) {
   const [helpMessage, setHelpMessage] = useState("");
 
   // Rota de API (redirect externo ao Google): precisa de navegação completa, não de router.push.
@@ -203,7 +232,7 @@ function LoginForm({ error, isSubmitting, login, onLoginChange, onPasswordChange
           <PasswordField compact label="sua senha" onChange={onPasswordChange} password={password} setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="current-password" />
           <button className="mt-2 text-left text-xs font-medium text-[#4938f4] hover:underline" onClick={() => setHelpMessage("Para redefinir sua senha, entre em contato com o administrador da clínica.")} type="button">Esqueceu sua senha?</button>
         </div>
-        {error ? <div className="mt-4"><ErrorMessage>{error}</ErrorMessage></div> : null}
+        {error ? <div className="mt-4"><ErrorMessage>{error}</ErrorMessage></div> : notice ? <p aria-live="polite" className="mt-4 rounded-[8px] bg-[#e7f4ef] px-3 py-2 text-xs font-semibold text-[#16805d]" role="status">{notice}</p> : null}
         <Button className="mt-5 h-[42px] w-full rounded-[10px] bg-[#4938f4] px-4 text-[13px] font-bold hover:bg-[#3d2de0]" size="lg" disabled={isSubmitting} type="submit"><ArrowRight className="h-4 w-4" />{isSubmitting ? "Validando acesso..." : "Acessar"}</Button>
       </form>
       <div className="my-5 flex items-center gap-3"><span className="h-px flex-1 bg-[#e9edf5]" /><span className="text-xs font-medium text-[#8b94af]">ou</span><span className="h-px flex-1 bg-[#e9edf5]" /></div>
@@ -243,6 +272,65 @@ function GoogleSignupForm({ error, isSubmitting, onBack, onChange, onSubmit, val
         {error ? <div className="sm:col-span-2"><ErrorMessage>{error}</ErrorMessage></div> : null}
         <div className="sm:col-span-2"><Button className="h-[38px] w-full rounded-[8px] text-xs font-bold" size="lg" disabled={isSubmitting} type="submit"><ArrowRight className="h-4 w-4" />{isSubmitting ? "Criando sua conta..." : "Criar conta grátis"}</Button><p className="mt-3 text-center text-xs font-bold text-[#26305a]">Já tem uma conta? <button className="text-[#5147dc] hover:underline" onClick={onBack} type="button">Acessar</button></p></div>
       </form>
+    </>
+  );
+}
+
+const RESEND_SECONDS = 60;
+
+// Etapa "Verifique seu e-mail" do cadastro com senha. O erro de código é sempre o mesmo; reenviar e alterar e-mail ficam sempre à mão.
+function VerifyEmailForm({ email, onChangeEmail, onResend, onVerify }: { email: string; onChangeEmail: () => void; onResend: (email: string) => Promise<{ error?: string }>; onVerify: (code: string) => Promise<VerifyResult> }) {
+  const [code, setCode] = useState("");
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isResending, setIsResending] = useState(false);
+  const [cooldown, setCooldown] = useState(RESEND_SECONDS);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = window.setTimeout(() => setCooldown((current) => current - 1), 1000);
+    return () => window.clearTimeout(timer);
+  }, [cooldown]);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (code.length !== 6) { setError("Digite o código de 6 dígitos."); return; }
+    setIsSubmitting(true);
+    setInfo("");
+    const result = await onVerify(code);
+    if (!result.error) return; // Sucesso: o login redireciona a página.
+    setError(result.error);
+    setCode("");
+    inputRef.current?.focus();
+    setIsSubmitting(false);
+  }
+
+  async function handleResend() {
+    setIsResending(true);
+    setError("");
+    setInfo("");
+    const result = await onResend(email);
+    setIsResending(false);
+    if (result.error) { setError(result.error); return; }
+    setCooldown(RESEND_SECONDS);
+    setCode("");
+    setInfo("Se o e-mail estiver correto, enviamos um novo código.");
+    inputRef.current?.focus();
+  }
+
+  return (
+    <>
+      <header className="mb-6 text-center"><h2 className="text-2xl font-black tracking-[0] text-[#211960]">Verifique seu e-mail</h2><p className="mt-2 text-[13px] leading-5 text-[#7783a8]">Enviamos um código de 6 dígitos para <strong className="break-all font-bold text-[#26305a]">{email}</strong>. Ele expira em 10 minutos.</p></header>
+      <form data-autofill="allow" onSubmit={handleSubmit}>
+        <label className="block"><span className="mb-1 block text-[11px] font-bold text-[#2d3654]">Código de verificação</span><span className="flex h-12 items-center rounded-[8px] border border-[#dfe7f2] bg-[#f5f8ff] px-3 transition focus-within:border-[#5947ee] focus-within:bg-white focus-within:shadow-[0_0_0_4px_rgba(89,71,238,0.08)]"><input aria-describedby="verify-feedback" autoComplete="one-time-code" className="w-full bg-transparent text-center text-xl font-black tracking-[0.5em] text-[#172033] outline-none placeholder:text-[#c3cad9]" inputMode="numeric" maxLength={6} onChange={(event) => { setCode(event.target.value.replace(/\D/g, "").slice(0, 6)); setError(""); }} pattern="[0-9]*" placeholder="000000" ref={inputRef} required value={code} /></span></label>
+        <div aria-live="polite" id="verify-feedback" role="status">{error ? <div className="mt-4"><ErrorMessage>{error}</ErrorMessage></div> : info ? <p className="mt-4 text-center text-xs leading-5 text-[#7783a8]">{info}</p> : null}</div>
+        <Button className="mt-5 h-[42px] w-full rounded-[10px] bg-[#4938f4] px-4 text-[13px] font-bold hover:bg-[#3d2de0]" disabled={isSubmitting || code.length !== 6} size="lg" type="submit"><ArrowRight className="h-4 w-4" />{isSubmitting ? "Verificando..." : "Verificar e criar conta"}</Button>
+      </form>
+      <Button className="mt-3 h-[40px] w-full rounded-[10px] border-[#d9dff0] bg-white px-4 text-[13px] font-semibold text-[#25263a] shadow-none hover:bg-[#f8f9fc]" disabled={cooldown > 0 || isResending} onClick={handleResend} size="lg" type="button" variant="outline">{isResending ? "Reenviando..." : cooldown > 0 ? `Reenviar código em ${cooldown}s` : "Reenviar código"}</Button>
+      <button className="mt-4 w-full text-center text-xs font-bold text-[#5147dc] hover:underline" onClick={onChangeEmail} type="button">Alterar e-mail</button>
     </>
   );
 }

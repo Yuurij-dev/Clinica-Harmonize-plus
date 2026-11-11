@@ -1,7 +1,7 @@
 // Envio de e-mail via Resend (fetch, sem dependencia). NUNCA logar token, URL do convite, corpo do e-mail,
 // e-mail do destinatario, chave nem a resposta bruta do provedor: o unico log permitido e um codigo estavel de lista fechada.
 
-import { composeEmail, heading, paragraph, button, note, escapeHtml } from "./email-layout.ts";
+import { composeEmail, heading, paragraph, button, note, highlight, escapeHtml } from "./email-layout.ts";
 
 export { escapeHtml };
 
@@ -143,4 +143,25 @@ export async function sendInvitationEmail(
     ],
   });
   return sendEmail({ to: input.to, subject: `${input.inviterName} convidou você para a clínica ${input.clinicName}`, html: body.html, text: body.text }, deps);
+}
+
+// Codigo de verificacao do cadastro. O codigo so aparece no corpo do e-mail (nunca em log nem na resposta da API).
+export async function sendSignupCodeEmail(
+  input: { to: string; code: string; name: string; ttlMinutes: number },
+  deps: { env?: Env; fetchImpl?: typeof fetch } = {},
+): Promise<EmailResult> {
+  const env = deps.env ?? process.env;
+  if (!isEmailDeliveryReady(env)) return { sent: false, reason: "not_configured" };
+  const body = composeEmail({
+    preheader: `Seu código de verificação é ${input.code}.`,
+    greeting: input.name,
+    blocks: [
+      heading("Verifique seu e-mail"),
+      paragraph("Use o código abaixo para concluir a criação da sua conta no Harmonize+."),
+      highlight("Código de verificação", input.code.split("").join(" ")),
+      note(`O código expira em ${input.ttlMinutes} minutos.`),
+      note("Se não foi você, ignore este e-mail: nenhuma conta será criada."),
+    ],
+  });
+  return sendEmail({ to: input.to, subject: "Seu código de verificação do Harmonize+", html: body.html, text: body.text }, deps);
 }

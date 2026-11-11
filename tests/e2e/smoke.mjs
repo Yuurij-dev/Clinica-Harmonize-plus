@@ -7379,7 +7379,179 @@ async function stockCatalog() {
   }
 }
 
+// Cadastro com senha + verificação de e-mail por código. O servidor local TEM provedor de e-mail: nunca dispara
+// register/resend até o envio. Só @example.invalid; pendentes são semeados via Prisma.
+async function signupEmailVerification() {
+  const authSecret = process.env.AUTH_SECRET ?? "";
+  if (authSecret.length < 32) { check("verificação de cadastro: SEM AUTH_SECRET no ambiente do teste (parte ignorada)", false); return; }
+  const { createHmac } = await import("node:crypto");
+  const { hash } = await import("bcryptjs");
+  const hashCode = (code, mail) => createHmac("sha256", new TextEncoder().encode(authSecret)).update(`signup-verification:${mail.trim().toLowerCase()}:${code}`).digest("hex");
+  const prefix = `e2e-sv-${run}`;
+  const mailOf = (t) => `${prefix}-${t}@example.invalid`;
+  const pw = `E2e-${run}-Veri9!`;
+  const passwordHash = await hash(pw, 4);
+  const profile = { clinicName: `${prefix} Clínica`, name: "Dona Verif", phone: "11999990000", profession: "Biomédica", practiceArea: "Estética", hasSecretary: true };
+  const post = async (path, body) => {
+    const res = await fetch(`${baseUrl}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), redirect: "manual" });
+    const text = await res.text();
+    let data; try { data = JSON.parse(text); } catch { data = text.slice(0, 200); }
+    return { status: res.status, data, text };
+  };
+  const verify = (mail, code, password = pw) => post("/api/auth/register/verify", { email: mail, code, password });
+  const seed = (mail, over = {}) => prisma.pendingSignup.create({ data: { windowStartedAt: new Date(), totalAttempts: 0, email: mail, passwordHash, profile, codeHash: hashCode("123456", mail), expiresAt: new Date(Date.now() + 600_000), attempts: 0, sends: 1, lastSentAt: new Date(Date.now() - 3_600_000), ...over } });
+  const pend = (mail) => prisma.pendingSignup.findUnique({ where: { email: mail } });
+  const leaks = (r) => /123456|codeHash|passwordHash|[0-9a-f]{64}/i.test(r.text);
+  try {
+    const GENERIC = "Não foi possível enviar um novo código agora. Verifique seu e-mail ou tente novamente em alguns minutos.";
+    const BAD = "Código inválido ou expirado. Confira o código ou peça um novo.";
+    const isBad = (x) => x.status === 400 && x.data.message === BAD && Object.keys(x.data).join() === "message";
+    const isGen = (x) => x.status === 429 && x.data.message === GENERIC && Object.keys(x.data).join() === "message";
+    const snap = async (mail) => JSON.stringify(await pend(mail));
+    const base = { clinicName: profile.clinicName, name: "Dona Verif", phone: "11999990000", profession: "Biomédica", practiceArea: "Estética", hasSecretary: "Sim", email: mailOf("reg"), password: pw };
+    let r = await post("/api/auth/register", { ...base, password: "curta" });
+    check("cadastro: senha curta = 400", r.status === 400, r.status);
+    r = await post("/api/auth/register", { ...base, password: "é".repeat(40) + "A1!" });
+    check("cadastro: senha >72 bytes UTF-8 = 400 e nenhum pendente", r.status === 400 && await prisma.pendingSignup.count({ where: { email: base.email } }) === 0, `${r.status} ${r.text}`);
+    r = await post("/api/auth/register", { ...base, email: "sem-arroba" });
+    check("cadastro: e-mail inválido = 400", r.status === 400, `${r.status} ${JSON.stringify(r.data)}`);
+    r = await post("/api/auth/register", { ...base, clinicName: "   " });
+    check("cadastro: nome de clínica vazio = 400", r.status === 400, r.status);
+    r = await post("/api/auth/register", { ...base, email: email });
+    check("cadastro: e-mail já existente = 409 e nenhum pendente criado", r.status === 409 && await prisma.pendingSignup.count({ where: { email } }) === 0, r.status);
+    const big = { ...base, clinicName: "x".repeat(11 * 1024) };
+    for (const p of ["/api/auth/register", "/api/auth/register/verify", "/api/auth/register/resend"]) {
+      r = await post(p, big);
+      check(`corpo grande: ${p} = 413 com mensagem`, r.status === 413 && r.data.message === "Requisição grande demais.", `${r.status} ${r.text}`);
+    }
+    const cd = mailOf("cd");
+    await seed(cd, { lastSentAt: new Date(), expiresAt: new Date(Date.now() - 1000) });
+    let before = await snap(cd);
+    r = await post("/api/auth/register", { ...base, email: cd });
+    check("cadastro: cooldown (código expirado) = 429 genérico sem retryAfterSeconds e linha intacta", isGen(r) && await snap(cd) === before, `${r.status} ${r.text}`);
+    const valid = mailOf("valid");
+    await seed(valid);
+    before = await snap(valid);
+    r = await post("/api/auth/register", { ...base, email: valid });
+    check("cadastro: código ainda válido = 429 genérico e linha intacta", isGen(r) && await snap(valid) === before, `${r.status} ${r.text}`);
+    const lim = mailOf("lim");
+    await seed(lim, { sends: 6, expiresAt: new Date(Date.now() - 1000) });
+    before = await snap(lim);
+    r = await post("/api/auth/register", { ...base, email: lim });
+    check("cadastro: sends>=6 = 429 genérico e linha intacta", isGen(r) && await snap(lim) === before, `${r.status} ${r.text}`);
+    const blk = mailOf("blk");
+    await seed(blk, { lockedUntil: new Date(Date.now() + 3_600_000), expiresAt: new Date(Date.now() - 1000) });
+    before = await snap(blk);
+    r = await post("/api/auth/register", { ...base, email: blk });
+    check("cadastro: pendente bloqueado = 429 genérico e linha intacta", isGen(r) && await snap(blk) === before, `${r.status} ${r.text}`);
+
+    // resend: só caminhos sem envio; sempre 200 {ok:true}.
+    const neutral = (x) => x.status === 200 && x.text === '{"ok":true}';
+    r = await post("/api/auth/register/resend", { email: mailOf("semcadastro") });
+    check("reenvio: sem pendente = 200 {ok:true}", neutral(r), `${r.status} ${r.text}`);
+    r = await post("/api/auth/register/resend", {});
+    check("reenvio: sem e-mail = 200 {ok:true}", neutral(r), `${r.status} ${r.text}`);
+    for (const [name, mail] of [["cooldown", cd], ["limite", lim], ["bloqueado", blk]]) {
+      before = await snap(mail);
+      r = await post("/api/auth/register/resend", { email: mail });
+      check(`reenvio: ${name} = 200 {ok:true} e linha (hash/senha/perfil/sends) intacta`, neutral(r) && await snap(mail) === before, `${r.status} ${r.text}`);
+    }
+
+    // verify: toda negativa tem a mesma resposta.
+    r = await verify(mailOf("x"), "12ab");
+    check("verify: formato inválido = 400 com mensagem própria", r.status === 400 && r.data.message === "Informe o código de 6 dígitos.", `${r.status} ${r.text}`);
+    r = await post("/api/auth/register/verify", { code: "123456" });
+    check("verify: sem e-mail = 400", r.status === 400, r.status);
+    r = await verify(mailOf("nada"), "123456");
+    check("verify: sem pendente = mesma resposta do código errado", isBad(r), `${r.status} ${r.text}`);
+
+    const ok = mailOf("ok");
+    await seed(ok);
+    r = await verify(ok, "000000");
+    const wrongBody = r.text;
+    check("verify: código errado = 400 genérico, sem attemptsLeft e sem vazar código/hash", isBad(r) && !leaks(r) && r.text === (await verify(mailOf("nada"), "123456")).text, `${r.status} ${r.text}`);
+    const okRow = await pend(ok);
+    check("verify: erro incrementa attempts e totalAttempts", okRow?.attempts === 1 && okRow?.totalAttempts === 1, JSON.stringify(okRow && [okRow.attempts, okRow.totalAttempts]));
+    check("verify: nenhuma conta criada com código errado", await prisma.user.count({ where: { email: ok } }) === 0);
+    // Senha: código certo + senha errada/ausente/inválida = mesmo 400 genérico, conta como palpite, sem conta.
+    const nothing = (await verify(mailOf("nada"), "123456")).text;
+    const attemptsOf = async () => (await pend(ok))?.attempts;
+    let a0 = await attemptsOf();
+    r = await verify(ok, "123456", "Senha-Errada#1");
+    check("verify: código certo + senha errada = 400 genérico idêntico a 'sem pendente', sem conta, attempts+1", isBad(r) && r.text === nothing && !leaks(r) && await prisma.user.count({ where: { email: ok } }) === 0 && await attemptsOf() === a0 + 1, `${r.status} ${r.text}`);
+    a0 = await attemptsOf();
+    r = await post("/api/auth/register/verify", { email: ok, code: "123456" });
+    check("verify: senha ausente = 400 genérico e conta como palpite", isBad(r) && r.text === nothing && await prisma.user.count({ where: { email: ok } }) === 0 && await attemptsOf() === a0 + 1, `${r.status} ${r.text}`);
+    const pwm = mailOf("pw");
+    await seed(pwm);
+    for (const [label, bad] of [["número", 123456], ["vazia", ""], [">72 bytes", "é".repeat(40) + "A1!"]]) {
+      r = await post("/api/auth/register/verify", { email: pwm, code: "123456", password: bad });
+      check(`verify: senha ${label} = 400 genérico e sem conta`, isBad(r) && r.text === nothing && await prisma.user.count({ where: { email: pwm } }) === 0, `${r.status} ${r.text}`);
+    }
+    r = await verify(ok, "123 456");
+    check("verify: código certo (com espaço) = 201 {created:true} sem vazar hash", r.status === 201 && r.data.created === true && !leaks(r), `${r.status} ${r.text}`);
+    const user = await prisma.user.findUnique({ where: { email: ok }, include: { memberships: { include: { clinic: true } } } });
+    const m = user?.memberships[0];
+    check("verify: criou usuário ADMIN verificado, clínica, membership owner e apagou o pendente", user?.role === "ADMIN" && !!user.emailVerifiedAt && user.memberships.length === 1 && m.isOwner && m.role === "ADMIN" && m.clinic.name === profile.clinicName && user.hasSecretary === true && await pend(ok) === null, JSON.stringify({ role: user?.role, n: user?.memberships.length }));
+    const lg = await post("/api/auth/login", { login: ok, password: pw });
+    check("verify: login com a senha do cadastro funciona", lg.status === 200 && lg.data.user?.clinic?.name === profile.clinicName, `${lg.status}`);
+    r = await verify(ok, "123456");
+    check("verify: repetir após criar = mesma resposta genérica", isBad(r) && r.text === wrongBody, `${r.status} ${r.text}`);
+
+    const lock = mailOf("lock");
+    await seed(lock);
+    const codes = [];
+    for (let i = 0; i < 5; i += 1) codes.push(await verify(lock, "999999"));
+    const lrow = await pend(lock);
+    check("verify: 5 erros = sempre o mesmo 400; linha permanece com attempts 5 / totalAttempts 5", codes.every(isBad) && lrow?.attempts === 5 && lrow.totalAttempts === 5, codes.map((c) => c.status).join());
+    r = await verify(lock, "123456");
+    check("verify: após 5 palpites nem o código certo cria conta", isBad(r) && await prisma.user.count({ where: { email: lock } }) === 0, `${r.status} ${r.text}`);
+
+    const tot = mailOf("tot");
+    await seed(tot, { attempts: 4, totalAttempts: 14 });
+    r = await verify(tot, "999999");
+    const trow = await pend(tot);
+    check("verify: 15º erro acumulado define lockedUntil = windowStartedAt+24h e mantém a linha", isBad(r) && trow && trow.lockedUntil && Math.abs(trow.lockedUntil.getTime() - (trow.windowStartedAt.getTime() + 86_400_000)) < 2000, `${r.status} ${trow?.lockedUntil?.toISOString()}`);
+    await prisma.pendingSignup.update({ where: { email: tot }, data: { attempts: 0, expiresAt: new Date(Date.now() + 600_000), codeHash: hashCode("123456", tot) } });
+    r = await verify(tot, "123456");
+    check("verify: bloqueado por 24 h, nem código certo semeado cria conta", isBad(r) && await prisma.user.count({ where: { email: tot } }) === 0, `${r.status} ${r.text}`);
+
+    const exp = mailOf("exp");
+    await seed(exp, { expiresAt: new Date(Date.now() - 1000) });
+    r = await verify(exp, "123456");
+    check("verify: expirado = resposta genérica e sem conta", isBad(r) && await prisma.user.count({ where: { email: exp } }) === 0, `${r.status} ${r.text}`);
+
+    const bk = mailOf("bk");
+    await seed(bk, { lockedUntil: new Date(Date.now() + 3_600_000) });
+    r = await verify(bk, "123456");
+    check("verify: pendente bloqueado com código certo = resposta genérica e sem conta", isBad(r) && await prisma.user.count({ where: { email: bk } }) === 0, `${r.status} ${r.text}`);
+
+    const taken = mailOf("taken");
+    await seed(taken);
+    await prisma.user.create({ data: { name: "Já existe", email: taken, passwordHash, role: "ADMIN" } });
+    r = await verify(taken, "123456");
+    check("verify: e-mail que virou conta = 409", r.status === 409, `${r.status} ${r.text}`);
+
+    const race = mailOf("race");
+    await seed(race);
+    const pair = await Promise.all([verify(race, "123456"), verify(race, "123456")]);
+    const statuses = pair.map((x) => x.status).sort().join();
+    check("verify: dois simultâneos criam só 1 conta e 1 clínica, nunca 500", await prisma.user.count({ where: { email: race } }) === 1 && !pair.some((x) => x.status >= 500) && pair.filter((x) => x.status === 201).length === 1 && await prisma.clinicMembership.count({ where: { user: { email: race } } }) === 1, statuses);
+  } finally {
+    const users = (await prisma.user.findMany({ where: { email: { startsWith: prefix } }, select: { id: true } })).map((u) => u.id);
+    const clinics = (await prisma.clinicMembership.findMany({ where: { userId: { in: users } }, select: { clinicId: true } })).map((c) => c.clinicId);
+    const named = (await prisma.clinic.findMany({ where: { name: { startsWith: prefix } }, select: { id: true } })).map((c) => c.id);
+    const allClinics = [...new Set([...clinics, ...named])];
+    await prisma.pendingSignup.deleteMany({ where: { email: { startsWith: prefix } } });
+    await prisma.clinicMembership.deleteMany({ where: { OR: [{ clinicId: { in: allClinics } }, { userId: { in: users } }] } });
+    await prisma.userIdentity.deleteMany({ where: { userId: { in: users } } });
+    await prisma.user.deleteMany({ where: { id: { in: users } } });
+    await prisma.clinic.deleteMany({ where: { id: { in: allClinics } } });
+  }
+}
+
 const suites = {
+  verificacao_email_cadastro: { needs: [], run: () => signupEmailVerification() },
   chave_email_clientes: { needs: [], run: () => patientEmailsSwitch() },
   catalogo_materiais: { needs: [], run: () => stockCatalog() },
   setup_wizard: { needs: [], run: () => setupWizard() },

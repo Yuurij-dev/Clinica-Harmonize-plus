@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { LoginScreen, type GoogleSignupValues, type RegisterResult, type RegisterValues } from "./login-screen";
+import { LoginScreen, type GoogleSignupValues, type RegisterResult, type RegisterValues, type VerifyResult } from "./login-screen";
 import { setClientCacheScope } from "@/lib/client-cache";
 
 export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "login" | "register"; googleStatus?: string }) {
@@ -51,12 +51,47 @@ export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "l
       body: JSON.stringify(values),
     });
 
-    if (!response.ok) {
-      const data = await response.json().catch(() => null) as { message?: string } | null;
-      return { error: data?.message ?? "Não foi possível criar a conta agora. Tente novamente." } satisfies RegisterResult;
-    }
+    const data = await response.json().catch(() => null) as { message?: string; verificationRequired?: boolean } | null;
+    if (!response.ok) return { error: data?.message ?? "Não foi possível criar a conta agora. Tente novamente." } satisfies RegisterResult;
+    // Com provedor de e-mail a conta só nasce após o código; sem provedor (dev) o cadastro já foi criado.
+    if (data?.verificationRequired) return { verificationRequired: true } satisfies RegisterResult;
     const result = await handleLogin({ login: values.email, password: values.password });
     return { error: result.error } satisfies RegisterResult;
+  }
+
+  async function handleVerifyEmail(values: { email: string; password: string; code: string }): Promise<VerifyResult> {
+    let response: Response;
+    try {
+      response = await fetch("/api/auth/register/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: values.email, code: values.code, password: values.password }),
+      });
+    } catch {
+      return { error: "Não foi possível verificar o código agora. Tente novamente." };
+    }
+    const data = await response.json().catch(() => null) as { message?: string } | null;
+    if (!response.ok) return { error: data?.message ?? "Não foi possível verificar o código agora. Tente novamente." };
+    // Conta criada: se o login automático falhar, não é erro de código (a tela volta ao login).
+    try {
+      const result = await handleLogin({ login: values.email, password: values.password });
+      return result.error ? { createdButLoginFailed: true } : {};
+    } catch {
+      return { createdButLoginFailed: true };
+    }
+  }
+
+  async function handleResendCode(email: string) {
+    const response = await fetch("/api/auth/register/resend", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null) as { message?: string } | null;
+      return { error: data?.message ?? "Não foi possível reenviar o código agora." };
+    }
+    return {};
   }
 
   async function handleGoogleSignup(values: GoogleSignupValues) {
@@ -80,5 +115,5 @@ export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "l
     return {} satisfies RegisterResult;
   }
 
-  return <LoginScreen initialMode={initialMode} googleStatus={googleStatus} onLogin={handleLogin} onChangePassword={handlePasswordChange} onRegister={handleRegister} onGoogleSignup={handleGoogleSignup} />;
+  return <LoginScreen initialMode={initialMode} googleStatus={googleStatus} onLogin={handleLogin} onChangePassword={handlePasswordChange} onRegister={handleRegister} onVerifyEmail={handleVerifyEmail} onResendCode={handleResendCode} onGoogleSignup={handleGoogleSignup} />;
 }

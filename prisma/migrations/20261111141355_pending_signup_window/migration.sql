@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "PendingSignup" ADD COLUMN     "lockedUntil" TIMESTAMPTZ(6),
+ADD COLUMN     "totalAttempts" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "windowStartedAt" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP;
