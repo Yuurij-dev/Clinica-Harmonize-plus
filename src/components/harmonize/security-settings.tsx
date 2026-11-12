@@ -341,7 +341,7 @@ function ReauthModal({ open, onClose, onSuccess, title, description, submitLabel
   );
 }
 
-// Histórico do próprio usuário, mais recentes primeiro; "Carregar mais" segue o cursor do servidor.
+// Histórico do próprio usuário, mais recentes primeiro; "Ver mais" segue o cursor do servidor.
 function SecurityHistory({ reloadTick }: { reloadTick: number }) {
   const [events, setEvents] = useState<SecurityEventRow[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -396,7 +396,7 @@ function SecurityHistory({ reloadTick }: { reloadTick: number }) {
           </ul>
         )}
         {error ? <p className="py-2 text-sm text-destructive" role="alert">{error}</p> : null}
-        {!loading && nextCursor ? <div className="flex justify-center pt-3"><Button disabled={loadingMore} onClick={() => void loadMore()} size="sm" variant="outline">{loadingMore ? <Loader2 className="animate-spin" /> : null}Carregar mais</Button></div> : null}
+        {!loading && nextCursor ? <div className="flex justify-center pt-3"><Button disabled={loadingMore} onClick={() => void loadMore()} size="sm" variant="outline">{loadingMore ? <Loader2 className="animate-spin" /> : null}Ver mais</Button></div> : null}
       </CardContent>
     </Card>
   );
