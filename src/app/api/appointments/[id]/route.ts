@@ -10,6 +10,7 @@ import { prisma } from "@/lib/prisma";
 import { DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE, procedureAppointmentVariants } from "@/lib/procedure-session-rules";
 import { appointmentDeleteAllowed, appointmentStatusChangeAllowed, can, runningAppointmentStatuses } from "@/lib/permissions";
 import { denyUnless } from "@/lib/api-guards";
+import { calendarAppointmentChanged, snapshotsBeforeDelete } from "@/lib/calendar-runtime";
 
 const appointmentStatuses = ["Agendado", "Em atendimento", "Atendido", "Finalizado", "Faltou", "Cancelado"];
 
@@ -99,6 +100,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (body.status === "Atendido") await prisma.appointment.updateMany({ where: { id, clinicId: user.clinicId, materialsCheck: null }, data: { materialsCheck: "pending" } });
   const appointment = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, include: { patient: { select: { name: true } } } });
   if (appointment) {
+    // Google Agenda + e-mail ao profissional (só quando data/hora/profissional/procedimento/cancelamento mudam; o resto é ignorado). Nunca falha a requisição.
+    await calendarAppointmentChanged({ clinicId: user.clinicId, appointmentId: id, patientId: current.patientId, actorUserId: user.id, prev: current, next: appointment }).catch(() => undefined);
     const oldDate = appointmentDay(current.date);
     const newDate = appointmentDay(appointment.date);
     // Só avisa sobre um agendamento que estava "Agendado": não e-mailar cancelamento de algo já Atendido/Faltou nem reabertura de Cancelado.
@@ -122,12 +125,15 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
   const user = await getCurrentUser({ requireActiveTrial: true });
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const id = (await params).id;
-  const current = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, select: { status: true } });
+  const current = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, select: { status: true, date: true, time: true, procedure: true, professional: true, patientId: true } });
   if (!current) return NextResponse.json({ message: "Agendamento não encontrado." }, { status: 404 });
   if (!appointmentDeleteAllowed(user.role, current.status, user.rolePermissions)) {
     return NextResponse.json({ message: "O atendimento é conduzido pela equipe clínica." }, { status: 403 });
   }
+  // Os vínculos com o Google são apagados em cascata junto com o agendamento: lê antes (best-effort) para o job DELETE.
+  const snapshots = await snapshotsBeforeDelete(user.clinicId, [id]);
   const result = await prisma.appointment.deleteMany({ where: { id, clinicId: user.clinicId, ...(can(user.role, "appointment:run", user.rolePermissions) ? {} : { status: { notIn: [...runningAppointmentStatuses] } }) } });
   if (result.count === 0) return NextResponse.json({ message: "O atendimento já foi iniciado." }, { status: 409 });
+  await calendarAppointmentChanged({ clinicId: user.clinicId, appointmentId: id, patientId: current.patientId, actorUserId: user.id, prev: current, next: null, snapshot: snapshots.get(id) ?? null }).catch(() => undefined);
   return NextResponse.json({ ok: true });
 }

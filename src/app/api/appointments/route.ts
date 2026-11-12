@@ -10,6 +10,7 @@ import { prisma } from "@/lib/prisma";
 import { ensurePatientJourney } from "@/lib/patient-journey";
 import { DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE, procedureAppointmentVariants } from "@/lib/procedure-session-rules";
 import { denyUnless } from "@/lib/api-guards";
+import { calendarAppointmentChanged } from "@/lib/calendar-runtime";
 
 export async function POST(request: Request) {
   const user = await getCurrentUser({ requireActiveTrial: true });
@@ -91,6 +92,8 @@ export async function POST(request: Request) {
   if ("duplicate" in result) return NextResponse.json({ message: DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE }, { status: 409 });
   if ("conflict" in result) return NextResponse.json({ message: result.conflict }, { status: 409 });
   const created = result.appointment;
+  // Google Agenda + e-mail ao profissional: enfileira (rápido, try/catch interno) e o resto roda depois da resposta; nunca falha o agendamento.
+  await calendarAppointmentChanged({ clinicId: user.clinicId, appointmentId: created.id, patientId: patient.id, actorUserId: user.id, prev: null, next: created }).catch(() => undefined);
   // E-mail ao paciente depois da resposta; opcional e silencioso, nunca altera o agendamento.
   after(async () => {
     try {

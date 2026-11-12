@@ -1,4 +1,4 @@
-const clinicTimeZone = "America/Sao_Paulo";
+export const clinicTimeZone = "America/Sao_Paulo";
 
 // Data de hoje no fuso da clínica, no formato YYYY-MM-DD.
 export function clinicToday(now = new Date()) {

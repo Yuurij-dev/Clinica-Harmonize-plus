@@ -18,6 +18,8 @@ function policyFor(key: string): CachePolicy {
   if (key.startsWith("/api/search?")) return { freshFor: 0, retainFor: 10_000 };
   // Segurança da conta (sessões, dispositivos, histórico): sempre revalida; outro dispositivo pode ter mudado o estado.
   if (key.startsWith("/api/security/")) return { freshFor: 0, retainFor: 10_000 };
+  // Google Agenda: o estado muda no callback e pelos jobs; sempre revalida.
+  if (key.startsWith("/api/integrations/google-calendar/")) return { freshFor: 0, retainFor: 10_000 };
   // Meu perfil: sempre revalida (nome, foto e clínicas podem ter mudado em outra aba/dispositivo).
   if (key === "/api/me") return { freshFor: 0, retainFor: 10_000 };
   // Formulário "Editar dados": sempre revalida (nunca mostra cadastro antigo; invalidateClientCache continua valendo após salvar).

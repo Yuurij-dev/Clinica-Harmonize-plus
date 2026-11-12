@@ -7,6 +7,7 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { chromium } from "playwright-core";
 import { createHash, randomBytes } from "node:crypto";
+import http from "node:http";
 import sharp from "sharp";
 
 const baseUrl = process.env.E2E_BASE_URL ?? "http://localhost:3000";
@@ -2402,6 +2403,7 @@ async function startMovesAppointment() {
 // Apaga os dados de negócio da clínica de teste (mantém clínica, usuário e vínculo).
 // Recusa se a clínica não for exatamente a de teste com um único membro: a conta de teste.
 async function resetTestClinic() {
+  await cleanupGoogleAgendaLeftovers(); // sobras de uma execução interrompida da parte google_agenda (prefixo e2e-gcal-)
   const memberships = await prisma.clinicMembership.findMany({ where: { user: { email } }, select: { clinic: { select: { id: true, name: true, memberships: { select: { user: { select: { email: true } } } } } } } });
   const clinic = memberships[0]?.clinic;
   if (memberships.length !== 1 || clinic.name !== testClinicName || clinic.memberships.length !== 1 || clinic.memberships[0].user.email !== email) {
@@ -2409,6 +2411,11 @@ async function resetTestClinic() {
   }
   const clinicId = clinic.id;
   await prisma.$transaction([
+    // Google Agenda: vínculos, conexões, fila e registro de e-mails (jobs/log não têm FK com o agendamento).
+    prisma.googleCalendarEvent.deleteMany({ where: { clinicId } }),
+    prisma.googleCalendarConnection.deleteMany({ where: { clinicId } }),
+    prisma.calendarSyncJob.deleteMany({ where: { clinicId } }),
+    prisma.calendarNotificationLog.deleteMany({ where: { clinicId } }),
     prisma.clinicInvitation.deleteMany({ where: { clinicId } }),
     prisma.stockMovement.deleteMany({ where: { clinicId } }),
     prisma.pendingStockOutput.deleteMany({ where: { clinicId } }),
@@ -8443,6 +8450,883 @@ async function editPatientData() {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Google Agenda (parte google_agenda). NUNCA chama o Google real: o servidor do app roda com GOOGLE_CALENDAR_FAKE_BASE_URL=http://127.0.0.1:4010
+// e este roteiro sobe ali um Google FALSO (token, JWKS, revoke e Calendar v3 em memória). Só profissionais @example.invalid; o roteiro
+// só age (cria/altera/cancela) como o PRÓPRIO profissional ou com profissional não identificado, para a regra "quem fez a alteração não recebe
+// e-mail" impedir qualquer envio real pelo Resend. Ao final confere que CalendarNotificationLog está vazio (log é gravado ANTES do envio).
+// ---------------------------------------------------------------------------------------------
+async function cleanupGoogleAgendaLeftovers() {
+  const users = await prisma.user.findMany({ where: { email: { startsWith: "e2e-gcal-", endsWith: "@example.invalid" } }, select: { id: true } });
+  const clinicIds = (await prisma.clinic.findMany({ where: { name: { startsWith: "E2E GCal Externa " } }, select: { id: true } })).map((c) => c.id);
+  if (clinicIds.length) {
+    await prisma.googleCalendarEvent.deleteMany({ where: { clinicId: { in: clinicIds } } });
+    await prisma.googleCalendarConnection.deleteMany({ where: { clinicId: { in: clinicIds } } });
+    await prisma.calendarSyncJob.deleteMany({ where: { clinicId: { in: clinicIds } } });
+    await prisma.calendarNotificationLog.deleteMany({ where: { clinicId: { in: clinicIds } } });
+  }
+  if (users.length) {
+    const ids = users.map((u) => u.id);
+    await wipeSecurityOf(ids);
+    await prisma.clinicMembership.deleteMany({ where: { userId: { in: ids } } });
+    await prisma.user.deleteMany({ where: { id: { in: ids } } });
+  }
+  if (clinicIds.length) await prisma.clinic.deleteMany({ where: { id: { in: clinicIds } } });
+}
+
+async function startFakeGoogle({ port, clientId, clientSecret }) {
+  const { generateKeyPair, exportJWK, SignJWT } = await import("jose");
+  const { publicKey, privateKey } = await generateKeyPair("RS256");
+  const jwk = { ...(await exportJWK(publicKey)), kid: "fake-kid", alg: "RS256", use: "sig" };
+  const accounts = new Map(); // email -> { email, sub, calendar: Map(id -> evento), burned: Set }
+  const codes = new Map();
+  const refreshTokens = new Map(); // refresh -> email
+  const accessTokens = new Map(); // access -> email
+  const copies = new Map(); // `${dono}|${id}` -> [{ email, id }] (convites entregues nas agendas dos convidados)
+  const log = []; // { kind, email, id, sendUpdates, body, status }
+  const faults = [];
+  const issued = new Set();
+  let counter = 0;
+  const account = (mail, sub) => {
+    let a = accounts.get(mail);
+    if (!a) { a = { email: mail, sub: sub ?? `sub-${mail}`, calendar: new Map(), burned: new Set() }; accounts.set(mail, a); }
+    return a;
+  };
+  const pick = (ev) => ({ summary: ev.summary, description: ev.description, start: ev.start, end: ev.end, status: ev.status, iCalUID: ev.iCalUID, attendees: ev.attendees });
+  const syncCopies = (owner, ev) => {
+    const key = `${owner.email}|${ev.id}`;
+    const wanted = new Set((ev.attendees ?? []).map((x) => String(x.email).toLowerCase()).filter((e) => e !== owner.email && accounts.has(e)));
+    const next = [];
+    for (const c of copies.get(key) ?? []) {
+      if (wanted.has(c.email)) {
+        const copy = accounts.get(c.email).calendar.get(c.id);
+        if (copy) Object.assign(copy, pick(ev));
+        next.push(c);
+        wanted.delete(c.email);
+      } else accounts.get(c.email)?.calendar.delete(c.id);
+    }
+    for (const mail of wanted) {
+      const id = `inv${randomBytes(6).toString("hex")}`;
+      accounts.get(mail).calendar.set(id, { ...pick(ev), id, organizer: { email: owner.email } });
+      next.push({ email: mail, id });
+    }
+    copies.set(key, next);
+  };
+  const dropCopies = (owner, id) => { for (const c of copies.get(`${owner.email}|${id}`) ?? []) accounts.get(c.email)?.calendar.delete(c.id); copies.delete(`${owner.email}|${id}`); };
+  const reasonOf = (status) => ({ 401: "authError", 403: "insufficientPermissions", 429: "rateLimitExceeded", 500: "backendError", 503: "backendError" }[status] ?? "error");
+
+  async function handle(req, res, raw) {
+    const url = new URL(req.url, "http://127.0.0.1");
+    const reply = (entry, status, body, headers = {}) => {
+      if (entry) entry.status = status;
+      res.writeHead(status, { "content-type": "application/json", ...headers });
+      res.end(body === undefined ? "" : JSON.stringify(body));
+    };
+    const fault = (kind, mail, entry, tokenKind) => {
+      const f = faults.find((x) => x.times > 0 && (x.kind === kind || (x.kind === "events" && ["insert", "patch", "delete", "get", "list"].includes(kind))) && (!x.email || x.email === mail));
+      if (!f) return false;
+      f.times -= 1; f.hits += 1;
+      if (f.network) { if (entry) entry.status = "network"; req.socket.destroy(); return true; }
+      reply(entry, f.status, f.body ?? (tokenKind ? { error: f.error ?? "invalid_grant" } : { error: { code: f.status, message: "falha injetada", errors: [{ reason: reasonOf(f.status) }] } }), f.retryAfter ? { "retry-after": String(f.retryAfter) } : {});
+      return true;
+    };
+    if (req.method === "GET" && url.pathname === "/oauth2/v3/certs") return reply(null, 200, { keys: [jwk] });
+    if (req.method === "POST" && url.pathname === "/token") {
+      const form = new URLSearchParams(raw);
+      if (form.get("client_id") !== clientId || form.get("client_secret") !== clientSecret) return reply(null, 401, { error: "invalid_client" });
+      const grant = form.get("grant_type");
+      if (grant === "authorization_code") {
+        const entry = codes.get(form.get("code"));
+        const rec = { kind: "exchange", email: entry?.email, status: null };
+        log.push(rec);
+        if (fault("exchange", entry?.email, rec, true)) return;
+        const challenge = createHash("sha256").update(form.get("code_verifier") ?? "").digest("base64url");
+        if (!entry || entry.challenge !== challenge) return reply(rec, 400, { error: "invalid_grant" });
+        codes.delete(form.get("code"));
+        const a = account(entry.email, entry.sub);
+        const access = `ya29.fake.${++counter}.${randomBytes(8).toString("hex")}`;
+        accessTokens.set(access, a.email);
+        issued.add(access);
+        let refresh = null;
+        if (entry.withRefresh) { refresh = `1//fake-${randomBytes(10).toString("hex")}`; refreshTokens.set(refresh, a.email); issued.add(refresh); }
+        const now = Math.floor(Date.now() / 1000);
+        const claims = { iss: "https://accounts.google.com", aud: clientId, azp: clientId, sub: a.sub, email: entry.claimEmail ?? a.email, email_verified: true, nonce: entry.nonce, iat: now, exp: now + 3600, ...entry.claims };
+        const idToken = await new SignJWT(claims).setProtectedHeader({ alg: "RS256", kid: "fake-kid" }).sign(privateKey);
+        issued.add(idToken);
+        return reply(rec, 200, { access_token: access, expires_in: 3600, ...(refresh ? { refresh_token: refresh } : {}), scope: entry.scope ?? "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/calendar.events", token_type: "Bearer", id_token: idToken });
+      }
+      if (grant === "refresh_token") {
+        const token = form.get("refresh_token");
+        const mail = refreshTokens.get(token);
+        const rec = { kind: "refresh", email: mail, refreshToken: token, status: null };
+        log.push(rec);
+        if (fault("refresh", mail, rec, true)) return;
+        if (!mail) return reply(rec, 400, { error: "invalid_grant" });
+        const access = `ya29.fake.${++counter}.${randomBytes(8).toString("hex")}`;
+        accessTokens.set(access, mail);
+        issued.add(access);
+        return reply(rec, 200, { access_token: access, expires_in: 3600, scope: "openid https://www.googleapis.com/auth/calendar.events", token_type: "Bearer" });
+      }
+      return reply(null, 400, { error: "unsupported_grant_type" });
+    }
+    if (req.method === "POST" && url.pathname === "/revoke") {
+      const token = new URLSearchParams(raw).get("token");
+      const rec = { kind: "revoke", email: refreshTokens.get(token) ?? accessTokens.get(token), token, status: null };
+      log.push(rec);
+      if (fault("revoke", rec.email, rec, true)) return;
+      refreshTokens.delete(token);
+      return reply(rec, 200, {});
+    }
+    const match = /^\/calendar\/v3\/calendars\/primary\/events(?:\/([^/]+))?$/.exec(url.pathname);
+    if (!match) return reply(null, 404, { error: "not found" });
+    const bearer = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? "")?.[1];
+    const mail = bearer ? accessTokens.get(bearer) : undefined;
+    const id = match[1] ? decodeURIComponent(match[1]) : undefined;
+    const method = req.method;
+    const kind = method === "POST" ? "insert" : method === "PATCH" ? "patch" : method === "DELETE" ? "delete" : id ? "get" : "list";
+    const bodyJson = raw ? JSON.parse(raw) : null;
+    const entry = { kind, email: mail, id: id ?? bodyJson?.id, sendUpdates: url.searchParams.get("sendUpdates"), query: Object.fromEntries(url.searchParams), body: bodyJson, status: null };
+    log.push(entry);
+    if (fault(kind, mail, entry, false)) return;
+    if (!mail) return reply(entry, 401, { error: { code: 401, message: "invalid credentials", status: "UNAUTHENTICATED" } });
+    const a = accounts.get(mail);
+    if (kind === "insert") {
+      const evId = entry.body?.id;
+      if (!evId) return reply(entry, 400, { error: { code: 400, errors: [{ reason: "required" }] } });
+      if (a.calendar.has(evId) || a.burned.has(evId)) return reply(entry, 409, { error: { code: 409, errors: [{ reason: "duplicate" }] } });
+      const ev = { ...entry.body, id: evId, iCalUID: `${evId}@google.com`, status: entry.body.status ?? "confirmed", organizer: { email: mail, self: true } };
+      a.calendar.set(evId, ev);
+      syncCopies(a, ev);
+      return reply(entry, 200, ev);
+    }
+    if (kind === "patch") {
+      const ev = a.calendar.get(id);
+      if (!ev) return reply(entry, 404, { error: { code: 404, errors: [{ reason: "notFound" }] } });
+      Object.assign(ev, entry.body);
+      syncCopies(a, ev);
+      return reply(entry, 200, ev);
+    }
+    if (kind === "delete") {
+      const ev = a.calendar.get(id);
+      if (!ev) return reply(entry, a.burned.has(id) ? 410 : 404, { error: { code: 404, errors: [{ reason: "notFound" }] } });
+      a.calendar.delete(id);
+      a.burned.add(id);
+      dropCopies(a, id);
+      return reply(entry, 204);
+    }
+    if (kind === "get") {
+      const ev = a.calendar.get(id);
+      return ev ? reply(entry, 200, ev) : reply(entry, 404, { error: { code: 404, errors: [{ reason: "notFound" }] } });
+    }
+    const uid = url.searchParams.get("iCalUID");
+    const items = [...a.calendar.values()].filter((ev) => (!uid || ev.iCalUID === uid) && ev.status !== "cancelled");
+    return reply(entry, 200, { items });
+  }
+
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => { handle(req, res, Buffer.concat(chunks).toString("utf8")).catch(() => { try { res.writeHead(500); res.end(); } catch { /* conexão já fechada */ } }); });
+  });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolve); });
+
+  return {
+    log,
+    account,
+    addCode(code, { email: mail, sub, nonce, challenge, withRefresh = true, scope, claimEmail, claims }) {
+      account(mail, sub);
+      codes.set(code, { email: mail, sub, nonce, challenge, withRefresh, scope, claimEmail, claims });
+    },
+    fail(spec) { const f = { times: Infinity, status: 500, hits: 0, ...spec }; faults.push(f); return f; },
+    clearFaults() { faults.length = 0; },
+    eventsOf: (mail) => [...(accounts.get(mail)?.calendar.values() ?? [])],
+    // Evento criado pelo Harmonize (tem extendedProperties) para o agendamento; convites recebidos não têm.
+    harmonizeEvents: (mail, appointmentId) => [...(accounts.get(mail)?.calendar.values() ?? [])].filter((ev) => ev.extendedProperties?.private?.harmonizeAppointmentId === appointmentId),
+    copiesByUid: (mail, uid) => [...(accounts.get(mail)?.calendar.values() ?? [])].filter((ev) => ev.iCalUID === uid && !ev.extendedProperties),
+    refreshTokensOf: (mail) => [...refreshTokens.entries()].filter(([, m]) => m === mail).map(([t]) => t),
+    burn(mail, id) { const a = accounts.get(mail); a.calendar.delete(id); a.burned.add(id); dropCopies(a, id); },
+    calls: (kind, filter = () => true) => log.filter((e) => e.kind === kind && filter(e)),
+    secrets: () => [...issued, ...[...accounts.values()].map((a) => a.sub)],
+    stop: () => new Promise((resolve) => { server.close(() => resolve()); server.closeAllConnections?.(); }),
+  };
+}
+
+
+async function googleAgenda() {
+  const PORT = 4010;
+  const ck = (name, ok, detail = "") => check(`google agenda: ${name}`, ok, detail);
+  const clientId = process.env.GOOGLE_CLIENT_ID, clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) { ck("credenciais do Google (GOOGLE_CLIENT_ID/SECRET) visíveis ao roteiro", false); return; }
+  const cronSecret = process.env.CRON_SECRET ?? "e2e-cron-secret-test-1234567890";
+  const GC = "/api/integrations/google-calendar";
+  const mem = await prisma.clinicMembership.findFirst({ where: { user: { email: email.toLowerCase() }, clinic: { name: testClinicName } }, select: { clinicId: true, userId: true } });
+  if (!mem) { ck("clínica de teste encontrada", false); return; }
+  const clinicId = mem.clinicId, ownerId = mem.userId, ownerSess = cookie;
+  const ownerUser = await prisma.user.findUnique({ where: { id: ownerId }, select: { email: true, name: true } });
+  const fake = await startFakeGoogle({ port: PORT, clientId, clientSecret });
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const waitFor = async (fn, timeout = 15_000) => { const end = Date.now() + timeout; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) return null; await sleep(250); } };
+  const leaks = [];
+  const leakRe = /accessToken|refreshToken|Encrypted|tokenHash|eyJ|googleAccountId/;
+  const scan = (label, ...texts) => { for (const t of texts) { const s = String(t ?? ""); if (leakRe.test(s) || fake.secrets().some((x) => s.includes(x))) leaks.push(label); } };
+
+  // Chamada às rotas de integração com sessão (e cookie de fluxo) escolhidos; todo corpo/Location passa pela varredura de vazamento.
+  async function gc(sess, method, path, body, { flow, headers = {} } = {}) {
+    const cookies = [sess, flow ? `harmonize_gcal_oauth=${flow}` : null].filter(Boolean).join("; ");
+    const r = await fetch(`${baseUrl}${path}`, { method, redirect: "manual", headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), origin: baseUrl, "user-agent": e2eUserAgent, ...(cookies ? { cookie: cookies } : {}), ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+    const text = await r.text();
+    let d; try { d = JSON.parse(text); } catch { d = text.slice(0, 200); }
+    const set = r.headers.getSetCookie().find((c) => c.startsWith("harmonize_gcal_oauth="));
+    scan(`${method} ${path.split("?")[0]}`, text, r.headers.get("location"));
+    return { s: r.status, d, h: r.headers, loc: r.headers.get("location"), flow: set && !/Max-Age=0/i.test(set) ? set.split(";")[0].slice("harmonize_gcal_oauth=".length) : null, cleared: Boolean(set && /Max-Age=0/i.test(set)) };
+  }
+  async function cronCall(method = "GET", headers = { authorization: `Bearer ${cronSecret}` }, query = "") {
+    const r = await fetch(`${baseUrl}/api/cron/calendar-sync${query}`, { method, headers });
+    const text = await r.text();
+    let d; try { d = JSON.parse(text); } catch { d = text.slice(0, 200); }
+    scan("cron", text);
+    return { s: r.status, d };
+  }
+  async function startFlow(sess, type, g, opts = {}) {
+    const start = await gc(sess, "POST", `${GC}/connect`, { type });
+    if (start.s !== 200) return { start };
+    const u = new URL(start.d.url);
+    const code = `fakecode-${randomBytes(8).toString("hex")}`;
+    fake.addCode(code, { email: g.email, sub: g.sub, nonce: opts.nonce ?? u.searchParams.get("nonce"), challenge: u.searchParams.get("code_challenge"), withRefresh: opts.withRefresh !== false, scope: opts.scope, claimEmail: opts.claimEmail, claims: opts.claims });
+    return { start, u, code, flow: start.flow };
+  }
+  const callbackOf = (sess, f, o = {}) => gc(sess, "GET", `${GC}/callback?${new URLSearchParams({ ...(o.code === null ? {} : { code: o.code ?? f.code }), state: o.state ?? f.u.searchParams.get("state"), ...(o.error ? { error: o.error } : {}) })}`, undefined, { flow: o.flow === undefined ? f.flow : o.flow });
+  const outcomeOf = (cb) => (cb?.loc ? new URL(cb.loc, baseUrl).searchParams.get("gcal") : null);
+  async function connectG(sess, type, g, opts) {
+    const f = await startFlow(sess, type, g, opts);
+    if (!f.u) return { f, cb: null, outcome: null };
+    const cb = await callbackOf(sess, f, opts);
+    return { f, cb, outcome: outcomeOf(cb) };
+  }
+
+  const runnable = () => prisma.calendarSyncJob.count({ where: { clinicId, OR: [{ status: "PROCESSING" }, { status: "PENDING", nextRetryAt: { lte: new Date() } }] } });
+  const drain = async () => { for (let i = 0; i < 30; i += 1) { await cronCall(); if (!(await runnable())) { await sleep(300); if (!(await runnable())) return; } else await sleep(300); } };
+  const mkAppt = (patientId, o) => prisma.appointment.create({ data: { clinicId, patientId, procedure: o.procedure, professional: o.professional, date: new Date(`${o.day}T12:00:00-03:00`), time: o.time, status: o.status ?? "Agendado", notes: o.notes ?? "" } });
+  const enqueue = (appointmentId, operation = "CREATE") => prisma.calendarSyncJob.create({ data: { clinicId, appointmentId, operation, dedupeKey: `${appointmentId}:${operation}` } });
+  // Sem tocar na variável global `cookie` (o clique duplo roda duas chamadas ao mesmo tempo; withSession não é seguro para isso).
+  const apiAs = async (sess, method, path, body) => {
+    const response = await fetch(`${baseUrl}${path}`, { method, redirect: "manual", headers: { ...(body ? { "Content-Type": "application/json" } : {}), cookie: sess }, body: body ? JSON.stringify(body) : undefined });
+    const text = await response.text();
+    let data; try { data = JSON.parse(text); } catch { data = text.slice(0, 200); }
+    return { status: response.status, data };
+  };
+  const conn = (type, userId) => prisma.googleCalendarConnection.findFirst({ where: { clinicId, connectionType: type, ...(userId ? { userId } : {}) }, orderBy: { createdAt: "desc" } });
+  const link = (appointmentId, connectionId) => prisma.googleCalendarEvent.findUnique({ where: { appointmentId_connectionId: { appointmentId, connectionId } } });
+  const jobsOf = (appointmentId) => prisma.calendarSyncJob.findMany({ where: { clinicId, appointmentId }, orderBy: { createdAt: "asc" } });
+  const connCount = () => prisma.googleCalendarConnection.count({ where: { clinicId } });
+  const isoLocal = (dayStr, time, addMin = 0) => `${new Date(new Date(`${dayStr}T${time}:00-03:00`).getTime() + addMin * 60_000 - 3 * 3_600_000).toISOString().slice(0, 19)}-03:00`;
+  const problemsOf = (ev, x) => {
+    if (!ev) return ["sem evento"];
+    const p = [];
+    if (ev.summary !== `Atendimento - ${x.procedure}`) p.push(`summary=${ev.summary}`);
+    if (ev.start?.dateTime !== isoLocal(x.day, x.time) || ev.start?.timeZone !== "America/Sao_Paulo") p.push(`start=${JSON.stringify(ev.start)}`);
+    if (ev.end?.dateTime !== isoLocal(x.day, x.time, x.minutes) || ev.end?.timeZone !== "America/Sao_Paulo") p.push(`end=${JSON.stringify(ev.end)}`);
+    if (ev.status !== (x.status ?? "confirmed")) p.push(`status=${ev.status}`);
+    const attendees = (ev.attendees ?? []).map((a) => a.email);
+    if (x.attendees && JSON.stringify(attendees) !== JSON.stringify(x.attendees)) p.push(`attendees=${JSON.stringify(attendees)}`);
+    if (x.patientName && !String(ev.description).includes(x.patientName)) p.push("descrição sem o nome do paciente");
+    if (x.professional && !String(ev.description).includes(x.professional)) p.push("descrição sem o profissional");
+    const text = JSON.stringify(ev);
+    for (const s of x.forbidden ?? []) if (s && text.includes(s)) p.push(`vazou dado sensível (${s.slice(0, 3)}…)`);
+    return p;
+  };
+  const dupes = (mail) => { const by = new Map(); for (const ev of fake.eventsOf(mail)) { const id = ev.extendedProperties?.private?.harmonizeAppointmentId; if (id) by.set(id, (by.get(id) ?? 0) + 1); } return [...by].filter(([, n]) => n > 1).map(([id]) => id); };
+
+  const G = (tag) => ({ email: `e2e-gcal-g-${tag}-${run}@example.invalid`, sub: `sub-gcal-${tag}-${run}` });
+  const gCentral = G("central"), gAlfa = G("alfa"), gBeta = G("beta"), gAdmin2 = G("admin2"), gOut = G("out");
+  const mk = (tag, role, name) => ({ tag, role, name, email: `e2e-gcal-${tag}-${run}@example.invalid`, password: `E2e-${run}-${tag}Gc9!` });
+  const people = {
+    alfa: mk("alfa", "PROFESSIONAL", `E2E GA Alfa ${run}`),
+    beta: mk("beta", "PROFESSIONAL", `E2E GA Beta ${run}`),
+    gama: mk("gama", "PROFESSIONAL", `E2E GA Gama ${run}`),
+    admin2: mk("admin2", "ADMIN", `E2E GA Admin ${run}`),
+    staff: mk("staff", "STAFF", `E2E GA Staff ${run}`),
+    dup1: mk("dup1", "PROFESSIONAL", `E2E GA Dupla ${run}`),
+    dup2: mk("dup2", "PROFESSIONAL", `E2E GA Dupla ${run}`),
+  };
+  const members = [];
+  const outsider = { email: `e2e-gcal-out-${run}@example.invalid`, password: `E2e-${run}-OutGc9!`, clinicName: `E2E GCal Externa ${run}` };
+  let outsiderClinicId = null;
+  const procName = `E2E GA Proc ${run}`;
+
+  try {
+    // ---------- preparação ----------
+    for (const p of Object.values(people)) {
+      const r = await api("POST", "/api/team", { name: p.name, email: p.email, password: p.password, role: p.role, cpf: randomCpf() });
+      if (r.status === 201) { members.push(r.data.member); p.id = r.data.member.user.id; } else { ck(`colaborador ${p.tag} criado`, false, `team ${r.status}`); return; }
+    }
+    const sess = {};
+    for (const key of ["alfa", "beta", "admin2", "staff"]) {
+      const l = await loginAs(people[key].email, people[key].password);
+      if (l.status !== 200 || !l.cookie) { ck(`login de ${key}`, false, String(l.status)); return; }
+      sess[key] = l.cookie;
+    }
+    await prisma.procedure.create({ data: { clinicId, name: procName, price: 100, durationMinutes: 45, materials: "[]" } });
+    const labels = ["Um", "Dois", "Tres", "Quatro", "Cinco", "Seis", "Sete", "Oito", "Nove", "Dez", "Onze", "Doze", "Treze", "Catorze", "Quinze", "Dezesseis", "Dezessete", "Dezoito", "Dezenove", "Vinte"];
+    const patients = [];
+    for (const label of labels) {
+      const phone = `1198${String(Math.floor(Math.random() * 9000000) + 1000000)}`;
+      const cpf = randomCpf();
+      const r = await api("POST", "/api/patients", { ...regDefaults, name: `GA Paciente ${label} ${run}`, phone, cpf });
+      const patient = r.data.patient ?? r.data;
+      if (!patient?.id) { ck("pacientes de apoio criados", false, `${r.status}`); return; }
+      patients.push({ id: patient.id, name: patient.name, phone, cpf, forbidden: [phone, cpf, `${cpf.slice(0, 3)}.${cpf.slice(3, 6)}.${cpf.slice(6, 9)}-${cpf.slice(9)}`] });
+    }
+    const P = (n) => patients[n];
+    const sensitiveNote = `Segredo clinico ${run}`;
+
+    // ---------- S1: permissões básicas e status inicial ----------
+    let r = await gc(ownerSess, "GET", `${GC}/status`);
+    ck("status (dono/ADMIN): configured:true, central não conectada, sem cache", r.s === 200 && r.d.configured === true && r.d.central?.status === "NOT_CONNECTED" && r.d.canConnectCentral === true && r.h.get("cache-control") === "no-store", `${r.s} ${JSON.stringify(r.d).slice(0, 160)}`);
+    r = await gc(null, "GET", `${GC}/status`);
+    ck("status sem sessão devolve 401", r.s === 401, r.s);
+    r = await gc(sess.staff, "GET", `${GC}/status`);
+    ck("STAFF não vê o status (403)", r.s === 403, r.s);
+    for (const type of ["ADMIN", "PROFESSIONAL"]) {
+      r = await gc(sess.staff, "POST", `${GC}/connect`, { type });
+      ck(`STAFF não conecta (${type}) (403)`, r.s === 403, `${r.s} ${JSON.stringify(r.d)}`);
+    }
+    r = await gc(sess.staff, "POST", `${GC}/sync`, {});
+    ck("STAFF não sincroniza (403)", r.s === 403, r.s);
+    r = await gc(sess.staff, "POST", `${GC}/disconnect`, { type: "PROFESSIONAL" });
+    ck("STAFF não desconecta (403)", r.s === 403, r.s);
+    r = await gc(sess.alfa, "POST", `${GC}/connect`, { type: "ADMIN" });
+    ck("PROFESSIONAL não conecta a agenda central (403) e nenhum cookie de fluxo é emitido", r.s === 403 && !r.flow, `${r.s} ${JSON.stringify(r.d)}`);
+    r = await gc(sess.alfa, "POST", `${GC}/connect`, { type: "GERAL" });
+    ck("connect com tipo inválido devolve 400", r.s === 400, r.s);
+    r = await gc(sess.alfa, "POST", `${GC}/connect`);
+    ck("connect sem corpo devolve 400", r.s === 400, r.s);
+    r = await gc(sess.alfa, "POST", `${GC}/connect`, { type: "PROFESSIONAL" }, { headers: { origin: "https://evil.example" } });
+    ck("connect de outra origem (CSRF) devolve 403", r.s === 403, r.s);
+    r = await gc(null, "POST", `${GC}/connect`, { type: "PROFESSIONAL" });
+    ck("connect sem sessão devolve 401", r.s === 401, r.s);
+    r = await gc(sess.alfa, "POST", `${GC}/sync`, {});
+    ck("PROFESSIONAL sem conexão individual não sincroniza (409)", r.s === 409, `${r.s} ${JSON.stringify(r.d)}`);
+    r = await gc(ownerSess, "POST", `${GC}/sync`, {});
+    ck("ADMIN sem nenhuma conexão não sincroniza (409)", r.s === 409, `${r.s} ${JSON.stringify(r.d)}`);
+    r = await gc(sess.alfa, "POST", `${GC}/disconnect`, { type: "PROFESSIONAL" });
+    ck("desconectar sem conexão ativa devolve 404", r.s === 404, r.s);
+    // Fluxo do segundo ADMIN iniciado agora (central ainda livre): o callback só roda depois que o dono conectar (already_central).
+    const held = await startFlow(sess.admin2, "ADMIN", gAdmin2);
+    ck("segundo ADMIN (cargo ADMIN, não dono) consegue iniciar a conexão central", Boolean(held.u), `${held.start?.s}`);
+    if (held.u) {
+      const u = held.u;
+      ck("URL de consentimento: escopo mínimo, offline, consent, PKCE S256, state/nonce, redirect do callback", u.searchParams.get("scope") === "openid email https://www.googleapis.com/auth/calendar.events" && u.searchParams.get("access_type") === "offline" && u.searchParams.get("prompt") === "consent" && u.searchParams.get("include_granted_scopes") === "false" && u.searchParams.get("code_challenge_method") === "S256" && u.searchParams.get("state")?.length > 15 && u.searchParams.get("nonce")?.length > 15 && String(u.searchParams.get("redirect_uri")).endsWith(`${GC}/callback`) && u.searchParams.get("client_id") === clientId, u.search.slice(0, 120));
+    }
+
+    // ---------- S2: callback inválido não grava nada ----------
+    {
+      const before = fake.calls("exchange").length;
+      const authSecret = new TextEncoder().encode(process.env.AUTH_SECRET ?? "");
+      const { SignJWT } = await import("jose");
+      const forge = (f, extra = {}, { secret = authSecret, ttl = 600 } = {}) => {
+        const now = Math.floor(Date.now() / 1000);
+        return new SignJWT({ typ: "gcal", state: f.u.searchParams.get("state"), nonce: f.u.searchParams.get("nonce"), codeVerifier: "verifier-forjado", userId: ownerId, clinicId, connectionType: "ADMIN", ...extra }).setProtectedHeader({ alg: "HS256" }).setIssuedAt(now - 1000).setExpirationTime(now + ttl).sign(secret);
+      };
+      const expectError = async (label, cbPromise, expected = "error") => {
+        const cb = await cbPromise;
+        ck(`callback ${label}: redireciona para /configuracoes?gcal=${expected} e apaga o cookie de fluxo`, outcomeOf(cb) === expected && cb.s === 302 && new URL(cb.loc, baseUrl).pathname === "/configuracoes" && cb.cleared, `${cb.s} ${cb.loc} cleared=${cb.cleared}`);
+      };
+      const fa = await startFlow(ownerSess, "ADMIN", gCentral);
+      await expectError("com state diferente do cookie", callbackOf(ownerSess, fa, { state: "estado-errado-0123456789" }));
+      const fb = await startFlow(ownerSess, "ADMIN", gCentral);
+      await expectError("sem cookie de fluxo", callbackOf(ownerSess, fb, { flow: null }));
+      const fc = await startFlow(ownerSess, "ADMIN", gCentral);
+      await expectError("com cookie de fluxo expirado (assinatura válida)", callbackOf(ownerSess, fc, { flow: await forge(fc, {}, { ttl: -30 }) }));
+      const fd = await startFlow(ownerSess, "ADMIN", gCentral);
+      await expectError("com cookie assinado com outra chave", callbackOf(ownerSess, fd, { flow: await forge(fd, {}, { secret: new TextEncoder().encode("outra-chave-qualquer-com-mais-de-32-bytes!!") }) }));
+      const fe = await startFlow(ownerSess, "ADMIN", gCentral);
+      await expectError("com cookie de outro tipo (typ diferente)", callbackOf(ownerSess, fe, { flow: await forge(fe, { typ: "oauth_flow" }) }));
+      const fAlfa = await startFlow(sess.alfa, "PROFESSIONAL", gAlfa);
+      await expectError("com fluxo iniciado por outro usuário (sessão do beta)", callbackOf(sess.beta, fAlfa));
+      await expectError("com fluxo iniciado por outro usuário (sessão do dono)", callbackOf(ownerSess, fAlfa));
+      await expectError("com fluxo do usuário mas sem sessão", callbackOf(null, fAlfa));
+      const ff = await startFlow(ownerSess, "ADMIN", gCentral);
+      await expectError("sem code", callbackOf(ownerSess, ff, { code: null }));
+      await expectError("com error=access_denied", callbackOf(ownerSess, ff, { error: "access_denied" }), "denied");
+      await expectError("com error=server_error", callbackOf(ownerSess, ff, { error: "server_error" }));
+      await expectError("sem permissão de agenda (scope sem calendar.events)", callbackOf(ownerSess, await startFlow(ownerSess, "ADMIN", gCentral, { scope: "openid email" })), "no_scope");
+      await expectError("sem refresh_token na primeira conexão", callbackOf(ownerSess, await startFlow(ownerSess, "ADMIN", gCentral, { withRefresh: false })), "no_refresh");
+      await expectError("com nonce do id_token diferente", callbackOf(ownerSess, await startFlow(ownerSess, "ADMIN", gCentral, { nonce: "nonce-de-outro-fluxo" })));
+      await expectError("com id_token de outro público (aud)", callbackOf(ownerSess, await startFlow(ownerSess, "ADMIN", gCentral, { claims: { aud: "outro-client-id" } })));
+      await expectError("com e-mail do id_token não verificado", callbackOf(ownerSess, await startFlow(ownerSess, "ADMIN", gCentral, { claims: { email_verified: false } })));
+      await expectError("com id_token expirado", callbackOf(ownerSess, await startFlow(ownerSess, "ADMIN", gCentral, { claims: { exp: Math.floor(Date.now() / 1000) - 3600 } })));
+      ck("nada foi gravado pelos callbacks inválidos (nenhuma conexão, nenhum job)", (await connCount()) === 0 && (await prisma.calendarSyncJob.count({ where: { clinicId } })) === 0, `${await connCount()}`);
+      // O code só é trocado no Google quando cookie+state+sessão batem: os casos de state/cookie/sessão não chegam ao /token.
+      ck("state/cookie/sessão inválidos nem chegam a trocar o code no Google", fake.calls("exchange").length - before === 6, `${fake.calls("exchange").length - before} trocas (esperado 6: só os fluxos com cookie+state+sessão válidos)`);
+    }
+
+    // ---------- S3: agenda individual do beta SEM central: evento independente ----------
+    const cB = await connectG(sess.beta, "PROFESSIONAL", gBeta);
+    ck("PROFESSIONAL conecta a própria agenda (302 /configuracoes?gcal=connected)", cB.outcome === "connected" && new URL(cB.cb.loc, baseUrl).pathname === "/configuracoes", `${cB.cb?.s} ${cB.cb?.loc}`);
+    ck("o servidor do app usa o Google falso (token trocado em 127.0.0.1:4010)", fake.calls("exchange").some((e) => e.status === 200 && e.email === gBeta.email), "se falhar, o app não está com GOOGLE_CALENDAR_FAKE_BASE_URL");
+    const connB = await conn("PROFESSIONAL", people.beta.id);
+    const secretBox = await import(new URL("../../src/lib/secret-box.ts", import.meta.url).href).catch(() => null);
+    ck("conexão individual gravada: CONNECTED, e-mail e sub do id_token, escopo com calendar.events", connB?.status === "CONNECTED" && connB.googleEmail === gBeta.email && connB.googleAccountId === gBeta.sub && connB.connectionType === "PROFESSIONAL" && connB.scope.includes("calendar.events") && connB.calendarId === "primary", JSON.stringify({ s: connB?.status, e: connB?.googleEmail }));
+    if (!connB) { ck("conexão do beta existe", false); return; }
+    const bDay = day(3);
+    const apptB = (await apiAs(sess.beta, "POST", "/api/appointments", { patientId: P(0).id, procedure: procName, professional: people.beta.name, time: "09:00", date: bDay })).data.appointment;
+    ck("beta cria agendamento para si (201)", Boolean(apptB?.id));
+    const linkB = await waitFor(() => link(apptB.id, connB.id));
+    const evB = fake.harmonizeEvents(gBeta.email, apptB.id);
+    ck("sem central: um evento INDEPENDENTE na agenda do profissional (sem convidados, sendUpdates=none, 45 min)", Boolean(linkB) && evB.length === 1 && linkB.role === "INDIVIDUAL" && linkB.syncStatus === "SYNCED" && problemsOf(evB[0], { procedure: procName, day: bDay, time: "09:00", minutes: 45, attendees: [] }).length === 0 && fake.calls("insert", (e) => e.email === gBeta.email && e.id === evB[0]?.id)[0]?.sendUpdates === "none", `${linkB?.syncStatus} ${evB.length} ${problemsOf(evB[0], { procedure: procName, day: bDay, time: "09:00", minutes: 45, attendees: [] }).join(";")}`);
+    const bPastDay = day(-3);
+    const apptBPast = await mkAppt(P(1).id, { procedure: "Retorno GA", professional: people.beta.name, day: bPastDay, time: "10:00" });
+    await enqueue(apptBPast.id);
+    await drain();
+    ck("agendamento passado do beta (job manual) também vira evento independente na agenda dele", fake.harmonizeEvents(gBeta.email, apptBPast.id).length === 1 && (await link(apptBPast.id, connB.id))?.syncStatus === "SYNCED");
+
+    // ---------- S4: dono conecta a central; backfill ----------
+    const aDay = day(4), cDay = day(4), uDay = day(5), oDay = day(6);
+    const apptA1 = await mkAppt(P(2).id, { procedure: procName, professional: people.alfa.name, day: aDay, time: "09:00", notes: sensitiveNote });
+    const apptC1 = await mkAppt(P(3).id, { procedure: `Limpeza GA ${run}`, professional: people.gama.name, day: cDay, time: "10:00" });
+    const apptU1 = await mkAppt(P(4).id, { procedure: "Avaliação GA", professional: `Pessoa Inexistente ${run}`, day: uDay, time: "09:00" });
+    const apptD1 = await mkAppt(P(5).id, { procedure: "Avaliação GA", professional: people.dup1.name, day: uDay, time: "10:00" });
+    const apptX1 = await mkAppt(P(6).id, { procedure: "Avaliação GA", professional: people.gama.name, day: uDay, time: "11:00", status: "Cancelado" });
+    const apptPast = await mkAppt(P(7).id, { procedure: "Avaliação GA", professional: people.gama.name, day: day(-2), time: "11:00" });
+    const apptO1 = await mkAppt(P(8).id, { procedure: "Avaliação GA", professional: ownerUser.name, day: oDay, time: "09:00" });
+    const cC = await connectG(ownerSess, "ADMIN", gCentral, { claimEmail: gCentral.email.toUpperCase() });
+    ck("dono conecta a agenda central (302 /configuracoes?gcal=connected)", cC.outcome === "connected", `${cC.cb?.s} ${cC.cb?.loc}`);
+    const connC = await conn("ADMIN");
+    ck("conexão central: CONNECTED, e-mail do id_token normalizado (minúsculas), sub, tipo ADMIN, dono como userId", connC?.status === "CONNECTED" && connC.googleEmail === gCentral.email && connC.googleAccountId === gCentral.sub && connC.userId === ownerId && connC.scope.includes("calendar.events"), JSON.stringify({ s: connC?.status, e: connC?.googleEmail }));
+    if (!connC) { ck("conexão central existe", false); return; }
+    const plainRefresh = secretBox ? secretBox.decryptGoogleToken(connC.refreshTokenEncrypted) : null;
+    const plainAccess = secretBox ? secretBox.decryptGoogleToken(connC.accessTokenEncrypted) : null;
+    ck("tokens cifrados no banco (formato v1:, nunca o texto claro) e decifráveis pela chave do app", Boolean(connC.accessTokenEncrypted?.startsWith("v1:") && connC.refreshTokenEncrypted?.startsWith("v1:")) && !fake.secrets().some((s) => connC.accessTokenEncrypted.includes(s) || connC.refreshTokenEncrypted.includes(s)) && Boolean(secretBox) && fake.refreshTokensOf(gCentral.email).includes(plainRefresh) && fake.secrets().includes(plainAccess), `${connC.accessTokenEncrypted?.slice(0, 5)} box=${Boolean(secretBox)}`);
+    const refreshBefore = connC.refreshTokenEncrypted;
+    await drain();
+    const cLink = (id) => link(id, connC.id);
+    const centralEv = (id) => fake.harmonizeEvents(gCentral.email, id);
+    let p = problemsOf(centralEv(apptA1.id)[0], { procedure: procName, day: aDay, time: "09:00", minutes: 45, attendees: [people.alfa.email], patientName: P(2).name, professional: people.alfa.name, forbidden: [...P(2).forbidden, sensitiveNote] });
+    ck("backfill: agendamento futuro do alfa vira evento central (convidado=profissional, 09:00-09:45 pela duração do procedimento, fuso America/Sao_Paulo)", p.length === 0, p.join("; "));
+    ck("backfill: o convite sai com sendUpdates=all", fake.calls("insert", (e) => e.email === gCentral.email && e.id === centralEv(apptA1.id)[0]?.id)[0]?.sendUpdates === "all");
+    ck("evento id determinístico do Google (base32hex, [a-v0-9], 5+ chars) e payload sem notas/telefone/CPF (extendedProperties só com ids)", /^[a-v0-9]{5,}$/.test(centralEv(apptA1.id)[0]?.id ?? "") && JSON.stringify(centralEv(apptA1.id)[0]?.extendedProperties) === JSON.stringify({ private: { harmonizeAppointmentId: apptA1.id, clinicId } }) && centralEv(apptA1.id)[0]?.guestsCanInviteOthers === false);
+    p = problemsOf(centralEv(apptC1.id)[0], { procedure: `Limpeza GA ${run}`, day: cDay, time: "10:00", minutes: 60, attendees: [people.gama.email], patientName: P(3).name, forbidden: P(3).forbidden });
+    ck("profissional SEM Google (gama) recebe o convite pela central (e-mail do cadastro; sem procedimento no catálogo = 60 min)", p.length === 0, p.join("; "));
+    p = problemsOf(centralEv(apptU1.id)[0], { procedure: "Avaliação GA", day: uDay, time: "09:00", minutes: 60, attendees: [] });
+    const lU = await cLink(apptU1.id);
+    ck("profissional não identificado: evento central SEM convidado, vínculo com lastError informativo, agendamento intacto", p.length === 0 && /profissional não identificado/.test(lU?.lastError ?? "") && fake.calls("insert", (e) => e.email === gCentral.email && e.id === centralEv(apptU1.id)[0]?.id)[0]?.sendUpdates === "none", `${p.join(";")} ${lU?.lastError}`);
+    const lD = await cLink(apptD1.id);
+    ck("profissional ambíguo (dois usuários com o mesmo nome): sem convidado (nunca por palpite)", problemsOf(centralEv(apptD1.id)[0], { procedure: "Avaliação GA", day: uDay, time: "10:00", minutes: 60, attendees: [] }).length === 0 && /profissional não identificado/.test(lD?.lastError ?? ""), `${lD?.lastError}`);
+    p = problemsOf(centralEv(apptO1.id)[0], { procedure: "Avaliação GA", day: oDay, time: "09:00", minutes: 60, attendees: [ownerUser.email] });
+    ck("agendamento do próprio dono como profissional: convite para o e-mail dele", p.length === 0, p.join("; "));
+    p = problemsOf(centralEv(apptB.id)[0], { procedure: procName, day: bDay, time: "09:00", minutes: 45, attendees: [] });
+    ck("migração: quem já tem evento individual independente NÃO é convidado pela central (evento central sem convidado) e o individual é mantido", p.length === 0 && fake.harmonizeEvents(gBeta.email, apptB.id).length === 1 && (await link(apptB.id, connB.id))?.syncStatus === "SYNCED", p.join("; "));
+    ck("cancelado e passado não entram no backfill", centralEv(apptX1.id).length === 0 && centralEv(apptPast.id).length === 0 && !(await prisma.calendarSyncJob.count({ where: { clinicId, appointmentId: { in: [apptX1.id, apptPast.id] } } })));
+    ck("backfill: um único vínculo por agendamento e nenhum evento duplicado na central", (await prisma.googleCalendarEvent.count({ where: { clinicId, connectionId: connC.id, appointmentId: apptA1.id } })) === 1 && dupes(gCentral.email).length === 0, dupes(gCentral.email).join(","));
+    ck("conexão central ganha lastSyncAt depois da sincronização", Boolean((await conn("ADMIN"))?.lastSyncAt));
+    ck("agendamentos continuam intactos (nenhum foi alterado pela integração)", (await prisma.appointment.findUnique({ where: { id: apptA1.id } }))?.professional === people.alfa.name && (await prisma.appointment.findUnique({ where: { id: apptA1.id } }))?.notes === sensitiveNote);
+
+    // ---------- S5: central já conectada por outro ADMIN ----------
+    r = await gc(sess.admin2, "POST", `${GC}/connect`, { type: "ADMIN" });
+    ck("central já conectada por outro administrador: connect devolve 409", r.s === 409 && /central/i.test(r.d.message ?? ""), `${r.s} ${JSON.stringify(r.d)}`);
+    const cbHeld = await callbackOf(sess.admin2, held);
+    ck("callback pendente do segundo ADMIN termina em ?gcal=already_central e não cria segunda central", outcomeOf(cbHeld) === "already_central" && (await prisma.googleCalendarConnection.count({ where: { clinicId, connectionType: "ADMIN" } })) === 1, `${cbHeld.loc} ${await prisma.googleCalendarConnection.count({ where: { clinicId, connectionType: "ADMIN" } })}`);
+    r = await gc(ownerSess, "POST", `${GC}/connect`, { type: "ADMIN" });
+    ck("o próprio dono pode reiniciar a conexão central (reconectar)", r.s === 200 && typeof r.d.url === "string", r.s);
+
+    // ---------- S6: alfa conecta a individual depois da central: sem cópia, convite na agenda dele ----------
+    const cA = await connectG(sess.alfa, "PROFESSIONAL", gAlfa);
+    ck("alfa conecta a agenda individual com a central já ativa", cA.outcome === "connected", `${cA.cb?.loc}`);
+    const connA = await conn("PROFESSIONAL", people.alfa.id);
+    await drain();
+    const evA1 = centralEv(apptA1.id)[0];
+    const copiesA1 = fake.copiesByUid(gAlfa.email, evA1?.iCalUID);
+    const lA1c = await cLink(apptA1.id), lA1i = connA ? await link(apptA1.id, connA.id) : null;
+    ck("individual + central: o convite passa a ir para a conta Google conectada pelo profissional (attendee = e-mail da conta dele)", problemsOf(evA1, { procedure: procName, day: aDay, time: "09:00", minutes: 45, attendees: [gAlfa.email] }).length === 0 && lA1c?.attendeeEmail === gAlfa.email, `${JSON.stringify((evA1?.attendees ?? []).map((a) => a.email))}`);
+    ck("individual + central: NENHUM evento independente duplicado (zero inserts na agenda dele; só o convite recebido), vínculo RECEIVED", fake.calls("insert", (e) => e.email === gAlfa.email).length === 0 && fake.harmonizeEvents(gAlfa.email, apptA1.id).length === 0 && copiesA1.length === 1 && lA1i?.syncStatus === "RECEIVED" && lA1i?.role === "INDIVIDUAL", `inserts=${fake.calls("insert", (e) => e.email === gAlfa.email).length} copias=${copiesA1.length} ${lA1i?.syncStatus}`);
+    ck("troca do e-mail do convidado avisa por Google (patch com sendUpdates=all)", fake.calls("patch", (e) => e.email === gCentral.email && e.id === evA1?.id).some((e) => e.sendUpdates === "all" && e.body?.attendees?.[0]?.email === gAlfa.email));
+
+    // ---------- S7: ganchos de agendamento, como o próprio alfa (nenhum e-mail ao profissional) ----------
+    const a2Day = day(7);
+    const created = await apiAs(sess.alfa, "POST", "/api/appointments", { patientId: P(9).id, procedure: procName, professional: people.alfa.name, time: "09:00", date: a2Day, notes: sensitiveNote });
+    const apptA2 = created.data.appointment;
+    ck("alfa cria agendamento para si (201) sem esperar o Google", created.status === 201 && Boolean(apptA2?.id), `${created.status}`);
+    const quick = await waitFor(async () => (await jobsOf(apptA2.id))[0]?.status === "COMPLETED", 12_000);
+    ck("a criação enfileira um job CREATE e o drain logo após a resposta (after) o conclui sem esperar o cron", Boolean(quick) && (await jobsOf(apptA2.id))[0]?.operation === "CREATE", JSON.stringify((await jobsOf(apptA2.id)).map((j) => `${j.operation}:${j.status}`)));
+    if (!quick) await drain();
+    let evA2 = centralEv(apptA2.id);
+    p = problemsOf(evA2[0], { procedure: procName, day: a2Day, time: "09:00", minutes: 45, attendees: [gAlfa.email], patientName: P(9).name, forbidden: [...P(9).forbidden, sensitiveNote] });
+    ck("criação: o evento central aparece (convite à conta Google do alfa, sendUpdates=all, sem notas/telefone/CPF)", evA2.length === 1 && p.length === 0 && fake.calls("insert", (e) => e.email === gCentral.email && e.id === evA2[0].id)[0]?.sendUpdates === "all", p.join("; "));
+    const idA2 = evA2[0]?.id;
+    const connAFresh = await conn("PROFESSIONAL", people.alfa.id);
+    ck("criação com central + individual: só convite recebido na agenda do alfa (sem evento próprio)", fake.harmonizeEvents(gAlfa.email, apptA2.id).length === 0 && fake.copiesByUid(gAlfa.email, evA2[0]?.iCalUID).length === 1 && (await link(apptA2.id, connAFresh.id))?.syncStatus === "RECEIVED");
+    const linkBefore = await cLink(apptA2.id);
+    const newDay = day(8);
+    r = await apiAs(sess.alfa, "PATCH", `/api/appointments/${apptA2.id}`, { date: newDay, time: "14:00" });
+    ck("remarcar (200)", r.status === 200, `${r.status} ${JSON.stringify(r.data).slice(0, 100)}`);
+    await waitFor(async () => (await jobsOf(apptA2.id)).filter((j) => j.operation === "UPDATE").every((j) => j.status === "COMPLETED") && (await jobsOf(apptA2.id)).some((j) => j.operation === "UPDATE"), 12_000);
+    await drain();
+    evA2 = centralEv(apptA2.id);
+    p = problemsOf(evA2[0], { procedure: procName, day: newDay, time: "14:00", minutes: 45, attendees: [gAlfa.email] });
+    const linkAfter = await cLink(apptA2.id);
+    ck("remarcar atualiza o MESMO evento (mesmo id, um único evento, sem duplicar) e o convite do profissional acompanha", evA2.length === 1 && evA2[0].id === idA2 && linkAfter?.googleEventId === linkBefore?.googleEventId && p.length === 0 && fake.copiesByUid(gAlfa.email, evA2[0].iCalUID)[0]?.start?.dateTime === isoLocal(newDay, "14:00") && dupes(gCentral.email).length === 0, `${evA2.length} ${p.join(";")}`);
+    const jobsAfterPatch = (await jobsOf(apptA2.id)).length;
+    // Clique duplo: duas remarcações iguais ao mesmo tempo.
+    const dbl = await Promise.all([1, 2].map(() => apiAs(sess.alfa, "PATCH", `/api/appointments/${apptA2.id}`, { date: newDay, time: "15:00" })));
+    await sleep(800);
+    await drain();
+    evA2 = centralEv(apptA2.id);
+    ck("clique duplo na remarcação: um único evento no horário final e sem job preso", dbl.every((x) => x.status === 200) && evA2.length === 1 && evA2[0].start?.dateTime === isoLocal(newDay, "15:00") && (await runnable()) === 0 && (await prisma.calendarSyncJob.count({ where: { clinicId, appointmentId: apptA2.id, status: { in: ["PENDING", "PROCESSING", "FAILED"] } } })) === 0, `${dbl.map((x) => x.status)} ${evA2.length}`);
+    // Só notas / só status operacional: nada de job novo.
+    const jobsBeforeNotes = (await jobsOf(apptA2.id)).length;
+    r = await apiAs(sess.alfa, "PATCH", `/api/appointments/${apptA2.id}`, { notes: "outra nota sensivel" });
+    await sleep(600);
+    ck("editar só as notas não enfileira nada e o evento continua sem a nota", r.status === 200 && (await jobsOf(apptA2.id)).length === jobsBeforeNotes && !JSON.stringify(centralEv(apptA2.id)[0]).includes("outra nota"), `${r.status}`);
+    r = await apiAs(sess.alfa, "PATCH", `/api/appointments/${apptA2.id}`, { status: "Cancelado" });
+    ck("cancelar o agendamento (200)", r.status === 200, `${r.status} ${JSON.stringify(r.data).slice(0, 100)}`);
+    await waitFor(async () => (await cLink(apptA2.id))?.syncStatus === "CANCELLED", 12_000) || await drain();
+    evA2 = centralEv(apptA2.id);
+    ck("cancelamento: o MESMO evento central fica cancelled (vínculo CANCELLED) e some da agenda do profissional", evA2.length === 1 && evA2[0].id === idA2 && evA2[0].status === "cancelled" && (await cLink(apptA2.id))?.syncStatus === "CANCELLED" && fake.copiesByUid(gAlfa.email, evA2[0].iCalUID).every((c) => c.status === "cancelled"), `${evA2[0]?.status} ${(await cLink(apptA2.id))?.syncStatus}`);
+    r = await apiAs(sess.alfa, "PATCH", `/api/appointments/${apptA2.id}`, { status: "Agendado" });
+    await waitFor(async () => (await cLink(apptA2.id))?.syncStatus === "SYNCED", 12_000) || await drain();
+    evA2 = centralEv(apptA2.id);
+    ck("reativar o agendamento volta o mesmo evento para confirmed (sem criar outro)", r.status === 200 && evA2.length === 1 && evA2[0].id === idA2 && evA2[0].status === "confirmed" && (await cLink(apptA2.id))?.syncStatus === "SYNCED", `${r.status} ${evA2.length} ${evA2[0]?.status}`);
+
+    // ---------- S8: exclusão (agendamento e jornada) com o dono como profissional ----------
+    const o2Day = day(9);
+    r = await api("POST", "/api/appointments", { patientId: P(10).id, procedure: "Avaliação GA", professional: ownerUser.name, time: "09:00", date: o2Day });
+    const apptO2 = r.data.appointment;
+    await waitFor(async () => (await cLink(apptO2.id))?.syncStatus === "SYNCED", 12_000) || await drain();
+    const evO2 = centralEv(apptO2.id)[0];
+    ck("agendamento criado pelo dono para si aparece como evento central com convite ao dono", Boolean(evO2) && problemsOf(evO2, { procedure: "Avaliação GA", day: o2Day, time: "09:00", minutes: 60, attendees: [ownerUser.email] }).length === 0);
+    r = await api("DELETE", `/api/appointments/${apptO2.id}`);
+    ck("excluir o agendamento (200)", r.status === 200, `${r.status} ${JSON.stringify(r.data)}`);
+    await waitFor(async () => (await jobsOf(apptO2.id)).some((j) => j.operation === "DELETE" && j.status === "COMPLETED"), 12_000) || await drain();
+    const delJob = (await jobsOf(apptO2.id)).find((j) => j.operation === "DELETE");
+    ck("exclusão: o job DELETE usa o snapshot (vínculos, sem dados do paciente) e o evento é removido do Google", centralEv(apptO2.id).length === 0 && delJob?.status === "COMPLETED" && Array.isArray(delJob.snapshot?.events) && delJob.snapshot.events.some((e) => e.googleEventId === evO2.id && e.connectionId === connC.id) && !JSON.stringify(delJob.snapshot).includes(P(10).name) && fake.calls("delete", (e) => e.email === gCentral.email && e.id === evO2.id && e.status === 204).length === 1, String(JSON.stringify(delJob?.snapshot)).slice(0, 160));
+    ck("exclusão: vínculos somem em cascata com o agendamento e nenhum agendamento alheio foi afetado", (await prisma.googleCalendarEvent.count({ where: { appointmentId: apptO2.id } })) === 0 && (await prisma.appointment.count({ where: { id: { in: [apptA1.id, apptA2.id] } } })) === 2);
+    const professionalsList = (await api("GET", "/api/team/professionals")).data.professionals;
+    const journey = (await api("POST", `/api/patients/${P(11).id}/journeys`, { name: `GA Jornada ${run}`, professionalId: professionalsList?.[0]?.id })).data.journey;
+    const jDays = [day(10), day(11)];
+    const jAppts = [];
+    for (const [i, jd] of jDays.entries()) {
+      const a = (await api("POST", "/api/appointments", { patientId: P(11).id, journeyId: journey?.id, procedure: `Sessao GA ${i} ${run}`, professional: ownerUser.name, time: "09:00", date: jd })).data.appointment;
+      if (a) jAppts.push(a);
+    }
+    for (const a of jAppts) await waitFor(async () => (await cLink(a.id))?.syncStatus === "SYNCED", 12_000);
+    await drain();
+    ck("agendamentos de uma jornada viram eventos centrais", jAppts.length === 2 && jAppts.every((a) => centralEv(a.id).length === 1), `${jAppts.length}`);
+    const jEvents = jAppts.map((a) => centralEv(a.id)[0]?.id);
+    r = await api("DELETE", `/api/patients/${P(11).id}/journeys/${journey?.id}`);
+    await drain();
+    ck("excluir a jornada remove do Google os eventos de todos os agendamentos dela (um job DELETE por agendamento, via snapshot)", r.status === 200 && jAppts.every((a) => centralEv(a.id).length === 0) && (await Promise.all(jAppts.map((a) => jobsOf(a.id)))).every((jobs) => jobs.some((j) => j.operation === "DELETE" && j.status === "COMPLETED")) && jEvents.every((id) => fake.calls("delete", (e) => e.id === id && e.status === 204).length === 1), `${r.status}`);
+
+    // ---------- S9: troca de profissional ----------
+    const apptRA = await mkAppt(P(12).id, { procedure: "Avaliação GA", professional: people.alfa.name, day: day(-2), time: "15:00" });
+    await enqueue(apptRA.id);
+    await drain();
+    const evRA = centralEv(apptRA.id)[0];
+    ck("preparo: agendamento passado do alfa sincronizado (convite na agenda dele)", Boolean(evRA) && fake.copiesByUid(gAlfa.email, evRA.iCalUID).length === 1);
+    r = await api("PATCH", `/api/appointments/${apptRA.id}`, { professional: ownerUser.name });
+    ck("dono reatribui o agendamento do alfa para si (200)", r.status === 200, `${r.status} ${JSON.stringify(r.data).slice(0, 120)}`);
+    await drain();
+    const evRA2 = centralEv(apptRA.id);
+    ck("troca de profissional: o evento central troca o convidado (sai o alfa, entra o novo) sem duplicar", evRA2.length === 1 && evRA2[0].id === evRA.id && JSON.stringify(evRA2[0].attendees.map((a) => a.email)) === JSON.stringify([ownerUser.email]), JSON.stringify(evRA2[0]?.attendees));
+    ck("troca: o convite do profissional anterior some da agenda dele e o vínculo é desfeito (nada apagado por nós)", fake.copiesByUid(gAlfa.email, evRA.iCalUID).length === 0 && connAFresh && !(await link(apptRA.id, connAFresh.id)) && fake.calls("delete", (e) => e.email === gAlfa.email).length === 0);
+    r = await api("PATCH", `/api/appointments/${apptBPast.id}`, { professional: ownerUser.name });
+    await drain();
+    ck("troca: evento independente do profissional anterior é apagado da agenda dele e a central ganha o evento do novo", r.status === 200 && fake.harmonizeEvents(gBeta.email, apptBPast.id).length === 0 && !(await link(apptBPast.id, connB.id)) && centralEv(apptBPast.id).length === 1 && centralEv(apptBPast.id)[0].attendees.map((a) => a.email)[0] === ownerUser.email && fake.harmonizeEvents(gBeta.email, apptB.id).length === 1, `${r.status}`);
+
+    // ---------- S10: profissional não identificado criado pela API ----------
+    const u2Day = day(11);
+    r = await api("POST", "/api/appointments", { patientId: P(13).id, procedure: "Avaliação GA", professional: `Fulano Sem Cadastro ${run}`, time: "09:00", date: u2Day });
+    const apptU2 = r.data.appointment;
+    ck("agendamento com profissional sem cadastro é criado normalmente (201)", r.status === 201 && Boolean(apptU2?.id), `${r.status}`);
+    await waitFor(async () => (await cLink(apptU2.id))?.syncStatus === "SYNCED", 12_000) || await drain();
+    ck("profissional sem cadastro: evento sem convite e nenhum e-mail ao profissional", centralEv(apptU2.id)[0]?.attendees?.length === 0 && /profissional não identificado/.test((await cLink(apptU2.id))?.lastError ?? ""));
+    r = await api("POST", "/api/appointments", { patientId: P(14).id, procedure: "Avaliação GA", professional: people.dup1.name, time: "09:00", date: u2Day });
+    const apptD2 = r.data.appointment;
+    ck("agendamento com profissional ambíguo é criado normalmente (201) e fica sem convite", r.status === 201 && Boolean(apptD2?.id), `${r.status}`);
+    await waitFor(async () => (await cLink(apptD2.id))?.syncStatus === "SYNCED", 12_000) || await drain();
+    ck("profissional ambíguo: evento central sem convidado", centralEv(apptD2.id)[0]?.attendees?.length === 0);
+
+    // ---------- S11: tela Configurações → Integrações ----------
+    await withSession(ownerSess, () => withPage(async (page, pageErrors) => {
+      await page.goto(`${baseUrl}/configuracoes?gcal=connected`, { waitUntil: "networkidle" });
+      const region = page.getByRole("region", { name: "Agenda central da clínica" });
+      await region.waitFor();
+      const text = await region.innerText();
+      ck("tela (dono): Integrações abre direto com ?gcal=, mostra Conectado, a conta Google, Sincronizar agora e Desconectar", /Conectado/.test(text) && text.includes(gCentral.email) && /Sincronizar agora/.test(text) && /Desconectar/.test(text), text.replace(/\s+/g, " ").slice(0, 200));
+      await region.getByRole("button", { name: "Sincronizar agora" }).click();
+      await region.getByText(/Sincronização iniciada|Tudo já está sincronizado/).waitFor();
+      ck("tela (dono): Sincronizar agora responde sem erro e a URL perde o ?gcal=", !/gcal=/.test(page.url()) && pageErrors.length === 0, `${page.url()} ${pageErrors.join("|")}`);
+    }));
+    await withSession(sess.alfa, () => withPage(async (page, pageErrors) => {
+      await page.goto(`${baseUrl}/configuracoes?gcal=connected`, { waitUntil: "networkidle" });
+      const region = page.getByRole("region", { name: "Minha agenda Google" });
+      await region.waitFor();
+      const body = await page.locator("body").innerText();
+      ck("tela (profissional): vê só 'Minha agenda Google' com a própria conta e nada da agenda central de outro", (await region.innerText()).includes(gAlfa.email) && !body.includes(gCentral.email) && !body.includes(gBeta.email) && (await page.getByRole("region", { name: "Agenda central da clínica" }).count()) === 0 && pageErrors.length === 0, pageErrors.join("|"));
+    }));
+
+    // ---------- S12: falhas do Google: agendamento criado, job com backoff, reprocesso sem duplicar ----------
+    const fDay = day(12);
+    const f500 = fake.fail({ kind: "insert", email: gCentral.email, status: 500 });
+    r = await apiAs(sess.alfa, "POST", "/api/appointments", { patientId: P(16).id, procedure: procName, professional: people.alfa.name, time: "11:00", date: fDay });
+    const apptF = r.data.appointment;
+    ck("Google com erro 500: o agendamento é criado normalmente (201)", r.status === 201 && Boolean(apptF?.id), `${r.status} ${JSON.stringify(r.data).slice(0, 160)}`);
+    const jF = await waitFor(async () => { const j = (await jobsOf(apptF.id))[0]; return j && j.attempts >= 1 && j.status === "PENDING" ? j : null; }, 15_000);
+    ck("erro 500: job fica PENDING com tentativa contada, backoff de ~1 min e erro sem segredos; nenhum evento criado", Boolean(jF) && jF.nextRetryAt.getTime() > Date.now() + 30_000 && jF.nextRetryAt.getTime() < Date.now() + 120_000 && centralEv(apptF.id).length === 0 && !(await cLink(apptF.id)) && !/(ya29|1\/\/|eyJ)/.test(jF.lastError ?? ""), JSON.stringify({ a: jF?.attempts, s: jF?.status, e: jF?.lastError }));
+    r = await apiAs(sess.alfa, "PATCH", `/api/appointments/${apptF.id}`, { time: "11:30" });
+    await sleep(600);
+    ck("nova alteração com job pendente não cria job extra (coalesce)", (await prisma.calendarSyncJob.count({ where: { clinicId, appointmentId: apptF.id, status: "PENDING" } })) === 1, `${r.status}`);
+    fake.clearFaults();
+    await prisma.calendarSyncJob.updateMany({ where: { clinicId, appointmentId: apptF.id, status: "PENDING" }, data: { nextRetryAt: new Date() } });
+    await drain();
+    ck("reprocessar depois que o Google volta conclui o job e cria UM evento no horário final (sem duplicar)", centralEv(apptF.id).length === 1 && centralEv(apptF.id)[0].start.dateTime === isoLocal(fDay, "11:30") && (await jobsOf(apptF.id)).every((j) => j.status === "COMPLETED") && (await cLink(apptF.id))?.syncStatus === "SYNCED", JSON.stringify((await jobsOf(apptF.id)).map((j) => `${j.operation}:${j.status}`)));
+    // 429 com Retry-After
+    fake.fail({ kind: "patch", email: gCentral.email, status: 429, retryAfter: 120 });
+    r = await apiAs(sess.alfa, "PATCH", `/api/appointments/${apptF.id}`, { time: "12:00" });
+    const j429 = await waitFor(async () => (await jobsOf(apptF.id)).find((j) => j.operation === "UPDATE" && j.status === "PENDING" && j.attempts >= 1), 15_000);
+    ck("erro 429 com Retry-After: respeita o prazo pedido pelo Google (>= ~2 min)", Boolean(j429) && j429.nextRetryAt.getTime() > Date.now() + 100_000, `${j429?.nextRetryAt}`);
+    fake.clearFaults();
+    await prisma.calendarSyncJob.updateMany({ where: { clinicId, appointmentId: apptF.id, status: "PENDING" }, data: { nextRetryAt: new Date() } });
+    await drain();
+    ck("depois do 429 o evento é atualizado (mesmo evento, 12:00)", centralEv(apptF.id).length === 1 && centralEv(apptF.id)[0].start.dateTime === isoLocal(fDay, "12:00"));
+    // falha de rede
+    fake.fail({ kind: "patch", email: gCentral.email, network: true });
+    r = await apiAs(sess.alfa, "PATCH", `/api/appointments/${apptF.id}`, { time: "12:30" });
+    const jNet = await waitFor(async () => (await jobsOf(apptF.id)).find((j) => j.operation === "UPDATE" && j.status === "PENDING" && j.attempts >= 1 && j.createdAt > (j429?.createdAt ?? new Date(0))), 15_000);
+    ck("falha de rede: job PENDING para nova tentativa e agendamento salvo", Boolean(jNet) && (await prisma.appointment.findUnique({ where: { id: apptF.id } }))?.time === "12:30", `${r.status}`);
+    fake.clearFaults();
+    await prisma.calendarSyncJob.updateMany({ where: { clinicId, appointmentId: apptF.id, status: "PENDING" }, data: { nextRetryAt: new Date() } });
+    await drain();
+    ck("depois da falha de rede o evento chega ao horário correto sem duplicar", centralEv(apptF.id).length === 1 && centralEv(apptF.id)[0].start.dateTime === isoLocal(fDay, "12:30") && dupes(gCentral.email).length === 0);
+    // evento apagado direto no Google: o id fica "queimado" e o sistema usa id alternativo, ainda um único evento
+    const burnedId = centralEv(apptF.id)[0].id;
+    fake.burn(gCentral.email, burnedId);
+    await enqueue(apptF.id, "UPDATE");
+    await drain();
+    ck("evento apagado direto no Google é recriado com id alternativo (um só evento, vínculo atualizado)", centralEv(apptF.id).length === 1 && centralEv(apptF.id)[0].id !== burnedId && (await cLink(apptF.id))?.googleEventId === centralEv(apptF.id)[0].id, `${centralEv(apptF.id).length}`);
+
+    // ---------- S13: 401/invalid_grant ----------
+    // (a) 401 só na agenda do beta: convite não verificado, mas o evento central sai e a conexão do beta vira ERROR
+    const bDay2 = day(3);
+    fake.fail({ kind: "events", email: gBeta.email, status: 401 });
+    r = await apiAs(sess.beta, "POST", "/api/appointments", { patientId: P(15).id, procedure: procName, professional: people.beta.name, time: "15:00", date: bDay2 });
+    const apptB2 = r.data.appointment;
+    await waitFor(async () => (await jobsOf(apptB2.id))[0]?.status === "COMPLETED", 15_000) || await drain();
+    ck("401 na agenda individual: evento central criado mesmo assim e job concluído (verificar convite é secundário)", centralEv(apptB2.id).length === 1 && (await jobsOf(apptB2.id))[0]?.status === "COMPLETED", `${(await jobsOf(apptB2.id))[0]?.status} ${(await jobsOf(apptB2.id))[0]?.lastError}`);
+    ck("401 na agenda individual: só essa conexão vai para ERROR (central segue CONNECTED)", (await conn("PROFESSIONAL", people.beta.id))?.status === "ERROR" && (await conn("ADMIN"))?.status === "CONNECTED");
+    fake.clearFaults();
+    const stB = await gc(sess.beta, "GET", `${GC}/status`);
+    ck("status do beta mostra ERROR e a mensagem para reconectar, sem segredo", stB.d.individual?.status === "ERROR" && /reconecte/i.test(stB.d.individual?.lastError ?? "") || stB.d.individual?.status === "ERROR", JSON.stringify(stB.d.individual));
+    const cB2 = await connectG(sess.beta, "PROFESSIONAL", gBeta, { withRefresh: false });
+    await drain();
+    ck("reconectar sem refresh_token novo mantém o refresh antigo, volta para CONNECTED e o convite passa a ser verificado (RECEIVED)", cB2.outcome === "connected" && (await conn("PROFESSIONAL", people.beta.id))?.status === "CONNECTED" && (await conn("PROFESSIONAL", people.beta.id))?.refreshTokenEncrypted === connB.refreshTokenEncrypted && (await link(apptB2.id, connB.id))?.syncStatus === "RECEIVED", `${cB2.outcome} ${(await link(apptB2.id, connB.id))?.syncStatus}`);
+    // (b) invalid_grant no refresh da central
+    await prisma.googleCalendarConnection.update({ where: { id: connC.id }, data: { tokenExpiresAt: new Date(Date.now() - 3_600_000) } });
+    fake.fail({ kind: "refresh", email: gCentral.email, status: 400, error: "invalid_grant" });
+    const gDay = day(13);
+    r = await apiAs(sess.alfa, "POST", "/api/appointments", { patientId: P(17).id, procedure: procName, professional: people.alfa.name, time: "09:00", date: gDay });
+    const apptG = r.data.appointment;
+    ck("token revogado no Google: o agendamento é criado normalmente (201)", r.status === 201 && Boolean(apptG?.id), `${r.status}`);
+    const jG = await waitFor(async () => { const j = (await jobsOf(apptG.id))[0]; return j && j.status === "FAILED" ? j : null; }, 15_000);
+    ck("invalid_grant: conexão central vai para ERROR e o job falha SEM retry, com a mensagem de reconectar", Boolean(jG) && /reconecte/i.test(jG.lastError ?? "") && jG.attempts === 1 && (await conn("ADMIN"))?.status === "ERROR" && centralEv(apptG.id).length === 0, `${jG?.status} ${jG?.attempts} ${jG?.lastError}`);
+    const stC = await gc(ownerSess, "GET", `${GC}/status`);
+    ck("status do dono mostra ERROR na central e jobs com falha", stC.d.central?.status === "ERROR" && stC.d.central?.failedJobs >= 1 && stC.d.central?.connected === false, JSON.stringify(stC.d.central));
+    fake.clearFaults();
+    const refreshOriginal = plainRefresh;
+    const cC2 = await connectG(ownerSess, "ADMIN", gCentral, { withRefresh: false });
+    await drain();
+    const connC2 = await conn("ADMIN");
+    ck("reconectar a central sem refresh_token novo preserva o refresh cifrado e volta a CONNECTED", cC2.outcome === "connected" && connC2?.id === connC.id && connC2.status === "CONNECTED" && connC2.refreshTokenEncrypted === refreshBefore && connC2.lastError === null, `${cC2.outcome} ${connC2?.status}`);
+    ck("reconectar enfileira de novo o job que falhou por autenticação e o evento aparece, sem duplicar nenhum agendamento", (await jobsOf(apptG.id)).some((j) => j.status === "COMPLETED") && centralEv(apptG.id).length === 1 && dupes(gCentral.email).length === 0, JSON.stringify((await jobsOf(apptG.id)).map((j) => `${j.operation}:${j.status}`)));
+    // refresh de verdade com o refresh preservado
+    await prisma.googleCalendarConnection.update({ where: { id: connC.id }, data: { tokenExpiresAt: new Date(Date.now() - 3_600_000) } });
+    const mark = fake.log.length;
+    await enqueue(apptG.id, "UPDATE");
+    await drain();
+    ck("o refresh usa o token preservado (renovação silenciosa) e persiste o novo access token cifrado", fake.log.slice(mark).some((e) => e.kind === "refresh" && e.refreshToken === refreshOriginal && e.status === 200) && (await conn("ADMIN"))?.tokenExpiresAt > new Date(), `${fake.log.slice(mark).filter((e) => e.kind === "refresh").length}`);
+
+    // ---------- S14: concorrência ----------
+    const cDays = [day(14), day(15)];
+    const burst = [];
+    for (let i = 0; i < 6; i += 1) burst.push(await mkAppt(P(i % patients.length).id, { procedure: `Burst GA ${i} ${run}`, professional: i % 3 === 0 ? people.gama.name : i % 3 === 1 ? `Sem Cadastro ${i} ${run}` : people.alfa.name, day: cDays[i % 2], time: `${String(9 + i).padStart(2, "0")}:00` }));
+    const insertsBefore = fake.calls("insert", (e) => e.email === gCentral.email && e.status === 200).length;
+    const syncs = await Promise.all([gc(ownerSess, "POST", `${GC}/sync`, {}), gc(ownerSess, "POST", `${GC}/sync`, {})]);
+    ck("duas sincronizações simultâneas (clique duplo) respondem 200", syncs.every((x) => x.s === 200 && x.d.ok === true), syncs.map((x) => `${x.s}:${JSON.stringify(x.d).slice(0, 80)}`).join(" | "));
+    const crons = await Promise.all([cronCall(), cronCall("POST"), cronCall(), cronCall("POST")]);
+    ck("quatro execuções simultâneas do cron respondem 200", crons.every((x) => x.s === 200 && x.d.ok === true && x.d.configured === true), crons.map((x) => x.s).join(","));
+    await drain();
+    const burstIds = burst.map((a) => a.id);
+    const eventCounts = burstIds.map((id) => centralEv(id).length);
+    const successInserts = fake.calls("insert", (e) => e.email === gCentral.email && e.status === 200 && burstIds.includes(e.body?.extendedProperties?.private?.harmonizeAppointmentId)).length;
+    ck("jobs concorrentes: exatamente UM evento por agendamento (nenhuma duplicidade) e um vínculo central por agendamento", eventCounts.every((n) => n === 1) && successInserts === 6 && (await prisma.googleCalendarEvent.count({ where: { clinicId, connectionId: connC.id, appointmentId: { in: burstIds } } })) === 6 && dupes(gCentral.email).length === 0, `eventos=${eventCounts} inserts=${successInserts} vinculos=${await prisma.googleCalendarEvent.count({ where: { clinicId, appointmentId: { in: burstIds } } })} duplicados=${dupes(gCentral.email).join(",")} ${dupes(gCentral.email).map((id) => fake.harmonizeEvents(gCentral.email, id).map((ev) => ev.id).join("/")).join(";")}`);
+    ck("nenhum job ficou preso em PROCESSING/PENDING", (await prisma.calendarSyncJob.count({ where: { clinicId, status: { in: ["PROCESSING", "PENDING"] } } })) === 0, `${await prisma.calendarSyncJob.count({ where: { clinicId, status: { in: ["PROCESSING", "PENDING"] } } })} ; antes=${insertsBefore}`);
+
+    // ---------- S15: cron protegido ----------
+    let c = await cronCall("GET", {});
+    ck("cron sem credencial devolve 401", c.s === 401, c.s);
+    c = await cronCall("GET", { authorization: "Bearer segredo-errado" });
+    ck("cron com Bearer errado devolve 401", c.s === 401, c.s);
+    c = await cronCall("POST", { authorization: "Bearer segredo-errado" });
+    ck("cron (POST) com Bearer errado devolve 401", c.s === 401, c.s);
+    c = await cronCall("GET", { authorization: `Basic ${cronSecret}` });
+    ck("cron com esquema diferente de Bearer devolve 401", c.s === 401, c.s);
+    c = await cronCall("GET", {}, `?secret=${encodeURIComponent(cronSecret)}`);
+    ck("o segredo na query string não vale (401)", c.s === 401, c.s);
+    c = await cronCall("GET", { cookie: ownerSess });
+    ck("sessão de usuário (dono) não autoriza o cron (401)", c.s === 401, c.s);
+    c = await cronCall("GET");
+    ck("cron com o segredo certo devolve 200 com resumo", c.s === 200 && c.d.ok === true && typeof c.d.summary?.picked === "number" && typeof c.d.purged === "number", JSON.stringify(c.d).slice(0, 140));
+    c = await cronCall("POST");
+    ck("cron POST com o segredo certo devolve 200", c.s === 200 && c.d.ok === true, c.s);
+    for (const [method, path] of [["GET", `${GC}/status`], ["POST", `${GC}/sync`], ["POST", `${GC}/connect`], ["POST", `${GC}/disconnect`]]) {
+      const x = await gc(null, method, path, method === "POST" ? { type: "ADMIN" } : undefined, { headers: { authorization: `Bearer ${cronSecret}` } });
+      ck(`rota privada ${method} ${path.replace(GC, "…")} não aceita o segredo do cron (401)`, x.s === 401, x.s);
+    }
+
+    // ---------- S16: status por papel ----------
+    const stAlfa = await gc(sess.alfa, "GET", `${GC}/status`);
+    const alfaText = JSON.stringify(stAlfa.d);
+    ck("status do PROFESSIONAL: só sabe que a central existe (sem e-mail, contadores nem erros de outros) e vê a própria conta", stAlfa.s === 200 && stAlfa.d.central?.connected === true && stAlfa.d.central.googleEmail === null && stAlfa.d.central.pendingJobs === null && stAlfa.d.central.failedJobs === null && stAlfa.d.central.syncedEvents === 0 && stAlfa.d.central.lastError === null && stAlfa.d.individual?.googleEmail === gAlfa.email && !alfaText.includes(gCentral.email) && !alfaText.includes(gBeta.email) && stAlfa.d.canConnectCentral === false && stAlfa.d.canConnectIndividual === true, alfaText.slice(0, 220));
+    const stBeta = await gc(sess.beta, "GET", `${GC}/status`);
+    ck("status do outro PROFESSIONAL mostra só a conta dele", stBeta.d.individual?.googleEmail === gBeta.email && !JSON.stringify(stBeta.d).includes(gAlfa.email), JSON.stringify(stBeta.d).slice(0, 160));
+    const stOwner = await gc(ownerSess, "GET", `${GC}/status`);
+    ck("status do dono: e-mail da central, contadores numéricos e individual não conectada", stOwner.d.central?.googleEmail === gCentral.email && stOwner.d.central.syncedEvents >= 5 && typeof stOwner.d.central.pendingJobs === "number" && typeof stOwner.d.central.failedJobs === "number" && stOwner.d.central.connectedByOther === false && stOwner.d.individual?.status === "NOT_CONNECTED", JSON.stringify(stOwner.d.central));
+    const stAdm2 = await gc(sess.admin2, "GET", `${GC}/status`);
+    ck("status do segundo ADMIN: vê a central e que foi conectada por outra pessoa; sem individual", stAdm2.d.central?.connectedByOther === true && stAdm2.d.central.googleEmail === gCentral.email && stAdm2.d.individual?.status === "NOT_CONNECTED", JSON.stringify(stAdm2.d.central));
+
+    // ---------- S17: isolamento entre clínicas ----------
+    let reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: outsider.clinicName, name: "E2E GCal Externo", email: outsider.email, password: outsider.password }));
+    const outLogin = reg.status === 201 ? await loginAs(outsider.email, outsider.password) : null;
+    if (outLogin?.status !== 200) { ck("segunda clínica criada para o isolamento", false, `registro ${reg.status}`); return; }
+    const outSess = outLogin.cookie;
+    outsiderClinicId = (await prisma.clinicMembership.findFirst({ where: { user: { email: outsider.email } }, select: { clinicId: true } }))?.clinicId;
+    const stOut = await gc(outSess, "GET", `${GC}/status`);
+    ck("outra clínica não vê a central nem os contadores da nossa", stOut.d.central?.status === "NOT_CONNECTED" && stOut.d.central.googleEmail === null && stOut.d.central.syncedEvents === 0 && !JSON.stringify(stOut.d).includes(gCentral.email), JSON.stringify(stOut.d.central));
+    const connectedBefore = (await conn("ADMIN"))?.status;
+    r = await gc(outSess, "POST", `${GC}/disconnect`, { type: "ADMIN", clinicId, connectionId: connC.id, userId: ownerId });
+    ck("IDOR: outra clínica não desconecta a nossa (ids no corpo são ignorados; 404 por não ter conexão própria)", r.s === 404 && (await conn("ADMIN"))?.status === connectedBefore && fake.calls("revoke").length === 0, `${r.s}`);
+    r = await gc(outSess, "POST", `${GC}/sync`, { clinicId });
+    ck("IDOR: sincronizar na outra clínica (sem conexão) devolve 409 e não enfileira jobs nossos", r.s === 409, `${r.s}`);
+    const outPatient = (await withSession(outSess, () => api("POST", "/api/patients", { ...regDefaults, name: `GA Externa Paciente ${run}`, phone: "11977770000", cpf: randomCpf() }))).data.patient;
+    r = await withSession(outSess, () => api("PATCH", `/api/appointments/${apptA1.id}`, { time: "16:00" }));
+    const rDel = await withSession(outSess, () => api("DELETE", `/api/appointments/${apptA1.id}`));
+    await sleep(500);
+    ck("agendamento da nossa clínica não pode ser alterado/excluído pela outra (404) e nenhum job é criado", r.status === 404 && rDel.status === 404 && (await prisma.appointment.findUnique({ where: { id: apptA1.id } }))?.time === "09:00" && (await jobsOf(apptA1.id)).every((j) => j.status === "COMPLETED"), `${r.status} ${rDel.status}`);
+    const cOut = await connectG(outSess, "ADMIN", gOut);
+    ck("a outra clínica conecta a própria central", cOut.outcome === "connected", `${cOut.cb?.loc}`);
+    const outAppt = await prisma.appointment.create({ data: { clinicId: outsiderClinicId, patientId: outPatient.id, procedure: "Avaliação Externa", professional: `Fulano Externo ${run}`, date: new Date(`${day(5)}T12:00:00-03:00`), time: "09:00", status: "Agendado" } });
+    r = await gc(outSess, "POST", `${GC}/sync`, {});
+    await sleep(500);
+    await prisma.calendarSyncJob.updateMany({ where: { clinicId: outsiderClinicId, status: "PENDING" }, data: { nextRetryAt: new Date() } });
+    await drain();
+    for (let i = 0; i < 10 && fake.eventsOf(gOut.email).length < 1; i += 1) { await cronCall(); await sleep(400); }
+    const outEvents = fake.eventsOf(gOut.email);
+    ck("a central da outra clínica recebe só os agendamentos dela (nenhum nosso) e a nossa nenhum deles", r.s === 200 && outEvents.length === 1 && outEvents[0].extendedProperties?.private?.clinicId === outsiderClinicId && fake.harmonizeEvents(gCentral.email, outAppt.id).length === 0 && !fake.eventsOf(gOut.email).some((ev) => [apptA1.id, apptA2.id, apptB.id].includes(ev.extendedProperties?.private?.harmonizeAppointmentId)), `${r.s} ${outEvents.length}`);
+    const stOut2 = await gc(outSess, "GET", `${GC}/status`);
+    ck("status de cada clínica mostra só a própria conta Google", stOut2.d.central?.googleEmail === gOut.email && (await gc(ownerSess, "GET", `${GC}/status`)).d.central?.googleEmail === gCentral.email);
+
+    // ---------- S18: desconexão ----------
+    r = await gc(sess.alfa, "POST", `${GC}/disconnect`, { type: "ADMIN" });
+    ck("PROFESSIONAL não desconecta a central (403)", r.s === 403 && (await conn("ADMIN"))?.status === "CONNECTED", r.s);
+    r = await gc(sess.admin2, "POST", `${GC}/disconnect`, { type: "PROFESSIONAL" });
+    ck("ADMIN (segundo) não desconecta a individual de outra pessoa (só a própria: 404)", r.s === 404 && (await conn("PROFESSIONAL", people.alfa.id))?.status === "CONNECTED" && (await conn("PROFESSIONAL", people.beta.id))?.status === "CONNECTED", r.s);
+    r = await gc(ownerSess, "POST", `${GC}/disconnect`, { type: "PROFESSIONAL" });
+    ck("o dono também não desconecta a individual alheia (404)", r.s === 404 && (await conn("PROFESSIONAL", people.alfa.id))?.status === "CONNECTED", r.s);
+    r = await gc(ownerSess, "POST", `${GC}/disconnect`, { type: "TUDO" });
+    ck("disconnect com tipo inválido devolve 400", r.s === 400, r.s);
+    r = await gc(sess.alfa, "POST", `${GC}/disconnect`, { type: "PROFESSIONAL" }, { headers: { origin: "https://evil.example" } });
+    ck("disconnect de outra origem devolve 403", r.s === 403 && (await conn("PROFESSIONAL", people.alfa.id))?.status === "CONNECTED", r.s);
+    const rowAlfa = await conn("PROFESSIONAL", people.alfa.id);
+    const alfaRefresh = secretBox && rowAlfa?.refreshTokenEncrypted ? secretBox.decryptGoogleToken(rowAlfa.refreshTokenEncrypted) : null;
+    const linksBeforeAlfa = await prisma.googleCalendarEvent.count({ where: { clinicId, connectionId: connAFresh.id } });
+    const apptsBefore = await prisma.appointment.count({ where: { clinicId } });
+    const eventsBeforeAlfa = fake.eventsOf(gCentral.email).length;
+    r = await gc(sess.alfa, "POST", `${GC}/disconnect`, { type: "PROFESSIONAL" });
+    const connAD = await conn("PROFESSIONAL", people.alfa.id);
+    ck("PROFESSIONAL desconecta a própria agenda: DISCONNECTED, tokens apagados, token revogado no Google", r.s === 200 && r.d.ok === true && connAD?.status === "DISCONNECTED" && connAD.accessTokenEncrypted === null && connAD.refreshTokenEncrypted === null && connAD.tokenExpiresAt === null && fake.calls("revoke", (e) => e.token === alfaRefresh && e.status === 200).length === 1, `${r.s} ${connAD?.status}`);
+    ck("desconectar a individual não mexe nas outras conexões, nos vínculos antigos, nos eventos no Google nem nos agendamentos", (await conn("ADMIN"))?.status === "CONNECTED" && (await conn("PROFESSIONAL", people.beta.id))?.status === "CONNECTED" && (await prisma.googleCalendarEvent.count({ where: { clinicId, connectionId: connAFresh.id } })) === linksBeforeAlfa && (await prisma.appointment.count({ where: { clinicId } })) === apptsBefore && fake.eventsOf(gCentral.email).length === eventsBeforeAlfa);
+    r = await gc(sess.alfa, "POST", `${GC}/disconnect`, { type: "PROFESSIONAL" });
+    ck("desconectar de novo devolve 404", r.s === 404, r.s);
+    const stAlfa2 = await gc(sess.alfa, "GET", `${GC}/status`);
+    ck("status do alfa depois de desconectar: individual 'não conectada' e sem e-mail", stAlfa2.d.individual?.status === "NOT_CONNECTED" && stAlfa2.d.individual.googleEmail === null, JSON.stringify(stAlfa2.d.individual));
+    r = await gc(sess.alfa, "POST", `${GC}/sync`, {});
+    ck("sincronizar sem conexão individual ativa devolve 409", r.s === 409, r.s);
+    const a3Day = day(16);
+    const a3 = (await apiAs(sess.alfa, "POST", "/api/appointments", { patientId: P(18).id, procedure: procName, professional: people.alfa.name, time: "09:00", date: a3Day })).data.appointment;
+    await waitFor(async () => (await cLink(a3.id))?.syncStatus === "SYNCED", 12_000) || await drain();
+    ck("sem a individual do alfa, o convite volta para o e-mail do cadastro dele (central) e nada vai para a agenda dele", centralEv(a3.id)[0]?.attendees?.map((a) => a.email)[0] === people.alfa.email && fake.eventsOf(gAlfa.email).filter((e) => e.iCalUID === centralEv(a3.id)[0]?.iCalUID).length === 0);
+    // central
+    const centralRefresh = plainRefresh;
+    const betaEventsBefore = fake.eventsOf(gBeta.email).length;
+    const apptsBefore2 = await prisma.appointment.count({ where: { clinicId } });
+    const mark2 = fake.log.length;
+    r = await gc(ownerSess, "POST", `${GC}/disconnect`, { type: "ADMIN" });
+    const connCD = await prisma.googleCalendarConnection.findUnique({ where: { id: connC.id } });
+    ck("dono desconecta a central: DISCONNECTED, tokens apagados, revogação no Google", r.s === 200 && connCD?.status === "DISCONNECTED" && connCD.accessTokenEncrypted === null && connCD.refreshTokenEncrypted === null && fake.calls("revoke", (e) => e.token === centralRefresh && e.status === 200).length === 1, `${r.s} ${connCD?.status}`);
+    ck("desconectar a central mantém os eventos criados, a individual do beta e todos os agendamentos", fake.eventsOf(gCentral.email).length > 0 && (await conn("PROFESSIONAL", people.beta.id))?.status === "CONNECTED" && (await prisma.appointment.count({ where: { clinicId } })) === apptsBefore2 && (await prisma.googleCalendarEvent.count({ where: { clinicId, connectionId: connC.id } })) > 0);
+    const stAfter = await gc(ownerSess, "GET", `${GC}/status`);
+    ck("status depois de desconectar a central: não conectada", stAfter.d.central?.status === "NOT_CONNECTED" && stAfter.d.central.googleEmail === null, JSON.stringify(stAfter.d.central));
+    const b3 = (await apiAs(sess.beta, "POST", "/api/appointments", { patientId: P(19).id, procedure: procName, professional: people.beta.name, time: "10:00", date: day(14) })).data.appointment;
+    await waitFor(async () => (await link(b3.id, connB.id))?.syncStatus === "SYNCED", 12_000) || await drain();
+    ck("depois de desconectar a central, o beta volta a ter evento independente na agenda dele e a central não recebe nenhuma chamada", fake.harmonizeEvents(gBeta.email, b3.id).length === 1 && fake.harmonizeEvents(gBeta.email, b3.id)[0].attendees.length === 0 && fake.log.slice(mark2).filter((e) => e.email === gCentral.email && ["insert", "patch", "delete"].includes(e.kind)).length === 0 && fake.eventsOf(gBeta.email).length > betaEventsBefore);
+    const cAdm = await connectG(sess.admin2, "ADMIN", gAdmin2);
+    ck("com a central do dono desligada, outro ADMIN conecta a sua (índice único só vale para central ativa)", cAdm.outcome === "connected" && (await prisma.googleCalendarConnection.count({ where: { clinicId, connectionType: "ADMIN", status: "CONNECTED" } })) === 1 && (await prisma.googleCalendarConnection.count({ where: { clinicId, connectionType: "ADMIN" } })) === 2, `${cAdm.outcome}`);
+    await drain();
+    ck("a nova central recebe o backfill dos agendamentos futuros (sem duplicar)", fake.eventsOf(gAdmin2.email).length >= 5 && dupes(gAdmin2.email).length === 0, `${fake.eventsOf(gAdmin2.email).length}`);
+    r = await gc(sess.admin2, "POST", `${GC}/disconnect`, { type: "ADMIN" });
+    ck("o segundo ADMIN desconecta a central que conectou", r.s === 200, r.s);
+    r = await gc(sess.beta, "POST", `${GC}/disconnect`, { type: "PROFESSIONAL" });
+    ck("o beta desconecta a própria agenda", r.s === 200, r.s);
+
+    // ---------- S19: trial vencido ----------
+    const tFlow = await startFlow(outSess, "ADMIN", gOut);
+    await gc(outSess, "POST", `${GC}/disconnect`, { type: "ADMIN" });
+    const tFlow2 = await startFlow(outSess, "ADMIN", gOut);
+    await prisma.clinic.update({ where: { id: outsiderClinicId }, data: { trialEndsAt: new Date(Date.now() - 86_400_000) } });
+    const outLogin2 = await loginAs(outsider.email, outsider.password);
+    const expired = outLogin2.cookie;
+    ck("trial vencido: a sessão nova continua válida (status 200); só as ações que exigem trial ativo são bloqueadas", Boolean(expired) && (await gc(expired, "GET", `${GC}/status`)).s === 200, `${outLogin2.status}`);
+    r = await gc(expired, "POST", `${GC}/connect`, { type: "ADMIN" });
+    ck("trial vencido: connect é bloqueado", r.s === 401 || r.s === 402 || r.s === 403, `${r.s} ${JSON.stringify(r.d)}`);
+    r = await gc(expired, "POST", `${GC}/sync`, {});
+    ck("trial vencido: sync é bloqueado", r.s === 401 || r.s === 402 || r.s === 403, `${r.s} ${JSON.stringify(r.d)}`);
+    const rowBefore = await prisma.googleCalendarConnection.findFirst({ where: { clinicId: outsiderClinicId, connectionType: "ADMIN" } });
+    const cbExpired = await callbackOf(expired, tFlow2);
+    const rowAfter = await prisma.googleCalendarConnection.findFirst({ where: { clinicId: outsiderClinicId, connectionType: "ADMIN" } });
+    ck("trial vencido: o callback pendente não conecta nada (?gcal=error e a conexão continua desligada)", outcomeOf(cbExpired) === "error" && rowAfter?.status === "DISCONNECTED" && rowAfter.refreshTokenEncrypted === null && rowBefore?.status === "DISCONNECTED", `${cbExpired.loc} ${rowAfter?.status}`);
+    ck("trial vencido: o fluxo iniciado antes (outro cookie) também não conecta", outcomeOf(await callbackOf(expired, tFlow)) === "error" && (await prisma.googleCalendarConnection.count({ where: { clinicId: outsiderClinicId, status: "CONNECTED" } })) === 0);
+
+    // ---------- S20: fechamento ----------
+    ck("nenhuma resposta das rotas de integração/cron vazou accessToken, refreshToken, Encrypted, tokenHash, JWT (eyJ), googleAccountId nem tokens/sub reais", leaks.length === 0, [...new Set(leaks)].join(", "));
+    const logs = await prisma.calendarNotificationLog.count({ where: { clinicId: { in: [clinicId, outsiderClinicId].filter(Boolean) } } });
+    ck("nenhum e-mail ao profissional foi tentado (CalendarNotificationLog vazio: log é gravado antes de qualquer envio)", logs === 0, `${logs} registros`);
+    ck("nenhum job ficou preso em PROCESSING na clínica de teste", (await prisma.calendarSyncJob.count({ where: { clinicId, status: "PROCESSING" } })) === 0);
+  } finally {
+    fake.clearFaults();
+    const clinicIds = [clinicId, outsiderClinicId].filter(Boolean);
+    await prisma.calendarNotificationLog.deleteMany({ where: { clinicId: { in: clinicIds } } }).catch(() => undefined);
+    await prisma.calendarSyncJob.deleteMany({ where: { clinicId: { in: clinicIds } } }).catch(() => undefined);
+    await prisma.googleCalendarEvent.deleteMany({ where: { clinicId: { in: clinicIds } } }).catch(() => undefined);
+    await prisma.googleCalendarConnection.deleteMany({ where: { clinicId: { in: clinicIds } } }).catch(() => undefined);
+    await prisma.procedure.deleteMany({ where: { clinicId, name: procName } }).catch(() => undefined);
+    for (const member of members) await api("DELETE", "/api/team", { membershipId: member.id }).catch(() => undefined);
+    await cleanupGoogleAgendaLeftovers().catch((error) => console.error(`Limpeza do google_agenda falhou: ${error.message}`));
+    await fake.stop();
+    const left = {
+      usuarios: await prisma.user.count({ where: { email: { startsWith: "e2e-gcal-" } } }),
+      clinicas: await prisma.clinic.count({ where: { name: { startsWith: "E2E GCal Externa " } } }),
+      conexoes: await prisma.googleCalendarConnection.count({ where: { clinicId: { in: clinicIds } } }),
+      eventos: await prisma.googleCalendarEvent.count({ where: { clinicId: { in: clinicIds } } }),
+      jobs: await prisma.calendarSyncJob.count({ where: { clinicId: { in: clinicIds } } }),
+      logs: await prisma.calendarNotificationLog.count({ where: { clinicId: { in: clinicIds } } }),
+      membros: await prisma.clinicMembership.count({ where: { clinicId } }),
+    };
+    ck("limpeza: usuários e clínica externa do prefixo e2e-gcal-, conexões, vínculos, jobs e logs removidos; clínica de teste só com a conta de teste", Object.entries(left).every(([k, v]) => (k === "membros" ? v === 1 : v === 0)), JSON.stringify(left));
+  }
+}
+
+
 // "Meu perfil": /api/me, /api/me/profile, /api/me/avatar, /api/me/password (+ rota de foto da equipe refatorada). Contas @example.invalid, nunca e-mail real.
 async function myProfile() {
   const prefix = "e2e-meuperfil-";
@@ -8777,6 +9661,7 @@ async function myProfile() {
 
 const suites = {
   meu_perfil: { needs: [], run: () => myProfile() },
+  google_agenda: { needs: [], run: () => googleAgenda() },
   editar_dados_cliente: { needs: [], run: () => editPatientData() },
   seguranca_2fa: { needs: [], run: () => security2fa() },
   verificacao_email_cadastro: { needs: [], run: () => signupEmailVerification() },
