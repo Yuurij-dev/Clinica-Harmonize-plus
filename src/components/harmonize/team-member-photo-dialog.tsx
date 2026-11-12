@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { prepareImage } from "./clinical-upload";
 
-export function TeamMemberPhotoDialog({ avatarUrl, onSaved, onClose }: { avatarUrl: string; onSaved: () => void; onClose: () => void }) {
+// Diálogo de foto de perfil: serve ao colaborador (/api/team/[id]/avatar) e ao próprio usuário (/api/me/avatar) mudando só o endpoint e os textos.
+export function TeamMemberPhotoDialog({ avatarUrl, onSaved, onClose, title = "Foto do colaborador", usage = "A imagem escolhida será usada como foto de perfil deste colaborador." }: { avatarUrl: string; onSaved: () => void; onClose: () => void; title?: string; usage?: string }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -108,7 +109,7 @@ export function TeamMemberPhotoDialog({ avatarUrl, onSaved, onClose }: { avatarU
     }, "image/jpeg", 0.92);
   }
 
-  return <Modal open title="Foto do colaborador" description="Arraste uma imagem, escolha um arquivo ou tire uma foto agora." onClose={() => { if (!busy) { stopCamera(); onClose(); } }} closeOnOverlayClick={!busy}>
+  return <Modal open title={title} description="Arraste uma imagem, escolha um arquivo ou tire uma foto agora." onClose={() => { if (!busy) { stopCamera(); onClose(); } }} closeOnOverlayClick={!busy}>
     <div className="space-y-4">
       {cameraOpen ? <div className="space-y-3">
         <video ref={videoRef} autoPlay playsInline muted className="max-h-[55dvh] w-full rounded-lg bg-black object-contain" aria-label="Prévia da câmera" />
@@ -129,7 +130,7 @@ export function TeamMemberPhotoDialog({ avatarUrl, onSaved, onClose }: { avatarU
         </div>
       </>}
       {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
-      <p className="text-xs text-muted-foreground">A imagem escolhida será usada como foto de perfil deste colaborador.</p>
+      <p className="text-xs text-muted-foreground">{usage}</p>
     </div>
   </Modal>;
 }

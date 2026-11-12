@@ -30,3 +30,8 @@ export function teamInviteRequested() {
 export function clearTeamInviteRequest() {
   teamInviteRequestedAt = 0;
 }
+
+// Disparado por "Meu perfil" após salvar nome ou foto: o shell (topbar, menu "Mais") atualiza o usuário atual sem novo /api/auth/me.
+// detail: só os campos que mudaram.
+export const profileUpdatedEvent = "harmonize-profile-updated";
+export type ProfileUpdatedDetail = { name?: string; avatarVersion?: string | null };

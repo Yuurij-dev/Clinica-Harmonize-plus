@@ -18,16 +18,18 @@ import type { UserClinic } from "./clinic-chooser";
 import { Modal } from "@/components/ui/modal";
 import { setupInviteEvent, tourReplayEvent } from "@/lib/section-events";
 import { PatientAvatar } from "./patient-avatar";
+import { OwnAvatar } from "./own-avatar";
 
 type TopbarProps = {
   onDashboard: () => void;
   onSettings: () => void;
+  onProfile: () => void;
   onNavigate: (section: SectionId) => void;
   onQuickCreate: (section: SectionId, dialog: "appointment" | "client" | "procedure" | "quote" | "payment") => Promise<void>;
   onOpenSettingsSection: (section: string) => void;
   onOpenStockAlert: (alert: StockAlert) => void;
   onLogout: () => Promise<void>;
-  user?: { id: string; name: string; role: string; clinicId?: string; clinic?: { name?: string; trialEndsAt?: string | null } } | null;
+  user?: { id: string; name: string; role: string; avatarVersion?: string | null; clinicId?: string; clinic?: { name?: string; trialEndsAt?: string | null } } | null;
   clinics?: UserClinic[];
   onSwitchClinic?: (clinicId: string) => Promise<void>;
 };
@@ -102,7 +104,7 @@ function appointmentMinutesFromTime(time: string) {
   return (hours || 0) * 60 + (minutes || 0);
 }
 
-export function Topbar({ onDashboard, onSettings, onNavigate, onQuickCreate, onOpenSettingsSection, onOpenStockAlert, onLogout, user, clinics = [], onSwitchClinic }: TopbarProps) {
+export function Topbar({ onDashboard, onSettings, onProfile, onNavigate, onQuickCreate, onOpenSettingsSection, onOpenStockAlert, onLogout, user, clinics = [], onSwitchClinic }: TopbarProps) {
   const canAccessDashboard = useCan("dashboard:access");
   const canAccessSettings = useCan("settings:access");
   const canAccessStock = useCan("stock:access");
@@ -221,7 +223,6 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onQuickCreate, onO
   }
 
   const userName = user?.name ?? "Usuário";
-  const initials = userName.split(" ").map((part) => part[0]).slice(0, 2).join("").toUpperCase();
   const roleLabel = user?.role === "ADMIN" ? "Administradora" : user?.role === "PROFESSIONAL" ? "Profissional" : user?.role === "STAFF" ? "Atendente" : "";
 
   useEffect(() => {
@@ -541,7 +542,7 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onQuickCreate, onO
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="hp-pressable hidden items-center gap-2 border-l border-border pl-4 lg:flex" disabled={isLoggingOut}>
-              <span className="grid h-8 w-8 place-items-center rounded-full bg-accent text-xs font-black text-accent-foreground">{initials}</span>
+              <OwnAvatar className="h-8 w-8 text-xs" name={userName} version={user?.avatarVersion} />
               <span className="text-left leading-tight">
                 <span className="block text-xs font-bold text-foreground">{userName}</span>
                 <span className="block text-xs text-muted-foreground">{roleLabel}</span>
@@ -550,7 +551,7 @@ export function Topbar({ onDashboard, onSettings, onNavigate, onQuickCreate, onO
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem onSelect={onSettings}>Meu perfil</DropdownMenuItem>
+            <DropdownMenuItem onSelect={onProfile}>Meu perfil</DropdownMenuItem>
             <DropdownMenuItem>Ajuda e suporte</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={isLoggingOut} onSelect={() => void handleLogout()}>

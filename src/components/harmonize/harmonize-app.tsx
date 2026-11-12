@@ -38,13 +38,14 @@ import { CurrentRoleProvider } from "./current-user";
 import { ClinicEntryTransition } from "./clinic-entry-transition";
 import { ClinicChooser, type UserClinic } from "./clinic-chooser";
 import { MfaRequiredGate } from "./mfa-setup-wizard";
-import { clientsHomeEvent, setupInviteEvent } from "@/lib/section-events";
+import { clientsHomeEvent, profileUpdatedEvent, setupInviteEvent, type ProfileUpdatedDetail } from "@/lib/section-events";
+import { MyProfile } from "./my-profile";
 import { agendaPeriodKey, agendaPeriodRange } from "@/lib/agenda-period-rules";
 import { clinicToday } from "@/lib/clinic-time";
 import { patientListKey } from "@/lib/patient-list-rules";
 import { guardDraftNavigation, hasDraftGuard } from "./use-draft-autosave";
 
-type CurrentUser = { id: string; clinicId: string; name: string; role: string; isOwner?: boolean; trialExpired?: boolean; rolePermissions?: RolePermissionMatrix; clinic?: { name: string; trialEndsAt?: string | null } };
+type CurrentUser = { id: string; clinicId: string; name: string; role: string; avatarVersion?: string | null; isOwner?: boolean; trialExpired?: boolean; rolePermissions?: RolePermissionMatrix; clinic?: { name: string; trialEndsAt?: string | null } };
 type AgendaFocus = { date: string; time: string };
 type CreateDialog = "appointment" | "client" | "procedure" | "quote" | "payment";
 type HarmonizeAppProps = { initialCreate?: CreateDialog };
@@ -128,7 +129,10 @@ function sectionFromPath(pathname: string | null): SectionId {
 export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const pathname = usePathname();
   const router = useRouter();
+  // "/perfil" é uma visão do shell (todos os papéis), não uma SectionId: sidebar e abas ficam sem item ativo.
+  const profileView = pathname === "/perfil";
   const active = sectionFromPath(pathname);
+  const shown = profileView ? null : active;
   const [moreOpen, setMoreOpen] = useState(false);
   const [createDialog, setCreateDialog] = useState<CreateDialog | null>(initialCreate ?? null);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
@@ -148,6 +152,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const allowedSections = visibleSections(currentUser?.role, currentUser?.rolePermissions, currentUser?.isOwner);
   const mobileSections = splitMobileSections(allowedSections);
   const [initialSection] = useState(active);
+  const [initialProfile] = useState(profileView);
 
   const activeUndoNoticeId = undoNotice?.id;
   useEffect(() => {
@@ -171,6 +176,16 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     if (section === "clientes" && active === "clientes") window.dispatchEvent(new Event(clientsHomeEvent));
     if (replace) router.replace(sectionPaths[section]);
     else router.push(sectionPaths[section]);
+  }
+
+  async function openProfile() {
+    if (profileView) { setMoreOpen(false); return; }
+    if (!await guardDraftNavigation()) return;
+    setSettingsFocusSection(null);
+    setAgendaFocus(null);
+    setMoreOpen(false);
+    setCreateDialog(null);
+    router.push("/perfil");
   }
 
   async function openSettingsSearchSection(section: string) {
@@ -232,7 +247,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
         setClientCacheScope(`${user.id}:${user.clinicId}:${JSON.stringify(user.rolePermissions ?? {})}`);
         setCurrentUser(user);
 
-        const resource = visibleSections(user.role, user.rolePermissions, user.isOwner).includes(initialSection) ? initialScreenResources[initialSection] : undefined;
+        const resource = !initialProfile && visibleSections(user.role, user.rolePermissions, user.isOwner).includes(initialSection) ? initialScreenResources[initialSection] : undefined;
         setStartup({
           status: "loading-data",
           sessionConfirmed: true,
@@ -256,7 +271,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
 
     void initializeApp();
     return () => { active = false; };
-  }, [initialSection, router, startupAttempt]);
+  }, [initialProfile, initialSection, router, startupAttempt]);
 
   // Retorno do login com Google (?google=ok): avisa outras abas como o login por senha e limpa a URL.
   useEffect(() => {
@@ -290,11 +305,22 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     };
   }, [router]);
 
+  // "Meu perfil" salvou nome ou foto: o usuário atual do shell (topbar, menu Mais, saudações) reflete na hora, sem recarregar.
+  useEffect(() => {
+    const handleProfileUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<ProfileUpdatedDetail>).detail;
+      if (!detail) return;
+      setCurrentUser((current) => current ? { ...current, ...(detail.name !== undefined ? { name: detail.name } : {}), ...(detail.avatarVersion !== undefined ? { avatarVersion: detail.avatarVersion } : {}) } : current);
+    };
+    window.addEventListener(profileUpdatedEvent, handleProfileUpdated);
+    return () => window.removeEventListener(profileUpdatedEvent, handleProfileUpdated);
+  }, []);
+
   // URL direta de uma seção que o papel não enxerga: vai para a primeira permitida (sempre permitida, então sem laço).
   const fallbackSection = allowedSections[0];
   useEffect(() => {
-    if (startup.status === "ready" && currentUser && fallbackSection && !allowedSections.includes(active)) router.replace(sectionPaths[fallbackSection]);
-  }, [startup.status, currentUser, active, fallbackSection, allowedSections, router]);
+    if (!profileView && startup.status === "ready" && currentUser && fallbackSection && !allowedSections.includes(active)) router.replace(sectionPaths[fallbackSection]);
+  }, [profileView, startup.status, currentUser, active, fallbackSection, allowedSections, router]);
 
   async function openCreate(section: SectionId, dialog: NonNullable<typeof createDialog>) {
     if (trialExpired) {
@@ -401,7 +427,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     <CurrentRoleProvider value={currentUser ? { id: currentUser.id, tourEnabled: startup.status === "ready" && !trialExpired, role: currentUser.role, isOwner: currentUser.isOwner, rolePermissions: currentUser.rolePermissions } : null}>
     <div className="harmonize-app min-h-screen bg-background text-foreground">
       <Sidebar
-        active={active}
+        active={shown}
         onSelect={selectSection}
         onNewAppointment={() => openCreate("agenda", "appointment")}
         clinicName={currentUser?.clinic?.name}
@@ -410,30 +436,31 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
         rolePermissions={currentUser?.rolePermissions}
       />
       <div className="lg:pl-[220px]">
-        <Topbar user={currentUser} clinics={clinics} onSwitchClinic={switchClinic} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onNavigate={selectSection} onQuickCreate={openCreate} onOpenSettingsSection={openSettingsSearchSection} onOpenStockAlert={openStockAlert} onLogout={logout} />
-        <main className={`mx-auto w-full ${active === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
-          <AnimatedPage routeKey={active}>
-          {currentUser && allowedSections.includes("dashboard") && active === "dashboard" ? <Dashboard userName={currentUser?.name} onNavigate={selectSection} /> : null}
-          {currentUser && active === "agenda" ? <ScheduleSection focus={agendaFocus} currentUserName={currentUser.name} openCreate={createDialog === "appointment"} onCreateOpen={() => openCreate("agenda", "appointment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {currentUser && active === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => openCreate("clientes", "client")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {currentUser && allowedSections.includes("procedimentos") && active === "procedimentos" ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => openCreate("procedimentos", "procedure")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {currentUser && allowedSections.includes("estoque") && active === "estoque" ? <StockSection onSaved={showNotice} /> : null}
-          {currentUser && allowedSections.includes("compras") && active === "compras" ? <PurchasesSection tab={purchasesTab} onTabChange={setPurchasesTab} onSaved={showNotice} /> : null}
-          {currentUser && active === "orcamentos" ? <QuotesSection openCreate={createDialog === "quote"} onCreateOpen={() => openCreate("orcamentos", "quote")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {currentUser && allowedSections.includes("pagamentos") && active === "pagamentos" ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => openCreate("pagamentos", "payment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
-          {currentUser && allowedSections.includes("financeiro") && active === "financeiro" ? <FinanceSection /> : null}
-          {currentUser && allowedSections.includes("relatorios") && active === "relatorios" ? <ReportsSection /> : null}
-          {currentUser && allowedSections.includes("configuracoes") && active === "configuracoes" ? <SettingsSection initialSection={settingsFocusSection} isOwner={currentUser.isOwner} clinicName={currentUser.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} onRolePermissionsChange={(rolePermissions) => {
+        <Topbar user={currentUser} clinics={clinics} onSwitchClinic={switchClinic} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onProfile={openProfile} onNavigate={selectSection} onQuickCreate={openCreate} onOpenSettingsSection={openSettingsSearchSection} onOpenStockAlert={openStockAlert} onLogout={logout} />
+        <main className={`mx-auto w-full ${shown === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
+          <AnimatedPage routeKey={shown ?? "perfil"}>
+          {currentUser && profileView ? <MyProfile /> : null}
+          {currentUser && allowedSections.includes("dashboard") && shown === "dashboard" ? <Dashboard userName={currentUser?.name} onNavigate={selectSection} /> : null}
+          {currentUser && shown === "agenda" ? <ScheduleSection focus={agendaFocus} currentUserName={currentUser.name} openCreate={createDialog === "appointment"} onCreateOpen={() => openCreate("agenda", "appointment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && shown === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => openCreate("clientes", "client")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && allowedSections.includes("procedimentos") && shown === "procedimentos" ? <ProceduresSection openCreate={createDialog === "procedure"} onCreateOpen={() => openCreate("procedimentos", "procedure")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && allowedSections.includes("estoque") && shown === "estoque" ? <StockSection onSaved={showNotice} /> : null}
+          {currentUser && allowedSections.includes("compras") && shown === "compras" ? <PurchasesSection tab={purchasesTab} onTabChange={setPurchasesTab} onSaved={showNotice} /> : null}
+          {currentUser && shown === "orcamentos" ? <QuotesSection openCreate={createDialog === "quote"} onCreateOpen={() => openCreate("orcamentos", "quote")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && allowedSections.includes("pagamentos") && shown === "pagamentos" ? <PaymentsSection openCreate={createDialog === "payment"} onCreateOpen={() => openCreate("pagamentos", "payment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
+          {currentUser && allowedSections.includes("financeiro") && shown === "financeiro" ? <FinanceSection /> : null}
+          {currentUser && allowedSections.includes("relatorios") && shown === "relatorios" ? <ReportsSection /> : null}
+          {currentUser && allowedSections.includes("configuracoes") && shown === "configuracoes" ? <SettingsSection initialSection={settingsFocusSection} isOwner={currentUser.isOwner} clinicName={currentUser.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} onRolePermissionsChange={(rolePermissions) => {
             setClientCacheScope(`${currentUser.id}:${currentUser.clinicId}:${JSON.stringify(rolePermissions)}`);
             setCurrentUser((current) => current ? { ...current, rolePermissions } : current);
           }} /> : null}
           </AnimatedPage>
         </main>
       </div>
-      <MobileNav active={active} sections={mobileSections.bar} moreActive={mobileSections.more.includes(active)} moreOpen={moreOpen} onSelect={selectSection} onOpenMore={() => setMoreOpen(true)} moreButtonRef={moreButtonRef} />
-      <MobileMoreSheet open={moreOpen} onOpenChange={setMoreOpen} active={active} sections={mobileSections.more} onSelect={selectSection} onLogout={logout} onCloseAutoFocus={(event) => { event.preventDefault(); moreButtonRef.current?.focus(); }} user={currentUser} />
+      <MobileNav active={shown} sections={mobileSections.bar} moreActive={shown !== null && mobileSections.more.includes(shown)} moreOpen={moreOpen} onSelect={selectSection} onOpenMore={() => setMoreOpen(true)} moreButtonRef={moreButtonRef} />
+      <MobileMoreSheet open={moreOpen} onOpenChange={setMoreOpen} active={shown} sections={mobileSections.more} onSelect={selectSection} onLogout={logout} onCloseAutoFocus={(event) => { event.preventDefault(); moreButtonRef.current?.focus(); }} user={currentUser} onProfile={openProfile} />
       <QuickCreateFab sections={allowedSections} onCreate={(target) => { const section = { appointment: "agenda", client: "clientes", quote: "orcamentos", payment: "pagamentos" }[target] as SectionId; void openCreate(section, target); }} />
-      {currentUser && startup.status === "ready" && !trialExpired ? <GuidedTour allowedSections={allowedSections} userId={currentUser.id} activeSection={active} suppressAutoOpen={createDialog !== null || hasDraftGuard()} onFinished={() => window.dispatchEvent(new Event(setupInviteEvent))} onSelectSection={(section, replace) => selectSection(section, undefined, "purchases", replace)} /> : null}
+      {currentUser && startup.status === "ready" && !trialExpired ? <GuidedTour allowedSections={allowedSections} userId={currentUser.id} activeSection={shown ?? undefined} suppressAutoOpen={createDialog !== null || hasDraftGuard()} onFinished={() => window.dispatchEvent(new Event(setupInviteEvent))} onSelectSection={(section, replace) => selectSection(section, undefined, "purchases", replace)} /> : null}
       <SetupWizardHost onOpenDestination={openSetupDestination} onDashboard={() => { void selectSection("dashboard"); }} />
       <AppToaster />
       {undoNotice ? <div className={`${undoNotice.leaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-[calc(8.5rem+env(safe-area-inset-bottom))] left-1/2 lg:bottom-6 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] border border-border bg-card px-4 py-3 text-xs font-bold text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.18)]`} role="status"><div className="flex items-center gap-3"><span className="min-w-0 flex-1">{undoNotice.message}</span><button className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-[11px] font-black text-foreground transition hover:bg-muted/80" onClick={() => { const undo = undoNotice.undo; setUndoNotice(null); undo(); }}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-success" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}

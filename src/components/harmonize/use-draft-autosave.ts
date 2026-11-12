@@ -130,6 +130,21 @@ export function useDraftAutosave({ scope, revision, enabled, save, canSave = tru
   return { state, flush, leave, hold, release, discard };
 }
 
+// Formulário sem autosave (ex.: Meu perfil): enquanto houver alterações não salvas, navegar pelo shell pede confirmação e fechar a aba avisa.
+export function useUnsavedChangesGuard(dirty: boolean) {
+  useEffect(() => {
+    if (!dirty) return;
+    const guard = async () => window.confirm("As alterações não foram salvas. Deseja sair e perdê-las?");
+    activeDraftGuard = guard;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => {
+      if (activeDraftGuard === guard) activeDraftGuard = null;
+      window.removeEventListener("beforeunload", warn);
+    };
+  }, [dirty]);
+}
+
 export function hasDraftGuard() {
   return activeDraftGuard !== null;
 }
