@@ -36,7 +36,7 @@ function ActiveProcedureWarning({ enabled }: { enabled: boolean }) {
 }
 
 type SidebarProps = {
-  active: SectionId;
+  active: SectionId | null;
   onSelect: (section: SectionId) => void;
   onNewAppointment: () => void;
   clinicName?: string;

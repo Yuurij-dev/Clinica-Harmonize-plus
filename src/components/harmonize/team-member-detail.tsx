@@ -11,6 +11,8 @@ import { LoadingSkeleton } from "./shared";
 import { TeamMemberPhotoDialog } from "./team-member-photo-dialog";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { formatCpf } from "@/lib/input-masks";
+import { profileUpdatedEvent, type ProfileUpdatedDetail } from "@/lib/section-events";
+import { useCurrentUserId } from "./current-user";
 
 export type TeamMemberDetailData = {
   id: string;
@@ -35,6 +37,7 @@ const sectionTitle = "border-b border-border pb-2 text-xs font-semibold uppercas
 export function TeamMemberDetail({ memberId, onBack }: { memberId: string; onBack: () => void }) {
   const key = `/api/team/${encodeURIComponent(memberId)}`;
   const [member, setMember] = useState<TeamMemberDetailData | undefined>(() => readClientCache<Response>(key)?.member);
+  const currentUserId = useCurrentUserId();
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -66,6 +69,13 @@ export function TeamMemberDetail({ memberId, onBack }: { memberId: string; onBac
     return () => window.removeEventListener("keydown", close);
   }, [photoMenu]);
 
+  // Foto do próprio usuário mudou por aqui: topbar e "Meu perfil" refletem a nova versão (mesma convenção de my-profile.tsx).
+  function announceOwnPhoto(avatarVersion: string | null) {
+    if (!user || user.id !== currentUserId) return;
+    invalidateClientCache("/api/me");
+    window.dispatchEvent(new CustomEvent<ProfileUpdatedDetail>(profileUpdatedEvent, { detail: { avatarVersion } }));
+  }
+
   function startEdit() { if (!user) return; setDraft(toDraft(user)); setFormError(""); setEditing(true); }
   function cancelEdit() { if (saving) return; setEditing(false); setDraft(null); setFormError(""); }
 
@@ -77,6 +87,7 @@ export function TeamMemberDetail({ memberId, onBack }: { memberId: string; onBac
       const response = await fetch(`${key}/avatar`, { method: "DELETE" });
       if (!response.ok) { const data = await response.json().catch(() => null) as { message?: string } | null; setPhotoError(data?.message ?? "Não foi possível remover a foto."); return; }
       setPhotoFailed(true);
+      announceOwnPhoto(null);
     } catch {
       setPhotoError("Não foi possível remover a foto.");
     } finally {
@@ -164,7 +175,7 @@ export function TeamMemberDetail({ memberId, onBack }: { memberId: string; onBac
               <button type="button" className="w-full px-4 py-3 text-muted-foreground hover:bg-muted/50" onClick={() => setPhotoMenu(null)}>Cancelar</button>
             </div>
           </Modal>
-          {photoMenu === "upload" ? <TeamMemberPhotoDialog avatarUrl={`${key}/avatar`} onSaved={() => { setPhotoFailed(false); setPhotoRevision((value) => value + 1); }} onClose={() => setPhotoMenu(null)} /> : null}
+          {photoMenu === "upload" ? <TeamMemberPhotoDialog avatarUrl={`${key}/avatar`} onSaved={() => { setPhotoFailed(false); setPhotoRevision((value) => value + 1); announceOwnPhoto(new Date().toISOString()); }} onClose={() => setPhotoMenu(null)} /> : null}
           <Modal open={photoMenu === "view"} onClose={() => setPhotoMenu(null)} title={user.name} panelClassName="max-w-sm">
             {/* eslint-disable-next-line @next/next/no-img-element -- endpoint privado que já devolve miniatura. */}
             <button type="button" aria-label="Expandir foto" title="Clique para expandir" onClick={() => setPhotoMenu("zoom")} className="mx-auto block w-full max-w-72 cursor-zoom-in rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5147dc]"><img alt={`Foto de ${user.name}`} className="aspect-square w-full rounded-xl object-cover" src={`${key}/avatar?v=${photoRevision}`} /></button>

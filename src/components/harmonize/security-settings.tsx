@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useState, type FormEvent, type ReactNode } from "react";
-import { KeyRound, Laptop, Loader2, LogOut, ShieldCheck, ShieldOff, Trash2 } from "lucide-react";
+import { ChevronDown, KeyRound, Laptop, Loader2, LogOut, ShieldCheck, ShieldOff, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -341,7 +341,7 @@ function ReauthModal({ open, onClose, onSuccess, title, description, submitLabel
   );
 }
 
-// Histórico do próprio usuário, mais recentes primeiro; "Carregar mais" segue o cursor do servidor.
+// Histórico do próprio usuário, mais recentes primeiro; "Ver mais" segue o cursor do servidor.
 function SecurityHistory({ reloadTick }: { reloadTick: number }) {
   const [events, setEvents] = useState<SecurityEventRow[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -396,7 +396,7 @@ function SecurityHistory({ reloadTick }: { reloadTick: number }) {
           </ul>
         )}
         {error ? <p className="py-2 text-sm text-destructive" role="alert">{error}</p> : null}
-        {!loading && nextCursor ? <div className="flex justify-center pt-3"><Button disabled={loadingMore} onClick={() => void loadMore()} size="sm" variant="outline">{loadingMore ? <Loader2 className="animate-spin" /> : null}Carregar mais</Button></div> : null}
+        {!loading && nextCursor ? <div className="flex justify-center pt-3"><Button aria-label="Ver mais eventos" disabled={loadingMore} onClick={() => void loadMore()} size="icon" title="Ver mais" variant="outline">{loadingMore ? <Loader2 className="animate-spin" /> : <ChevronDown className="h-4 w-4" />}</Button></div> : null}
       </CardContent>
     </Card>
   );

@@ -2,7 +2,7 @@
 import { CLIENT_CACHE_UNAUTHORIZED_EVENT } from "./client-cache";
 
 export const SECURITY_OVERVIEW_KEY = "/api/security/overview";
-export const SECURITY_EVENTS_PAGE_SIZE = 20;
+export const SECURITY_EVENTS_PAGE_SIZE = 5;
 
 export type SecurityOverview = {
   mfa: { enabled: boolean; enabledAt: string | null; setupPending: boolean; required: boolean; recoveryCodesRemaining: number };

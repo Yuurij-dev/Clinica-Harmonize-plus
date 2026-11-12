@@ -9327,7 +9327,340 @@ async function googleAgenda() {
 }
 
 
+// "Meu perfil": /api/me, /api/me/profile, /api/me/avatar, /api/me/password (+ rota de foto da equipe refatorada). Contas @example.invalid, nunca e-mail real.
+async function myProfile() {
+  const prefix = "e2e-meuperfil-";
+  const mail = (t) => `${prefix}${t}-${run}@example.invalid`;
+  const pw = `E2e-${run}-Perfil9!`;
+  const otherClinic = `Clínica Perfil ${run}`;
+  const emails = ["pro", "staff", "adm", "pwu", "lock", "goog", "outro"].map(mail);
+  const digitsOf = (v) => String(v ?? "").replace(/\D/g, "");
+  const bcryptCompare = async (a, b) => (await import("bcryptjs")).compare(a, b);
+  const jpeg = await sharp({ create: { width: 64, height: 64, channels: 3, background: { r: 30, g: 120, b: 200 } } }).jpeg().toBuffer();
+  const png = await sharp({ create: { width: 48, height: 48, channels: 3, background: { r: 200, g: 80, b: 120 } } }).png().toBuffer();
+  // Requisição crua: cookie e Origin explícitos (as rotas /api/me exigem same-origin nas mutações).
+  const rq = async (sess, method, path, { json, form, headers = {}, origin = true, body } = {}) => {
+    const h = { ...(sess ? { cookie: sess } : {}), ...(origin && method !== "GET" ? { origin: baseUrl } : {}), ...headers };
+    let payload = body;
+    if (json !== undefined) { h["content-type"] = "application/json"; payload = JSON.stringify(json); }
+    if (form) payload = form;
+    const isStream = payload && typeof payload === "object" && "getReader" in payload;
+    const res = await fetch(`${baseUrl}${path}`, { method, headers: h, body: payload, redirect: "manual", ...(isStream ? { duplex: "half" } : {}) });
+    const buf = Buffer.from(await res.arrayBuffer());
+    let d; try { d = JSON.parse(buf.toString()); } catch { d = null; }
+    return { s: res.status, d, h: res.headers, buf };
+  };
+  const file = (bytes, type, name = "foto.png", field = "file") => { const f = new FormData(); f.set(field, new File([bytes], name, { type }), name); return f; };
+  const userRow = (id) => prisma.user.findUnique({ where: { id } });
+  const stable = (u) => JSON.stringify({ ...u, updatedAt: undefined });
+  const testMembership = await prisma.clinicMembership.findFirst({ where: { user: { email } }, select: { userId: true, clinicId: true } });
+  const personal = { name: true, phone: true, cpf: true, postalCode: true, address: true, country: true, state: true, city: true };
+  const ownerBefore = await prisma.user.findUnique({ where: { id: testMembership.userId }, select: personal });
+  const ownerHadAvatar = Boolean(await prisma.userAvatar.findUnique({ where: { userId: testMembership.userId }, select: { userId: true } }));
+  const clinicBefore = await prisma.clinic.findUnique({ where: { id: testMembership.clinicId }, select: { trialEndsAt: true } });
+  try {
+    // ---- contas ----
+    const mk = async (tag, role) => {
+      const r = await api("POST", "/api/team", { name: `E2e Perfil ${tag}`, email: mail(tag), password: pw, role, cpf: randomCpf(), address: "Rua Velha, 1", postalCode: "01001000", country: "Brasil", state: "SP", city: "São Paulo" });
+      if (r.status !== 201) return null;
+      const id = await userIdOf(mail(tag));
+      await prisma.user.update({ where: { id }, data: { mustChangePassword: false } }); // senha segue `pw` (sem troca de primeiro acesso)
+      return { ...r.data.member, userId: id };
+    };
+    const M = {};
+    for (const [tag, role] of [["pro", "PROFESSIONAL"], ["staff", "STAFF"], ["adm", "ADMIN"], ["pwu", "STAFF"], ["lock", "STAFF"]]) M[tag] = await mk(tag, role);
+    if (Object.values(M).some((m) => !m)) { check("meu perfil: contas criadas", false, JSON.stringify(Object.keys(M).filter((k) => !M[k]))); return; }
+    // conta só-Google: criada no banco (usuário e identidade nascem juntos), com hash conhecido só para o roteiro entrar
+    const { hash } = await import("bcryptjs");
+    const googUser = await prisma.user.create({ data: { name: "E2e Perfil goog", email: mail("goog"), passwordHash: await hash(pw, 4), role: "STAFF", emailVerifiedAt: new Date() } });
+    await prisma.clinicMembership.create({ data: { userId: googUser.id, clinicId: testMembership.clinicId, role: "STAFF" } });
+    await prisma.userIdentity.create({ data: { userId: googUser.id, provider: "google", providerSubject: `e2e-${run}`, email: mail("goog") } });
+    // dono de outra clínica
+    const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2e Perfil Externo", email: mail("outro"), password: pw }));
+    if (reg.status !== 201) { check("meu perfil: outra clínica criada", false, reg.status); return; }
+    const outroId = await userIdOf(mail("outro"));
+    const S = {};
+    for (const tag of ["pro", "staff", "adm", "outro"]) {
+      const s = await loginAs(mail(tag), pw);
+      if (s.status !== 200) { check(`meu perfil: login ${tag}`, false, `${s.status} ${JSON.stringify(s.data).slice(0, 120)}`); return; }
+      S[tag] = s.cookie;
+    }
+    S.owner = cookie;
+    const ownerId = testMembership.userId;
+    const ids = { owner: ownerId, pro: M.pro.userId, staff: M.staff.userId, adm: M.adm.userId, outro: outroId };
+
+    // ---- 1. /api/me por papel, sem segredos ----
+    const sensitive = /passwordHash|\$2[aby]\$|secretEnc/i;
+    for (const [label, key, role, owner] of [["ADMIN (dono)", "owner", "ADMIN", true], ["ADMIN", "adm", "ADMIN", false], ["PROFESSIONAL", "pro", "PROFESSIONAL", false], ["STAFF", "staff", "STAFF", false]]) {
+      const r = await rq(S[key], "GET", "/api/me");
+      check(`meu perfil: ${label} abre /api/me com os próprios dados`, r.s === 200 && r.d?.id === ids[key] && r.d.role === role && r.d.isOwner === owner && r.d.clinics?.length === 1 && r.d.activeClinicId === testMembership.clinicId, `${r.s} ${r.buf.toString().slice(0, 150)}`);
+      check(`meu perfil: ${label} /api/me sem hash/token e com no-store`, !sensitive.test(r.buf.toString()) && /no-store/.test(r.h.get("cache-control") ?? ""), r.h.get("cache-control"));
+    }
+    const me0 = await rq(S.pro, "GET", "/api/me");
+    check("meu perfil: CPF vem mascarado (nunca completo)", /^\*\*\*\.\*\*\*\.\*\*\*-\d{2}$/.test(me0.d?.cpf ?? "") && !/\d{11}/.test(me0.buf.toString()), me0.d?.cpf);
+    check("meu perfil: campos do contrato presentes", ["email", "phone", "postalCode", "address", "country", "state", "city", "hasAvatar", "avatarVersion", "createdAt", "hasPassword", "canChangePassword", "mfa"].every((k) => k in (me0.d ?? {})) && me0.d.hasPassword === true && me0.d.mfa.enabled === false, Object.keys(me0.d ?? {}).join());
+    check("meu perfil: /api/me sem sessão devolve 401", (await rq("", "GET", "/api/me")).s === 401);
+    const authMe0 = await rq(S.pro, "GET", "/api/auth/me");
+    check("meu perfil: /api/auth/me traz avatarVersion", authMe0.s === 200 && "avatarVersion" in (authMe0.d?.user ?? {}), JSON.stringify(authMe0.d).slice(0, 150));
+
+    // ---- 2. tela /perfil por papel ----
+    for (const [label, key] of [["ADMIN", "owner"], ["PROFESSIONAL", "pro"], ["STAFF", "staff"]]) {
+      await withSession(S[key], () => withPage(async (page, pageErrors) => {
+        await page.goto(`${baseUrl}/perfil`, { waitUntil: "domcontentloaded" });
+        const heading = await page.getByText("Meu perfil").first().waitFor({ timeout: 20_000 }).then(() => true).catch(() => false);
+        check(`meu perfil: ${label} abre /perfil sem ir ao login e vê "Meu perfil"`, heading && !/\/login/.test(page.url()), page.url());
+        check(`meu perfil: ${label} /perfil sem erro de JavaScript`, pageErrors.length === 0, pageErrors.join(" | ").slice(0, 150));
+      }));
+    }
+
+    // ---- 3. PATCH /profile ----
+    const patch = (key, json, extra) => rq(S[key], "PATCH", "/api/me/profile", { json, ...extra });
+    const cpfNew = randomCpf();
+    let r = await patch("staff", { name: "Maria", phone: "(11) 98888-7777", postalCode: "01310-100", address: "Av. Paulista, 1000", country: "Brasil", state: "SP", city: "São Paulo", cpf: cpfNew });
+    let row = await userRow(ids.staff);
+    check("meu perfil: PATCH persiste todos os campos (nome sem sobrenome)", r.s === 200 && row.name === "Maria" && row.phone === "11988887777" && row.postalCode === "01310100" && row.address === "Av. Paulista, 1000" && row.city === "São Paulo" && digitsOf(row.cpf) === cpfNew, `${r.s} ${r.buf.toString().slice(0, 150)} ${row.phone} ${row.cpf}`);
+    check("meu perfil: PATCH devolve o perfil com CPF mascarado", r.d?.name === "Maria" && r.d.cpf === `***.***.***-${cpfNew.slice(-2)}` && !r.buf.toString().includes(cpfNew), r.d?.cpf);
+    const g = await rq(S.staff, "GET", "/api/me");
+    const am = await rq(S.staff, "GET", "/api/auth/me");
+    check("meu perfil: /api/me e /api/auth/me refletem o novo nome", g.d?.name === "Maria" && g.d.phone === "11988887777" && am.d?.user?.name === "Maria", `${g.d?.name} ${JSON.stringify(am.d).slice(0, 100)}`);
+    const keep = stable(await userRow(ids.staff));
+    r = await patch("staff", {});
+    check("meu perfil: PATCH vazio mantém tudo", r.s === 200 && stable(await userRow(ids.staff)) === keep, r.s);
+    r = await patch("staff", { cpf: g.d.cpf });
+    check("meu perfil: CPF mascarado mantém o atual", r.s === 200 && digitsOf((await userRow(ids.staff)).cpf) === cpfNew, r.s);
+    r = await patch("staff", { cpf: "" });
+    check("meu perfil: CPF vazio mantém o atual", r.s === 200 && digitsOf((await userRow(ids.staff)).cpf) === cpfNew, r.s);
+    const cpf2 = randomCpf();
+    r = await patch("staff", { cpf: `${cpf2.slice(0, 3)}.${cpf2.slice(3, 6)}.${cpf2.slice(6, 9)}-${cpf2.slice(9)}` });
+    check("meu perfil: CPF completo novo (com pontuação) grava e volta mascarado", r.s === 200 && digitsOf((await userRow(ids.staff)).cpf) === cpf2 && r.d?.cpf === `***.***.***-${cpf2.slice(-2)}`, `${r.s} ${r.d?.cpf}`);
+    r = await patch("staff", { phone: "", postalCode: "", address: "", city: "" });
+    row = await userRow(ids.staff);
+    check("meu perfil: campos vazios limpam (exceto nome e CPF)", r.s === 200 && row.phone === null && row.postalCode === null && row.address === null && row.city === null && row.name === "Maria" && Boolean(row.cpf) && row.state === "SP", `${r.s} ${row.phone} ${row.city}`);
+    const bad = async (label, json, field) => { const x = await patch("staff", json); check(`meu perfil: ${label} devolve 400 com fields.${field}`, x.s === 400 && Boolean(x.d?.fields?.[field]), `${x.s} ${x.buf.toString().slice(0, 120)}`); };
+    const beforeBad = stable(await userRow(ids.staff));
+    await bad("CPF inválido", { cpf: "11111111111" }, "cpf");
+    await bad("CPF com dígito errado", { cpf: "12345678900" }, "cpf");
+    await bad("telefone curto", { phone: "1234567" }, "phone");
+    await bad("telefone com 12 dígitos", { phone: "551199998888" }, "phone");
+    await bad("CEP curto", { postalCode: "1234" }, "postalCode");
+    await bad("nome vazio", { name: "   " }, "name");
+    await bad("nome com 101 caracteres", { name: "a".repeat(101) }, "name");
+    await bad("nome não-texto", { name: 123 }, "name");
+    await bad("endereço com 201 caracteres", { address: "a".repeat(201) }, "address");
+    await bad("cidade com 101 caracteres", { city: "c".repeat(101) }, "city");
+    r = await patch("staff", { name: "Novo Nome", phone: "123", cpf: "1" });
+    check("meu perfil: vários erros voltam juntos e nada é gravado", r.s === 400 && r.d?.fields?.phone && r.d.fields.cpf && stable(await userRow(ids.staff)) === beforeBad, `${r.s} ${JSON.stringify(r.d?.fields)}`);
+    r = await patch("staff", { name: "a".repeat(100) });
+    check("meu perfil: nome com exatamente 100 caracteres é aceito", r.s === 200, r.s);
+    for (const [label, opt] of [["corpo array", { json: [1] }], ["JSON null", { body: "null", headers: { "content-type": "application/json" } }], ["JSON inválido", { body: "{oops", headers: { "content-type": "application/json" } }], ["corpo texto", { body: "\"texto\"", headers: { "content-type": "application/json" } }]]) {
+      const x = await rq(S.staff, "PATCH", "/api/me/profile", opt);
+      check(`meu perfil: PATCH ${label} devolve 400`, x.s === 400, x.s);
+    }
+    r = await patch("staff", { name: "Valido", pad: "x".repeat(20_000) });
+    check("meu perfil: corpo acima de 16 KB devolve 413 e não grava", r.s === 413 && (await userRow(ids.staff)).name !== "Valido", r.s);
+    r = await patch("staff", { name: "Sem origem" }, { origin: false });
+    check("meu perfil: PATCH sem Origin devolve 403 e não grava", r.s === 403 && (await userRow(ids.staff)).name !== "Sem origem", r.s);
+    check("meu perfil: PATCH sem sessão devolve 401", (await rq("", "PATCH", "/api/me/profile", { json: { name: "X" } })).s === 401);
+    check("meu perfil: PATCH com Origin de outro site devolve 403", (await rq(S.staff, "PATCH", "/api/me/profile", { json: { name: "X" }, headers: { origin: "https://evil.example.invalid" } })).s === 403);
+
+    // mass assignment (profissional): nada além dos campos permitidos muda
+    const staffBefore = stable(await userRow(ids.staff));
+    const proBefore = await userRow(ids.pro);
+    const memberships = () => prisma.clinicMembership.findMany({ where: { userId: ids.pro }, select: { id: true, role: true, isOwner: true, clinicId: true } });
+    const proMemberBefore = await memberships();
+    r = await patch("pro", { name: "Pro Novo", email: `hack-${run}@example.invalid`, role: "ADMIN", clinicId: testMembership.clinicId, userId: ids.staff, id: ids.staff, passwordHash: "x", mustChangePassword: true, failedLogins: 7, lockedUntil: new Date().toISOString(), activeClinicId: null, profession: "hack", isOwner: true, emailVerifiedAt: null });
+    const proAfter = await userRow(ids.pro);
+    check("meu perfil: mass assignment ignora e-mail, papel, clínica, userId, hash e demais campos", r.s === 200 && stable(proAfter) === stable({ ...proBefore, name: "Pro Novo" }), `${r.s} ${["email", "role", "passwordHash", "mustChangePassword", "failedLogins", "lockedUntil", "activeClinicId", "profession", "emailVerifiedAt"].filter((k) => JSON.stringify(proAfter[k]) !== JSON.stringify(proBefore[k])).join()}`);
+    check("meu perfil: mass assignment não muda a membership nem outro usuário", JSON.stringify(await memberships()) === JSON.stringify(proMemberBefore) && stable(await userRow(ids.staff)) === staffBefore, "");
+    check("meu perfil: o perfil devolvido mantém e-mail, papel e id", r.d?.email === mail("pro") && r.d?.role === "PROFESSIONAL" && r.d?.id === ids.pro, `${r.d?.email} ${r.d?.role}`);
+    r = await patch("adm", { name: "Adm Perfil", phone: "11977776666" });
+    check("meu perfil: ADMIN (não dono) edita o próprio perfil", r.s === 200 && (await userRow(ids.adm)).phone === "11977776666", r.s);
+    r = await patch("owner", { name: "Dono Perfil E2E", city: "Campinas" });
+    check("meu perfil: ADMIN dono edita o próprio perfil e /api/auth/me muda", r.s === 200 && (await rq(S.owner, "GET", "/api/auth/me")).d?.user?.name === "Dono Perfil E2E", r.s);
+
+    // ---- 4. foto ----
+    const av = "/api/me/avatar";
+    r = await rq(S.pro, "GET", av);
+    check("meu perfil: foto sem imagem devolve 204 e no-store", r.s === 204 && /no-store/.test(r.h.get("cache-control") ?? ""), `${r.s} ${r.h.get("cache-control")}`);
+    check("meu perfil: foto sem sessão (GET/PUT/DELETE) devolve 401", (await rq("", "GET", av)).s === 401 && (await rq("", "PUT", av, { form: file(jpeg, "image/jpeg") })).s === 401 && (await rq("", "DELETE", av)).s === 401);
+    r = await rq(S.pro, "PUT", av, { form: file(jpeg, "image/jpeg", "a.jpg") });
+    check("meu perfil: PUT de JPEG válido devolve 200", r.s === 200 && r.d?.ok === true, `${r.s} ${r.buf.toString().slice(0, 100)}`);
+    r = await rq(S.pro, "GET", av);
+    const meta = r.s === 200 ? await sharp(r.buf).metadata().catch(() => null) : null;
+    check("meu perfil: GET foto 200 image/jpeg, nosniff e no-store sem ?v=", r.s === 200 && r.h.get("content-type") === "image/jpeg" && meta?.format === "jpeg" && r.h.get("x-content-type-options") === "nosniff" && r.h.get("cache-control") === "private, no-store", `${r.s} ${r.h.get("content-type")} ${r.h.get("cache-control")}`);
+    const rv = await rq(S.pro, "GET", `${av}?v=abc`);
+    check("meu perfil: GET foto com ?v= usa cache privado de 1 dia", rv.s === 200 && rv.h.get("cache-control") === "private, max-age=86400", rv.h.get("cache-control"));
+    const v1 = (await rq(S.pro, "GET", "/api/me")).d;
+    check("meu perfil: hasAvatar e avatarVersion após enviar", v1.hasAvatar === true && Boolean(v1.avatarVersion), `${v1.hasAvatar} ${v1.avatarVersion}`);
+    await new Promise((res) => setTimeout(res, 20));
+    const upPng = await rq(S.pro, "PUT", av, { form: file(png, "image/png") });
+    const upWebp = await rq(S.pro, "PUT", av, { form: file(await sharp(png).webp().toBuffer(), "image/webp", "f.webp") });
+    check("meu perfil: PNG e WebP também aceitos e a versão da foto muda", upPng.s === 200 && upWebp.s === 200 && (await rq(S.pro, "GET", "/api/me")).d.avatarVersion !== v1.avatarVersion, `${upPng.s} ${upWebp.s}`);
+    check("meu perfil: /api/auth/me traz avatarVersion preenchido", Boolean((await rq(S.pro, "GET", "/api/auth/me")).d?.user?.avatarVersion), "");
+    const proPhoto = (await rq(S.pro, "GET", av)).buf;
+    const badUp = async (label, form, expectStatus) => { const x = await rq(S.pro, "PUT", av, { form }); check(`meu perfil: foto ${label} devolve ${expectStatus}`, x.s === expectStatus, `${x.s} ${x.buf.toString().slice(0, 100)}`); };
+    await badUp("GIF", file(Buffer.from("GIF89a"), "image/gif", "a.gif"), 400);
+    await badUp("SVG (image/svg+xml)", file(Buffer.from("<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><script>alert(1)</script></svg>"), "image/svg+xml", "a.svg"), 400);
+    await badUp("imagem ilegível", file(Buffer.from("isto nao e imagem"), "image/png"), 400);
+    await badUp("sem o campo file", file(png, "image/png", "foto.png", "outro"), 400);
+    await badUp("acima de 5 MB (arquivo)", file(Buffer.alloc(5 * 1024 * 1024 + 1, 1), "image/png"), 413);
+    await badUp("acima de 5 MB + margem (cabeçalho)", file(Buffer.alloc(6 * 1024 * 1024, 1), "image/png"), 413);
+    check("meu perfil: pedidos de foto inválidos não alteraram a foto", Buffer.compare(proPhoto, (await rq(S.pro, "GET", av)).buf) === 0, "");
+    const disguised = await rq(S.pro, "PUT", av, { form: file(Buffer.from("<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' fill='red'/></svg>"), "image/png") });
+    const afterSvg = await rq(S.pro, "GET", av);
+    check("meu perfil: SVG disfarçado de PNG é recusado ou vira JPEG (nunca é servido como SVG)", disguised.s === 400 || (disguised.s === 200 && afterSvg.h.get("content-type") === "image/jpeg" && (await sharp(afterSvg.buf).metadata()).format === "jpeg"), `${disguised.s} ${afterSvg.h.get("content-type")}`);
+    const fd = new Response(file(png, "image/png"));
+    const bodyBytes = Buffer.from(await fd.arrayBuffer());
+    const chunkedBody = () => new ReadableStream({ start(c) { c.enqueue(bodyBytes); c.close(); } });
+    const chunked = await rq(S.pro, "PUT", av, { body: chunkedBody(), headers: { "content-type": fd.headers.get("content-type") } });
+    check("meu perfil: PUT sem Content-Length devolve 411", chunked.s === 411, `${chunked.s} ${chunked.buf.toString().slice(0, 80)}`);
+    check("meu perfil: PUT/DELETE foto sem Origin devolvem 403", (await rq(S.pro, "PUT", av, { form: file(png, "image/png"), origin: false })).s === 403 && (await rq(S.pro, "DELETE", av, { origin: false })).s === 403, "");
+    await rq(S.staff, "PUT", av, { form: file(png, "image/png") });
+    const staffPhoto = (await rq(S.staff, "GET", av)).buf;
+    const proNow = (await rq(S.pro, "GET", av)).buf;
+    check("meu perfil: cada usuário vê só a própria foto", staffPhoto.length > 0 && Buffer.compare(staffPhoto, proNow) !== 0, `${staffPhoto.length} ${proNow.length}`);
+    check("meu perfil: /api/me/avatar ignora id na query (ADMIN sem foto vê 204)", (await rq(S.adm, "GET", `${av}?id=${ids.staff}&userId=${ids.staff}`)).s === 204);
+    check("meu perfil: /api/me/avatar/<id> não existe (404)", (await rq(S.adm, "GET", `${av}/${ids.staff}`)).s === 404);
+    await rq(S.outro, "PUT", av, { form: file(jpeg, "image/jpeg") });
+    await rq(S.outro, "DELETE", av);
+    check("meu perfil: PUT/DELETE de outro usuário não tocam a foto do staff", Buffer.compare((await rq(S.staff, "GET", av)).buf, staffPhoto) === 0, "");
+    const dbl = await Promise.all([rq(S.adm, "PUT", av, { form: file(jpeg, "image/jpeg") }), rq(S.adm, "PUT", av, { form: file(jpeg, "image/jpeg") })]);
+    check("meu perfil: clique duplo no PUT não falha nem duplica", dbl.every((x) => x.s === 200) && (await prisma.userAvatar.count({ where: { userId: ids.adm } })) === 1, dbl.map((x) => x.s).join());
+    r = await rq(S.pro, "DELETE", av);
+    const d2 = await rq(S.pro, "DELETE", av);
+    const afterDel = (await rq(S.pro, "GET", "/api/me")).d;
+    check("meu perfil: DELETE remove (200), repetir também 200, GET volta 204 e hasAvatar=false", r.s === 200 && d2.s === 200 && (await rq(S.pro, "GET", av)).s === 204 && afterDel.hasAvatar === false && afterDel.avatarVersion === null, `${r.s} ${d2.s}`);
+    check("meu perfil: DELETE do pro não apagou a foto do staff", (await rq(S.staff, "GET", av)).s === 200);
+
+    // ---- 5. rota de foto da equipe (refatorada) ----
+    const teamUrl = (m) => `/api/team/${m.id}/avatar`;
+    const ownerMem = await prisma.clinicMembership.findFirst({ where: { isOwner: true, userId: ownerId }, select: { id: true } });
+    r = await rq(S.owner, "PUT", teamUrl(M.pro), { form: file(png, "image/png") });
+    check("equipe foto: ADMIN dono troca a foto de colaborador (200) e o colaborador vê em /api/me", r.s === 200 && (await rq(S.pro, "GET", "/api/me")).d.hasAvatar === true, r.s);
+    r = await rq(S.owner, "GET", teamUrl(M.pro));
+    check("equipe foto: GET devolve JPEG com nosniff e no-store", r.s === 200 && r.h.get("content-type") === "image/jpeg" && r.h.get("x-content-type-options") === "nosniff" && r.h.get("cache-control") === "private, no-store", `${r.s} ${r.h.get("cache-control")}`);
+    check("equipe foto: outro ADMIN (não dono) troca a foto de colaborador (200)", (await rq(S.adm, "PUT", teamUrl(M.pro), { form: file(png, "image/png") })).s === 200);
+    for (const [label, key] of [["STAFF", "staff"], ["PROFESSIONAL", "pro"]]) {
+      const target = key === "staff" ? M.pro : M.staff;
+      check(`equipe foto: ${label} recebe 403 ao enviar/remover foto de outro`, (await rq(S[key], "PUT", teamUrl(target), { form: file(png, "image/png") })).s === 403 && (await rq(S[key], "DELETE", teamUrl(target))).s === 403, "");
+      check(`equipe foto: ${label} lê a foto de outro membro (200/204)`, [200, 204].includes((await rq(S[key], "GET", teamUrl(target))).s), "");
+    }
+    check("equipe foto: STAFF troca a própria foto pela rota da equipe (200)", (await rq(S.staff, "PUT", teamUrl(M.staff), { form: file(png, "image/png") })).s === 200);
+    check("equipe foto: outro ADMIN não troca nem remove a foto do dono (403)", (await rq(S.adm, "PUT", teamUrl(ownerMem), { form: file(png, "image/png") })).s === 403 && (await rq(S.adm, "DELETE", teamUrl(ownerMem))).s === 403);
+    const t400 = await rq(S.owner, "PUT", teamUrl(M.pro), { form: file(Buffer.from("GIF89a"), "image/gif", "a.gif") });
+    const t413 = await rq(S.owner, "PUT", teamUrl(M.pro), { form: file(Buffer.alloc(5 * 1024 * 1024 + 1, 1), "image/png") });
+    const t411 = await rq(S.owner, "PUT", teamUrl(M.pro), { body: chunkedBody(), headers: { "content-type": fd.headers.get("content-type") } });
+    check("equipe foto: erros de arquivo iguais ao anterior (GIF 400, >5MB 413, sem Content-Length 411)", t400.s === 400 && t413.s === 413 && t411.s === 411, `${t400.s} ${t413.s} ${t411.s}`);
+    check("equipe foto: sem sessão 401 e administrador de outra clínica 404", (await rq("", "GET", teamUrl(M.pro))).s === 401 && (await rq(S.outro, "GET", teamUrl(M.pro))).s === 404 && (await rq(S.outro, "PUT", teamUrl(M.pro), { form: file(png, "image/png") })).s === 404 && (await rq(S.outro, "DELETE", teamUrl(M.pro))).s === 404);
+    const outroClinicId = (await prisma.clinicMembership.findFirst({ where: { userId: outroId }, select: { clinicId: true } })).clinicId;
+    await prisma.clinicMembership.create({ data: { userId: ids.pro, clinicId: outroClinicId, role: "STAFF" } });
+    const shared = await rq(S.owner, "PUT", teamUrl(M.pro), { form: file(png, "image/png") });
+    const sharedDel = await rq(S.owner, "DELETE", teamUrl(M.pro));
+    check("equipe foto: ADMIN não mexe na foto de conta compartilhada com outra clínica (403)", shared.s === 403 && sharedDel.s === 403, `${shared.s} ${sharedDel.s}`);
+    check("equipe foto: a própria conta compartilhada ainda troca a foto (200)", (await rq(S.pro, "PUT", teamUrl(M.pro), { form: file(png, "image/png") })).s === 200);
+    const proClinics = (await rq(S.pro, "GET", "/api/me")).d;
+    check("meu perfil: conta em 2 clínicas vê as duas, com a ativa correta", proClinics.clinics.length === 2 && proClinics.activeClinicId === testMembership.clinicId && proClinics.clinics.some((c) => c.name === otherClinic && c.role === "STAFF"), JSON.stringify(proClinics.clinics.map((c) => c.name)));
+    await prisma.clinicMembership.deleteMany({ where: { userId: ids.pro, clinicId: outroClinicId } });
+
+    // ---- 6. isolamento entre usuários/clínicas ----
+    const outroMe = (await rq(S.outro, "GET", "/api/me")).d;
+    const staffMe = (await rq(S.staff, "GET", "/api/me")).d;
+    check("meu perfil: cada conta vê só as próprias clínicas", outroMe?.clinics?.length === 1 && outroMe.clinics[0].name === otherClinic && outroMe.clinics[0].isOwner === true && staffMe.clinics.every((c) => c.id === testMembership.clinicId) && !JSON.stringify(staffMe).includes(otherClinic), JSON.stringify(outroMe?.clinics));
+    const staffSnap = stable(await userRow(ids.staff));
+    r = await patch("outro", { name: "Invasor", userId: ids.staff, id: ids.staff, phone: "11911112222" });
+    check("meu perfil: PATCH de A (com userId de B no corpo) só altera A", r.s === 200 && stable(await userRow(ids.staff)) === staffSnap && (await userRow(outroId)).name === "Invasor", r.s);
+    check("meu perfil: /api/me devolve sempre os dados da sessão (e-mails distintos)", staffMe.email === mail("staff") && outroMe.email === mail("outro"));
+
+    // ---- 7. senha ----
+    const pwd = (sess, json, extra) => rq(sess, "POST", "/api/me/password", { json, ...extra });
+    const pwuSessA = (await loginAs(mail("pwu"), pw)).cookie;
+    const pwuSessB = (await loginAs(mail("pwu"), pw)).cookie;
+    await prisma.trustedDevice.create({ data: { userId: M.pwu.userId, tokenHash: `e2e-${run}-${randomBytes(8).toString("hex")}`, label: "E2E", expiresAt: new Date(Date.now() + 86_400_000) } });
+    const newPw = `Nova-${run}-Aa1!`;
+    check("meu perfil: senha sem sessão 401 e sem Origin 403", (await pwd("", { currentPassword: pw, newPassword: newPw })).s === 401 && (await pwd(pwuSessA, { currentPassword: pw, newPassword: newPw }, { origin: false })).s === 403);
+    r = await pwd(pwuSessA, { newPassword: newPw });
+    check("meu perfil: senha sem a atual devolve 400 field currentPassword", r.s === 400 && r.d?.field === "currentPassword", `${r.s} ${r.buf.toString().slice(0, 100)}`);
+    for (const [label, newPassword] of [["fraca (curta)", "Ab1!"], ["sem maiúscula", "semmaiuscula1!"], ["sem número", "SemNumero!!"], ["sem caractere especial", "SemEspecial12"], ["acima de 72 bytes", `Aa1!${"x".repeat(80)}`], ["acima de 72 bytes (multibyte)", `Aa1!${"é".repeat(35)}`], ["não-texto", 12345678]]) {
+      const x = await pwd(pwuSessA, { currentPassword: pw, newPassword });
+      check(`meu perfil: senha nova ${label} devolve 400 field newPassword`, x.s === 400 && x.d?.field === "newPassword" && Boolean(x.d?.message), `${x.s} ${x.buf.toString().slice(0, 100)}`);
+    }
+    r = await pwd(pwuSessA, { currentPassword: pw, newPassword: pw });
+    check("meu perfil: senha nova igual à atual devolve 400 field newPassword", r.s === 400 && r.d?.field === "newPassword", `${r.s} ${r.buf.toString().slice(0, 100)}`);
+    const hashBefore = (await userRow(M.pwu.userId)).passwordHash;
+    r = await pwd(pwuSessA, { currentPassword: `${pw}x`, newPassword: newPw });
+    const afterWrong = await userRow(M.pwu.userId);
+    check("meu perfil: senha atual errada devolve 403 invalid_password e não troca", r.s === 403 && r.d?.code === "invalid_password" && afterWrong.passwordHash === hashBefore && afterWrong.failedLogins === 1, `${r.s} ${r.buf.toString().slice(0, 100)} ${afterWrong.failedLogins}`);
+    await prisma.user.update({ where: { id: M.pwu.userId }, data: { mustChangePassword: true, failedLogins: 3 } });
+    r = await pwd(pwuSessA, { currentPassword: pw, newPassword: newPw });
+    const pwRow = await userRow(M.pwu.userId);
+    check("meu perfil: troca de senha 200 com sessionsEnded, hash novo, mustChangePassword=false e falhas zeradas", r.s === 200 && r.d?.success === true && r.d.sessionsEnded >= 1 && pwRow.passwordHash !== hashBefore && await bcryptCompare(newPw, pwRow.passwordHash) && pwRow.mustChangePassword === false && pwRow.failedLogins === 0, `${r.s} ${r.buf.toString().slice(0, 150)}`);
+    const sa = (await rq(pwuSessA, "GET", "/api/me")).s, sb = (await rq(pwuSessB, "GET", "/api/me")).s;
+    check("meu perfil: a sessão atual continua 200 e a outra sessão passa a 401", sa === 200 && sb === 401, `${sa} ${sb}`);
+    check("meu perfil: dispositivos confiáveis revogados", (await prisma.trustedDevice.count({ where: { userId: M.pwu.userId, revokedAt: null } })) === 0);
+    const events = await rq(pwuSessA, "GET", "/api/security/events?limit=50");
+    const evPwd = (events.d?.events ?? []).find((e) => e.type === "PASSWORD_CHANGED");
+    const evText = events.buf.toString();
+    check("meu perfil: evento PASSWORD_CHANGED no histórico, sem segredos", Boolean(evPwd) && evPwd.success === true && !evText.includes(newPw) && !evText.includes(pw) && !/\$2[aby]\$/.test(evText), JSON.stringify(evPwd));
+    const loginNew = await fullLogin(mail("pwu"), newPw);
+    const loginOld = await fullLogin(mail("pwu"), pw);
+    check("meu perfil: login com a senha nova funciona e com a antiga não", loginNew.status === 200 && loginOld.status === 401, `${loginNew.status} ${loginOld.status}`);
+    const newPw2 = `Outra-${run}-Bb2@`;
+    const pair = await Promise.all([pwd(pwuSessA, { currentPassword: newPw, newPassword: newPw2 }), pwd(pwuSessA, { currentPassword: newPw, newPassword: newPw2 })]);
+    const finalLogin = await fullLogin(mail("pwu"), newPw2);
+    check("meu perfil: clique duplo na troca não dá 5xx e a senha final funciona", pair.every((x) => x.s < 500) && pair.some((x) => x.s === 200) && finalLogin.status === 200, `${pair.map((x) => x.s)} ${finalLogin.status}`);
+    // bloqueio: mesmo contador do login
+    const lockSess = (await loginAs(mail("lock"), pw)).cookie;
+    let last;
+    for (let i = 0; i < 10; i += 1) last = await pwd(lockSess, { currentPassword: `errada-${i}`, newPassword: newPw });
+    const lockRow = await userRow(M.lock.userId);
+    const afterLock = await pwd(lockSess, { currentPassword: pw, newPassword: newPw });
+    check("meu perfil: 10 senhas atuais erradas bloqueiam a conta (a próxima, mesmo certa, devolve 429)", last.s === 403 && Boolean(lockRow.lockedUntil) && afterLock.s === 429 && (await userRow(M.lock.userId)).passwordHash === lockRow.passwordHash, `${last.s} ${afterLock.s} ${lockRow.lockedUntil}`);
+    const lockedLogin = await rq("", "POST", "/api/auth/login", { json: { login: mail("lock"), password: pw } });
+    check("meu perfil: o bloqueio é o mesmo do login (login também recusa)", lockedLogin.s !== 200, lockedLogin.s);
+    await prisma.user.update({ where: { id: M.lock.userId }, data: { failedLogins: 0, lockedUntil: null } });
+    // conta só-Google
+    const googLogin = await loginAs(mail("goog"), pw);
+    if (googLogin.status === 200) {
+      const gMe = await rq(googLogin.cookie, "GET", "/api/me");
+      const gp = await pwd(googLogin.cookie, { currentPassword: pw, newPassword: newPw });
+      check("meu perfil: conta só-Google devolve 403 no_password (hasPassword=false) e não troca", gp.s === 403 && gp.d?.code === "no_password" && gMe.d?.hasPassword === false && gMe.d?.canChangePassword === false && await bcryptCompare(pw, (await userRow(googUser.id)).passwordHash), `${gp.s} ${gp.buf.toString().slice(0, 100)} ${gMe.d?.hasPassword}`);
+      check("meu perfil: conta só-Google ainda edita o perfil", (await rq(googLogin.cookie, "PATCH", "/api/me/profile", { json: { phone: "11955554444" } })).s === 200);
+    } else check("meu perfil: login da conta só-Google", false, `${googLogin.status} ${JSON.stringify(googLogin.data).slice(0, 120)}`);
+
+    // ---- 8. trial vencido não bloqueia perfil nem senha ----
+    await prisma.clinic.updateMany({ where: { name: otherClinic }, data: { trialEndsAt: new Date(Date.now() - 86_400_000) } });
+    const expired = await loginAs(mail("outro"), pw); // sessão nova: sem o cache de autenticação anterior
+    if (expired.status === 200) {
+      const e = expired.cookie;
+      const contrast = await rq(e, "GET", "/api/appointments");
+      const eMe = await rq(e, "GET", "/api/me");
+      const ePatch = await rq(e, "PATCH", "/api/me/profile", { json: { city: "Rio" } });
+      const eWrong = await pwd(e, { currentPassword: `${pw}x`, newPassword: newPw });
+      const eOk = await pwd(e, { currentPassword: pw, newPassword: newPw });
+      check("meu perfil: trial vencido não bloqueia /api/me, PATCH de perfil nem troca de senha", eMe.s === 200 && ePatch.s === 200 && eWrong.s === 403 && eWrong.d?.code === "invalid_password" && eOk.s === 200, `me ${eMe.s} patch ${ePatch.s} senha-errada ${eWrong.s} senha ${eOk.s} (controle /api/appointments=${contrast.s})`);
+    } else check("meu perfil: login com trial vencido", false, `${expired.status} ${JSON.stringify(expired.data).slice(0, 120)}`);
+  } finally {
+    const uids = (await prisma.user.findMany({ where: { email: { in: emails } }, select: { id: true } })).map((u) => u.id);
+    await wipeSecurityOf(uids).catch(() => undefined);
+    await prisma.userAvatar.deleteMany({ where: { userId: { in: uids } } });
+    await prisma.userIdentity.deleteMany({ where: { userId: { in: uids } } });
+    await prisma.clinicMembership.deleteMany({ where: { userId: { in: uids } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { id: { in: uids } } });
+    // restaura a conta de teste (dados pessoais, foto e prazo do trial)
+    await prisma.user.update({ where: { id: testMembership.userId }, data: ownerBefore });
+    if (!ownerHadAvatar) await prisma.userAvatar.deleteMany({ where: { userId: testMembership.userId } });
+    await prisma.clinic.update({ where: { id: testMembership.clinicId }, data: { trialEndsAt: clinicBefore.trialEndsAt } });
+    const leftUsers = await prisma.user.count({ where: { email: { in: emails } } });
+    const leftClinics = await prisma.clinic.count({ where: { name: otherClinic } });
+    const members = await prisma.clinicMembership.count({ where: { clinicId: testMembership.clinicId } });
+    const restored = await prisma.user.findUnique({ where: { id: testMembership.userId }, select: personal });
+    check("meu perfil: limpeza confirmada no banco e conta de teste restaurada", leftUsers === 0 && leftClinics === 0 && members === 1 && JSON.stringify(restored) === JSON.stringify(ownerBefore), `${leftUsers} ${leftClinics} ${members}`);
+  }
+}
+
 const suites = {
+  meu_perfil: { needs: [], run: () => myProfile() },
   google_agenda: { needs: [], run: () => googleAgenda() },
   editar_dados_cliente: { needs: [], run: () => editPatientData() },
   seguranca_2fa: { needs: [], run: () => security2fa() },

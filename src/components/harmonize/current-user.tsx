@@ -20,6 +20,11 @@ export function useCan(permission: Permission) {
   return user ? canForUser(user, permission) : false;
 }
 
+/** Id do usuário logado (nulo enquanto o app não carregou). */
+export function useCurrentUserId() {
+  return useContext(CurrentRoleContext)?.id ?? null;
+}
+
 /** Usuário para os tours; nulo enquanto o app não está pronto ou quando o tour está desligado (ex.: teste expirado). */
 export function useTourUserId() {
   const user = useContext(CurrentRoleContext);

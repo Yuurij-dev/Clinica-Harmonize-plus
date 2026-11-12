@@ -7,7 +7,7 @@ import type { SectionId } from "@/types/clinic";
 import { cn } from "@/lib/utils";
 
 type MobileNavProps = {
-  active: SectionId;
+  active: SectionId | null;
   sections: SectionId[];
   /** Verdadeiro quando a seção ativa está dentro de "Mais" (realça o botão). */
   moreActive: boolean;
