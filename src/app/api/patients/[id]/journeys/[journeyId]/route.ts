@@ -6,8 +6,12 @@ import { removeStoredBytes, type StoredRef } from "@/lib/clinical-storage";
 import { prisma } from "@/lib/prisma";
 import { journeyDeleteDecision } from "@/lib/journey-delete-rules";
 import { can } from "@/lib/permissions";
+import { calendarAppointmentsDeleted } from "@/lib/calendar-runtime";
+import { captureDeleteSnapshots } from "@/lib/calendar-sync-queue";
 
 class JourneyDeleteRace extends Error {}
+
+const appointmentCalendarSelect = { id: true, status: true, date: true, time: true, procedure: true, professional: true } as const;
 
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string; journeyId: string }> }) {
   const user = await getCurrentUser({ requireActiveTrial: true });
@@ -28,14 +32,15 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
     if (journey.quotes.some((quote) => ["Pago", "Aprovado"].includes(quote.status))) return { error: "Não é possível excluir uma jornada vinculada a orçamento aprovado ou pago.", status: 409 as const };
 
     const [appointments, evaluations, followUps, sessions] = await Promise.all([
-      transaction.appointment.findMany({ where: { patientId, clinicId: user.clinicId, journeyId }, select: { id: true } }),
+      transaction.appointment.findMany({ where: { patientId, clinicId: user.clinicId, journeyId }, select: appointmentCalendarSelect }),
       transaction.evaluation.findMany({ where: { patientId, clinicId: user.clinicId, journeyId }, select: { id: true } }),
       transaction.patientProcedureFollowUp.findMany({ where: { patientId, clinicId: user.clinicId, journeyId }, select: { id: true, appointmentId: true } }),
       transaction.patientProcedureSession.findMany({ where: { patientId, clinicId: user.clinicId, journeyId }, select: { id: true } }),
     ]);
     const followUpAppointmentIds = followUps.flatMap(({ appointmentId }) => appointmentId ? [appointmentId] : []);
-    const followUpAppointments = followUpAppointmentIds.length ? await transaction.appointment.findMany({ where: { id: { in: followUpAppointmentIds }, patientId, clinicId: user.clinicId }, select: { id: true } }) : [];
-    const appointmentIds = [...new Set([...appointments.map(({ id }) => id), ...followUpAppointments.map(({ id }) => id)])];
+    const followUpAppointments = followUpAppointmentIds.length ? await transaction.appointment.findMany({ where: { id: { in: followUpAppointmentIds }, patientId, clinicId: user.clinicId }, select: appointmentCalendarSelect }) : [];
+    const calendarRows = [...new Map([...appointments, ...followUpAppointments].map((row) => [row.id, row])).values()];
+    const appointmentIds = calendarRows.map(({ id }) => id);
     const encounterLinks = [
       ...(evaluations.length ? [{ encounterType: "evaluation", encounterId: { in: evaluations.map(({ id }) => id) } }] : []),
       ...(sessions.length ? [{ encounterType: "session", encounterId: { in: sessions.map(({ id }) => id) } }] : []),
@@ -61,6 +66,8 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
     ];
     if (pendingOutputLinks.length) await transaction.pendingStockOutput.deleteMany({ where: { clinicId: user.clinicId, OR: pendingOutputLinks } });
     await transaction.patientProcedureFollowUp.deleteMany({ where: { patientId, clinicId: user.clinicId, journeyId } });
+    // Vínculos com o Google somem em cascata com os agendamentos: lê antes, para os jobs DELETE depois do commit.
+    const calendarSnapshots = await captureDeleteSnapshots(transaction, user.clinicId, appointmentIds);
     if (appointmentIds.length) await transaction.appointment.deleteMany({ where: { id: { in: appointmentIds }, patientId, clinicId: user.clinicId } });
     await transaction.patientProcedureSession.deleteMany({ where: { patientId, clinicId: user.clinicId, journeyId } });
     await transaction.patientProcedure.deleteMany({ where: { patientId, clinicId: user.clinicId, journeyId } });
@@ -74,13 +81,15 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
     // Registro criado entre a contagem e o delete (pagamentos não usam a trava): desfaz tudo.
     if (!journeyDeleteDecision(abilities, deleted).allowed) throw new JourneyDeleteRace();
     await transaction.patientJourney.delete({ where: { id: journey.id } });
-    return { journey: { id: journey.id, name: journey.name }, storedFiles: [...documents, ...photos] satisfies StoredRef[] };
+    return { journey: { id: journey.id, name: journey.name }, storedFiles: [...documents, ...photos] satisfies StoredRef[], calendarRows, calendarSnapshots };
   }).catch((error) => {
     if (error instanceof JourneyDeleteRace) return { error: "A jornada recebeu novos registros durante a exclusão. Nada foi apagado; tente novamente ou peça a um administrador.", status: 409 as const };
     throw error;
   });
   if ("error" in result) return NextResponse.json({ message: result.error }, { status: result.status });
   await Promise.all(result.storedFiles.map(removeStoredBytes));
+  // Google Agenda + e-mails de cancelamento ao profissional (best-effort, nunca falha a exclusão).
+  await calendarAppointmentsDeleted({ clinicId: user.clinicId, patientId, actorUserId: user.id, rows: result.calendarRows.map((row) => ({ appointmentId: row.id, row })), snapshots: result.calendarSnapshots }).catch(() => undefined);
   return NextResponse.json({ journey: result.journey });
 }
 

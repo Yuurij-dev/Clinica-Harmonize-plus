@@ -8,6 +8,7 @@ import { appointmentStartNow, approvedProcedureNames, combinedProcedureName, isM
 import { consentGate, consentRequiredCode } from "@/lib/consent-rules";
 import { consentCounts } from "@/lib/clinical-files-server";
 import { prisma } from "@/lib/prisma";
+import { calendarAppointmentChanged } from "@/lib/calendar-runtime";
 import { lotBalances } from "@/lib/stock";
 import { validateQuantity } from "@/lib/stock-rules";
 import { parseKnownPhotoIds, unknownStoredPhotos } from "@/lib/session-after-photo-rules";
@@ -153,6 +154,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   };
 
   try {
+    // Início efetivo move o agendamento para agora: guarda antes/depois para sincronizar com o Google Agenda depois do commit.
+    const calendarMoves: Array<{ appointmentId: string; prev: { status: string; date: Date; time: string; procedure: string; professional: string }; next: { status: string; date: Date; time: string; procedure: string; professional: string } }> = [];
     const updated = await prisma.$transaction(async (tx) => {
       if (finalizing) {
         const claimed = await tx.patientProcedureSession.updateMany({ where: { id: sessionId, patientId, clinicId: user.clinicId, status: "Em execução", updatedAt: current.updatedAt }, data: updateData });
@@ -179,7 +182,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         // "Procedimento - …" em Agendado desta jornada é movido; retornos e demais agendamentos não são tocados.
         // O cliente envia o id do agendamento que o modal mostrou; sem id válido, só vale o agendamento cujo nome casa com o da sessão (nunca "o mais antigo").
         const scope = { clinicId: user.clinicId, patientId, journeyId: current.journeyId, status: "Agendado", procedure: { startsWith: PROCEDURE_APPOINTMENT_PREFIX } };
-        const select = { id: true, procedure: true, status: true };
+        const select = { id: true, procedure: true, status: true, date: true, time: true, professional: true };
         const chosenId = typeof body?.scheduledAppointmentId === "string" ? body.scheduledAppointmentId : "";
         const byId = chosenId ? await tx.appointment.findFirst({ where: { ...scope, id: chosenId }, select }) : null;
         const scheduled = byId ?? await tx.appointment.findFirst({ where: { ...scope, procedure: procedureAppointmentName(current.procedureName) }, orderBy: scheduledAppointmentOrder(), select });
@@ -188,6 +191,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
           const moved = await tx.appointment.updateMany({ where: { id: scheduled.id, clinicId: user.clinicId, patientId, journeyId: current.journeyId, status: "Agendado" }, data: { date: appointmentInstant(startNow.day), time: startNow.time } });
           if (moved.count) {
             appointment = { id: scheduled.id, date: startNow.day, time: startNow.time };
+            calendarMoves.push({ appointmentId: scheduled.id, prev: scheduled, next: { ...scheduled, date: appointmentInstant(startNow.day), time: startNow.time } });
             const log = [...parseJson<Array<{ at: string; actor: string; action: string; fields: string[] }>>(auditLog, []), { at: new Date().toISOString(), actor: user.name, action: `Agendamento alterado para o início (${startNow.day.split("-").reverse().join("/")} às ${startNow.time})`, fields: [] }].slice(-100);
             await tx.patientProcedureSession.updateMany({ where: { id: sessionId, patientId, clinicId: user.clinicId }, data: { auditLog: JSON.stringify(log) } });
           }
@@ -196,6 +200,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       }
       return { session: await tx.patientProcedureSession.findUnique({ where: { id: sessionId } }), pending: [], appointment };
     });
+    // Google Agenda + e-mail ao profissional pelo horário movido (profissional/status/procedimento não mudam aqui). Nunca falha a requisição.
+    for (const move of calendarMoves) {
+      await calendarAppointmentChanged({ clinicId: user.clinicId, appointmentId: move.appointmentId, patientId, actorUserId: user.id, prev: move.prev, next: move.next }).catch(() => undefined);
+    }
     const savedPhotos = updated.session ? parseJson<Photo[]>(updated.session.photos, []) : [];
     const sourcePhotoIds = savedPhotos.flatMap((photo) => photo.sourceEvaluationPhotoId ? [photo.sourceEvaluationPhotoId] : []);
     const sourcePhotos = sourcePhotoIds.length ? await prisma.evaluationPhoto.findMany({ where: { id: { in: sourcePhotoIds }, evaluationId: current.evaluationId }, select: { id: true, name: true, imageUrl: true, width: true, height: true, category: true } }) : [];

@@ -67,6 +67,8 @@ import { capitalizeFirst, formatDayBR, agendaDayInvalidationKey, agendaPeriodKey
 import { PaginationBar } from "./clinical-pagination";
 import { TeamInvitations } from "./team-invitations";
 import { SecuritySettings } from "./security-settings";
+import { GoogleCalendarSettings } from "./google-calendar-settings";
+import { gcalOutcomeToast } from "@/lib/google-calendar-ui-rules";
 import { TeamMemberDetail } from "./team-member-detail";
 import { usePatientLookup, type LookupPatient } from "./use-patient-lookup";
 import { createDefaultRolePermissionMatrix, permissionGroups, roleLabels, roles, runningAppointmentStatuses, type Role, type RolePermissionMatrix } from "@/lib/permissions";
@@ -1951,7 +1953,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const [editing, setEditing] = useState<string | null>(null);
   const [settingsSearch, setSettingsSearch] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
-  const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection ?? (canManageSettings ? "Dados da clínica" : canManageTeam ? "Custos e orçamento" : "Segurança e permissões"));
+  const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection ?? (typeof window !== "undefined" && new URLSearchParams(window.location.search).has("gcal") ? "Integrações" : canManageSettings ? "Dados da clínica" : canManageTeam ? "Custos e orçamento" : "Segurança e permissões"));
   useEffect(() => {
     const focusSection = (event: Event) => {
       const section = (event as CustomEvent<string>).detail;
@@ -1959,6 +1961,16 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
     };
     window.addEventListener(SETTINGS_SECTION_FOCUS_EVENT, focusSection);
     return () => window.removeEventListener(SETTINGS_SECTION_FOCUS_EVENT, focusSection);
+  }, []);
+  // Retorno do consentimento do Google (/configuracoes?gcal=codigo): abre Integrações, avisa o resultado e limpa a URL.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const code = url.searchParams.get("gcal");
+    if (!code) return;
+    const result = gcalOutcomeToast(code);
+    toast[result.kind](result.message);
+    url.searchParams.delete("gcal");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   }, []);
   const cachedTeam = canManageTeam ? readClientCache<{ members?: TeamMember[] }>("/api/team") : undefined;
   const [members, setMembers] = useState<TeamMember[]>(cachedTeam?.members ?? []);
@@ -2412,7 +2424,8 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const normalizeSettingsSearch = (value: string) => value.toLocaleLowerCase("pt-BR").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const normalizedSettingsSearch = normalizeSettingsSearch(settingsSearch.trim());
   // "Segurança da conta" é da própria conta (2FA, dispositivos, sessões): não depende de nenhuma permissão de gestão.
-  const hasSettingsSectionPermission = (label: string) => label === "Segurança da conta" ? true : label === "Segurança e permissões" ? canManageRolePermissions : label === "Profissionais e equipe" ? canManageTeam : label === "Custos e orçamento" ? canManageTeam : canManageSettings;
+  // "Integrações" abre para quem acessa Configurações: o profissional conecta a própria agenda Google (os demais itens ficam só para quem gerencia).
+  const hasSettingsSectionPermission = (label: string) => label === "Segurança da conta" || label === "Integrações" ? true : label === "Segurança e permissões" ? canManageRolePermissions : label === "Profissionais e equipe" ? canManageTeam : label === "Custos e orçamento" ? canManageTeam : canManageSettings;
   const permittedSettingsNavigation = settingsNavigation.filter((item) => hasSettingsSectionPermission(item.label));
   const displayedSettingsSection = permittedSettingsNavigation.some((item) => item.label === activeSettingsSection) ? activeSettingsSection : permittedSettingsNavigation[0]?.label ?? "";
   const isSearchingClinicPreferences = displayedSettingsSection === "Dados da clínica" && Boolean(normalizedSettingsSearch);
@@ -2650,10 +2663,9 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
             <Card className="border-border/70">
               <CardHeader className="border-b border-border/70"><CardTitle>Integrações</CardTitle><p className="text-sm text-muted-foreground">Conecte serviços externos para ampliar os recursos da clínica.</p></CardHeader>
               <CardContent className="space-y-3 pt-4">
-                {[
-                  ["WhatsApp", "Confirmações e lembretes de agendamentos"],
-                  ["Calendário", "Sincronização externa da agenda"],
-                ].map(([name, description]) => <div className="flex flex-col gap-3 rounded-md border border-border/70 p-4 sm:flex-row sm:items-center sm:justify-between" key={name}><div><p className="text-sm font-bold text-foreground">{name}</p><p className="mt-1 text-xs text-muted-foreground">{description}</p></div><Badge variant="amber">Indisponível</Badge></div>)}
+                <GoogleCalendarSettings />
+                {canManageSettings ? <>
+                <div className="flex flex-col gap-3 rounded-md border border-border/70 p-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-bold text-foreground">WhatsApp</p><p className="mt-1 text-xs text-muted-foreground">Confirmações e lembretes de agendamentos</p></div><Badge variant="amber">Indisponível</Badge></div>
                 <div className="rounded-md border border-border/70 p-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div><p className="text-sm font-bold text-foreground">E-mail</p><p className="mt-1 text-xs text-muted-foreground">Envio de comunicações para pacientes</p></div>
@@ -2674,7 +2686,8 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
                   <p className="mt-3 text-xs leading-5 text-muted-foreground">Envia ao cliente a confirmação, a remarcação e o cancelamento de agendamentos e o orçamento. Só envia para pacientes com e-mail cadastrado. {emailProviderReady ? "Desligue para parar de enviar e-mails aos clientes." : "O envio ainda não foi configurado neste ambiente."}</p>
                   {patientEmailsFeedback ? <p className={cn("mt-2 text-xs font-medium", patientEmailsFeedback.success && patientEmailsEnabled ? "text-success" : "text-destructive")} role={patientEmailsFeedback.success ? "status" : "alert"}>{patientEmailsFeedback.message}</p> : null}
                 </div>
-                <p className="text-xs leading-5 text-muted-foreground">O envio de e-mails depende do provedor configurado no ambiente. WhatsApp e calendário ainda não estão disponíveis; as opções de confirmação e reagendamento online ficam desativadas até a conexão estar disponível.</p>
+                <p className="text-xs leading-5 text-muted-foreground">O envio de e-mails depende do provedor configurado no ambiente. O WhatsApp ainda não está disponível; as opções de confirmação e reagendamento online ficam desativadas até a conexão estar disponível.</p>
+                </> : null}
               </CardContent>
             </Card>
           ) : null}

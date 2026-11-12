@@ -44,6 +44,7 @@ model User {
   trustedDevices             TrustedDevice[]
   authSessions               AuthSession[]
   securityEvents             SecurityEvent[]
+  googleCalendarConnections  GoogleCalendarConnection[]
   activeClinic              Clinic?            @relation("UserActiveClinic", fields: [activeClinicId], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@index([activeClinicId])
@@ -107,6 +108,7 @@ model Clinic {
   setup                       ClinicSetup?
   pendingStockOutputs         PendingStockOutput[]
   procedureImageAssets        ProcedureImageAsset[]
+  googleCalendarConnections   GoogleCalendarConnection[]
 }
 
 model ClinicMembership {
@@ -272,6 +274,7 @@ model Appointment {
   patient             Patient                   @relation(fields: [patientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   journey             PatientJourney?           @relation(fields: [journeyId], references: [id], onDelete: SetNull, onUpdate: NoAction)
   clinic              Clinic?                   @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  googleCalendarEvents GoogleCalendarEvent[]
 
   @@index([patientId, date])
   @@index([journeyId, date])
@@ -1080,4 +1083,95 @@ model SecurityEvent {
   user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@index([userId, createdAt])
+}
+
+// Conexão OAuth com o Google Agenda. connectionType: ADMIN (agenda central, no máximo uma ativa por clínica,
+// garantida por índice único parcial na migration) | PROFESSIONAL. status: CONNECTED | DISCONNECTED | ERROR.
+// Tokens sempre cifrados (secret-box); nunca devolvidos ao front.
+model GoogleCalendarConnection {
+  id                    String                @id @default(cuid())
+  clinicId              String
+  userId                String
+  googleEmail           String
+  googleAccountId       String?
+  calendarId            String                @default("primary")
+  accessTokenEncrypted  String?
+  refreshTokenEncrypted String?
+  tokenExpiresAt        DateTime?             @db.Timestamptz(6)
+  scope                 String                @default("")
+  connectionType        String
+  status                String                @default("CONNECTED")
+  lastSyncAt            DateTime?             @db.Timestamptz(6)
+  lastError             String?
+  createdAt             DateTime              @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime              @default(now()) @updatedAt @db.Timestamptz(6)
+  clinic                Clinic                @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  events                GoogleCalendarEvent[]
+
+  @@unique([clinicId, connectionType, userId])
+  @@index([clinicId, status])
+  @@index([userId])
+}
+
+// Vínculo agendamento <-> evento Google. role: CENTRAL | INDIVIDUAL.
+// syncStatus: SYNCED | PENDING_INVITE | RECEIVED | CANCELLED | ERROR.
+model GoogleCalendarEvent {
+  id            String                   @id @default(cuid())
+  clinicId      String
+  appointmentId String
+  connectionId  String
+  googleEventId String
+  role          String
+  attendeeEmail String?
+  syncStatus    String                   @default("SYNCED")
+  lastSyncedAt  DateTime?                @db.Timestamptz(6)
+  lastError     String?
+  createdAt     DateTime                 @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime                 @default(now()) @updatedAt @db.Timestamptz(6)
+  appointment   Appointment              @relation(fields: [appointmentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  connection    GoogleCalendarConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([appointmentId, connectionId])
+  @@index([clinicId, appointmentId])
+  @@index([connectionId])
+}
+
+// Outbox de sincronização. Sem FK em appointmentId: sobrevive à exclusão do agendamento (snapshot guarda o necessário para DELETE).
+// operation: CREATE | UPDATE | DELETE. status: PENDING | PROCESSING | COMPLETED | FAILED.
+model CalendarSyncJob {
+  id            String    @id @default(cuid())
+  clinicId      String
+  appointmentId String
+  operation     String
+  status        String    @default("PENDING")
+  attempts      Int       @default(0)
+  nextRetryAt   DateTime  @default(now()) @db.Timestamptz(6)
+  lockedAt      DateTime? @db.Timestamptz(6)
+  lockedBy      String?
+  lastError     String?
+  dedupeKey     String?
+  snapshot      Json?     @db.JsonB
+  createdAt     DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime  @default(now()) @updatedAt @db.Timestamptz(6)
+
+  @@index([status, nextRetryAt])
+  @@index([clinicId])
+  @@index([appointmentId])
+  @@index([dedupeKey])
+}
+
+// Registro dos e-mails Resend ao profissional (kind: NEW | CHANGED | CANCELLED | REASSIGNED_OUT). dedupeKey único evita reenvio.
+// status: SENT | SKIPPED | FAILED. Sem FK em appointmentId (o agendamento pode ter sido excluído).
+model CalendarNotificationLog {
+  id              String   @id @default(cuid())
+  clinicId        String
+  appointmentId   String
+  recipientUserId String?
+  kind            String
+  dedupeKey       String   @unique
+  status          String   @default("SENT")
+  sentAt          DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([clinicId, appointmentId])
 }
