@@ -41,7 +41,8 @@ export function MyProfilePassword({ email, canChangePassword, onChanged }: { ema
   const [values, setValues] = useState({ currentPassword: "", newPassword: "", confirmPassword: "" });
   const [errors, setErrors] = useState<Errors>({});
   const [formError, setFormError] = useState("");
-  const [show, setShow] = useState(false);
+  // Olho de mostrar/ocultar em cada campo (o que aparece é só o que a própria pessoa digitou; o navegador pode preencher a senha salva).
+  const [revealed, setRevealed] = useState<Record<FieldKey, boolean>>({ currentPassword: false, newPassword: false, confirmPassword: false });
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(false);
   const [warning, setWarning] = useState("");
@@ -104,8 +105,19 @@ export function MyProfilePassword({ email, canChangePassword, onChanged }: { ema
 
   const field = (name: FieldKey, label: string, autoComplete: string, extra?: { describedBy?: string }) => (
     <FormField label={label} htmlFor={ids[name]}>
-      <div key={`${name}-${shake[name]}`} className={errors[name] ? "hp-field-shake" : undefined}>
-        <input id={ids[name]} className={fieldClassName} type={show && name !== "currentPassword" ? "text" : "password"} value={values[name]} autoComplete={autoComplete} aria-invalid={errors[name] ? true : undefined} aria-describedby={[errors[name] ? `${ids[name]}-error` : "", extra?.describedBy ?? ""].filter(Boolean).join(" ") || undefined} maxLength={128} onChange={(event) => set(name, event.target.value)} />
+      <div key={`${name}-${shake[name]}`} className={cn("relative", errors[name] ? "hp-field-shake" : undefined)}>
+        <input id={ids[name]} className={cn(fieldClassName, "pr-11")} type={revealed[name] ? "text" : "password"} value={values[name]} autoComplete={autoComplete} aria-invalid={errors[name] ? true : undefined} aria-describedby={[errors[name] ? `${ids[name]}-error` : "", extra?.describedBy ?? ""].filter(Boolean).join(" ") || undefined} maxLength={128} onChange={(event) => set(name, event.target.value)} />
+        {(
+          <button
+            type="button"
+            className="absolute right-1.5 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary"
+            aria-label={revealed[name] ? "Ocultar senha" : "Mostrar senha"}
+            aria-pressed={revealed[name]}
+            onClick={() => setRevealed((current) => ({ ...current, [name]: !current[name] }))}
+          >
+            {revealed[name] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </button>
+        )}
       </div>
       {errors[name] ? <p id={`${ids[name]}-error`} role="alert" className="text-xs font-medium text-destructive">{errors[name]}</p> : null}
     </FormField>
@@ -124,13 +136,13 @@ export function MyProfilePassword({ email, canChangePassword, onChanged }: { ema
           {/* Campo de usuário oculto: o gerenciador de senhas associa a nova senha ao e-mail certo. */}
           <input type="text" autoComplete="username" value={email} readOnly tabIndex={-1} aria-hidden="true" className="sr-only" />
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="sm:col-span-2 sm:max-w-sm">{field("currentPassword", "Senha atual", "current-password")}</div>
+            {field("currentPassword", "Senha atual", "current-password")}
+            <div aria-hidden="true" className="hidden sm:block" />
             {field("newPassword", "Nova senha", "new-password", { describedBy: checklistId })}
             {field("confirmPassword", "Confirmar nova senha", "new-password")}
           </div>
           <PasswordChecklist id={checklistId} password={values.newPassword} highlightMissing={Boolean(errors.newPassword)} />
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <Button type="button" variant="ghost" size="sm" aria-pressed={show} onClick={() => setShow((value) => !value)}>{show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}{show ? "Ocultar nova senha" : "Mostrar nova senha"}</Button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Button type="submit" disabled={saving}>{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}{saving ? "Alterando..." : "Alterar senha"}</Button>
           </div>
           {formError ? <p className="rounded-md bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{formError}</p> : null}
