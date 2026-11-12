@@ -105,7 +105,7 @@ export function MyProfilePassword({ email, canChangePassword, onChanged }: { ema
   const field = (name: FieldKey, label: string, autoComplete: string, extra?: { describedBy?: string }) => (
     <FormField label={label} htmlFor={ids[name]}>
       <div key={`${name}-${shake[name]}`} className={errors[name] ? "hp-field-shake" : undefined}>
-        <input id={ids[name]} className={fieldClassName} type={show ? "text" : "password"} value={values[name]} autoComplete={autoComplete} aria-invalid={errors[name] ? true : undefined} aria-describedby={[errors[name] ? `${ids[name]}-error` : "", extra?.describedBy ?? ""].filter(Boolean).join(" ") || undefined} maxLength={128} onChange={(event) => set(name, event.target.value)} />
+        <input id={ids[name]} className={fieldClassName} type={show && name !== "currentPassword" ? "text" : "password"} value={values[name]} autoComplete={autoComplete} aria-invalid={errors[name] ? true : undefined} aria-describedby={[errors[name] ? `${ids[name]}-error` : "", extra?.describedBy ?? ""].filter(Boolean).join(" ") || undefined} maxLength={128} onChange={(event) => set(name, event.target.value)} />
       </div>
       {errors[name] ? <p id={`${ids[name]}-error`} role="alert" className="text-xs font-medium text-destructive">{errors[name]}</p> : null}
     </FormField>
@@ -130,7 +130,7 @@ export function MyProfilePassword({ email, canChangePassword, onChanged }: { ema
           </div>
           <PasswordChecklist id={checklistId} password={values.newPassword} highlightMissing={Boolean(errors.newPassword)} />
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <Button type="button" variant="ghost" size="sm" aria-pressed={show} onClick={() => setShow((value) => !value)}>{show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}{show ? "Ocultar senhas" : "Mostrar senhas"}</Button>
+            <Button type="button" variant="ghost" size="sm" aria-pressed={show} onClick={() => setShow((value) => !value)}>{show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}{show ? "Ocultar nova senha" : "Mostrar nova senha"}</Button>
             <Button type="submit" disabled={saving}>{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}{saving ? "Alterando..." : "Alterar senha"}</Button>
           </div>
           {formError ? <p className="rounded-md bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{formError}</p> : null}
