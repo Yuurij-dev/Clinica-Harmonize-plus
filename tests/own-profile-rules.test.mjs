@@ -75,3 +75,29 @@ test("avatar: Content-Length obrigatório e limitado; arquivo só JPG/PNG/WebP a
   assert.equal(checkAvatarFile({ type: "image/png", size: AVATAR_MAX_UPLOAD_BYTES + 1 })?.status, 413);
   for (const type of ["image/jpeg", "image/png", "image/webp"]) assert.equal(checkAvatarFile({ type, size: AVATAR_MAX_UPLOAD_BYTES }), null);
 });
+
+test("professionalNameTaken: recusa nome igual ao de outro membro (espaços e maiúsculas ignorados), mas não o próprio nome", async () => {
+  const { professionalNameTaken } = await import("../src/lib/own-profile-rules.ts");
+  const others = ["Dra. Bia Souza", "Carlos  Lima"];
+  assert.equal(professionalNameTaken("dra.  bia souza", "Ana Paula", others), true);
+  assert.equal(professionalNameTaken("Carlos Lima", "Ana Paula", others), true);
+  assert.equal(professionalNameTaken("Dra. Bia", "Ana Paula", others), false); // nome diferente
+  assert.equal(professionalNameTaken("Ana Paula", "Ana Paula", ["Ana Paula"]), false); // nome atual não é bloqueado
+  assert.equal(professionalNameTaken("ANA PAULA", "Ana Paula", ["ana paula"]), false); // só maiúsculas do próprio nome
+  assert.equal(professionalNameTaken("Ana  Paula", "Ana Paula", ["Ana Paula"]), false);
+  assert.equal(professionalNameTaken("   ", "Ana", others), false);
+  assert.equal(professionalNameTaken("Novo Nome", "Ana", []), false);
+});
+
+test("professionalNameTaken: nomes vindos de agendamentos/orçamentos (ex-colega, rótulo digitado) também são proibidos; o próprio continua livre", async () => {
+  const { professionalNameTaken } = await import("../src/lib/own-profile-rules.ts");
+  const fromRecords = ["Dr. Ex-Colega", "dra.  Bia", "Rótulo Digitado", "Ana Paula"]; // inclui o próprio nome atual nos agendamentos
+  assert.equal(professionalNameTaken("dr. ex-colega", "Ana Paula", fromRecords), true);
+  assert.equal(professionalNameTaken("Dra. Bia", "Ana Paula", fromRecords), true);
+  assert.equal(professionalNameTaken("rótulo   digitado", "Ana Paula", fromRecords), true);
+  assert.equal(professionalNameTaken("Ana Paula", "Ana Paula", fromRecords), false); // reenviar o mesmo nome
+  assert.equal(professionalNameTaken("ANA  PAULA", "Ana Paula", fromRecords), false); // só maiúsculas/espaços
+  assert.equal(professionalNameTaken("Ana Paula Silva", "Ana Paula", fromRecords), false);
+  assert.equal(professionalNameTaken("Nome Livre", "Ana Paula", Array.from({ length: 5000 }, (_, i) => `Pessoa ${i}`)), false); // sem limite de lista
+  assert.equal(professionalNameTaken("Pessoa 4999", "Ana Paula", Array.from({ length: 5000 }, (_, i) => `Pessoa ${i}`)), true);
+});
