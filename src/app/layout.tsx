@@ -53,7 +53,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <head />
       <body className="min-h-full flex flex-col">
-        <Script id="harmonize-theme" strategy="beforeInteractive">{`(() => { try { var p = window.location.pathname; if (p === "/login" || p.startsWith("/convite")) return; var saved = window.localStorage.getItem("harmonize-theme"); var dark = saved === "dark" || saved === "light" ? saved === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches; if (dark) document.documentElement.classList.add("dark"); } catch {} })();`}</Script>
+        <Script id="harmonize-theme" strategy="beforeInteractive">{`(() => { try { var p = window.location.pathname; if (p === "/login" || p.startsWith("/convite") || p === "/privacidade" || p === "/termos") return; var saved = window.localStorage.getItem("harmonize-theme"); var dark = saved === "dark" || saved === "light" ? saved === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches; if (dark) document.documentElement.classList.add("dark"); } catch {} })();`}</Script>
         <Script id="disable-browser-autocomplete" strategy="beforeInteractive">{`(() => {
           // Formulários de autenticação (login, cadastro, troca de senha, convite) se declaram com data-autofill="allow":
           // mantêm o autocomplete que o próprio componente define (username/current-password/new-password).

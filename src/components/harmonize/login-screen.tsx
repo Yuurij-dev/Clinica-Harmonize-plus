@@ -268,6 +268,10 @@ export function AuthShell({ action, children }: { action?: React.ReactNode; chil
         <BrandOutline className="pointer-events-none absolute inset-0 h-full w-full text-[#5147dc] opacity-[0.055]" />
         <div className="hp-panel-enter relative z-10 my-auto w-full max-w-[520px] rounded-[8px] border border-white/80 bg-white/95 px-6 py-8 shadow-[0_18px_55px_rgba(38,48,112,0.14)] sm:px-10 sm:py-10 lg:px-12 lg:py-12">
             {children}
+            <nav aria-label="Documentos legais" className="mx-auto mt-6 flex max-w-[360px] flex-wrap items-center justify-center gap-x-4 gap-y-1 border-t border-[#e6ebf5] pt-4 text-[11px] font-semibold text-[#7783a8]">
+              <a className="hover:text-[#5147dc] hover:underline" href="/termos" rel="noopener" target="_blank">Termos de Uso</a>
+              <a className="hover:text-[#5147dc] hover:underline" href="/privacidade" rel="noopener" target="_blank">Política de Privacidade</a>
+            </nav>
         </div>
       </section>
     </main>
@@ -538,7 +542,7 @@ function RegisterForm({ error, emailTaken, invalidFields, ruleShake, isSubmittin
           <Button className="h-12 w-full rounded-[10px] bg-[#4938f4] px-4 text-sm font-bold hover:bg-[#3d2de0]" size="lg" disabled={isSubmitting} type="submit">{isSubmitting ? "Criando sua conta..." : "Criar minha conta grátis"}{isSubmitting ? null : <ArrowRight className="h-4 w-4" />}</Button>
           <div className="my-4 flex items-center gap-3"><span className="h-px flex-1 bg-[#e9edf5]" /><span className="text-xs font-medium text-[#8b94af]">ou</span><span className="h-px flex-1 bg-[#e9edf5]" /></div>
           <Button aria-label="Continuar com Google" onClick={startGoogleSignup} className="h-12 w-full rounded-[10px] border-[#d9dff0] bg-white px-4 text-sm font-semibold text-[#25263a] shadow-none hover:bg-[#f8f9fc]" size="lg" type="button" variant="outline"><GoogleMark />Continuar com Google</Button>
-          <p className="mt-4 text-center text-[11px] leading-4 text-[#7783a8]">Ao continuar, você concorda com os <a className="font-bold text-[#5147dc] underline underline-offset-2" href="#termos">Termos de Uso</a> e a <a className="font-bold text-[#5147dc] underline underline-offset-2" href="#privacidade">Política de Privacidade</a>.</p>
+          <p className="mt-4 text-center text-[11px] leading-4 text-[#7783a8]">Ao continuar, você concorda com os <a className="font-bold text-[#5147dc] underline underline-offset-2" href="/termos" rel="noopener" target="_blank">Termos de Uso</a> e a <a className="font-bold text-[#5147dc] underline underline-offset-2" href="/privacidade" rel="noopener" target="_blank">Política de Privacidade</a>.</p>
           <p className="mt-3 text-center text-[13px] font-semibold text-[#26305a]">Já tem uma conta? <button className="inline-flex min-h-11 items-center px-1 font-bold text-[#5147dc] hover:underline focus-visible:outline-2 focus-visible:outline-[#5147dc]" onClick={onBack} type="button">Acessar</button></p>
         </div>
       </form>
