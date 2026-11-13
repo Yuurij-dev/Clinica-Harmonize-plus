@@ -1,3 +1,4 @@
+import { professionalKey } from "./appointment-conflict-rules.ts";
 import { COLLABORATOR_ADDRESS_MAX, COLLABORATOR_NAME_MAX, COLLABORATOR_PLACE_MAX } from "./collaborator-profile-rules.ts";
 import { PASSWORD_RULE_MESSAGE, isStrongPassword } from "./password-rules.ts";
 import { validCpf } from "./patient-registration-rules.ts";
@@ -95,4 +96,17 @@ export function validatePasswordChange(input: Record<string, unknown> | null | u
   if (new TextEncoder().encode(newPassword).length > BCRYPT_MAX_BYTES) return { ok: false, field: "newPassword", message: PASSWORD_TOO_LONG_MESSAGE };
   if (newPassword === currentPassword) return { ok: false, field: "newPassword", message: PASSWORD_SAME_MESSAGE };
   return { ok: true, currentPassword, newPassword };
+}
+
+export const OWN_NAME_TAKEN_MESSAGE = "Já existe outro profissional com este nome na sua clínica. Use um nome diferente (por exemplo, acrescente o sobrenome) para que os relatórios e agendamentos não se misturem.";
+
+/**
+ * O escopo dos relatórios de um PROFISSIONAL é por NOME (Appointment.professional é texto). Um nome igual ao de outro
+ * membro das clínicas em que ele é profissional misturaria os atendimentos. Compara como o agendamento (espaços colapsados,
+ * sem diferenciar maiúsculas). Não bloqueia manter o nome atual nem mudar só as maiúsculas do próprio nome.
+ */
+export function professionalNameTaken(newName: string, currentName: string, otherNames: readonly string[]): boolean {
+  const key = professionalKey(newName);
+  if (!key || key === professionalKey(currentName)) return false;
+  return otherNames.some((other) => professionalKey(other) === key);
 }

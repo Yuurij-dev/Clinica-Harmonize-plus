@@ -22,11 +22,11 @@ import {
   PaymentsSection,
   ProceduresSection,
   QuotesSection,
-  ReportsSection,
   ScheduleSection,
   SETTINGS_SECTION_FOCUS_EVENT,
   SettingsSection,
 } from "./sections";
+import { ReportsSection } from "./reports/reports-section";
 import type { SectionId } from "@/types/clinic";
 import type { RolePermissionMatrix } from "@/lib/permissions";
 import type { StockAlert } from "@/lib/stock-rules";
@@ -67,7 +67,7 @@ const initialScreenResources: Partial<Record<SectionId, { key: string; extraKeys
   orcamentos: { key: "/api/quotes", message: "Carregando os orçamentos..." },
   pagamentos: { key: "/api/payments", message: "Carregando os pagamentos..." },
   financeiro: { key: "/api/finance/summary?period=month", message: "Carregando o resumo financeiro..." },
-  relatorios: { key: "/api/dashboard/bootstrap", message: "Carregando os dados dos relatórios..." },
+  // relatorios: sem pré-carga; a tela busca /api/reports/overview sozinha (com skeleton) e as abas carregam sob demanda.
 };
 
 // Sessão inválida no cliente mas aceita pelo servidor (ex.: banco instável) faz /login e / se redirecionarem sem parar.

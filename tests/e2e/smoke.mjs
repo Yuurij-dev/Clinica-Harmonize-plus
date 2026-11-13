@@ -9387,6 +9387,11 @@ async function myProfile() {
     }
     S.owner = cookie;
     const ownerId = testMembership.userId;
+    // Escopo dos relatórios é por nome: PROFESSIONAL não assume o nome de outro membro (espaços/maiúsculas ignorados), mas pode reenviar o próprio.
+    const clash = await rq(S.pro, "PATCH", "/api/me/profile", { json: { name: "e2e  PERFIL staff" } });
+    check("meu perfil: PROFESSIONAL com nome igual ao de outro membro leva 409 em pt-BR", clash.s === 409 && /outro profissional/.test(clash.d?.message ?? ""), `${clash.s} ${clash.d?.message}`);
+    const keepName = await rq(S.pro, "PATCH", "/api/me/profile", { json: { name: "E2e Perfil pro" } });
+    check("meu perfil: PROFESSIONAL reenviando o próprio nome não é bloqueado", keepName.s === 200, keepName.s);
     const ids = { owner: ownerId, pro: M.pro.userId, staff: M.staff.userId, adm: M.adm.userId, outro: outroId };
 
     // ---- 1. /api/me por papel, sem segredos ----
@@ -9659,7 +9664,924 @@ async function myProfile() {
   }
 }
 
+// Relatórios: rotas /api/reports/* e exportação. Dados criados pela API em dias controlados (hoje e amanhã), na clínica de teste vazia.
+async function reports() {
+  const today = day(0), tomorrow = day(1);
+  const both = `from=${today}&to=${tomorrow}`;
+  const rawGet = async (path, sessionCookie = cookie) => {
+    const response = await fetch(`${baseUrl}${path}`, { headers: sessionCookie ? { cookie: sessionCookie } : {}, redirect: "manual" });
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return { status: response.status, headers: response.headers, bytes, text: bytes.toString("utf8") };
+  };
+  const get = (path) => api("GET", path);
+  const routes = ["overview", "procedures", "professionals", "clients", "quotes", "finance", "stock"];
+
+  // Sem sessão.
+  const anon = await withSession("", async () => Promise.all([...routes.map((name) => api("GET", `/api/reports/${name}`)), api("GET", "/api/reports/export?format=csv&tab=overview")]));
+  check("relatórios: sem sessão as 7 rotas e o export devolvem 401", anon.every((res) => res.status === 401), anon.map((res) => res.status).join("/"));
+
+  // ADMIN: 200 nas 7 rotas.
+  const okAll = await Promise.all(routes.map((name) => get(`/api/reports/${name}?period=last30`)));
+  check("relatórios: ADMIN recebe 200 nas 7 rotas", okAll.every((res) => res.status === 200), okAll.map((res) => res.status).join("/"));
+
+  // Exportação.
+  const pdf = await rawGet(`/api/reports/export?format=pdf&tab=all&${both}`);
+  check("export pdf: 200, application/pdf, começa com %PDF e attachment seguro", pdf.status === 200 && /^application\/pdf/.test(pdf.headers.get("content-type") ?? "") && pdf.bytes.subarray(0, 4).toString() === "%PDF" && /^attachment; filename="[A-Za-z0-9._-]+\.pdf"$/.test(pdf.headers.get("content-disposition") ?? "") && /no-store/.test(pdf.headers.get("cache-control") ?? ""), `${pdf.status} ${pdf.headers.get("content-type")} ${pdf.headers.get("content-disposition")}`);
+  const csv = await rawGet(`/api/reports/export?format=csv&tab=overview&${both}`);
+  check("export csv: 200, text/csv, BOM, separador ';', attachment com nome seguro", csv.status === 200 && /^text\/csv/.test(csv.headers.get("content-type") ?? "") && csv.bytes[0] === 0xef && csv.bytes[1] === 0xbb && csv.bytes[2] === 0xbf && /^attachment; filename="[A-Za-z0-9._-]+\.csv"$/.test(csv.headers.get("content-disposition") ?? ""), `${csv.status} ${csv.headers.get("content-type")} ${csv.headers.get("content-disposition")}`);
+  for (const tab of routes.slice(1)) {
+    const res = await rawGet(`/api/reports/export?format=csv&tab=${tab}&${both}`);
+    check(`export csv da aba ${tab}: 200`, res.status === 200, res.status);
+  }
+
+  // Entradas inválidas.
+  const bad = [
+    ["period inválido", "/api/reports/overview?period=semana"],
+    ["from > to", `/api/reports/overview?from=${tomorrow}&to=${today}`],
+    ["data inexistente", "/api/reports/overview?from=2026-02-31&to=2026-03-01"],
+    ["intervalo > 366 dias", "/api/reports/overview?from=2024-01-01&to=2025-06-01"],
+    ["ano 1999", "/api/reports/overview?from=1999-12-31&to=2000-01-05"],
+    ["ano 2101", "/api/reports/overview?from=2100-12-30&to=2101-01-02"],
+    ["professional com NUL", "/api/reports/overview?professional=a%00b"],
+    ["professional > 120 caracteres", `/api/reports/overview?professional=${"x".repeat(121)}`],
+    ["granularity inválida", "/api/reports/overview?granularity=ano"],
+    ["finance: from > to", `/api/reports/finance?from=${tomorrow}&to=${today}`],
+    ["export format inválido", "/api/reports/export?format=xls&tab=overview"],
+    ["export sem format", "/api/reports/export?tab=overview"],
+    ["export tab inválida", "/api/reports/export?format=csv&tab=outra"],
+    ["export período inválido", "/api/reports/export?format=csv&tab=overview&period=x"],
+    ["export NUL em professional", "/api/reports/export?format=csv&tab=overview&professional=a%00"],
+  ];
+  for (const [label, path] of bad) {
+    const res = await rawGet(path);
+    check(`relatórios: ${label} => 400`, res.status === 400, `${res.status} ${res.text.slice(0, 80)}`);
+  }
+
+  // Dados: pacientes, agendamentos, pagamentos e orçamento criados pela API.
+  const profA = `Prof Rel A ${run}`;
+  const proName = `E2E Prof Rel ${run}`;
+  const proLogin = `e2e-rel-prof-${run}@example.invalid`;
+  const staffLogin = `e2e-rel-staff-${run}@example.invalid`;
+  const secret = `E2e-${run}-rel9!`;
+  const createdMembers = [];
+  let originalMatrix = null;
+  let otherClinicId = null;
+  let otherUserEmail = null;
+  try {
+    const mkPatient = async (label) => (await api("POST", "/api/patients", { ...regDefaults, name: `Rel ${label} ${run}`, phone: "11999990070", age: 33, cpf: randomCpf() })).data.patient;
+    const procedure = `Proc Rel ${run}`;
+    let slot = 8;
+    const mkAppt = async (professional, status, label) => {
+      const patient = await mkPatient(label);
+      const time = `${String(slot).padStart(2, "0")}:00`;
+      slot += 1;
+      let r = await api("POST", "/api/appointments", { patientId: patient.id, procedure, professional, time, date: tomorrow });
+      if (r.status !== 201) return { ok: false, status: r.status, message: r.data?.message };
+      if (status !== "Agendado") r = await api("PATCH", `/api/appointments/${r.data.appointment.id}`, { status });
+      return { ok: r.status === 200 || r.status === 201, status: r.status, message: r.data?.message };
+    };
+    const mk = await api("POST", "/api/team", { name: proName, email: proLogin, password: secret, role: "PROFESSIONAL", cpf: randomCpf(), address: "Rua A, 1", country: "Brasil", state: "SP", city: "São Paulo" });
+    check("relatórios: PROFESSIONAL de teste criado", mk.status === 201, `${mk.status} ${JSON.stringify(mk.data).slice(0, 100)}`);
+    if (mk.data.member) createdMembers.push(mk.data.member);
+    const mkStaff = await api("POST", "/api/team", { name: `E2E Staff Rel ${run}`, email: staffLogin, password: secret, role: "STAFF", cpf: randomCpf(), address: "Rua A, 1", country: "Brasil", state: "SP", city: "São Paulo" });
+    if (mkStaff.data.member) createdMembers.push(mkStaff.data.member);
+    const plan = [[profA, "Atendido", "aa"], [profA, "Finalizado", "ab"], [profA, "Atendido", "ac"], [profA, "Agendado", "ad"], [profA, "Cancelado", "ae"], [profA, "Faltou", "af"], [proName, "Atendido", "ba"], [proName, "Cancelado", "bb"]];
+    const made = [];
+    for (const [pro, status, label] of plan) made.push(await mkAppt(pro, status, label));
+    check("relatórios: 8 agendamentos criados e com status ajustado pela API", made.every((m) => m.ok), JSON.stringify(made.filter((m) => !m.ok)));
+
+    const pPay = await mkPatient("pay");
+    const payOk = await api("POST", "/api/payments", { patientId: pPay.id, value: 100, method: "Pix", status: "Pago", installments: "A vista" });
+    const payPending = await api("POST", "/api/payments", { patientId: pPay.id, value: 50.5, method: "Pix", status: "Pendente", installments: "A vista" });
+    const quote = await api("POST", "/api/quotes", { patientId: pPay.id, items: "Avulso (1x)", total: 777.7 });
+    const qa = await api("PATCH", `/api/quotes/${quote.data.quote?.id}`, { status: "Aprovado" });
+    check("relatórios: pagamentos e orçamento criados", payOk.status === 201 && payPending.status === 201 && quote.status === 201 && qa.status === 200, `${payOk.status}/${payPending.status}/${quote.status}/${qa.status}`);
+
+    // Regras de negócio (período = amanhã, onde estão os agendamentos).
+    const q = `from=${tomorrow}&to=${tomorrow}`;
+    let r = await get(`/api/reports/overview?${q}`);
+    check("overview: só Atendido/Finalizado contam (4 de 8; Agendado, Cancelado e Faltou ficam de fora)", r.status === 200 && r.data.cards.appointments.value === 4, `${r.status} ${JSON.stringify(r.data.cards?.appointments)}`);
+    r = await get(`/api/reports/overview?from=${today}&to=${today}`);
+    check("overview: hoje sem atendimentos; receita só do Pago (R$ 100,00), Pendente fora", r.status === 200 && r.data.cards.appointments.value === 0 && r.data.cards.revenue.value === 10_000, JSON.stringify([r.data.cards?.appointments, r.data.cards?.revenue]));
+    r = await get(`/api/reports/overview?${both}`);
+    check("overview: período amplo soma 4 atendimentos e receita 10000; orçamento aprovado não vira receita", r.status === 200 && r.data.cards.appointments.value === 4 && r.data.cards.revenue.value === 10_000 && r.data.cards.avgTicket.value === 2_500, JSON.stringify(r.data.cards));
+    r = await get(`/api/reports/finance?${both}`);
+    check("finance: receita 10000, despesas 0, resultado 10000 (Pendente e orçamento fora)", r.status === 200 && r.data.summary.revenueCents === 10_000 && r.data.summary.expensesCents === 0 && r.data.summary.resultCents === 10_000, JSON.stringify(r.data.summary));
+    r = await get(`/api/reports/quotes?${both}`);
+    check("quotes: 1 criado, 1 aprovado, valor aprovado 77770", r.status === 200 && r.data.stats.created === 1 && r.data.stats.approved === 1 && r.data.stats.approvedValueCents === 77_770, JSON.stringify(r.data.stats));
+    r = await get(`/api/reports/professionals?${q}`);
+    const rowA = r.data.rows?.find((row) => row.name === profA);
+    const rowB = r.data.rows?.find((row) => row.name === proName);
+    check("professionals: A = 3 realizados, 1 cancelado, 1 falta (taxa 20%); B = 1 realizado, 1 cancelado", rowA?.done === 3 && rowA.cancelled === 1 && rowA.missed === 1 && Math.round(rowA.cancellationRatePct) === 20 && rowB?.done === 1 && rowB.cancelled === 1, JSON.stringify(r.data.rows));
+    r = await get(`/api/reports/procedures?${q}`);
+    check("procedures: 4 execuções do procedimento", r.status === 200 && r.data.totalExecutions === 4 && r.data.rows?.find((row) => row.name === procedure)?.executions === 4, JSON.stringify(r.data.rows).slice(0, 200));
+
+    // Filtros mudam o resultado.
+    r = await get(`/api/reports/overview?${q}&professional=${encodeURIComponent(profA)}`);
+    check("overview com professional: 3 atendimentos, receita null (payment_without_professional)", r.status === 200 && r.data.cards.appointments.value === 3 && r.data.cards.revenue === null && r.data.cards.revenueLimitation === "payment_without_professional" && r.data.appliedProfessional === profA, JSON.stringify([r.data.cards?.appointments, r.data.cards?.revenueLimitation]));
+    r = await get(`/api/reports/overview?${q}&professional=${encodeURIComponent(`Inexistente ${run}`)}`);
+    check("overview com profissional inexistente: 0 atendimentos", r.status === 200 && r.data.cards.appointments.value === 0, JSON.stringify(r.data.cards?.appointments));
+    r = await get(`/api/reports/overview?${q}&compare=1`);
+    check("compare=1 devolve previousRange e previous nos cards", r.status === 200 && r.data.previousRange && r.data.cards.appointments.previous === 0, JSON.stringify([r.data.previousRange, r.data.cards?.appointments]));
+    r = await get(`/api/reports/overview?${q}`);
+    check("sem compare: previousRange null e previous null", r.data.previousRange === null && r.data.cards.appointments.previous === null, JSON.stringify(r.data.previousRange));
+    for (const name of ["finance", "quotes", "clients"]) {
+      r = await get(`/api/reports/${name}?${q}&compare=1`);
+      check(`${name} compare=1 devolve previousRange e previous`, r.status === 200 && r.data.previousRange && r.data.previous, `${r.status} ${JSON.stringify(r.data.previousRange)}`);
+    }
+    // Export: sem nome de paciente e com filtro de profissional.
+    const exported = await rawGet(`/api/reports/export?format=csv&tab=professionals&${q}`);
+    check("export csv de profissionais contém os nomes e não contém nome de paciente", exported.text.includes(profA) && !exported.text.includes(`Rel aa ${run}`), exported.text.slice(0, 200));
+    const filtered = await rawGet(`/api/reports/export?format=csv&tab=professionals&${q}&professional=${encodeURIComponent(profA)}`);
+    check("export csv respeita o filtro de profissional (B ausente)", filtered.status === 200 && filtered.text.includes(profA) && !filtered.text.includes(proName), filtered.status);
+
+    // Isolamento: outra clínica com dados no mesmo período.
+    otherUserEmail = `e2e-rel-other-${run}@example.invalid`;
+    const reg = await api("POST", "/api/auth/register", { email: otherUserEmail, password: secret, clinicName: `E2E Rel Outra ${run}`, name: "Outra" });
+    const otherUser = await prisma.user.findUnique({ where: { email: otherUserEmail }, select: { id: true, memberships: { select: { clinicId: true } } } });
+    otherClinicId = otherUser?.memberships[0]?.clinicId ?? null;
+    if (reg.status === 201 && otherClinicId) {
+      const op = await prisma.patient.create({ data: { clinicId: otherClinicId, name: `Outra Clinica ${run}`, phone: "11999990099", age: 40 } });
+      const when = new Date(`${tomorrow}T15:00:00.000Z`);
+      for (let n = 0; n < 5; n += 1) await prisma.appointment.create({ data: { clinicId: otherClinicId, patientId: op.id, procedure: `Outra ${run}`, professional: `Outro Prof ${run}`, time: `0${n + 8}:00`, date: when, status: "Atendido" } });
+      await prisma.payment.create({ data: { clinicId: otherClinicId, patientId: op.id, valueCents: 99_999, installments: "A vista", method: "Pix", status: "Pago", date: new Date(`${today}T15:00:00.000Z`) } });
+      const ov = await get(`/api/reports/overview?${both}`);
+      const pr = await get(`/api/reports/professionals?${both}`);
+      const fin = await get(`/api/reports/finance?${both}`);
+      const text = JSON.stringify([ov.data, pr.data, fin.data]);
+      check("isolamento: dados de outra clínica não aparecem (atendimentos, profissionais, receita)", ov.data.cards.appointments.value === 4 && ov.data.cards.revenue.value === 10_000 && fin.data.summary.revenueCents === 10_000 && !text.includes(`Outro Prof ${run}`) && !text.includes(`Outra ${run}`), `${ov.data.cards?.appointments?.value}/${ov.data.cards?.revenue?.value}/${fin.data.summary?.revenueCents}`);
+    } else check("isolamento: segunda clínica criada", false, `${reg.status} clinic=${otherClinicId}`);
+
+    // Papéis: sem reports:access => 403.
+    const proSession = mk.status === 201 ? await loginAs(proLogin, secret) : null;
+    const staffSession = mkStaff.status === 201 ? await loginAs(staffLogin, secret) : null;
+    const denied = (sess, label) => withSession(sess.cookie, async () => {
+      const res = await Promise.all([...routes.map((name) => api("GET", `/api/reports/${name}`)), api("GET", "/api/reports/export?format=csv&tab=overview")]);
+      check(`${label} sem reports:access: 7 rotas e export devolvem 403`, res.every((x) => x.status === 403), res.map((x) => x.status).join("/"));
+    });
+    if (staffSession?.status === 200) await denied(staffSession, "STAFF"); else check("STAFF de relatórios entrou", false, staffSession?.status);
+    if (proSession?.status === 200) await denied(proSession, "PROFESSIONAL"); else check("PROFESSIONAL de relatórios entrou", false, proSession?.status);
+
+    // Concede permissões ao PROFESSIONAL e ao STAFF pela matriz da clínica.
+    const current = await api("GET", "/api/clinic/role-permissions");
+    originalMatrix = current.data.matrix;
+    const grant = (perms) => {
+      const matrix = JSON.parse(JSON.stringify(originalMatrix));
+      for (const role of ["PROFESSIONAL", "STAFF"]) for (const key of perms) matrix[role][key] = true;
+      return api("PATCH", "/api/clinic/role-permissions", { matrix });
+    };
+    r = await grant(["reports:access"]);
+    check("matriz de permissões atualizada (reports:access)", r.status === 200, r.status);
+    if (proSession?.status === 200) await withSession(proSession.cookie, async () => {
+      const ov = await get(`/api/reports/overview?${q}&professional=${encodeURIComponent(profA)}`);
+      check("PROFESSIONAL com reports:access: vê só os próprios dados (parâmetro professional ignorado)", ov.status === 200 && ov.data.cards.appointments.value === 1 && ov.data.appliedProfessional === proName && ov.data.cards.revenue === null && ov.data.professionals.length === 0, JSON.stringify([ov.status, ov.data.cards?.appointments, ov.data.appliedProfessional]));
+      const pr = await get(`/api/reports/professionals?${q}`);
+      check("PROFESSIONAL: relatório de profissionais só traz ele", pr.status === 200 && pr.data.rows.length === 1 && pr.data.rows[0].name === proName, JSON.stringify(pr.data.rows?.map((x) => x.name)));
+      const cl = await get(`/api/reports/clients?${both}`);
+      check("PROFESSIONAL: clientes 200", cl.status === 200, cl.status);
+      const fin = await get(`/api/reports/finance?${both}`);
+      check("PROFESSIONAL sem finance:access: financeiro 403", fin.status === 403, fin.status);
+      const ex = await rawGet(`/api/reports/export?format=csv&tab=finance&${both}`, cookie);
+      check("PROFESSIONAL: export de finance 403", ex.status === 403, ex.status);
+      const exAll = await rawGet(`/api/reports/export?format=pdf&tab=all&${q}`, cookie);
+      check("PROFESSIONAL: export all (pdf) 200", exAll.status === 200 && exAll.bytes.subarray(0, 4).toString() === "%PDF", exAll.status);
+      const csvAll = await rawGet(`/api/reports/export?format=csv&tab=all&${q}`, cookie);
+      check("export csv do consolidado: 400 com mensagem clara em pt-BR (CSV só por relatório)", csvAll.status === 400 && /consolidado/i.test(csvAll.text), `${csvAll.status} ${csvAll.text.slice(0, 120)}`);
+    });
+    r = await grant(["reports:access", "finance:access", "quotes:access", "stock:access"]);
+    if (proSession?.status === 200) await withSession(proSession.cookie, async () => {
+      const fin = await get(`/api/reports/finance?${both}`);
+      check("PROFESSIONAL com finance:access ainda recebe 403 no financeiro (filtro forçado)", fin.status === 403, fin.status);
+      const ov = await get(`/api/reports/overview?${both}`);
+      check("PROFESSIONAL com finance:access: receita da visão geral continua oculta", ov.status === 200 && ov.data.cards.revenue === null && ov.data.cards.appointments.value === 1, JSON.stringify(ov.data.cards?.revenue));
+      const qr = await get(`/api/reports/quotes?${both}`);
+      check("PROFESSIONAL com quotes:access: orçamentos 200", qr.status === 200, qr.status);
+    });
+    if (staffSession?.status === 200) await withSession(staffSession.cookie, async () => {
+      const fin = await get(`/api/reports/finance?${both}`);
+      const ov = await get(`/api/reports/overview?${both}`);
+      check("STAFF com reports:access e finance:access: vê a clínica toda (4 atendimentos, receita 10000)", fin.status === 200 && ov.status === 200 && ov.data.cards.appointments.value === 4 && fin.data.summary.revenueCents === 10_000, `${fin.status}/${ov.data.cards?.appointments?.value}`);
+    });
+    r = await api("PATCH", "/api/clinic/role-permissions", { matrix: originalMatrix });
+    originalMatrix = null;
+    check("matriz de permissões restaurada", r.status === 200, r.status);
+    if (proSession?.status === 200) await withSession(proSession.cookie, async () => {
+      const res = await get("/api/reports/overview");
+      check("PROFESSIONAL volta a receber 403 após revogar a permissão", res.status === 403, res.status);
+    });
+  } finally {
+    if (originalMatrix) await api("PATCH", "/api/clinic/role-permissions", { matrix: originalMatrix }).catch(() => undefined);
+    for (const m of createdMembers) await api("DELETE", "/api/team", { membershipId: m.id }).catch(() => undefined);
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [proLogin, staffLogin] } } } }).catch(() => undefined);
+    await prisma.user.deleteMany({ where: { email: { in: [proLogin, staffLogin] } } }).catch(() => undefined);
+    if (otherClinicId) {
+      await prisma.appointment.deleteMany({ where: { clinicId: otherClinicId } }).catch(() => undefined);
+      await prisma.payment.deleteMany({ where: { clinicId: otherClinicId } }).catch(() => undefined);
+      await prisma.patient.deleteMany({ where: { clinicId: otherClinicId } }).catch(() => undefined);
+      await prisma.clinicMembership.deleteMany({ where: { clinicId: otherClinicId } }).catch(() => undefined);
+      await prisma.user.deleteMany({ where: { email: otherUserEmail } }).catch(() => undefined);
+      await prisma.clinic.delete({ where: { id: otherClinicId } }).catch((error) => console.error(`Aviso: clínica auxiliar ${otherClinicId} não removida: ${error.message}`));
+    }
+  }
+}
+
+// Relatórios, tela /relatorios no navegador (ADMIN). Cria os próprios dados (hoje) e a clínica de teste é esvaziada no fim do roteiro.
+async function reportsUi() {
+  const shots = process.env.E2E_SHOTS_DIR ?? "C:\\Users\\Yuri\\AppData\\Local\\Temp\\claude\\7bc61ed2be135a06\\5fd25c07-7726-4e0c-8711-9c5e08b11430\\scratchpad";
+  const fsp = await import("node:fs/promises");
+  const today = day(0);
+  const procedure = `Proc RelUi ${run}`;
+  const proA = `Prof RelUi ${run}`;
+
+  // Dados: 4 atendimentos realizados + 1 cancelado hoje (criados para amanhã pela API e movidos para hoje no banco, pois a API recusa datas passadas), 1 Pago, 1 Pendente, 1 orçamento aprovado.
+  const mkPatient = async (label) => (await api("POST", "/api/patients", { ...regDefaults, name: `RelUi ${label} ${run}`, phone: "11999990071", age: 33, cpf: randomCpf() })).data.patient;
+  const ids = [];
+  let slot = 8;
+  for (const [status, label] of [["Atendido", "aa"], ["Finalizado", "ab"], ["Atendido", "ac"], ["Atendido", "ad"], ["Cancelado", "ae"]]) {
+    const patient = await mkPatient(label);
+    const created = await api("POST", "/api/appointments", { patientId: patient.id, procedure, professional: proA, time: `${String(slot).padStart(2, "0")}:00`, date: day(1) });
+    slot += 1;
+    if (created.status === 201) { ids.push(created.data.appointment.id); await api("PATCH", `/api/appointments/${created.data.appointment.id}`, { status }); }
+  }
+  await prisma.appointment.updateMany({ where: { id: { in: ids } }, data: { date: new Date(`${today}T15:00:00.000Z`) } });
+  const pPay = await mkPatient("pay");
+  const pays = [await api("POST", "/api/payments", { patientId: pPay.id, value: 100, method: "Pix", status: "Pago", installments: "A vista" }), await api("POST", "/api/payments", { patientId: pPay.id, value: 50.5, method: "Pix", status: "Pendente", installments: "A vista" })];
+  const quote = await api("POST", "/api/quotes", { patientId: pPay.id, items: "Avulso (1x)", total: 777.7 });
+  await api("PATCH", `/api/quotes/${quote.data.quote?.id}`, { status: "Aprovado" });
+  check("relatorios_ui: dados criados (5 agendamentos, 2 pagamentos, 1 orçamento)", ids.length === 5 && pays.every((p) => p.status === 201) && quote.status === 201, `${ids.length}/${pays.map((p) => p.status)}/${quote.status}`);
+
+  await withPage(async (page, pageErrors) => {
+    const consoleErrors = [];
+    page.on("console", (message) => { if (message.type() === "error" && !/status of 401/.test(message.text())) consoleErrors.push(message.text().slice(0, 160)); });
+    const bodyText = () => page.locator("body").innerText();
+    const until = async (fn, ms = 15_000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await fn().catch(() => false)) return true; await page.waitForTimeout(200); } return false; };
+    const kpi = (label) => page.locator("p", { hasText: new RegExp(`^${label}`) }).first().locator("xpath=ancestor::div[contains(@class,'items-start') and contains(@class,'gap-3')][1]");
+    const kpiText = async (label) => (await kpi(label).innerText().catch(() => "")).replace(/\s+/g, " ");
+    // Assistente de configuração ("Fazer isso depois") e tour de boas-vindas ("Pular tour"): preferências de interface que cobrem a tela.
+    const dismissOverlays = async () => {
+      for (let n = 0; n < 6; n += 1) {
+        await page.waitForTimeout(n === 0 ? 2500 : 600);
+        const later = page.getByRole("button", { name: "Fazer isso depois" });
+        const skipTour = page.getByRole("button", { name: "Pular tour" });
+        if (await later.count()) await later.first().click().catch(() => undefined);
+        else if (await skipTour.count()) await skipTour.first().click().catch(() => undefined);
+        else if (!(await page.locator(".hp-tour-root").count())) break;
+      }
+    };
+    const noScroll = async (width, height) => {
+      await page.setViewportSize({ width, height });
+      await page.waitForTimeout(500);
+      const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: window.innerWidth, bw: document.body.scrollWidth }));
+      check(`relatorios_ui: sem rolagem horizontal da página em ${width}px`, m.sw <= m.iw && m.bw <= m.iw, JSON.stringify(m));
+    };
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${baseUrl}/relatorios`);
+    check("relatorios_ui: título 'Relatórios e desempenho' aparece", await until(async () => (await bodyText()).includes("Relatórios e desempenho")));
+    await dismissOverlays();
+    await until(async () => /4/.test(await kpiText("Atendimentos realizados")));
+    await page.waitForTimeout(1200); // CountUp
+    const labels = ["Atendimentos realizados", "Receita recebida", "Novos pacientes", "Taxa de retorno", "Ticket médio"];
+    const texts = {};
+    for (const l of labels) texts[l] = await kpiText(l);
+    check("relatorios_ui: os 5 cards aparecem", labels.every((l) => texts[l].startsWith(l)), JSON.stringify(texts));
+    check("relatorios_ui: atendimentos realizados = 4, receita R$ 100,00, ticket R$ 25,00, novos pacientes 6", /\b4\b/.test(texts["Atendimentos realizados"]) && /R\$\s?100,00/.test(texts["Receita recebida"]) && /R\$\s?25,00/.test(texts["Ticket médio"]) && /\b6\b/.test(texts["Novos pacientes"]), JSON.stringify(texts));
+    await page.screenshot({ path: `${shots}\\rel-desk.png`, fullPage: true });
+
+    // Período e comparação refazem a consulta e mudam os números.
+    const overviewReq = (match) => page.waitForResponse((r) => r.url().includes("/api/reports/overview") && match(r.url()) && r.status() === 200);
+    await page.getByRole("button", { name: /Alterar período/ }).click();
+    let wait = overviewReq((u) => u.includes("period=today"));
+    await page.getByRole("menuitemradio", { name: "Hoje" }).click();
+    let ok = await wait.then(() => true).catch(() => false);
+    await page.waitForTimeout(1200);
+    check("relatorios_ui: período Hoje refaz a consulta (period=today) e mantém 4 atendimentos", ok && /\b4\b/.test(await kpiText("Atendimentos realizados")), await kpiText("Atendimentos realizados"));
+    await page.getByRole("button", { name: /Alterar período/ }).click();
+    wait = overviewReq((u) => u.includes("period=prevMonth"));
+    await page.getByRole("menuitemradio", { name: "Mês anterior" }).click();
+    ok = await wait.then(() => true).catch(() => false);
+    await page.waitForTimeout(1200);
+    check("relatorios_ui: Mês anterior refaz a consulta e zera os atendimentos", ok && /\b0\b/.test(await kpiText("Atendimentos realizados")), await kpiText("Atendimentos realizados"));
+    await page.getByRole("button", { name: /Alterar período/ }).click();
+    wait = overviewReq((u) => u.includes("period=last30"));
+    await page.getByRole("menuitemradio", { name: "Últimos 30 dias" }).click();
+    ok = await wait.then(() => true).catch(() => false);
+    await page.waitForTimeout(1200);
+    check("relatorios_ui: Últimos 30 dias volta a 4 atendimentos (pode vir do cache de 60 s do cliente, sem nova consulta)", /\b4\b/.test(await kpiText("Atendimentos realizados")), await kpiText("Atendimentos realizados"));
+    const before = await kpiText("Atendimentos realizados");
+    wait = overviewReq((u) => u.includes("compare=1"));
+    await page.getByRole("switch", { name: /Comparar com período anterior/ }).click();
+    ok = await wait.then(() => true).catch(() => false);
+    await page.waitForTimeout(800);
+    const withCompare = await kpiText("Atendimentos realizados");
+    check("relatorios_ui: ligar 'Comparar' refaz a consulta (compare=1) e muda o card", ok && withCompare !== before && !/Sem comparação/i.test(withCompare), `${before} => ${withCompare}`);
+    wait = page.waitForResponse((r) => r.url().includes("/api/reports/overview") && !r.url().includes("compare=1") && r.status() === 200).catch(() => null);
+    await page.getByRole("switch", { name: /Comparar com período anterior/ }).click();
+    ok = Boolean(await wait);
+    await page.waitForTimeout(800);
+    check("relatorios_ui: desligar 'Comparar' volta ao card anterior (resposta sem compare pode vir do cache do cliente)", (await kpiText("Atendimentos realizados")) === before, await kpiText("Atendimentos realizados"));
+
+    // Abas.
+    const tabs = [["Procedimentos", "procedures"], ["Profissionais", "professionals"], ["Clientes", "clients"], ["Orçamentos", "quotes"], ["Financeiro", "finance"], ["Estoque", "stock"]];
+    const tabNames = await page.getByRole("tab").allInnerTexts();
+    check("relatorios_ui: as 6 abas existem (role=tab)", tabs.every(([name]) => tabNames.some((t) => t.includes(name))), tabNames.join("|"));
+    for (const [name, id] of tabs) {
+      const resp = page.waitForResponse((r) => (r.url().includes(`/api/reports/${id}`) || r.url().includes(`/api/reports/document?tab=${id}`)) && r.status() === 200).catch(() => null);
+      await page.getByRole("tab", { name }).click();
+      const got = Boolean(await resp);
+      await page.waitForTimeout(700);
+      const panel = (await page.getByRole("tabpanel").innerText()).replace(/\s+/g, " ");
+      const selected = await page.getByRole("tab", { name }).getAttribute("aria-selected");
+      check(`relatorios_ui: aba ${name} abre, carrega e mostra conteúdo sem erro`, selected === "true" && (got || id === "procedures") && panel.length > 20 && !/Tentar novamente/.test(panel) && !(await page.getByRole("tabpanel").locator("[role=status][aria-label^=Carregando]").count()), `${got} ${panel.slice(0, 140)}`);
+      if (id === "procedures") check("relatorios_ui: aba Procedimentos lista o procedimento e as 4 execuções", panel.includes(procedure) && /\b4\b/.test(panel), panel.slice(0, 200));
+      if (id === "professionals") check("relatorios_ui: aba Profissionais lista o profissional com 4 realizados", panel.includes(proA) && /\b4\b/.test(panel), panel.slice(0, 200));
+      if (id === "quotes") check("relatorios_ui: aba Orçamentos mostra valor aprovado R$ 777,70", /R\$\s?777,70/.test(panel), panel.slice(0, 200));
+      if (id === "finance") {
+        const hrefs = await page.getByRole("tabpanel").locator("a").evaluateAll((as) => as.map((a) => a.getAttribute("href")));
+        check("relatorios_ui: Financeiro tem links para /financeiro e /pagamentos e receita R$ 100,00", hrefs.includes("/financeiro") && hrefs.includes("/pagamentos") && /R\$\s?100,00/.test(panel), `${hrefs} ${panel.slice(0, 120)}`);
+      }
+      await page.screenshot({ path: `${shots}\\rel-desk-${id}.png`, fullPage: true });
+    }
+
+    // Exportar.
+    const downloadOf = async (itemName) => {
+      await page.getByRole("button", { name: "Exportar relatório" }).click();
+      const [download] = await Promise.all([page.waitForEvent("download", { timeout: 30_000 }), page.getByRole("menuitem", { name: itemName }).first().click()]);
+      const bytes = await fsp.readFile(await download.path());
+      return { name: download.suggestedFilename(), bytes };
+    };
+    const pdf = await downloadOf("Baixar PDF");
+    check("relatorios_ui: Exportar PDF baixa arquivo com nome seguro e começa com %PDF", /^Harmonize_[A-Za-z0-9_.-]+.pdf$/.test(pdf.name) && pdf.bytes.subarray(0, 4).toString() === "%PDF", `${pdf.name} ${pdf.bytes.subarray(0, 8).toString()}`);
+    await page.waitForTimeout(500);
+    const csv = await downloadOf("Baixar CSV");
+    check("relatorios_ui: Exportar CSV baixa arquivo .csv com nome seguro, BOM e ';'", /^Harmonize_[A-Za-z0-9_.-]+.csv$/.test(csv.name) && csv.bytes[0] === 0xef && csv.bytes.toString("utf8").includes(";"), `${csv.name}`);
+
+    const xl = await downloadOf("Baixar Excel");
+    check("relatorios_ui: Exportar Excel baixa .xlsx (Harmonize_..., assinatura PK)", /^Harmonize_[A-Za-z0-9_.-]+.xlsx$/.test(xl.name) && xl.bytes.subarray(0, 2).toString() === "PK", xl.name);
+    await page.waitForTimeout(500);
+
+    // Período personalizado inválido.
+    await page.getByRole("button", { name: /Alterar período/ }).click();
+    await page.getByRole("menuitemradio", { name: "Personalizado" }).click();
+    await page.waitForTimeout(500);
+    const inputs = page.locator("input[type=date]");
+    await inputs.nth(1).fill(day(0));
+    await inputs.nth(0).fill(day(5));
+    await page.waitForTimeout(500);
+    const alertText = await page.locator("p[role=alert]").first().innerText().catch(() => "");
+    check("relatorios_ui: período personalizado com De > Até mostra mensagem de erro", /data inicial|anterior|inválid/i.test(alertText), alertText);
+    check("relatorios_ui: período inválido desabilita Exportar", await page.getByRole("button", { name: "Exportar relatório" }).isDisabled());
+    await page.screenshot({ path: `${shots}\\rel-desk-invalido.png`, fullPage: true });
+    // Volta a um período válido para as capturas responsivas.
+    await page.getByRole("button", { name: /Alterar período/ }).click();
+    await page.getByRole("menuitemradio", { name: "Últimos 30 dias" }).click();
+    await page.waitForTimeout(1500);
+
+    // Responsivo.
+    await noScroll(1440, 900);
+    await page.setViewportSize({ width: 820, height: 1100 });
+    await page.reload();
+    await dismissOverlays();
+    await until(async () => (await bodyText()).includes("Atendimentos realizados"));
+    await page.waitForTimeout(1500);
+    await noScroll(820, 1100);
+    await page.screenshot({ path: `${shots}\\rel-tab.png`, fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.reload();
+    await dismissOverlays();
+    await until(async () => (await bodyText()).includes("Atendimentos realizados"));
+    await page.waitForTimeout(1500);
+    await noScroll(390, 844);
+    await page.screenshot({ path: `${shots}\\rel-mob.png`, fullPage: true });
+    for (const [name] of tabs) {
+      await page.getByRole("tab", { name }).click();
+      await page.waitForTimeout(500);
+      await noScroll(390, 844);
+    }
+
+    // Modo escuro.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.addInitScript(() => localStorage.setItem("harmonize-theme", "dark"));
+    await page.reload();
+    await dismissOverlays();
+    await until(async () => (await bodyText()).includes("Atendimentos realizados"));
+    await page.waitForTimeout(1500);
+    const dark = await page.evaluate(() => document.documentElement.classList.contains("dark"));
+    check("relatorios_ui: modo escuro ativo e página renderiza os cards", dark && /\b4\b/.test(await kpiText("Atendimentos realizados")), `dark=${dark}`);
+    await page.screenshot({ path: `${shots}\\rel-dark.png`, fullPage: true });
+
+    check("relatorios_ui: nenhum pageerror", pageErrors.length === 0, pageErrors.join(" | "));
+    check("relatorios_ui: nenhum erro de console (exceto 401)", consoleErrors.length === 0, consoleErrors.join(" | "));
+  });
+}
+
+// Estoque de teste dos relatórios (API): item com custo, item SEM custo, item sem saldo; saldo inicial, compra, saída manual, ajuste e baixa de atendimento.
+async function seedReportsStock(tag) {
+  const today = day(0), tomorrow = day(1);
+  const mk = async (name, costCents, minStock) => (await api("POST", "/api/products", { name: `${name} ${tag}`, kind: "material", unit: "unidade", costCents, supplier: "Fornecedor", minStock })).data.product;
+  const withCost = await mk("Item Custo", 1000, 20);
+  const noCost = await mk("Item SemCusto", 0, 0);
+  const empty = await mk("Item Zerado", 500, 2);
+  const out = { withCost, noCost, empty, secretNote: `NotaSecreta${tag}`, secretAdjust: `AjusteSecreto${tag}`, patientName: `Segredo Paciente ${tag}`, ok: Boolean(withCost && noCost && empty), steps: {} };
+  if (!out.ok) return out;
+  const init = (p, code, qty) => api("POST", `/api/products/${p.id}/initial-balance`, { lotCode: `${code}${tag}`, expiresOn: day(200), quantity: qty });
+  out.steps.initA = (await init(withCost, "LA", 10)).status;
+  out.steps.initB = (await init(noCost, "LB", 8)).status;
+  out.steps.purchase = (await api("POST", "/api/purchases", { supplier: "Fornecedor", purchasedOn: today, paymentMethod: "Pix", installments: 1, items: [{ productId: withCost.id, lotCode: `LP${tag}`, expiresOn: day(300), quantity: 3, unitPriceCents: 1000 }] })).status;
+  const lots = (await api("GET", `/api/products/${withCost.id}`)).data.product?.lots ?? [];
+  const lotA = lots.find((l) => l.code === `LA${tag}`);
+  out.steps.manual = (await api("POST", `/api/products/${withCost.id}/movements`, { lotId: lotA?.id, reason: "loss", direction: "out", quantity: 2, notes: out.secretNote })).status;
+  out.steps.adjust = (await api("POST", `/api/products/${withCost.id}/movements`, { lotId: lotA?.id, reason: "count", direction: "out", quantity: 1, notes: out.secretAdjust })).status;
+  const patient = (await api("POST", "/api/patients", { ...regDefaults, name: out.patientName, phone: "11999990072", age: 33, cpf: randomCpf() })).data.patient;
+  const appt = (await api("POST", "/api/appointments", { patientId: patient.id, procedure: `Proc Estoque ${tag}`, professional: `Prof Estoque ${tag}`, time: "10:00", date: tomorrow })).data.appointment;
+  out.steps.done = (await api("PATCH", `/api/appointments/${appt.id}`, { status: "Atendido" })).status;
+  out.steps.baixa = (await api("POST", `/api/appointments/${appt.id}/materials`, { items: [{ productId: withCost.id, quantity: 2 }, { productId: noCost.id, quantity: 1 }] })).status;
+  out.appointmentId = appt.id;
+  return out;
+}
+
+// Relatórios: exportação XLSX/PDF/CSV, documento JSON, estoque (posição + movimentações + consumo), privacidade e papéis.
+async function reportsFiles() {
+  const samples = process.env.E2E_SAMPLES_DIR ?? "C:\\Users\\Yuri\\AppData\\Local\\Temp\\claude\\7bc61ed2be135a06\\5fd25c07-7726-4e0c-8711-9c5e08b11430\\scratchpad\\samples2";
+  const fsp = await import("node:fs/promises");
+  await fsp.mkdir(samples, { recursive: true });
+  const ExcelJS = (await import("exceljs")).default;
+  const today = day(0), tomorrow = day(1);
+  const both = `from=${today}&to=${tomorrow}`;
+  const rawGet = async (path, sessionCookie = cookie) => {
+    const response = await fetch(`${baseUrl}${path}`, { headers: sessionCookie ? { cookie: sessionCookie } : {}, redirect: "manual" });
+    const bytes = Buffer.from(await response.arrayBuffer());
+    return { status: response.status, headers: response.headers, bytes, text: bytes.toString("utf8") };
+  };
+  const exportUrl = (format, tab, query = both) => `/api/reports/export?format=${format}&tab=${tab}&${query}`;
+  const docUrl = (tab, query = both) => `/api/reports/document?tab=${tab}&${query}`;
+  const readSheets = async (bytes) => { const wb = new ExcelJS.Workbook(); await wb.xlsx.load(bytes); return wb; };
+  const sheetText = (wb) => { const parts = []; wb.eachSheet((ws) => { parts.push(ws.name); ws.eachRow((row) => row.eachCell((cell) => parts.push(String(cell.value?.result ?? cell.value ?? "")))); }); return parts.join("\n"); };
+  const tabs = ["finance", "procedures", "professionals", "appointments", "clients", "quotes", "stock", "all"];
+
+  // Sem sessão e entradas inválidas.
+  const anon = await withSession("", async () => Promise.all([rawGet(exportUrl("xlsx", "stock"), ""), rawGet(docUrl("stock"), ""), rawGet(exportUrl("pdf", "appointments"), ""), rawGet("/api/reports/appointments", "")]));
+  check("relatórios 2: sem sessão export xlsx/pdf, document e appointments devolvem 401", anon.every((res) => res.status === 401), anon.map((res) => res.status).join("/"));
+  for (const [label, path] of [
+    ["export format docx", exportUrl("docx", "stock")], ["export tab inválida (xlsx)", exportUrl("xlsx", "outra")], ["export sem tab", `/api/reports/export?format=xlsx&${both}`],
+    ["document sem tab", `/api/reports/document?${both}`], ["document tab inválida", docUrl("outra")], ["document período inválido", docUrl("stock", "period=semana")],
+    ["document from > to", docUrl("stock", `from=${tomorrow}&to=${today}`)], ["document > 366 dias", docUrl("stock", "from=2024-01-01&to=2025-06-01")],
+    ["document ano 1999", docUrl("stock", "from=1999-12-31&to=2000-01-05")], ["document NUL em professional", docUrl("stock", `${both}&professional=a%00b`)],
+    ["export xlsx > 366 dias", exportUrl("xlsx", "all", "from=2024-01-01&to=2025-06-01")], ["export xlsx NUL em professional", exportUrl("xlsx", "stock", `${both}&professional=a%00`)],
+    ["appointments from > to", `/api/reports/appointments?from=${tomorrow}&to=${today}`],
+  ]) {
+    const res = await rawGet(path);
+    check(`relatórios 2: ${label} => 400`, res.status === 400, `${res.status} ${res.text.slice(0, 80)}`);
+  }
+
+  // Dados de estoque criados pela API.
+  const seed = await seedReportsStock(run);
+  check("relatórios 2: estoque criado pela API (3 itens, saldo inicial, compra, saída manual, ajuste, baixa de atendimento)", seed.ok && Object.values(seed.steps).every((s) => s === 200 || s === 201), JSON.stringify(seed.steps));
+  const apiAppt = await get_(`/api/reports/appointments?${both}`);
+  check("relatórios 2: GET /api/reports/appointments responde 200 com o atendimento do estoque", apiAppt.status === 200, `${apiAppt.status} ${JSON.stringify(apiAppt.data).slice(0, 160)}`);
+
+  // Documento de estoque.
+  const stockDoc = await get_(docUrl("stock"));
+  const doc = stockDoc.data;
+  const section = (id) => doc.sections?.find((s) => s.id === id);
+  const position = section("position");
+  const colIndex = (table, key) => table.columns.findIndex((c) => c.key === key);
+  const rowOf = (table, name) => table.rows.find((row) => String(row.cells[0].value).startsWith(name));
+  const costI = position ? colIndex(position, "cost") : -1, valueI = position ? colIndex(position, "value") : -1, balI = position ? colIndex(position, "balance") : -1, minI = position ? colIndex(position, "min") : -1, sitI = position ? colIndex(position, "situation") : -1;
+  const rowCost = position && rowOf(position, `Item Custo ${run}`), rowNo = position && rowOf(position, `Item SemCusto ${run}`), rowZero = position && rowOf(position, `Item Zerado ${run}`);
+  check("document/stock: 200, cabeçalho com clínica, período e hasData", stockDoc.status === 200 && doc.kind === "stock" && doc.clinicName === testClinicName && doc.period && doc.hasData === true, `${stockDoc.status} ${doc.clinicName} ${JSON.stringify(doc.period)}`);
+  check("document/stock posição: item com custo = saldo 8, mínimo 20, 'Abaixo do mínimo', custo 1000, valor 8000", rowCost?.cells[balI].value === 8 && rowCost.cells[minI].value === 20 && rowCost.cells[sitI].value === "Abaixo do mínimo" && rowCost.cells[costI].value === 1000 && rowCost.cells[valueI].value === 8000, JSON.stringify(rowCost?.cells));
+  check("document/stock posição: item SEM custo = saldo 7, custo e valor 'unknown' (nunca 0)", rowNo?.cells[balI].value === 7 && rowNo.cells[costI].type === "unknown" && rowNo.cells[valueI].type === "unknown" && rowNo.cells[costI].reason, JSON.stringify(rowNo?.cells));
+  check("document/stock posição: item sem saldo = 'Sem estoque' com saldo 0", rowZero?.cells[sitI].value === "Sem estoque" && rowZero.cells[balI].value === 0, JSON.stringify(rowZero?.cells));
+  const kpi = (id, key) => section(id)?.items?.find((i) => i.key === key)?.value?.value;
+  check("document/stock KPIs: 3 itens, 1 abaixo do mínimo, 1 sem estoque, valor total 8000 (só custo conhecido)", kpi("position-kpis", "items") === 3 && kpi("position-kpis", "belowMinimum") === 1 && kpi("position-kpis", "outOfStock") === 1 && kpi("position-kpis", "stockValue") === 8000, JSON.stringify(section("position-kpis")?.items?.map((i) => [i.key, i.value?.value])));
+  const history = section("movements-history");
+  const typeI = history ? colIndex(history, "type") : -1;
+  const types = (history?.rows ?? []).map((row) => row.cells[typeI].value);
+  check("document/stock movimentações: 7 no período (2 saldos iniciais, compra, saída manual, ajuste, 2 consumos)", kpi("movements-kpis", "movements") === 7 && history?.rows.length === 7 && types.filter((t) => t === "Entrada inicial").length === 2 && types.includes("Compra") && types.filter((t) => t === "Consumo em atendimento").length === 2 && types.some((t) => /Ajuste de contagem/.test(t)), `${kpi("movements-kpis", "movements")} ${types.join("|")}`);
+  const consItem = section("consumption-by-item");
+  const consNo = consItem && rowOf(consItem, `Item SemCusto ${run}`), consCost = consItem && rowOf(consItem, `Item Custo ${run}`);
+  check("document/stock consumo: item com custo 2 un = R$ 20,00 (2000); item sem custo 1 un com custo desconhecido", consCost?.cells[colIndex(consItem, "cost")].value === 2000 && consNo?.cells[colIndex(consItem, "quantity")].value === 1 && consNo.cells[colIndex(consItem, "cost")].type === "unknown", JSON.stringify([consCost?.cells, consNo?.cells]));
+  const consProc = section("consumption-by-procedure");
+  check("document/stock consumo por procedimento: 2 movimentos, 1 sem custo", consProc?.rows[0]?.cells[colIndex(consProc, "movements")].value === 2 && consProc.rows[0].cells[colIndex(consProc, "missing")].value === 1, JSON.stringify(consProc?.rows[0]?.cells));
+  const legacy = await get_(`/api/reports/stock?${both}`);
+  check("api/reports/stock (legado): 200, custo do item sem custo é null (não 0)", legacy.status === 200 && JSON.stringify(legacy.data).includes("null"), `${legacy.status} ${JSON.stringify(legacy.data).slice(0, 300)}`);
+
+  // Exportações de todos os relatórios nos 3 formatos + amostras.
+  const formats = { xlsx: /^application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet/, pdf: /^application\/pdf/, csv: /^text\/csv/ };
+  const files = {};
+  for (const tab of tabs) for (const format of Object.keys(formats)) {
+    if (tab === "all" && format === "csv") continue; // sem CSV do consolidado (400, verificado adiante)
+    const res = await rawGet(exportUrl(format, tab));
+    files[`${tab}.${format}`] = res;
+    const disp = res.headers.get("content-disposition") ?? "";
+    const magic = format === "xlsx" ? res.bytes.subarray(0, 2).toString() === "PK" : format === "pdf" ? res.bytes.subarray(0, 4).toString() === "%PDF" : res.bytes[0] === 0xef && res.bytes[1] === 0xbb && res.bytes[2] === 0xbf;
+    check(`export ${format} ${tab}: 200, content-type, assinatura, nome Harmonize_ seguro, no-store`, res.status === 200 && formats[format].test(res.headers.get("content-type") ?? "") && magic && new RegExp(`^attachment; filename="Harmonize_[A-Za-z0-9_.-]+\\.${format}"$`).test(disp) && /no-store/.test(res.headers.get("cache-control") ?? "") && res.headers.get("x-content-type-options") === "nosniff", `${res.status} ${res.headers.get("content-type")} ${disp}`);
+    if (res.status === 200) await fsp.writeFile(`${samples}\\${tab}.${format}`, res.bytes);
+  }
+  for (const tab of tabs) {
+    const res = await rawGet(docUrl(tab));
+    check(`document ${tab}: 200 com ReportDocument (sections)`, res.status === 200 && Array.isArray(JSON.parse(res.text).sections), res.status);
+  }
+
+  // XLSX do estoque aberto com exceljs.
+  const wbStock = await readSheets(files["stock.xlsx"].bytes);
+  const names = wbStock.worksheets.map((ws) => ws.name);
+  check("xlsx estoque: abas Resumo, Estoque (posição) e Movimentações", names.join("|") === "Resumo|Estoque|Movimentações", names.join("|"));
+  const dados = wbStock.getWorksheet("Estoque");
+  const zipStock = await (await import("jszip")).default.loadAsync(files["stock.xlsx"].bytes);
+  const tableXml = await zipStock.file("xl/tables/table1.xml").async("string");
+  check("xlsx estoque: cabeçalho da aba Estoque congelado e Tabela do Excel com filtro", dados?.views?.[0]?.state === "frozen" && dados.views[0].ySplit >= 1 && /<autoFilter /.test(tableXml) && /name="Estoque"/.test(tableXml), JSON.stringify([dados?.views?.[0], tableXml.slice(0, 160)]));
+  // Acha a tabela de posição em qualquer aba pelo rótulo das colunas de custo.
+  const costLabel = position?.columns[costI]?.label, valueLabel = position?.columns[valueI]?.label;
+  let found = null;
+  wbStock.eachSheet((ws) => ws.eachRow((row, rowNumber) => {
+    if (found) return;
+    const cells = row.values;
+    const ci = cells.indexOf(costLabel), vi = cells.indexOf(valueLabel);
+    if (ci > 0 && vi > 0) found = { ws, rowNumber, ci, vi };
+  }));
+  let rowWithCost = null, rowNoCost = null;
+  if (found) found.ws.eachRow((row, n) => { if (n <= found.rowNumber) return; const first = String(row.getCell(1).value ?? ""); if (first.startsWith(`Item Custo ${run}`)) rowWithCost = row; if (first.startsWith(`Item SemCusto ${run}`)) rowNoCost = row; });
+  const c1 = rowWithCost?.getCell(found.ci), v1 = rowWithCost?.getCell(found.vi), c2 = rowNoCost?.getCell(found.ci), v2 = rowNoCost?.getCell(found.vi);
+  check("xlsx estoque: custo e valor conhecidos são NÚMEROS (10 e 80) com formato R$", typeof c1?.value === "number" && c1.value === 10 && typeof v1?.value === "number" && v1.value === 80 && /R\$/.test(c1.numFmt ?? "") && /R\$/.test(v1.numFmt ?? ""), JSON.stringify([c1?.value, c1?.numFmt, v1?.value, v1?.numFmt]));
+  check("xlsx estoque: custo e valor desconhecidos são células VAZIAS (nunca 0)", c2 && v2 && (c2.value === null || c2.value === undefined) && (v2.value === null || v2.value === undefined), JSON.stringify([c2?.value, v2?.value]));
+  const wbAll = await readSheets(files["all.xlsx"].bytes);
+  check("xlsx consolidado: Resumo + uma aba por relatório", wbAll.worksheets.length >= 6 && wbAll.worksheets[0].name === "Resumo", wbAll.worksheets.map((ws) => ws.name).join("|"));
+  // Valores monetários numéricos no financeiro (receita Pago R$ 100,00 criada na suíte anterior, se existir) e tipagem geral.
+  const wbFin = await readSheets(files["finance.xlsx"].bytes);
+  let moneyCells = 0, moneyNumbers = 0; const oddCells = [];
+  wbFin.eachSheet((ws) => ws.eachRow((row) => row.eachCell((cell) => { if (/R\$/.test(cell.numFmt ?? "")) { moneyCells += 1; if (typeof cell.value === "number" || typeof cell.value?.result === "number" || cell.value === "—" || typeof cell.value?.formula === "string") moneyNumbers += 1; else oddCells.push(`${ws.name}!${cell.address}=${JSON.stringify(cell.value)}`); } })));
+  check("xlsx financeiro: toda célula com formato R$ guarda número (ou '—' quando desconhecido)", moneyCells > 0 && moneyCells === moneyNumbers, `${moneyNumbers}/${moneyCells} ${oddCells.join(" ")}`);
+
+  // ---- XLSX lido por XML (jszip): abas, grade desligada, fórmulas, Tabela do Excel, KPIs do Resumo = KPIs de /api/reports/document, sem coluna de paciente.
+  const JSZip = (await import("jszip")).default;
+  const zlib = await import("node:zlib");
+  const mainTabs = ["finance", "procedures", "professionals", "appointments", "clients", "quotes", "stock"];
+  const tabLabels = { finance: "Financeiro", procedures: "Procedimentos", professionals: "Profissionais", appointments: "Agendamentos", clients: "Clientes", quotes: "Orçamentos", stock: "Estoque" };
+  const sheetNamesOf = async (zip) => [...(await zip.file("xl/workbook.xml").async("string")).matchAll(/<sheet [^>]*name="([^"]+)"/g)].map((m) => m[1].replace(/&amp;/g, "&"));
+  const sheetXmls = async (zip) => Promise.all(Object.keys(zip.files).filter((n) => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).sort().map((n) => zip.file(n).async("string")));
+  const tableXmls = async (zip) => Promise.all(Object.keys(zip.files).filter((n) => /^xl\/tables\/table\d+\.xml$/.test(n)).map((n) => zip.file(n).async("string")));
+  const kpiItemsOf = (d) => (d.sections ?? []).filter((s) => s.type === "kpis").flatMap((s) => s.items);
+  const problems = { names: [], grid: [], tables: [], formulas: [], subtotal: [], kpi: [], columns: [], cleanText: [] };
+  const docs = {};
+  const formulaSummary = {};
+  for (const tab of mainTabs) {
+    docs[tab] = (await get_(docUrl(tab))).data;
+    const zip = await JSZip.loadAsync(files[`${tab}.xlsx`].bytes);
+    const names = await sheetNamesOf(zip);
+    const expected = tab === "stock" ? ["Resumo", "Estoque", "Movimentações"] : ["Resumo", tabLabels[tab]];
+    if (names.join("|") !== expected.join("|")) problems.names.push(`${tab}: ${names.join("|")}`);
+    const sheets = await sheetXmls(zip);
+    if (!sheets.every((x) => /showGridLines="(0|false)"/.test(x))) problems.grid.push(tab);
+    const tables = await tableXmls(zip);
+    if (tables.length < 1 || !tables.every((x) => /<table [^>]*ref="/.test(x) && /<autoFilter /.test(x))) problems.tables.push(`${tab}: ${tables.length}`);
+    const all = sheets.join("\n");
+    const has = (re) => re.test(all);
+    formulaSummary[tab] = ["COUNTA", "SUM", "COUNTIF", "SUMIFS", "SUBTOTAL\\(109"].filter((f) => has(new RegExp(`<f>[^<]*${f}`)));
+    if (!has(/<f>[^<]*(COUNTA|COUNT\(|SUM\()/)) problems.formulas.push(tab);
+    if (["quotes", "clients", "stock"].includes(tab) && !has(/<f>[^<]*SUBTOTAL\(109,/)) problems.subtotal.push(tab);
+    for (const t of tables) for (const m of t.matchAll(/<tableColumn [^>]*name="([^"]+)"/g)) if (/^(paciente|nome|cliente)\b|cpf|telefone|e-?mail|observa|^nota/i.test(m[1])) problems.columns.push(`${tab}:${m[1]}`);
+    // KPIs do Resumo (valor em cache) = KPIs do documento.
+    const wb = await readSheets(files[`${tab}.xlsx`].bytes);
+    const resumo = wb.getWorksheet("Resumo");
+    const byLabel = new Map();
+    resumo.eachRow((row, n) => row.eachCell((cell, c) => { if (typeof cell.value === "string") byLabel.set(cell.value, [...(byLabel.get(cell.value) ?? []), resumo.getCell(n + 1, c)]); }));
+    for (const item of kpiItemsOf(docs[tab])) {
+      const targets = byLabel.get(item.label);
+      if (!targets) { problems.kpi.push(`${tab}: sem card "${item.label}"`); continue; }
+      const rawOf = (t) => t.value?.result ?? t.value;
+      const v = item.value;
+      if (v.type === "unknown") { const bad = targets.map(rawOf).find((r) => typeof r === "number" && r !== 0); if (bad !== undefined) problems.kpi.push(`${tab}: "${item.label}" desconhecido mas xlsx=${bad}`); continue; }
+      const exp = v.type === "money" ? v.value / 100 : v.value;
+      const matches = (raw) => { const got = typeof raw === "number" ? raw : (raw === "–" || raw == null ? 0 : NaN); return Math.abs(got - exp) < 0.006 || (v.type === "percent" && Math.abs(got - exp / 100) < 0.0006); };
+      // (comparação feita em matches)
+      if (typeof v.value === "number" && !targets.some((t) => matches(rawOf(t)))) problems.kpi.push(`${tab}: "${item.label}" doc=${v.value}(${v.type}) xlsx=${JSON.stringify(targets.map(rawOf))}`);
+    }
+  }
+  check("xlsx (XML): abas = Resumo + aba com o nome do relatório (Estoque: Estoque e Movimentações) nos 7 relatórios", problems.names.length === 0, problems.names.join(" ; "));
+  check("xlsx (XML): grade desligada em todas as abas dos 7 relatórios", problems.grid.length === 0, problems.grid.join(","));
+  check("xlsx (XML): Tabela do Excel real (xl/tables, ref + autoFilter) em todos os 7", problems.tables.length === 0, problems.tables.join(" ; "));
+  check("xlsx (XML): Resumo com fórmulas COUNTA/COUNT/SUM nos 7 relatórios", problems.formulas.length === 0, `${problems.formulas.join(",")} ${JSON.stringify(formulaSummary)}`);
+  check("xlsx (XML): total da aba de dados com SUBTOTAL(109,...) em orçamentos, clientes e estoque (financeiro mistura recebimentos e despesas e não tem linha Total; os demais têm total 0 ou nenhuma coluna somável)", problems.subtotal.length === 0, `${problems.subtotal.join(",")} ${JSON.stringify(formulaSummary)}`);
+  check("xlsx (XML estoque): Resumo usa COUNTA, SUM, COUNTIF e SUMIFS; dados com SUBTOTAL(109", ["COUNTA", "SUM", "COUNTIF", "SUMIFS", "SUBTOTAL\\(109"].every((f) => formulaSummary.stock.includes(f)), JSON.stringify(formulaSummary.stock));
+  check("xlsx: KPIs do Resumo (valor em cache) = KPIs de /api/reports/document nos 7 relatórios", problems.kpi.length === 0, problems.kpi.join(" ; "));
+  check("xlsx: nenhuma coluna de paciente, nome, CPF, contato nem observação nas Tabelas", problems.columns.length === 0, problems.columns.join(","));
+
+  // CSV só dados: linha 1 = cabeçalho, sem metadados, decimal vírgula, sem R$, datas DD/MM/AAAA.
+  const csvProblems = [];
+  for (const tab of mainTabs) {
+    const text = files[`${tab}.csv`].text.replace(/^﻿/, "");
+    const lines = text.split("\r\n").filter((l) => l !== "");
+    if (/Cl[ií]nica;|^Nota;|Gerado em|Compara[cç][aã]o;|Indicador;/m.test(text)) csvProblems.push(`${tab}: metadados`);
+    if (/R\$/.test(text)) csvProblems.push(`${tab}: R$`);
+    if (/\d{4}-\d{2}-\d{2}/.test(text)) csvProblems.push(`${tab}: data ISO`);
+    if (/(^|;)-?\d+\.\d+(;|$)/m.test(text)) csvProblems.push(`${tab}: decimal com ponto`);
+    if (lines.length < 2 || new Set(lines.map((l) => l.split(";").length)).size !== 1) csvProblems.push(`${tab}: colunas inconsistentes/sem linhas (${lines.length})`);
+    if (lines.length > 1 && !text.includes("\r\n")) csvProblems.push(`${tab}: sem CRLF entre linhas`);
+  }
+  check("csv (7 relatórios): só dados, sem metadados/R$/data ISO/decimal com ponto, mesmo número de colunas em todas as linhas", csvProblems.length === 0, csvProblems.join(" ; "));
+  check("csv: exemplos de formato (financeiro: valor 100,00 e 50,50; orçamento 777,70; agendamento DD/MM/AAAA;HH:MM)", /;100,00(\r|$)/m.test(files["finance.csv"].text) && /;50,50(\r|$)/m.test(files["finance.csv"].text) && /777,70/.test(files["quotes.csv"].text) && /\d{2}\/\d{2}\/\d{4};\d{2}:\d{2};/.test(files["appointments.csv"].text), files["appointments.csv"].text.split("\r\n")[1]);
+  const csvAll = await rawGet(exportUrl("csv", "all"));
+  check("csv do consolidado (tab=all): 400 em pt-BR, JSON, sem arquivo", csvAll.status === 400 && /json/.test(csvAll.headers.get("content-type") ?? "") && /CSV/.test(JSON.parse(csvAll.text).message ?? "") && !csvAll.headers.get("content-disposition"), `${csvAll.status} ${csvAll.text.slice(0, 160)}`);
+  const csvAllAnon = await withSession("", async () => rawGet(exportUrl("csv", "all"), ""));
+  check("csv do consolidado sem sessão: 401 (antes do 400)", csvAllAnon.status === 401, csvAllAnon.status);
+  const csvOverview = files["overview.csv"] ?? await rawGet(exportUrl("csv", "overview"));
+  check("csv da visão geral: 200 text/csv com BOM, sem metadados", csvOverview.status === 200 && /^text\/csv/.test(csvOverview.headers.get("content-type") ?? "") && csvOverview.bytes[0] === 0xef && !/Cl[ií]nica;|^Nota;|Gerado em/m.test(csvOverview.text), `${csvOverview.status} ${csvOverview.text.slice(0, 120)}`);
+
+  // Privacidade: nenhum texto livre de movimentação nem nome de paciente em JSON/xlsx/csv.
+  const secrets = [seed.secretNote, seed.secretAdjust, seed.patientName, "Segredo Paciente", "Segredo"];
+  const leak = (text) => secrets.filter((s) => text.includes(s));
+  const leaks = [];
+  for (const tab of tabs) {
+    const j = await rawGet(docUrl(tab));
+    leaks.push(...leak(j.text).map((s) => `json:${tab}:${s}`));
+    if (files[`${tab}.csv`]) leaks.push(...leak(files[`${tab}.csv`].text).map((s) => `csv:${tab}:${s}`));
+    leaks.push(...leak(sheetText(await readSheets(files[`${tab}.xlsx`].bytes))).map((s) => `xlsx:${tab}:${s}`));
+  }
+  check("privacidade: notas das movimentações e nome do paciente não aparecem em JSON, XLSX nem CSV (todos os relatórios)", leaks.length === 0, leaks.join(", "));
+  const csvStock = files["stock.csv"].text;
+  check("csv estoque: SÓ DADOS (cabeçalho na linha 1, sem metadados), custo desconhecido é célula vazia (não 0,00), ';' e CRLF", /^\uFEFF?Item;/.test(csvStock) && !/Nota;|Clínica;|Período;/.test(csvStock) && csvStock.includes(";") && csvStock.includes("\r\n") && !new RegExp(`Item SemCusto ${run};[^\\r\\n]*;0,00;`).test(csvStock), csvStock.split("\r\n").filter((l) => l.includes("SemCusto")).slice(0, 2).join(" // "));
+
+  // Relatório vazio: período sem movimentos. Vazio de verdade = bases E KPIs zerados; KPI diferente de zero nunca é "vazio".
+  const pdfHas = (bytes, text) => {
+    const raw = bytes.toString("latin1");
+    const parts = [raw];
+    for (const m of raw.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) { for (const tail of ["", "\n", "\r"]) { try { parts.push(zlib.inflateSync(Buffer.from(m[1] + tail, "latin1")).toString("latin1")); break; } catch { /* tenta o proximo */ } } }
+    const hay = parts.join("\n").toLowerCase();
+    return hay.includes(text.toLowerCase()) || hay.includes(Buffer.from(text, "latin1").toString("hex").toLowerCase());
+  };
+  const empty = "from=2020-01-01&to=2020-01-31";
+  const emptyProblems = [];
+  const emptyTabs = ["appointments", "finance", "procedures", "professionals", "quotes", "clients"];
+  for (const tab of emptyTabs) {
+    const d = (await get_(docUrl(tab, empty))).data;
+    const [x, c, p] = await Promise.all(["xlsx", "csv", "pdf"].map((f) => rawGet(exportUrl(f, tab, empty))));
+    for (const [f, res] of [["xlsx", x], ["csv", c], ["pdf", p]]) { if (res.status === 200) await fsp.writeFile(`${samples}\\vazio-${tab}.${f}`, res.bytes); else emptyProblems.push(`${tab}.${f}: ${res.status}`); }
+    if (d.hasData !== false) { emptyProblems.push(`${tab}: hasData=${d.hasData}`); continue; }
+    if (x.status === 200) {
+      const wb = await readSheets(x.bytes);
+      const text = sheetText(wb);
+      if (!/Nenhuma movimenta[çc][ãa]o no per[íi]odo/.test(text)) emptyProblems.push(`${tab}: xlsx sem a nota`);
+      const resumo = wb.getWorksheet("Resumo");
+      const labels = new Set(); resumo.eachRow((row) => row.eachCell((cell) => { if (typeof cell.value === "string") labels.add(cell.value); }));
+      const missing = kpiItemsOf(d).filter((i) => !labels.has(i.label)).map((i) => i.label);
+      if (kpiItemsOf(d).length === 0 || missing.length) emptyProblems.push(`${tab}: KPIs ${kpiItemsOf(d).length === 0 ? "ausentes no document" : `ausentes no Resumo: ${missing.join(",")}`}`);
+      const zip = await JSZip.loadAsync(x.bytes);
+      const dataSheet = wb.worksheets[1];
+      if (dataSheet.actualRowCount !== 1) emptyProblems.push(`${tab}: aba de dados com ${dataSheet.actualRowCount} linhas (esperado só o cabeçalho)`);
+      if ((await tableXmls(zip)).length !== 0) emptyProblems.push(`${tab}: Tabela do Excel presente sem linhas`);
+    }
+    if (c.status === 200 && c.text.replace(/^﻿/, "").split("\r\n").filter((l) => l !== "").length !== 1) emptyProblems.push(`${tab}: csv com mais que o cabeçalho`);
+    if (p.status === 200 && !pdfHas(p.bytes, "Nenhum")) emptyProblems.push(`${tab}: pdf sem a nota`);
+  }
+  check("vazio (2020): appointments, finance, procedures, professionals, quotes e clients — document hasData=false; xlsx com 'Nenhuma movimentação no período', KPIs no Resumo, aba de dados só cabeçalho sem Tabela; csv só cabeçalho; pdf com a nota", emptyProblems.length === 0, emptyProblems.join(" ; "));
+  const emptyStock = (await get_(docUrl("stock", empty))).data;
+  const stockXlsx2020 = await rawGet(exportUrl("xlsx", "stock", empty));
+  const stockPdf2020 = await rawGet(exportUrl("pdf", "stock", empty));
+  const stockCsv2020 = await rawGet(exportUrl("csv", "stock", empty));
+  for (const [f, res] of [["xlsx", stockXlsx2020], ["pdf", stockPdf2020], ["csv", stockCsv2020]]) await fsp.writeFile(`${samples}\\vazio-stock.${f}`, res.bytes);
+  check("estoque em período sem movimentos mas com itens cadastrados (KPI ≠ 0): NÃO é vazio em document, xlsx e csv (posição presente)", emptyStock.hasData === true && !/Nenhuma movimenta/.test(sheetText(await readSheets(stockXlsx2020.bytes))) && stockCsv2020.text.split("\r\n").filter((l) => l !== "").length >= 4, `${emptyStock.hasData}`);
+  check("estoque 2020 no PDF: mostra a posição (KPIs de itens); nota só da parte de movimentações", pdfHas(stockPdf2020.bytes, "Itens cadastrados"), `nota de movimentações no pdf: ${pdfHas(stockPdf2020.bytes, "Nenhuma movimenta")}`);
+  // Caso do bug: hoje há pacientes novos e nenhum atendimento realizado hoje (os atendimentos estão em amanhã).
+  const bugQ = `from=${today}&to=${today}`;
+  const bugDoc = (await get_(docUrl("clients", bugQ))).data;
+  const newItem = kpiItemsOf(bugDoc).find((i) => /Novos/i.test(i.label));
+  const doneToday = (await get_(`/api/reports/overview?${bugQ}`)).data?.cards?.appointments?.value;
+  const [bx, bc, bp] = await Promise.all(["xlsx", "csv", "pdf"].map((f) => rawGet(exportUrl(f, "clients", bugQ))));
+  for (const [f, res] of [["xlsx", bx], ["csv", bc], ["pdf", bp]]) await fsp.writeFile(`${samples}\\caso-novos-sem-atendimento-clients.${f}`, res.bytes);
+  check("caso do bug: novos pacientes > 0 e 0 atendimentos realizados — document hasData=true, xlsx/pdf/csv NÃO dizem 'vazio' e o csv tem linhas", newItem?.value?.value > 0 && doneToday === 0 && bugDoc.hasData === true && !/Nenhuma movimenta/.test(sheetText(await readSheets(bx.bytes))) && !pdfHas(bp.bytes, "Nenhuma movimenta") && bc.text.split("\r\n").filter((l) => l !== "").length >= 2, `novos=${newItem?.value?.value} realizados=${doneToday} hasData=${bugDoc.hasData}`);
+  const emptyAll = await rawGet(exportUrl("xlsx", "all", empty));
+  check("vazio: consolidado xlsx de 2020 gera arquivo (Resumo + abas)", emptyAll.status === 200 && emptyAll.bytes.subarray(0, 2).toString() === "PK", emptyAll.status);
+  if (emptyAll.status === 200) await fsp.writeFile(`${samples}\\vazio-all.xlsx`, emptyAll.bytes);
+
+  // Papéis: STAFF e PROFESSIONAL.
+  const proName = `E2E Prof Arq ${run}`, proLogin = `e2e-arq-prof-${run}@example.invalid`, staffLogin = `e2e-arq-staff-${run}@example.invalid`, secret = `E2e-${run}-arq9!`;
+  const members = [];
+  let original = null;
+  try {
+    const person = { cpf: randomCpf(), address: "Rua A, 1", country: "Brasil", state: "SP", city: "São Paulo" };
+    const mkPro = await api("POST", "/api/team", { name: proName, email: proLogin, password: secret, role: "PROFESSIONAL", ...person, cpf: randomCpf() });
+    const mkStaff = await api("POST", "/api/team", { name: `E2E Staff Arq ${run}`, email: staffLogin, password: secret, role: "STAFF", ...person, cpf: randomCpf() });
+    for (const m of [mkPro, mkStaff]) if (m.data.member) members.push(m.data.member);
+    const proSession = mkPro.status === 201 ? await loginAs(proLogin, secret) : null;
+    const staffSession = mkStaff.status === 201 ? await loginAs(staffLogin, secret) : null;
+    const probe = async (sess) => withSession(sess.cookie, async () => {
+      const paths = [exportUrl("xlsx", "stock"), exportUrl("pdf", "appointments"), exportUrl("csv", "all"), docUrl("stock"), docUrl("appointments"), "/api/reports/appointments"];
+      return Promise.all(paths.map((p) => rawGet(p, sess.cookie)));
+    });
+    for (const [label, sess] of [["STAFF", staffSession], ["PROFESSIONAL", proSession]]) {
+      if (sess?.status !== 200) { check(`${label} de relatórios 2 entrou`, false, sess?.status); continue; }
+      const res = await probe(sess);
+      check(`${label} sem reports:access: export xlsx/pdf/csv, document e appointments devolvem 403`, res.every((x) => x.status === 403), res.map((x) => x.status).join("/"));
+    }
+    original = (await api("GET", "/api/clinic/role-permissions")).data.matrix;
+    const grant = (perms) => { const matrix = JSON.parse(JSON.stringify(original)); for (const key of perms) matrix.PROFESSIONAL[key] = true; return api("PATCH", "/api/clinic/role-permissions", { matrix }); };
+    const g = await grant(["reports:access", "stock:access", "finance:access"]);
+    check("matriz: PROFESSIONAL com reports, stock e finance concedidos", g.status === 200, g.status);
+    if (proSession?.status === 200) await withSession(proSession.cookie, async () => {
+      const fin = await Promise.all([rawGet(docUrl("finance"), proSession.cookie), rawGet(exportUrl("xlsx", "finance"), proSession.cookie), rawGet(exportUrl("csv", "finance"), proSession.cookie)]);
+      check("PROFESSIONAL (mesmo com finance:access): financeiro em document/xlsx/csv devolve 403", fin.every((x) => x.status === 403), fin.map((x) => x.status).join("/"));
+      const st = await rawGet(docUrl("stock"), proSession.cookie);
+      const sd = JSON.parse(st.text);
+      const pos = sd.sections?.find((s) => s.id === "position");
+      const moneyIn = (table, key) => table.rows.map((row) => row.cells[table.columns.findIndex((c) => c.key === key)]);
+      const proCols = pos?.columns.map((c) => c.key).join(",");
+      const costs = pos ? moneyIn(pos, "cost") : [], values = pos ? moneyIn(pos, "value") : [];
+      const hidden = [...costs, ...values].every((cell) => !cell || !(cell.type === "money" && cell.value > 0));
+      const stockValueKpi = sd.sections?.find((s) => s.id === "position-kpis")?.items?.find((i) => i.key === "stockValue")?.value;
+      check("PROFESSIONAL: posição de estoque 200, mas sem custo unitário nem valor em estoque (saldo e situação mantidos)", st.status === 200 && pos && hidden && !(stockValueKpi?.type === "money" && stockValueKpi.value > 0) && rowOf(pos, `Item Custo ${run}`)?.cells[balI].value === 8, `${st.status} cols=${proCols} ${JSON.stringify(costs.slice(0, 3))} ${JSON.stringify(stockValueKpi)}`);
+      const xl = await rawGet(exportUrl("xlsx", "stock"), proSession.cookie);
+      const xlText = sheetText(await readSheets(xl.bytes));
+      check("PROFESSIONAL: xlsx de estoque 200 sem valor em estoque (R$ 80,00 / 8000) e sem notas", xl.status === 200 && !leak(xlText).length && !/\b80[.,]00\b/.test(xlText.replace(/\n/g, " ")), `${xl.status} ${leak(xlText)}`);
+      const ap = await Promise.all([rawGet("/api/reports/appointments", proSession.cookie), rawGet(docUrl("appointments"), proSession.cookie), rawGet(exportUrl("xlsx", "appointments"), proSession.cookie), rawGet(exportUrl("pdf", "all"), proSession.cookie)]);
+      check("PROFESSIONAL: appointments e export xlsx de agendamentos e consolidado pdf 200", ap.every((x) => x.status === 200), ap.map((x) => x.status).join("/"));
+      const own = JSON.parse(ap[1].text);
+      check("PROFESSIONAL: document/appointments não traz o profissional do estoque (escopo próprio)", !JSON.stringify(own).includes(`Prof Estoque ${run}`), "");
+      const all = await rawGet(docUrl("all"), proSession.cookie);
+      check("PROFESSIONAL: documento consolidado 200 e sem financeiro", all.status === 200 && !/Receita recebida/.test(all.text), `${all.status}`);
+    });
+    const back = await api("PATCH", "/api/clinic/role-permissions", { matrix: original });
+    original = null;
+    check("matriz restaurada (relatórios 2)", back.status === 200, back.status);
+  } finally {
+    if (original) await api("PATCH", "/api/clinic/role-permissions", { matrix: original }).catch(() => undefined);
+    for (const m of members) await api("DELETE", "/api/team", { membershipId: m.id }).catch(() => undefined);
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [proLogin, staffLogin] } } } }).catch(() => undefined);
+    await prisma.user.deleteMany({ where: { email: { in: [proLogin, staffLogin] } } }).catch(() => undefined);
+  }
+}
+const get_ = (path) => api("GET", path);
+
+// Relatórios, tela: Central de relatórios, abas Agendamentos e Estoque, download Excel. Cria o próprio estoque (tag própria).
+async function reportsUi2() {
+  const ExcelJS = (await import("exceljs")).default;
+  const shots = process.env.E2E_SHOTS_DIR ?? "C:\\Users\\Yuri\\AppData\\Local\\Temp\\claude\\7bc61ed2be135a06\\5fd25c07-7726-4e0c-8711-9c5e08b11430\\scratchpad";
+  const fsp = await import("node:fs/promises");
+  const tag = `${run}u`.replace(/\d/g, "x");
+  const seed = await seedReportsStock(tag);
+  check("relatorios_ui 2: estoque e atendimento do estoque criados pela API", seed.ok && Object.values(seed.steps).every((s) => s === 200 || s === 201), JSON.stringify(seed.steps));
+
+  await withPage(async (page, pageErrors) => {
+    const consoleErrors = [];
+    page.on("console", (message) => { if (message.type() === "error" && !/status of 401/.test(message.text())) consoleErrors.push(message.text().slice(0, 160)); });
+    const bodyText = () => page.locator("body").innerText();
+    const until = async (fn, ms = 20_000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await fn().catch(() => false)) return true; await page.waitForTimeout(250); } return false; };
+    const dismissOverlays = async () => {
+      for (let n = 0; n < 6; n += 1) {
+        await page.waitForTimeout(n === 0 ? 2500 : 600);
+        const later = page.getByRole("button", { name: "Fazer isso depois" });
+        const skipTour = page.getByRole("button", { name: "Pular tour" });
+        if (await later.count()) await later.first().click().catch(() => undefined);
+        else if (await skipTour.count()) await skipTour.first().click().catch(() => undefined);
+        else if (!(await page.locator(".hp-tour-root").count())) break;
+      }
+    };
+    const noScroll = async (width, height, label) => {
+      await page.setViewportSize({ width, height });
+      await page.waitForTimeout(500);
+      const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: window.innerWidth, bw: document.body.scrollWidth }));
+      check(`relatorios_ui 2: sem rolagem horizontal da página em ${width}px (${label})`, m.sw <= m.iw && m.bw <= m.iw, JSON.stringify(m));
+    };
+    const loadPage = async () => {
+      await page.goto(`${baseUrl}/relatorios`);
+      await dismissOverlays();
+      await until(async () => (await bodyText()).includes("Atendimentos realizados"));
+    };
+    const scrollAll = async () => { await page.evaluate(async () => { for (let y = 0; y < document.body.scrollHeight; y += 500) { window.scrollTo(0, y); await new Promise((r) => setTimeout(r, 120)); } window.scrollTo(0, 0); }); };
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await loadPage();
+    check("relatorios_ui 2: título 'Relatórios e desempenho' aparece", (await bodyText()).includes("Relatórios e desempenho"));
+
+    // Central de relatórios: categorias e cartões permitidos para o ADMIN (todos os 7).
+    await scrollAll();
+    const central = page.locator("section[aria-labelledby=report-center-title]");
+    check("central: título 'Central de relatórios' visível", await central.getByText("Central de relatórios").first().isVisible().catch(() => false));
+    const groups = await central.locator("[role=group][aria-label^='Relatórios de ']").evaluateAll((els) => els.map((el) => el.getAttribute("aria-label")));
+    check("central: categorias Financeiro, Operação, Clientes e Estoque", ["Financeiro", "Operação", "Clientes", "Estoque"].every((c) => groups.includes(`Relatórios de ${c}`)), groups.join("|"));
+    const cardTitles = await central.locator("h5").allInnerTexts();
+    check("central: um cartão por relatório permitido (Financeiro, Orçamentos, Procedimentos, Profissionais, Agendamentos, Clientes, Estoque)", ["Financeiro", "Orçamentos", "Procedimentos", "Profissionais", "Agendamentos", "Clientes", "Estoque"].every((t) => cardTitles.includes(t)) && !cardTitles.includes("Visão geral") && !cardTitles.includes("Consolidado"), cardTitles.join("|"));
+    const btnCounts = await central.locator("[role=group][aria-label^='Baixar ']").evaluateAll((els) => els.map((el) => el.querySelectorAll("button").length));
+    check("central: cada cartão tem 3 botões (Excel, PDF, CSV)", btnCounts.length === 7 && btnCounts.every((n) => n === 3), btnCounts.join(","));
+    const stockCard = central.locator("div:has(> div > div > h5:text-is('Estoque'))").first();
+    const previewOk = await until(async () => { const t = (await stockCard.innerText()).replace(/\s+/g, " "); return /Itens cadastrados/.test(t) && /\b3\b/.test(t) && !(await stockCard.locator("[role=status][aria-label='Carregando prévia']").count()); });
+    check("central: prévia do cartão Estoque carrega (itens cadastrados 3, sem skeleton)", previewOk, (await stockCard.innerText().catch(() => "")).replace(/\s+/g, " ").slice(0, 200));
+    const loadingLeft = await central.locator("[role=status][aria-label='Carregando prévia']").count();
+    check("central: nenhuma prévia ficou carregando nem com erro", loadingLeft === 0 && !(await central.getByText("Não foi possível carregar a prévia.").count()), `skeletons=${loadingLeft}`);
+    await page.screenshot({ path: `${shots}\\rel2-desk.png`, fullPage: true });
+    await central.screenshot({ path: `${shots}\\rel2-central.png` });
+
+    // Botão Excel baixa .xlsx.
+    const [xlsx] = await Promise.all([page.waitForEvent("download", { timeout: 40_000 }), central.getByRole("group", { name: "Baixar Estoque" }).getByRole("button", { name: /Excel/ }).click()]);
+    const xbytes = await fsp.readFile(await xlsx.path());
+    check("central: botão Excel do Estoque baixa .xlsx (nome Harmonize_..., assinatura PK)", /^Harmonize_[A-Za-z0-9_.-]+\.xlsx$/.test(xlsx.suggestedFilename()) && xbytes.subarray(0, 2).toString() === "PK", `${xlsx.suggestedFilename()} ${xbytes.subarray(0, 2).toString()}`);
+    await page.waitForTimeout(500);
+    const [pdf] = await Promise.all([page.waitForEvent("download", { timeout: 40_000 }), central.getByRole("group", { name: "Baixar Agendamentos" }).getByRole("button", { name: /PDF/ }).click()]);
+    check("central: botão PDF de Agendamentos baixa .pdf com %PDF", /\.pdf$/.test(pdf.suggestedFilename()) && (await fsp.readFile(await pdf.path())).subarray(0, 4).toString() === "%PDF", pdf.suggestedFilename());
+
+    // Abas Agendamentos e Estoque.
+    const tabNames = await page.getByRole("tab").allInnerTexts();
+    check("abas: Agendamentos e Estoque existem (role=tab)", tabNames.some((t) => t.includes("Agendamentos")) && tabNames.some((t) => t.includes("Estoque")), tabNames.join("|"));
+    await page.getByRole("tab", { name: "Agendamentos" }).click();
+    const apOk = await until(async () => { const t = await page.getByRole("tabpanel").innerText(); return t.length > 40 && !(await page.locator("[role=status][aria-label^=Carregando]").count()); });
+    const apText = (await page.getByRole("tabpanel").innerText()).replace(/\s+/g, " ");
+    check("aba Agendamentos renderiza KPIs/tabelas sem erro", apOk && /Conclu/i.test(apText) && !/Tentar novamente/.test(apText), apText.slice(0, 200));
+    await page.screenshot({ path: `${shots}\\rel2-agendamentos.png`, fullPage: true });
+    await page.getByRole("tab", { name: "Estoque" }).click();
+    const stOk = await until(async () => (await page.getByRole("tabpanel").innerText()).includes(`Item Custo ${tag}`));
+    const stText = (await page.getByRole("tabpanel").innerText()).replace(/\s+/g, " ");
+    check("aba Estoque: posição (Abaixo do mínimo, Sem estoque), item sem custo com '—', movimentações e consumo", stOk && /Abaixo do m/.test(stText) && /Sem estoque/.test(stText) && stText.includes(`Item SemCusto ${tag}`) && /—/.test(stText) && /Compra/.test(stText) && !/R\$\s?0,00[^\d]*Item SemCusto/.test(stText), stText.slice(0, 260));
+    await fsp.writeFile(shots.split("\\").join("/") + "/rel2-estoque-texto.txt", stText);
+    check("aba Estoque: nenhum texto de observação nem nome de paciente na tela", !stText.includes(seed.secretNote) && !stText.includes(seed.secretAdjust) && !stText.includes("Segredo"), "");
+    await page.screenshot({ path: `${shots}\\rel2-estoque.png`, fullPage: true });
+
+    // Menu Exportar: Excel/PDF/CSV da aba atual e Excel/PDF (sem CSV) do consolidado.
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.getByRole("button", { name: "Exportar relatório" }).click();
+    await page.waitForTimeout(400);
+    const itemCount = async (re) => page.getByRole("menuitem", { name: re }).count();
+    const menuCounts = { excel: await itemCount(/Baixar Excel/), pdf: await itemCount(/Baixar PDF/), csv: await itemCount(/Baixar CSV/) };
+    const menuText = (await page.getByRole("menu").innerText()).replace(/\s+/g, " ");
+    check("menu Exportar: Excel e PDF na aba atual e no consolidado; CSV só na aba atual (sem CSV do consolidado)", menuCounts.excel === 2 && menuCounts.pdf === 2 && menuCounts.csv === 1 && /Aba atual/.test(menuText) && /Consolidado/.test(menuText), `${JSON.stringify(menuCounts)} ${menuText.slice(0, 200)}`);
+    await page.screenshot({ path: `${shots}\\rel3-menu.png` });
+    // Consolidado em Excel pelo menu (segundo item "Baixar Excel").
+    const [allXlsx] = await Promise.all([page.waitForEvent("download", { timeout: 60_000 }), page.getByRole("menuitem", { name: /Baixar Excel/ }).nth(1).click()]);
+    const allBytes = await fsp.readFile(await allXlsx.path());
+    check("menu Exportar: consolidado em Excel baixa .xlsx (Harmonize_Consolidado..., PK)", /^Harmonize_[A-Za-z0-9_.-]+\.xlsx$/.test(allXlsx.suggestedFilename()) && allBytes.subarray(0, 2).toString() === "PK", allXlsx.suggestedFilename());
+    await page.waitForTimeout(600);
+    // CSV da aba atual (Estoque): só cabeçalho + dados, sem metadados.
+    await page.getByRole("button", { name: "Exportar relatório" }).click();
+    const [csvDl] = await Promise.all([page.waitForEvent("download", { timeout: 40_000 }), page.getByRole("menuitem", { name: /Baixar CSV/ }).first().click()]);
+    const csvText = (await fsp.readFile(await csvDl.path())).toString("utf8").replace(/^﻿/, "");
+    check("menu Exportar: CSV da aba Estoque baixa só dados (linha 1 = cabeçalho, sem Clínica/Período/Nota)", /^Item;/.test(csvText) && !/Cl[ií]nica;|^Nota;|Gerado em/m.test(csvText) && /Item Custo/.test(csvText), csvText.split("\r\n").slice(0, 2).join(" // "));
+    await page.waitForTimeout(600);
+
+    // Central: o cartão do consolidado não existe e nenhum cartão oferece CSV do consolidado (3 botões por cartão, 7 cartões).
+    // Caso do bug: pacientes novos hoje e nenhum atendimento realizado hoje — nem a tela nem o Excel dizem "vazio".
+    const clinicLink = await prisma.clinicMembership.findFirst({ where: { user: { email } }, select: { clinicId: true } });
+    await prisma.appointment.updateMany({ where: { patient: { clinicId: clinicLink.clinicId } }, data: { date: new Date(`${day(1)}T15:00:00.000Z`) } });
+    await page.reload(); await dismissOverlays(); await until(async () => (await bodyText()).includes("Atendimentos realizados"));
+    await page.getByRole("button", { name: /Alterar período/ }).click();
+    await page.getByRole("menuitemradio", { name: "Hoje" }).click();
+    await page.waitForTimeout(1500);
+    await scrollAll();
+    const kpiToday = async (label) => (await page.locator("p", { hasText: new RegExp(`^${label}`) }).first().locator("xpath=ancestor::div[contains(@class,'items-start') and contains(@class,'gap-3')][1]").innerText().catch(() => "")).replace(/\s+/g, " ");
+    const doneToday = await kpiToday("Atendimentos realizados"), newToday = await kpiToday("Novos pacientes");
+    check("caso do bug (tela): Hoje = 0 atendimentos realizados e novos pacientes > 0", /\b0\b/.test(doneToday) && /Novos pacientes\s+([1-9]\d*)\b/.test(newToday), `${doneToday} // ${newToday}`);
+    const clientsCard = central.locator("div:has(> div > div > h5:text-is('Clientes'))").first();
+    const apptCard = central.locator("div:has(> div > div > h5:text-is('Agendamentos'))").first();
+    await until(async () => !(await central.locator("[role=status][aria-label='Carregando prévia']").count()));
+    const clientsText = (await clientsCard.innerText()).replace(/\s+/g, " "), apptText = (await apptCard.innerText()).replace(/\s+/g, " ");
+    check("caso do bug (Central): cartão Clientes mostra números (novos > 0) e NÃO diz 'Sem movimentações'; Agendamentos (0 no dia) diz", !/Sem movimenta/.test(clientsText) && /Novos no período\s+([1-9]\d*)/.test(clientsText) && /Sem movimenta/.test(apptText), `${clientsText.slice(0, 160)} // ${apptText.slice(0, 160)}`);
+    await central.screenshot({ path: `${shots}\\rel3-central-hoje.png` });
+    const [clientsXlsx] = await Promise.all([page.waitForEvent("download", { timeout: 40_000 }), central.getByRole("group", { name: "Baixar Clientes" }).getByRole("button", { name: /Excel/ }).click()]);
+    const cwb = new ExcelJS.Workbook(); await cwb.xlsx.load(await fsp.readFile(await clientsXlsx.path()));
+    let ctext = ""; cwb.eachSheet((ws) => ws.eachRow((row) => row.eachCell((cell) => { ctext += `${cell.value?.result ?? cell.value ?? ""}\n`; })));
+    check("caso do bug (Excel do cartão Clientes): sem 'Nenhuma movimentação no período' e com a tabela de dados", !/Nenhuma movimenta/.test(ctext) && cwb.worksheets.length >= 2 && cwb.worksheets[1].actualRowCount >= 2, `${cwb.worksheets.map((w) => `${w.name}:${w.actualRowCount}`).join(" ")}`);
+    await page.screenshot({ path: `${shots}\\rel3-hoje.png`, fullPage: true });
+    await page.getByRole("tab", { name: "Agendamentos" }).click();
+    await page.waitForTimeout(1200);
+    const apTab = (await page.getByRole("tabpanel").innerText()).replace(/\s+/g, " ");
+    check("aba Agendamentos com 0 agendamentos hoje: mostra 'Sem movimentações' ou zeros, sem erro", /Sem movimenta|Nenhuma movimenta/.test(apTab) && !/Tentar novamente/.test(apTab), apTab.slice(0, 160));
+    await page.getByRole("tab", { name: "Clientes" }).click();
+    await page.waitForTimeout(1200);
+    const clTab = (await page.getByRole("tabpanel").innerText()).replace(/\s+/g, " ");
+    check("aba Clientes hoje (novos > 0, sem atendimentos): mostra os números e não o estado vazio", !/Sem movimenta|Nenhuma movimenta/.test(clTab) && /Novos pacientes\s+([1-9]\d*)/.test(clTab), clTab.slice(0, 200));
+
+    // Responsivo, com a aba Estoque aberta.
+    await noScroll(1440, 900, "estoque");
+    await page.setViewportSize({ width: 820, height: 1100 });
+    await page.reload(); await dismissOverlays(); await until(async () => (await bodyText()).includes("Atendimentos realizados"));
+    await page.getByRole("tab", { name: "Estoque" }).click(); await until(async () => (await page.getByRole("tabpanel").innerText()).includes(`Item Custo ${tag}`));
+    await scrollAll();
+    await noScroll(820, 1100, "estoque + central");
+    await page.screenshot({ path: `${shots}\\rel2-tab.png`, fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.reload(); await dismissOverlays(); await until(async () => (await bodyText()).includes("Atendimentos realizados"));
+    await page.getByRole("tab", { name: "Estoque" }).click(); await until(async () => (await page.getByRole("tabpanel").innerText()).includes(`Item Custo ${tag}`));
+    await scrollAll();
+    await noScroll(390, 844, "estoque + central");
+    await page.screenshot({ path: `${shots}\\rel2-mob.png`, fullPage: true });
+    await page.getByRole("tab", { name: "Agendamentos" }).click(); await page.waitForTimeout(1200);
+    await noScroll(390, 844, "agendamentos");
+
+    // Escuro.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.addInitScript(() => localStorage.setItem("harmonize-theme", "dark"));
+    await page.reload(); await dismissOverlays(); await until(async () => (await bodyText()).includes("Atendimentos realizados"));
+    await scrollAll();
+    check("relatorios_ui 2: modo escuro ativo e Central renderiza", await page.evaluate(() => document.documentElement.classList.contains("dark")) && (await central.getByText("Central de relatórios").count()) > 0, "");
+    await page.screenshot({ path: `${shots}\\rel2-dark.png`, fullPage: true });
+
+    check("relatorios_ui 2: nenhum pageerror", pageErrors.length === 0, pageErrors.join(" | "));
+    check("relatorios_ui 2: nenhum erro de console (exceto 401)", consoleErrors.length === 0, consoleErrors.join(" | "));
+  });
+}
+
 const suites = {
+  relatorios_ui: { needs: [], run: async () => { await reportsUi(); await reportsUi2(); } },
+  relatorios: { needs: [], run: async () => { await reports(); await reportsFiles(); } },
   meu_perfil: { needs: [], run: () => myProfile() },
   google_agenda: { needs: [], run: () => googleAgenda() },
   editar_dados_cliente: { needs: [], run: () => editPatientData() },

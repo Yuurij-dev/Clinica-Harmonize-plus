@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // exceljs (XLSX dos relatórios) é CommonJS pesado, usado só em Route Handlers: carrega do node_modules em vez de entrar no bundle.
+  serverExternalPackages: ["exceljs"],
   images: {
     remotePatterns: [
       {

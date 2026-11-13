@@ -7,10 +7,7 @@ import {
   Bell,
   Building2,
   CalendarDays,
-  CalendarPlus,
   CalendarClock,
-  Camera,
-  CheckCircle2,
   Check,
   Clock3,
   CircleDollarSign,
@@ -34,10 +31,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CountUp } from "@/components/ui/count-up";
 import { MaskedInput } from "@/components/ui/masked-input";
 import {
-  DetailCard,
   DateRangeFilter,
   EmptyState,
   LoadingSkeleton,
@@ -305,23 +300,6 @@ function journeyForPatient(patient: Patient) {
     ...stage,
     status: index < currentIndex ? "completed" as const : index === currentIndex ? "current" as const : "pending" as const,
   }));
-}
-
-type FinancialData = {
-  payments: Array<{ value: number; status: string }>;
-  quotes: Array<{ total: number; status: string }>;
-  appointments: Array<{ procedure: string; status: string }>;
-};
-
-function useFinancialData() {
-  const cachedDashboard = readClientCache<FinancialData>("/api/dashboard/bootstrap");
-  const [data, setData] = useState<FinancialData | null>(cachedDashboard ?? null);
-  useEffect(() => {
-    getCachedJson<FinancialData>("/api/dashboard/bootstrap")
-      .then((dashboardData) => setData({ payments: dashboardData.payments ?? [], quotes: dashboardData.quotes ?? [], appointments: dashboardData.appointments ?? [] }))
-      .catch(() => setData({ payments: [], quotes: [], appointments: [] }));
-  }, []);
-  return data;
 }
 
 export function ClientsSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
@@ -1770,73 +1748,6 @@ export function PaymentsSection({ openCreate = false, onCreateOpen, onCreateClos
 function periodListKey(base: string, from: string, to: string) {
   const params = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) }).toString();
   return params ? `${base}?${params}` : base;
-}
-
-export function ReportsSection() {
-  const data = useFinancialData();
-  const received = data?.payments.filter((item) => item.status === "Pago").reduce((sum, item) => sum + item.value, 0) ?? 0;
-  const pending = data?.payments.filter((item) => item.status !== "Pago").reduce((sum, item) => sum + item.value, 0) ?? 0;
-  const mostPerformed = Object.entries((data?.appointments ?? []).reduce<Record<string, number>>((result, item) => { result[item.procedure] = (result[item.procedure] ?? 0) + 1; return result; }, {})).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "Sem dados";
-  const reportItems = [
-    { label: "Receita por período", amount: received },
-    { label: "Resultado por período", amount: received },
-    { label: "Procedimento mais realizado", text: mostPerformed },
-    { label: "Pagamentos pendentes", amount: pending },
-  ];
-  return (
-    <div>
-      <SectionIntro
-        title="Relatórios"
-        description="Primeiros indicadores para receita, resultado, custos, margem por procedimento e pendências."
-        action="Exportar relatório"
-        onAction={() => window.print()}
-      />
-      <div className="hp-list-stagger grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {reportItems.map((item) => (
-          <Card className="p-5" key={item.label}>
-            <p className="text-sm font-semibold text-[#65708b]">{item.label}</p>
-            <p className="mt-3 text-xl font-black text-[#121733]">{item.amount === undefined ? item.text : <CountUp value={item.amount} format={currency.format} />}</p>
-          </Card>
-        ))}
-      </div>
-      <div className="hp-list-stagger mt-6 grid gap-6 lg:grid-cols-2">
-        <DetailCard title="Relatórios iniciais">
-          <div className="space-y-3">
-            {[
-              "Procedimentos realizados",
-              "Procedimentos mais realizados",
-              "Receita por procedimento",
-              "Custo por procedimento",
-              "Margem por procedimento",
-              "Pagamentos pendentes",
-            ].map((item) => (
-              <div className="flex items-center gap-3" key={item}>
-                <CheckCircle2 className="h-4 w-4 text-[#16a34a]" />
-                <span className="text-sm font-semibold text-[#3f485f]">{item}</span>
-              </div>
-            ))}
-          </div>
-        </DetailCard>
-        <DetailCard title="Pós-atendimento">
-          <div className="space-y-4">
-            <div className="rounded-[8px] bg-[#f2edff] p-4">
-              <p className="font-black text-[#6d36d4]">
-                8 pacientes possuem retorno nos próximos 7 dias.
-              </p>
-            </div>
-            <div className="flex items-center gap-3 text-sm text-[#3f485f]">
-              <CalendarPlus className="h-4 w-4 text-[#1438ff]" />
-              Data do retorno e evolução clínica
-            </div>
-            <div className="flex items-center gap-3 text-sm text-[#3f485f]">
-              <Camera className="h-4 w-4 text-[#1438ff]" />
-              Fotos e evidências conforme o fluxo da clínica
-            </div>
-          </div>
-        </DetailCard>
-      </div>
-    </div>
-  );
 }
 
 type TeamMember = { id: string; role: string; isOwner: boolean; laborCostCents: number | null; user: { id: string; name: string; email: string; createdAt: string } };
