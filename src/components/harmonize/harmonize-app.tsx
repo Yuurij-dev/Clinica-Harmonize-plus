@@ -4,6 +4,12 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { AppToaster } from "./app-toaster";
+import { TrialEndedModal } from "./trial-ended-modal";
+import { navItems } from "@/data/navigation";
+
+function sectionLabel(section: SectionId) {
+  return navItems.find((item) => item.id === section)?.label ?? "este recurso";
+}
 import { Dashboard } from "./dashboard";
 import { AnimatedPage } from "./animated-page";
 import { Sidebar } from "./sidebar";
@@ -147,6 +153,8 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const [purchasesTab, setPurchasesTab] = useState<PurchasesTab>("purchases");
   const [undoNotice, setUndoNotice] = useState<UndoNotice>(null);
   const undoNoticeId = useRef(0);
+  // Funcionalidade que o usuário tentou usar com o teste encerrado; não nulo = modal de planos aberto (nunca abre sozinho).
+  const [upgradeFeature, setUpgradeFeature] = useState<string | null>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const trialExpired = currentUser?.trialExpired === true;
   const allowedSections = visibleSections(currentUser?.role, currentUser?.rolePermissions, currentUser?.isOwner);
@@ -166,6 +174,8 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     if (!allowedSections.includes(section)) {
       return;
     }
+    // Relatórios é recurso de plano: com o teste encerrado, abre o modal de planos em vez de navegar.
+    if (trialExpired && section === "relatorios") { setMoreOpen(false); setUpgradeFeature(sectionLabel(section)); return; }
     if (!await guardDraftNavigation()) return;
     if (section !== "configuracoes") setSettingsFocusSection(null);
     setAgendaFocus(section === "agenda" ? focus ?? null : null);
@@ -324,7 +334,8 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
 
   async function openCreate(section: SectionId, dialog: NonNullable<typeof createDialog>) {
     if (trialExpired) {
-      showNotice("O teste grátis terminou. Ative um plano para continuar alterando os dados.", undefined, "warning");
+      setMoreOpen(false);
+      setUpgradeFeature(sectionLabel(section));
       return;
     }
     if (!await guardDraftNavigation()) return;
@@ -463,6 +474,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       {currentUser && startup.status === "ready" && !trialExpired ? <GuidedTour allowedSections={allowedSections} userId={currentUser.id} activeSection={shown ?? undefined} suppressAutoOpen={createDialog !== null || hasDraftGuard()} onFinished={() => window.dispatchEvent(new Event(setupInviteEvent))} onSelectSection={(section, replace) => selectSection(section, undefined, "purchases", replace)} /> : null}
       <SetupWizardHost onOpenDestination={openSetupDestination} onDashboard={() => { void selectSection("dashboard"); }} />
       <AppToaster />
+      <TrialEndedModal open={upgradeFeature !== null} feature={upgradeFeature} onClose={() => setUpgradeFeature(null)} />
       {undoNotice ? <div className={`${undoNotice.leaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-[calc(8.5rem+env(safe-area-inset-bottom))] left-1/2 lg:bottom-6 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] border border-border bg-card px-4 py-3 text-xs font-bold text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.18)]`} role="status"><div className="flex items-center gap-3"><span className="min-w-0 flex-1">{undoNotice.message}</span><button className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-[11px] font-black text-foreground transition hover:bg-muted/80" onClick={() => { const undo = undoNotice.undo; setUndoNotice(null); undo(); }}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-success" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
     </div>
     </CurrentRoleProvider>
