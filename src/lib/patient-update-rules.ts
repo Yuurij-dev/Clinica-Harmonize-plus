@@ -7,6 +7,7 @@ export type PatientFormValues = RegistrationValues & {
   socialName: string; sex: string; profession: string; referralSource: string;
   address: string; addressNumber: string; addressComplement: string; neighborhood: string; city: string; state: string;
   emergencyContactName: string; emergencyContactRelationship: string;
+  allergies: string; currentMedications: string; healthNotes: string;
   whatsappReminders: boolean;
 };
 
@@ -20,6 +21,7 @@ export type PatientEditRecord = {
   legalGuardianName: string | null; legalGuardianCpf: string | null; legalGuardianPhone: string | null; legalGuardianRelationship: string | null;
   careType: string; insuranceProvider: string | null; insuranceCardNumber: string | null;
   privacyConsentAt: string | Date | null; whatsappReminders: boolean;
+  allergies: string | null; currentMedications: string | null; healthNotes: string | null;
 };
 
 export const emptyPatientFormValues: PatientFormValues = {
@@ -28,6 +30,7 @@ export const emptyPatientFormValues: PatientFormValues = {
   careType: "Particular", insuranceProvider: "", insuranceCardNumber: "", privacyConsent: false,
   socialName: "", sex: "", profession: "", referralSource: "", address: "", addressNumber: "", addressComplement: "", neighborhood: "", city: "", state: "",
   emergencyContactName: "", emergencyContactRelationship: "", whatsappReminders: false,
+  allergies: "", currentMedications: "", healthNotes: "",
 };
 
 const isoDay = (value: string | Date | null) => (value ? (value instanceof Date ? value.toISOString() : value).slice(0, 10) : "");
@@ -48,6 +51,7 @@ export function formValuesFromRecord(record: PatientEditRecord): PatientFormValu
     neighborhood: record.neighborhood ?? "", city: record.city ?? "", state: record.state ?? "",
     emergencyContactName: record.emergencyContactName ?? "", emergencyContactRelationship: record.emergencyContactRelationship ?? "",
     whatsappReminders: record.whatsappReminders,
+    allergies: record.allergies ?? "", currentMedications: record.currentMedications ?? "", healthNotes: record.healthNotes ?? "",
   };
 }
 
@@ -55,12 +59,13 @@ export type PatientUpdateResult = { ok: true; data: Record<string, unknown> } | 
 
 const guardianKeys = ["legalGuardianName", "legalGuardianCpf", "legalGuardianPhone", "legalGuardianRelationship"];
 const plainTextKeys = ["socialName", "profession", "referralSource", "address", "addressNumber", "addressComplement", "neighborhood", "city", "emergencyContactName", "emergencyContactRelationship"];
+const healthKeys = ["allergies", "currentMedications", "healthNotes"];
 
 // Edição parcial: só os campos presentes no corpo mudam (ausente = manter). As regras são as do cadastro (validateRegistration)
 // aplicadas sobre o registro atual + o que veio no corpo; só os erros dos campos enviados contam. `age` isolado (clientes
 // antigos da API) continua valendo; com `birthDate` a idade é derivada da data. Aceite de privacidade nunca é alterado aqui.
 // CPF ausente ou mascarado = manter; vazio = limpar, exceto para quem não vê o CPF inteiro (mantém sem erro).
-export function buildPatientUpdate(body: Record<string, unknown>, existing: PatientEditRecord, options: { fullCpf: boolean }): PatientUpdateResult {
+export function buildPatientUpdate(body: Record<string, unknown>, existing: PatientEditRecord, options: { fullCpf: boolean; clinicalWrite: boolean }): PatientUpdateResult {
   const has = (key: string) => body[key] !== undefined;
   const text = (key: string) => (typeof body[key] === "string" ? (body[key] as string).trim() : "");
   const digits = (key: string) => text(key).replace(/\D/g, "");
@@ -130,6 +135,9 @@ export function buildPatientUpdate(body: Record<string, unknown>, existing: Pati
   if (has("email")) data.email = text("email").toLowerCase() || null;
   if (has("sex") && sexUpdate.sex !== undefined) data.sex = sexUpdate.sex;
   for (const key of plainTextKeys) if (has(key)) data[key] = text(key) || null;
+  // Dado clínico (regra permanente): a rota já recusa a requisição se vier sem anamnesis:write (não chega aqui em
+  // silêncio); esta checagem é só a segunda camada, para nunca gravar mesmo se outro chamador pular a checagem da rota.
+  if (options.clinicalWrite) for (const key of healthKeys) if (has(key)) data[key] = text(key) || null;
   if (has("state")) data.state = text("state").toUpperCase().slice(0, 2) || null;
   if (has("postalCode")) data.postalCode = digits("postalCode") || null;
   if (has("emergencyContactPhone")) data.emergencyContactPhone = digits("emergencyContactPhone") ? formatPhone(digits("emergencyContactPhone")) : null;

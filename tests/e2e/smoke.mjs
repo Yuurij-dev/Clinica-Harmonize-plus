@@ -8556,6 +8556,70 @@ async function editPatientData() {
       await prisma.clinic.update({ where: { id: membership.clinicId }, data: { rolePermissions: savedMatrix } });
     }
 
+    // 11b. dados de saúde (allergies/currentMedications/healthNotes): dado clínico, exige clinical:read/write.
+    let pH;
+    {
+      const health = { allergies: "Látex, dipirona", currentMedications: "Losartana 50mg", healthNotes: "Hipertensão controlada" };
+      r = await api("POST", "/api/patients", { ...regDefaults, name: nm("saude"), phone: "11999990205", cpf: randomCpf(), ...health });
+      pH = r.data.patient;
+      check("Dados de saúde: ADMIN cria paciente com allergies/currentMedications/healthNotes (201)", r.status === 201, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
+      const dbHealth = () => prisma.patient.findUnique({ where: { id: pH.id }, select: { allergies: true, currentMedications: true, healthNotes: true } });
+      let stored = await dbHealth();
+      check("Dados de saúde: valores gravados no banco na criação", stored.allergies === health.allergies && stored.currentMedications === health.currentMedications && stored.healthNotes === health.healthNotes, JSON.stringify(stored));
+      const urlH = `/api/patients/${pH.id}`;
+      const formH = async () => (await api("GET", `${urlH}?form=edit`)).data.patient;
+      let fH = await formH();
+      check("Dados de saúde: ADMIN vê os 3 campos reais no ?form=edit", fH.allergies === health.allergies && fH.currentMedications === health.currentMedications && fH.healthNotes === health.healthNotes, JSON.stringify(fH).slice(0, 200));
+
+      r = await api("PATCH", urlH, { allergies: "Penicilina", currentMedications: "Nenhum", healthNotes: "Observação atualizada" });
+      fH = await formH();
+      check("Dados de saúde: ADMIN atualiza só os 3 campos (200) e o form reflete", r.status === 200 && fH.allergies === "Penicilina" && fH.currentMedications === "Nenhum" && fH.healthNotes === "Observação atualizada", `${r.status} ${JSON.stringify(fH).slice(0, 200)}`);
+
+      r = await api("PATCH", urlH, { allergies: "", currentMedications: "", healthNotes: "" });
+      stored = await dbHealth();
+      check("Dados de saúde: string vazia limpa os 3 campos (null no banco)", r.status === 200 && stored.allergies === null && stored.currentMedications === null && stored.healthNotes === null, JSON.stringify(stored));
+
+      // Repõe dados de saúde reais para testar o STAFF sem apagar nada.
+      r = await api("PATCH", urlH, health);
+      check("Dados de saúde: dados reais repostos para o teste do STAFF", r.status === 200, r.status);
+
+      if (staff?.status === 200) {
+        const sHealth = await withSession(staff.cookie, async () => {
+          const o = {};
+          o.form = await formH();
+          o.patchAllergies = await api("PATCH", urlH, { allergies: "Invasão" });
+          o.patchMeds = await api("PATCH", urlH, { currentMedications: "Invasão" });
+          o.patchNotes = await api("PATCH", urlH, { healthNotes: "Invasão" });
+          o.patchOther = await api("PATCH", urlH, { profession: "Vendedor" });
+          return o;
+        });
+        check("Dados de saúde: STAFF (sem clinical:read) recebe os 3 campos como null no ?form=edit, mesmo com dados reais no banco", sHealth.form.allergies === null && sHealth.form.currentMedications === null && sHealth.form.healthNotes === null, JSON.stringify(sHealth.form).slice(0, 150));
+        check("Dados de saúde: STAFF enviando allergies/currentMedications/healthNotes recebe 403 com a mensagem esperada", [sHealth.patchAllergies, sHealth.patchMeds, sHealth.patchNotes].every((x) => x.status === 403 && x.data?.message === "A anamnese é restrita à equipe clínica."), [sHealth.patchAllergies, sHealth.patchMeds, sHealth.patchNotes].map((x) => `${x.status}:${x.data?.message}`).join(" | "));
+        stored = await dbHealth();
+        check("Dados de saúde: tentativas do STAFF não alteraram o banco", stored.allergies === health.allergies && stored.currentMedications === health.currentMedications && stored.healthNotes === health.healthNotes, JSON.stringify(stored));
+        check("Dados de saúde: STAFF editando só profession funciona (200) e não apaga os dados de saúde", sHealth.patchOther.status === 200 && (await dbHealth()).allergies === health.allergies, `${sHealth.patchOther.status} ${JSON.stringify(await dbHealth())}`);
+
+        const staffNoHealthEmail = `e2e-staff-nohealth-${run}@example.com`;
+        const staffNoHealthPassword = `E2e-${run}-NoHealth9!`;
+        let teamNoHealth = null;
+        r = await api("POST", "/api/team", { name: "E2E Atendente Sem Saude", email: staffNoHealthEmail, password: staffNoHealthPassword, role: "STAFF", cpf: randomCpf(), address: "Rua A, 1", country: "Brasil", state: "SP", city: "São Paulo" });
+        teamNoHealth = r.status === 201 ? r.data.member : null;
+        const staffNoHealthLogin = teamNoHealth ? await loginAs(staffNoHealthEmail, staffNoHealthPassword) : null;
+        if (staffNoHealthLogin?.status !== 200) check("Dados de saúde: segundo usuário STAFF criado para teste de criação", false, `team ${r.status} login ${staffNoHealthLogin?.status}`);
+        else {
+          const created = await withSession(staffNoHealthLogin.cookie, () => api("POST", "/api/patients", { ...regDefaults, name: nm("staffsemsaude"), phone: "11999990206", cpf: randomCpf() }));
+          check("Dados de saúde: STAFF cria paciente sem enviar os 3 campos (201) e eles ficam vazios", created.status === 201, `${created.status} ${JSON.stringify(created.data).slice(0, 150)}`);
+          if (created.status === 201) {
+            const createdHealth = await prisma.patient.findUnique({ where: { id: created.data.patient.id }, select: { allergies: true, currentMedications: true, healthNotes: true } });
+            check("Dados de saúde: paciente criado pelo STAFF fica com os 3 campos null no banco", createdHealth.allergies === null && createdHealth.currentMedications === null && createdHealth.healthNotes === null, JSON.stringify(createdHealth));
+          }
+        }
+        if (teamNoHealth) await api("DELETE", "/api/team", { membershipId: teamNoHealth.id });
+        await prisma.clinicMembership.deleteMany({ where: { user: { email: staffNoHealthEmail } } });
+        await prisma.user.deleteMany({ where: { email: staffNoHealthEmail } });
+      } else check("Dados de saúde: usuário STAFF disponível para os testes de dado clínico", false, "staff não logado na seção anterior");
+    }
+
     // 12. outra clínica
     const reg = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinicName, name: "Admin Edit B", email: otherMail, password: otherPass }));
     const other = reg.status === 201 ? await loginAs(otherMail, otherPass) : null;
@@ -8566,6 +8630,8 @@ async function editPatientData() {
         const out = {};
         out.patchForeign = await api("PATCH", url, { name: "Invasor", cpf: randomCpf(), city: "Invadida" });
         out.formForeign = await api("GET", `${url}?form=edit`);
+        out.formHealthForeign = await api("GET", `/api/patients/${pH.id}?form=edit`);
+        out.patchHealthForeign = await api("PATCH", `/api/patients/${pH.id}`, { allergies: "Invasor" });
         out.same = await api("POST", "/api/patients", { ...regDefaults, name: `zz Edit B ${run}`, phone: "11999990204", cpf });
         const sameId = out.same.data.patient?.id;
         if (sameId) {
@@ -8579,6 +8645,7 @@ async function editPatientData() {
       check("Editar dados: GET ?form=edit de outra clínica = 404 sem vazar dados", o.formForeign.status === 404 && !JSON.stringify(o.formForeign.data).includes(snapA.name), `${o.formForeign.status}`);
       check("Editar dados: mesmo CPF em OUTRA clínica é permitido (criar e atualizar)", o.same.status === 201 && o.upd?.status === 200 && o.upd2?.status === 200, `${o.same.status} ${o.upd?.status} ${o.upd2?.status}`);
       check("Editar dados: paciente da clínica B não afetou o paciente da A", (await db()).city === snapA.city && digits((await db()).cpf) === cpf);
+      check("Dados de saúde: clínica B não lê nem edita o paciente com dados de saúde da clínica A (404 e nada muda)", o.formHealthForeign.status === 404 && o.patchHealthForeign.status === 404 && (await prisma.patient.findUnique({ where: { id: pH.id }, select: { allergies: true } })).allergies === "Látex, dipirona", `${o.formHealthForeign.status}/${o.patchHealthForeign.status}`);
     }
   } finally {
     await prisma.clinic.update({ where: { id: membership.clinicId }, data: { rolePermissions: savedMatrix } }).catch(() => {});
