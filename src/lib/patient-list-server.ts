@@ -81,14 +81,18 @@ export async function withCurrentStage<T extends StagePatient>(clinicId: string,
   });
 }
 
-// Dados para preencher o formulário "Editar dados" (GET /api/patients/:id?form=edit). Sem auditLog, fotos nem dados clínicos
-// (alergias, medicações, notas de saúde); o CPF do cliente e do responsável são mascarados na rota para quem não vê o inteiro.
+// Dados para preencher o formulário "Editar dados" (GET /api/patients/:id?form=edit). Sem auditLog nem fotos. Inclui
+// alergias/medicações/notas de saúde (dado clínico) só para a edição parcial poder manter o valor quando ausente do corpo;
+// a ROTA é quem decide se devolve esses 3 campos (anamnesis:read) e se aceita gravá-los (anamnesis:write) — nunca aqui.
+// Mesma permissão usada no cadastro (POST /api/patients), para não divergir entre criar e editar o mesmo dado.
+// O CPF do cliente e do responsável são mascarados na rota para quem não vê o inteiro.
 export const patientEditSelect = {
   name: true, cpf: true, phone: true, age: true, birthDate: true, email: true, socialName: true, sex: true, profession: true, referralSource: true,
   postalCode: true, address: true, addressNumber: true, addressComplement: true, neighborhood: true, city: true, state: true,
   emergencyContactName: true, emergencyContactPhone: true, emergencyContactRelationship: true,
   legalGuardianName: true, legalGuardianCpf: true, legalGuardianPhone: true, legalGuardianRelationship: true,
   careType: true, insuranceProvider: true, insuranceCardNumber: true, privacyConsentAt: true, whatsappReminders: true,
+  allergies: true, currentMedications: true, healthNotes: true,
 } satisfies Prisma.PatientSelect;
 
 // Resposta do cadastro e da edição: campos da lista + data de nascimento (sem auditLog nem dados do responsável).
