@@ -53,7 +53,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   // Alergias, medicações e notas de saúde são dado clínico (regra permanente). Mesma permissão do cadastro
   // (POST /api/patients usa anamnesis:write para os 3 campos, não clinical:write, para não divergir entre criar e
   // editar o mesmo dado): enviar qualquer um deles sem anamnesis:write é recusado (nunca ignorado em silêncio).
-  const clinicalWrite = canForUser(user, "anamnesis:write");
+  // Exige TAMBÉM anamnesis:read: quem só tem anamnesis:write (matriz personalizada) veria o campo vazio no GET (o valor
+  // real sai omitido) e poderia sobrescrever sem saber que já havia algo preenchido — não é permitido gravar o que não vê.
+  const clinicalWrite = canForUser(user, "anamnesis:write") && canForUser(user, "anamnesis:read");
   if (!clinicalWrite && ["allergies", "currentMedications", "healthNotes"].some((key) => body[key] !== undefined)) {
     const clinicalDenied = denyUnless(user, "anamnesis:write");
     if (clinicalDenied) return clinicalDenied;
