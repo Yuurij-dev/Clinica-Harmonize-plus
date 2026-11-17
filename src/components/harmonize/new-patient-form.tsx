@@ -51,7 +51,9 @@ export function PatientForm({ saving, onSubmit, onCancel, onOpenExisting, mode =
   // Alergias/medicações/notas de saúde são dado clínico (regra permanente). Mesma permissão do cadastro de paciente
   // (anamnesis:write, não clinical:write — fica consistente com POST /api/patients): sem ela a seção não aparece e
   // nada é enviado por este formulário (a API recusa de todo jeito, mas a tela já não oferece o que seria negado).
-  const canSeeHealth = useCan("anamnesis:write");
+  // Exige TAMBÉM anamnesis:read: só write, numa matriz personalizada, veria o campo vazio (o GET omite o valor real
+  // sem read) e poderia sobrescrever sem saber que já havia algo preenchido.
+  const canSeeHealth = useCan("anamnesis:write") && useCan("anamnesis:read");
   const validate = (next: Values) => {
     const found = validateRegistration(editing ? { ...next, privacyConsent: true } : next, undefined, { editing });
     // CPF do responsável mascarado (vindo do servidor) = manter o atual.
