@@ -8,8 +8,18 @@ import { Modal } from "@/components/ui/modal";
 import { PLAN_CHECKOUT_SOON_MESSAGE, planOffers, type PlanOffer } from "@/data/plans";
 import { cn } from "@/lib/utils";
 
+export type PlanModalVariant = "trial_ended" | "feature" | "limit";
+
+const variantTexts: Record<PlanModalVariant, { title: string; subtitle: string }> = {
+  trial_ended: { title: "Seu teste grátis chegou ao fim", subtitle: "Escolha o plano ideal para continuar cuidando da sua clínica." },
+  feature: { title: "Este recurso não está no seu plano", subtitle: "Conheça os planos e escolha o ideal para a sua clínica." },
+  limit: { title: "Limite do plano atingido", subtitle: "Faça upgrade para continuar adicionando." },
+};
+
 type TrialEndedModalProps = {
   open: boolean;
+  /** Motivo da abertura: muda só título e subtítulo (padrão: teste encerrado). */
+  variant?: PlanModalVariant;
   /** Nome da funcionalidade que o usuário tentou acessar (ex.: "Relatórios"). */
   feature: string | null;
   onClose: () => void;
@@ -51,16 +61,17 @@ function PlanCard({ plan }: { plan: PlanOffer }) {
 }
 
 /** Modal de encerramento do teste grátis: abre só quando o usuário tenta usar algo bloqueado (nunca sozinho). Planos mockados em data/plans.ts. */
-export function TrialEndedModal({ open, feature, onClose, plans = planOffers }: TrialEndedModalProps) {
+export function TrialEndedModal({ open, variant = "trial_ended", feature, onClose, plans = planOffers }: TrialEndedModalProps) {
+  const texts = variantTexts[variant];
   return (
-    <Modal open={open} title="Seu teste grátis chegou ao fim" description="Escolha o plano ideal para continuar cuidando da sua clínica." onClose={onClose} hideHeader mascot={false} panelClassName="max-w-5xl" bodyClassName="p-0 sm:p-0">
+    <Modal open={open} title={texts.title} description={texts.subtitle} onClose={onClose} hideHeader mascot={false} panelClassName="max-w-5xl" bodyClassName="p-0 sm:p-0">
       <div className="relative px-4 pb-6 pt-6 text-foreground sm:px-8 sm:pb-7">
         <DialogPrimitive.Close asChild>
           <button aria-label="Fechar" className="absolute right-3 top-3 inline-flex h-10 w-10 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted focus-visible:outline-2 focus-visible:outline-primary" type="button"><X className="h-4 w-4" /></button>
         </DialogPrimitive.Close>
         <div className="flex justify-center"><Image alt="Harmonize+" className="h-auto w-[150px] hp-logo-light" height={300} src="/brand/logo-horizontal.svg" unoptimized width={1200} /><Image alt="Harmonize+" className="hp-logo-dark h-auto w-[150px]" height={300} src="/brand/logo-horizontal-white.svg" unoptimized width={1200} /></div>
-        <h2 aria-hidden="true" className="mt-5 text-center text-xl font-black sm:text-2xl">Seu teste grátis chegou ao fim</h2>
-        <p aria-hidden="true" className="mt-1 text-center text-sm text-muted-foreground">Escolha o plano ideal para continuar cuidando da sua clínica.</p>
+        <h2 aria-hidden="true" className="mt-5 text-center text-xl font-black sm:text-2xl">{texts.title}</h2>
+        <p aria-hidden="true" className="mt-1 text-center text-sm text-muted-foreground">{texts.subtitle}</p>
         {feature ? (
           <p className="mx-auto mt-4 flex w-fit max-w-full items-center gap-2 rounded-full border border-border bg-muted px-4 py-2 text-xs font-semibold"><Lock aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-primary" /><span>Você tentou acessar: <strong>{feature}</strong></span></p>
         ) : null}

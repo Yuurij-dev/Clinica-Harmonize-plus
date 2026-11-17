@@ -1,5 +1,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type { InvitationRepo, InvitationTx } from "./invitations.ts";
+import { loadClinicEntitlements, reserveCapacity } from "./plan-usage.ts";
+import { canWriteCore } from "./entitlements.ts";
 
 // Persistencia de convites (Prisma). Fabrica que recebe o PrismaClient (testavel contra o banco local sem o alias @/). Toda consulta/atualizacao por id inclui clinicId.
 
@@ -69,6 +71,13 @@ function makeTx(db: Client): InvitationTx {
     },
     async countMembershipsOutside({ userId, clinicId }) {
       return db.clinicMembership.count({ where: { userId, clinicId: { not: clinicId } } });
+    },
+    async assertClinicWritable({ clinicId, now }) {
+      return canWriteCore(await loadClinicEntitlements(db, clinicId, now)) ? { ok: true } : { ok: false };
+    },
+    async reserveProfessionalSlot({ clinicId, excludeInvitationId, now }) {
+      const result = await reserveCapacity(db, clinicId, "professionals", { excludeInvitationId, now });
+      return result.ok ? { ok: true } : { ok: false, plan: result.body };
     },
     async createMembership({ userId, clinicId, role }) {
       await db.clinicMembership.create({ data: { userId, clinicId, role, isOwner: false } });

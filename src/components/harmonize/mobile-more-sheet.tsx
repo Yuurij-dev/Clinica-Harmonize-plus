@@ -22,6 +22,8 @@ type MobileMoreSheetProps = {
   user: { name: string; role: string; avatarVersion?: string | null; clinic?: { name?: string; trialEndsAt?: string | null } };
   /** Abre "Meu perfil". */
   onProfile: () => void;
+  /** Rótulo do plano (planLabel); sem ele não mostra plano. */
+  planLabel?: string | null;
 };
 
 const roleLabels: Record<string, string> = { ADMIN: "Administradora", PROFESSIONAL: "Profissional", STAFF: "Atendente" };
@@ -39,7 +41,7 @@ function useIsDark() {
 }
 
 /** Folha inferior do botão "Mais": demais seções, perfil, tema, aviso de teste grátis e Sair. */
-export function MobileMoreSheet({ open, onOpenChange, active, sections, onSelect, onLogout, onCloseAutoFocus, user, onProfile }: MobileMoreSheetProps) {
+export function MobileMoreSheet({ open, onOpenChange, active, sections, onSelect, onLogout, onCloseAutoFocus, user, onProfile, planLabel }: MobileMoreSheetProps) {
   const [leaving, setLeaving] = useState(false);
   const dark = useIsDark();
   const items = navItems.filter((item) => sections.includes(item.id));
@@ -57,6 +59,7 @@ export function MobileMoreSheet({ open, onOpenChange, active, sections, onSelect
           <div className="min-w-0 leading-tight">
             <p className="truncate text-sm font-bold text-foreground">{user.name}</p>
             <p className="truncate text-xs text-muted-foreground">{[roleLabels[user.role], user.clinic?.name].filter(Boolean).join(" · ")}</p>
+            {planLabel ? <p className="truncate text-xs font-semibold text-foreground">{planLabel}</p> : null}
           </div>
         </button>
 

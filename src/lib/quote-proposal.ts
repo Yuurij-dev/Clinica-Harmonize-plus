@@ -48,7 +48,6 @@ export type ProposalInput = {
   financial?: {
     subtotalCents?: number | null;
     discountCents?: number | null;
-    additions?: Array<{ label: string; amountCents: number }>;
     totalCents?: number | null;
     compositionNote?: string | null;
   };
@@ -148,20 +147,16 @@ export function buildQuoteProposalHtml(input: ProposalInput) {
 
   const subtotal = input.financial?.subtotalCents ?? sumKnown(input.rows.map((item) => item.subtotalCents));
   const discount = input.financial?.discountCents ?? sumKnown(input.rows.map((item) => item.discountCents));
-  const additions = (input.financial?.additions ?? []).filter((item) => hasValue(item.label) && Number.isFinite(item.amountCents));
   const total = input.financial?.totalCents ?? input.totalCents;
   const knownSubtotal = subtotal !== null ? subtotal : null;
   const knownDiscount = discount !== null ? discount : null;
-  const knownAdditions = sumKnown(additions.map((item) => item.amountCents));
-  const unexplained = knownSubtotal !== null && knownDiscount !== null && knownAdditions !== null
-    ? total - knownSubtotal + knownDiscount - knownAdditions
-    : null;
-  const summaryLines = [
+  // Documento do paciente: só procedimentos, valores cobrados, descontos e total. Nunca custos internos, margem ou lucro.
+  // Se subtotal e desconto não fecham com o total (o total pode embutir composição interna), mostra só o total.
+  const showBreakdown = quoteBreakdownReconciles(knownSubtotal, knownDiscount, total);
+  const summaryLines = showBreakdown ? [
     subtotal !== null ? detailLine("Subtotal dos procedimentos", money(subtotal)) : "",
     discount !== null ? detailLine("Descontos", money(discount)) : "",
-    ...additions.map((item) => detailLine(item.label, money(item.amountCents))),
-    unexplained !== null && unexplained !== 0 ? detailLine("Ajuste sem detalhamento salvo", money(unexplained)) : "",
-  ].filter(Boolean).join("");
+  ].filter(Boolean).join("") : "";
   const compositionNote = hasValue(input.financial?.compositionNote) ? `<p class="composition-note">${text(input.financial!.compositionNote!.trim())}</p>` : "";
   const summary = `<section class="financial-summary">${summaryLines}<div class="total-line"><span>Investimento total</span><strong>${money(total)}</strong></div>${compositionNote}</section>`;
   const installments = Math.max(1, Math.floor(Number(input.installments) || 1));
@@ -217,6 +212,11 @@ h1,h2,h3,p{margin:0}h1{font-size:25pt;line-height:1.12;font-weight:750}h2{displa
 </body></html>`;
 }
 
+/** Subtotal − desconto = total? Só então o resumo para o paciente mostra subtotal e desconto (sem expor a diferença). */
+export function quoteBreakdownReconciles(subtotal: number | null | undefined, discount: number | null | undefined, total: number) {
+  return typeof subtotal === "number" && typeof discount === "number" && subtotal - discount === total;
+}
+
 export function parseQuoteDetails(value?: string | null): StoredQuoteDetails | null {
   if (!value) return null;
   try {
@@ -228,17 +228,10 @@ export function parseQuoteDetails(value?: string | null): StoredQuoteDetails | n
 export function quoteFinancialSnapshot(details: string | null | undefined, fallbackTotalCents: number): NonNullable<ProposalInput["financial"]> {
   const stored = parseQuoteDetails(details);
   if (!stored) return { totalCents: fallbackTotalCents, compositionNote: "O detalhamento financeiro original deste orçamento não está disponível." };
-  const additions = stored.costs ? [
-    { label: "Custo de mão de obra", amountCents: stored.costs.laborCents },
-    { label: "Custo de estrutura da clínica", amountCents: stored.costs.facilityCents },
-    { label: "Custo de medicação", amountCents: stored.costs.medicationCents },
-  ].filter((item) => item.amountCents > 0) : (stored.costTotalCents ?? 0) > 0
-    ? [{ label: "Custos adicionais da clínica", amountCents: stored.costTotalCents! }]
-    : [];
+  // Custos internos (costs/costTotalCents) NUNCA entram no documento do paciente: o histórico interno fica intacto em Quote.details.
   return {
     subtotalCents: stored.subtotalCents,
     discountCents: stored.discountCents,
-    additions,
     totalCents: stored.totalCents ?? fallbackTotalCents,
     compositionNote: stored.items.length ? null : "O detalhamento financeiro original deste orçamento não está disponível.",
   };

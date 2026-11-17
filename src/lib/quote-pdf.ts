@@ -141,11 +141,14 @@ export async function buildQuotePdf(input: QuotePdfInput): Promise<Uint8Array> {
   const discount = fin.discountCents ?? known(rows.map((r) => r?.discountCents));
   const total = fin.totalCents ?? subtotal;
   const boxX = PAGE.w - M - 230;
-  text("Subtotal", boxX, 10, regular, MUTED);
-  text(money(subtotal), PAGE.w - M, 10, regular, INK, "right");
-  y -= 16;
-  text("Desconto", boxX, 10, regular, MUTED);
-  text(money(discount), PAGE.w - M, 10, regular, INK, "right");
+  // Subtotal e desconto só aparecem quando fecham com o valor final (nada interno é revelado pela diferença).
+  if (typeof subtotal === "number" && typeof discount === "number" && typeof total === "number" && subtotal - discount === total) {
+    text("Subtotal", boxX, 10, regular, MUTED);
+    text(money(subtotal), PAGE.w - M, 10, regular, INK, "right");
+    y -= 16;
+    text("Desconto", boxX, 10, regular, MUTED);
+    text(money(discount), PAGE.w - M, 10, regular, INK, "right");
+  }
   y -= 10;
   page.drawRectangle({ x: boxX - 10, y: y - 30, width: 240, height: 30, color: SOFT });
   y -= 20;

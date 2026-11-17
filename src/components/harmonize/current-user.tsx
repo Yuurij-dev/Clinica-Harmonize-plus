@@ -4,7 +4,8 @@ import { createContext, useContext } from "react";
 import { canForUser, type Permission, type PermissionPrincipal } from "@/lib/permissions";
 
 // `id` e `tourEnabled` servem aos tours (marca de "já viu" por usuário; sem tour com teste expirado ou app ainda carregando).
-type CurrentPrincipal = PermissionPrincipal & { id?: string; tourEnabled?: boolean };
+// `features`: recursos do plano (user.access.features de /api/auth/me); ausente = carregando = sem recurso (o servidor decide de verdade).
+type CurrentPrincipal = PermissionPrincipal & { id?: string; tourEnabled?: boolean; features?: readonly string[] };
 
 const CurrentRoleContext = createContext<CurrentPrincipal | null>(null);
 
@@ -18,6 +19,11 @@ export function useCurrentRole() {
 export function useCan(permission: Permission) {
   const user = useContext(CurrentRoleContext);
   return user ? canForUser(user, permission) : false;
+}
+
+/** O plano da clínica inclui o recurso (id de src/lib/plans.ts)? Falha fechado enquanto o usuário não carregou. */
+export function useHasFeature(feature: string) {
+  return useContext(CurrentRoleContext)?.features?.includes(feature) ?? false;
 }
 
 /** Id do usuário logado (nulo enquanto o app não carregou). */

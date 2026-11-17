@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, hasFeature, planErrorResponse } from "@/lib/plan-guards";
+import { reserveCapacity } from "@/lib/plan-usage";
 import { duplicateCpfResponse, rejectInvalidCpf } from "@/lib/patient-cpf";
 import { patientCreatedSelect, patientListSelect, searchPatientIds, withCurrentStage } from "@/lib/patient-list-server";
 import { cpfForRole, patientsForRole } from "@/lib/patient-cpf-mask";
 import { paginationMeta, parsePatientListQuery, type PatientSort } from "@/lib/patient-list-rules";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
+import { canForUser } from "@/lib/permissions";
 import { formatCpf, formatPhone } from "@/lib/input-masks";
 import { birthDateFromPtBr, fieldMaxLength, normalizeName, PRIVACY_CONSENT_VERSION, validateRegistration } from "@/lib/patient-registration-rules";
 
@@ -28,7 +31,7 @@ export async function GET(request: Request) {
   ]);
   const byStatus = Object.fromEntries(statusGroups.map((group) => [group.status, group._count._all]));
   const summary = { total: statusGroups.reduce((sum, group) => sum + group._count._all, 0), byStatus };
-  return NextResponse.json({ patients: patientsForRole(user.role, await withCurrentStage(clinicId, listed.patients, clinic?.autoAdvancePatientJourneyEnabled ?? true), user.rolePermissions), pagination: paginationMeta(page, pageSize, listed.total), summary });
+  return NextResponse.json({ patients: patientsForRole(user.role, await withCurrentStage(clinicId, listed.patients, (clinic?.autoAdvancePatientJourneyEnabled ?? true) && hasFeature(user, "agendaAutomations")), user.rolePermissions), pagination: paginationMeta(page, pageSize, listed.total), summary });
 }
 
 async function listPlain(clinicId: string, options: { status: string; sort: PatientSort; skip: number; take: number }) {
@@ -54,8 +57,10 @@ async function listBySearch(clinicId: string, options: { q: string; status: stri
 }
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const denied = denyUnless(user, "patients:manage");
@@ -93,8 +98,17 @@ export async function POST(request: Request) {
 
   const now = new Date();
   const optional = (key: string) => text(key) || null;
+  const healthFields = ["allergies", "currentMedications", "healthNotes"] as const;
+  const changedHealthFields = healthFields.filter((key) => Boolean(text(key)));
+  if (changedHealthFields.length && !canForUser(user, "anamnesis:write")) return NextResponse.json({ message: "Seu cargo não pode registrar informações de saúde." }, { status: 403 });
 
-  const patient = await prisma.patient.create({
+  // Limite de pacientes do plano: trava por clinica + contagem + criacao na MESMA transacao (cadastros simultaneos nao
+  // passam do limite). Todos os pacientes contam (nao ha arquivamento). So o cadastro e limitado: ler, editar e atender
+  // pacientes ja cadastrados nunca depende deste limite (downgrade com mais pacientes que o limite preserva tudo).
+  const outcome = await prisma.$transaction(async (tx) => {
+    const capacity = await reserveCapacity(tx, user.clinicId, "patients");
+    if (!capacity.ok) return { denied: capacity.body } as const;
+    const created = await tx.patient.create({
     data: {
       name: normalizeName(text("name")),
       cpf,
@@ -117,6 +131,7 @@ export async function POST(request: Request) {
       insuranceProvider: careType === "Convênio" ? text("insuranceProvider") : null,
       insuranceCardNumber: careType === "Convênio" ? text("insuranceCardNumber") : null,
       privacyConsentAt: now, privacyConsentVersion: PRIVACY_CONSENT_VERSION, whatsappReminders: body.whatsappReminders === true,
+      allergies: optional("allergies"), currentMedications: optional("currentMedications"), healthNotes: optional("healthNotes"),
       status: text("status") || "Ativa",
       lastVisit: parseDate(text("lastVisit")),
       nextReturn: parseDate(text("nextReturn")),
@@ -125,8 +140,13 @@ export async function POST(request: Request) {
     },
     // Resposta enxuta: só os campos que a tela usa (nunca o auditLog nem o CPF do responsável).
     select: patientCreatedSelect,
+    });
+    if (changedHealthFields.length) await tx.clinicalFileAudit.create({ data: { clinicId: user.clinicId, patientId: created.id, fileKind: "HEALTH", fileId: `patient:${created.id}`, action: "CREATE", actorId: user.id, actorName: user.name, category: "informações de saúde", note: `Campos registrados: ${changedHealthFields.join(", ")}` } });
+    return { created } as const;
   }).catch((error: unknown) => duplicateCpfResponse(error) ?? Promise.reject(error));
-  if (patient instanceof NextResponse) return patient;
+  if (outcome instanceof NextResponse) return outcome;
+  if (outcome.denied) return planErrorResponse(outcome.denied);
+  const patient = outcome.created;
   return NextResponse.json({ patient: cpfForRole(user.role, patient, user.rolePermissions) }, { status: 201 });
 }
 

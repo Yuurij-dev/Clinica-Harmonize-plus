@@ -73,6 +73,7 @@ const googleMessages: Record<string, string> = {
   signup_expired: "Sua verificação com o Google expirou. Toque em “Criar conta com Google” novamente.",
   invite_invalid: "Este convite não é mais válido. Peça um novo convite à clínica.",
   invite_email_mismatch: "O e-mail da conta Google precisa ser o mesmo e-mail que recebeu o convite.",
+  invite_plan_limit: "Esta clínica atingiu o limite de profissionais do plano. Peça ao administrador para liberar uma vaga ou fazer upgrade.",
   error: "Não foi possível entrar com o Google. Tente novamente.",
 };
 

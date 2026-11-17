@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { clinicToday, parseDateOnly } from "@/lib/clinic-time";
 import { ensureRecurringOccurrences, isExpenseCategory, parseRecurringSchedule, recurringNextInfo, recurringSelect, serializeRecurring } from "@/lib/finance";
@@ -11,7 +12,8 @@ export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (!canForUser(user, "finance:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
-  await ensureRecurringOccurrences(user.clinicId);
+  const planDenied = denyUnlessFeature(user, "finance", "read");
+  if (planDenied) return planDenied;
   const today = clinicToday();
   const items = await prisma.recurringExpense.findMany({ where: { clinicId: user.clinicId }, orderBy: [{ endsOn: { sort: "asc", nulls: "first" } }, { description: "asc" }], select: recurringSelect });
   const info = await recurringNextInfo(user.clinicId, items, today);
@@ -29,9 +31,13 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "finance:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const planDenied = denyUnlessFeature(user, "finance", "write");
+  if (planDenied) return planDenied;
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   const schedule = parseRecurringSchedule(body);
   const startsOn = parseDateOnly(body?.startsOn);
@@ -48,5 +54,7 @@ export async function POST(request: Request) {
     data: { clinicId: user.clinicId, description, category, amountCents, paymentMethod, ...schedule, startsOn, endsOn },
     select: recurringSelect,
   });
+  // Ocorrências do mês já nascem aqui (escrita autorizada); a leitura (GET) nunca as gera. Idempotente (índice único + skipDuplicates).
+  await ensureRecurringOccurrences(user.clinicId, prisma, item.id);
   return NextResponse.json({ recurringExpense: serializeRecurring(item) }, { status: 201 });
 }

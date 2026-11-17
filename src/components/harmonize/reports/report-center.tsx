@@ -18,7 +18,7 @@ const icons: Record<string, ComponentType<{ className?: string }>> = {
 const formats: ExportExtension[] = ["xlsx", "pdf", "csv"];
 
 // Seção "Central de relatórios": cartões por categoria; prévias (KPIs) só carregam quando a categoria entra na tela.
-export function ReportCenter({ capabilities, filters, disabled }: { capabilities: ReportCapabilities; filters: ReportFilters; disabled?: boolean }) {
+export function ReportCenter({ capabilities, filters, disabled, canExport = true }: { capabilities: ReportCapabilities; filters: ReportFilters; disabled?: boolean; canExport?: boolean }) {
   const groups = reportCenterGroups(capabilities);
   if (groups.length === 0) return null;
   return (
@@ -26,7 +26,7 @@ export function ReportCenter({ capabilities, filters, disabled }: { capabilities
       <h3 id="report-center-title" className="text-base font-bold text-foreground">Central de relatórios</h3>
       <p className="mb-3 text-xs leading-5 text-muted-foreground">Prévia e download (Excel, PDF ou CSV) de cada relatório, com o período, a comparação e o profissional escolhidos acima.</p>
       <div className="space-y-5">
-        {groups.map((group) => <CategoryBlock key={group.category} category={group.category} reports={group.reports} filters={filters} disabled={disabled} />)}
+        {groups.map((group) => <CategoryBlock key={group.category} category={group.category} reports={group.reports} filters={filters} disabled={disabled} canExport={canExport} />)}
       </div>
     </section>
   );
@@ -51,19 +51,19 @@ function useOnceVisible() {
   return { ref, visible };
 }
 
-function CategoryBlock({ category, reports, filters, disabled }: { category: string; reports: ReportDefinition[]; filters: ReportFilters; disabled?: boolean }) {
+function CategoryBlock({ category, reports, filters, disabled, canExport }: { category: string; reports: ReportDefinition[]; filters: ReportFilters; disabled?: boolean; canExport: boolean }) {
   const { ref, visible } = useOnceVisible();
   return (
     <div ref={ref} role="group" aria-label={`Relatórios de ${category}`}>
       <h4 className="mb-2 text-xs font-bold uppercase tracking-wide text-muted-foreground">{category}</h4>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {reports.map((report) => <ReportCard key={report.id} report={report} filters={filters} enabled={visible && !disabled} disabled={disabled} />)}
+        {reports.map((report) => <ReportCard key={report.id} report={report} filters={filters} enabled={visible && !disabled} disabled={disabled} canExport={canExport} />)}
       </div>
     </div>
   );
 }
 
-function ReportCard({ report, filters, enabled, disabled }: { report: ReportDefinition; filters: ReportFilters; enabled: boolean; disabled?: boolean }) {
+function ReportCard({ report, filters, enabled, disabled, canExport }: { report: ReportDefinition; filters: ReportFilters; enabled: boolean; disabled?: boolean; canExport: boolean }) {
   const resource = useFinanceResource<ReportDocument>(enabled ? previewKey(report.id, filters) : null, true);
   const { busy, run } = useReportExport(filters);
   const Icon = icons[report.icon] ?? BarChart3;
@@ -82,7 +82,7 @@ function ReportCard({ report, filters, enabled, disabled }: { report: ReportDefi
         <Preview resource={resource} enabled={enabled} />
       </div>
 
-      <div className="mt-auto flex flex-wrap gap-2" role="group" aria-label={`Baixar ${report.label}`}>
+      {canExport ? <div className="mt-auto flex flex-wrap gap-2" role="group" aria-label={`Baixar ${report.label}`}>
         {formats.map((format) => {
           const active = generating && busy?.format === format;
           return (
@@ -92,7 +92,7 @@ function ReportCard({ report, filters, enabled, disabled }: { report: ReportDefi
             </Button>
           );
         })}
-      </div>
+      </div> : null}
     </Card>
   );
 }

@@ -9,6 +9,7 @@ import { chromium } from "playwright-core";
 import { createHash, randomBytes } from "node:crypto";
 import http from "node:http";
 import sharp from "sharp";
+import { requireCreatedPatient } from "./require-created-patient.mjs";
 
 const baseUrl = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 const testClinicName = "Clínica Teste Auditoria";
@@ -50,6 +51,8 @@ const day = (offset) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sa
 // CPF com digitos verificadores validos (passa na validacao de paciente e de colaborador).
 const randomCpf = () => { const d = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10)); if (d.every((x) => x === d[0])) d[0] = (d[0] + 1) % 10; for (let n = 9; n < 11; n += 1) { const sum = d.reduce((t, x, i) => t + x * (n + 1 - i), 0); d.push(((sum * 10) % 11) % 10); } return d.join(""); };
 const regDefaults = { birthDate: "10/01/1990", privacyConsent: true };
+// Dados de endereço e CPF que o cadastro de colaborador exige (POST /api/team).
+const teamProfile = () => ({ cpf: randomCpf(), address: "Rua A, 1", country: "Brasil", state: "SP", city: "São Paulo" });
 
 // ---------------------------------------------------------------------------------------------
 // 2FA no roteiro. Proprietário/ADMIN são OBRIGADOS a ter 2FA: sem ele a API devolve 401 em quase toda rota.
@@ -323,7 +326,7 @@ async function journeyDeletePermissions() {
   const proEmail = `e2e-jd-pro-${run}@example.com`, proPassword = `E2e-${run}-Pro99!`;
   const otherEmail = `e2e-jd-outra-${run}@example.com`, otherPassword = `E2e-${run}-Outra9!`, otherClinic = `E2E JornadaDel Externa ${run}`;
   const members = [];
-  const mkPatient = async (label) => (await api("POST", "/api/patients", { name: `JD ${label} ${run}`, phone: "11999990077", age: 30, cpf: randomCpf() })).data.patient;
+  const mkPatient = async (label) => (await api("POST", "/api/patients", { ...regDefaults, name: `JD ${label} ${run}`, phone: "11999990077", age: 30, cpf: randomCpf() })).data.patient;
   const mkJourney = async (pid, label) => (await api("POST", `/api/patients/${pid}/journeys`, { name: `JD ${label} ${run}`, professionalId: professional?.id })).data.journey;
   const file = { mimeType: "application/pdf", sizeBytes: 3, sha256: "x", uploadedBy: "e2e", uploadedByName: "E2E" };
   const addPayment = (pid, jid) => prisma.payment.create({ data: { clinicId, patientId: pid, journeyId: jid, valueCents: 1000, method: "Pix", installments: "A vista" } });
@@ -342,7 +345,7 @@ async function journeyDeletePermissions() {
     if (!clinicId) { check("clínica de teste encontrada para o gate de exclusão de jornada", false); return; }
     const sessions = {};
     for (const [role, memberEmail, memberPassword] of [["STAFF", staffEmail, staffPassword], ["PROFESSIONAL", proEmail, proPassword]]) {
-      const r = await api("POST", "/api/team", { name: `E2E ${role} JD`, email: memberEmail, password: memberPassword, role });
+      const r = await api("POST", "/api/team", { name: `E2E ${role} JD`, email: memberEmail, password: memberPassword, role, ...teamProfile() });
       if (r.status === 201) members.push(r.data.member);
       sessions[role] = r.status === 201 ? await loginAs(memberEmail, memberPassword) : null;
       if (sessions[role]?.status !== 200) check(`usuário ${role} criado para o gate de exclusão de jornada`, false, `team ${r.status}`);
@@ -442,7 +445,7 @@ async function journeyDeleteGaps() {
   const members = [];
   const file = { mimeType: "application/pdf", sizeBytes: 3, sha256: "x", uploadedBy: "e2e", uploadedByName: "E2E" };
   const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
-  const mkPatient = async (label) => (await api("POST", "/api/patients", { name: `JDG ${label} ${run}`, phone: "11999990078", age: 30, cpf: randomCpf() })).data.patient;
+  const mkPatient = async (label) => (await api("POST", "/api/patients", { ...regDefaults, name: `JDG ${label} ${run}`, phone: "11999990078", age: 30, cpf: randomCpf() })).data.patient;
   const mkJourney = async (pid, label) => (await api("POST", `/api/patients/${pid}/journeys`, { name: `JDG ${label} ${run}`, professionalId: professional?.id })).data.journey;
   const del = (pid, jid) => api("DELETE", `/api/patients/${pid}/journeys/${jid}`);
   const addPayment = (pid, jid) => prisma.payment.create({ data: { clinicId, patientId: pid, journeyId: jid, valueCents: 1000, method: "Pix", installments: "A vista" } });
@@ -453,7 +456,7 @@ async function journeyDeleteGaps() {
   const raw = (token, method, path) => fetch(`${baseUrl}${path}`, { method, headers: token ? { Authorization: `Bearer ${token}` } : {}, redirect: "manual" }).then(async (response) => ({ status: response.status, data: await response.json().catch(() => null) }));
   try {
     if (!clinicId) { check("jornada excluída (lacunas): clínica de teste encontrada", false); return; }
-    const created = await api("POST", "/api/team", { name: "E2E PRO JDG", email: proEmail, password: proPassword, role: "PROFESSIONAL" });
+    const created = await api("POST", "/api/team", { name: "E2E PRO JDG", email: proEmail, password: proPassword, role: "PROFESSIONAL", ...teamProfile() });
     if (created.status === 201) members.push(created.data.member);
     const pro = created.status === 201 ? await loginAs(proEmail, proPassword) : null;
     if (pro?.status !== 200) { check("jornada excluída (lacunas): PROFESSIONAL criado", false, `team ${created.status}`); return; }
@@ -600,10 +603,10 @@ async function journeyDeleteGaps() {
       const tClinic = (await prisma.clinicMembership.findFirst({ where: { user: { email: trialEmail } }, select: { clinicId: true } })).clinicId;
       const tPatient = await prisma.patient.create({ data: { clinicId: tClinic, name: `Trial JDG ${run}`, phone: "11999990080", age: 30 } });
       const tJourney = await prisma.patientJourney.create({ data: { clinicId: tClinic, patientId: tPatient.id, name: "J" } });
-      await prisma.clinic.update({ where: { id: tClinic }, data: { trialEndsAt: new Date(Date.now() - 86_400_000) } });
+      await prisma.clinicSubscription.update({ where: { clinicId: tClinic }, data: { trialEndsAt: new Date(Date.now() - 86_400_000) } });
       const tSession = await loginAs(trialEmail, trialPassword);
       r = await withSession(tSession.cookie, () => del(tPatient.id, tJourney.id));
-      check("jornada excluída (lacunas): trial vencido devolve 401 e a jornada continua", r.status === 401 && await exists(tJourney.id), `${tSession.status}/${r.status}`);
+      check("jornada excluída (lacunas): trial vencido devolve 403 SUBSCRIPTION_READONLY e a jornada continua", r.status === 403 && r.data?.code === "SUBSCRIPTION_READONLY" && await exists(tJourney.id), `${tSession.status}/${r.status}`);
       await prisma.patient.deleteMany({ where: { clinicId: tClinic } });
     } else check("jornada excluída (lacunas): clínica de trial vencido criada", false, `registro ${reg.status}`);
   } finally {
@@ -694,7 +697,7 @@ async function withPage(fn, { fakeCamera = false } = {}) {
     await context.addCookies([{ name: "harmonize_session", value: cookie.split("=")[1], url: baseUrl }]);
     const page = await context.newPage();
     const pageErrors = [];
-    page.on("pageerror", (error) => pageErrors.push(error.message));
+    page.on("pageerror", (error) => pageErrors.push(error.stack ?? error.message));
     page.setDefaultTimeout(30_000);
     await fn(page, pageErrors);
   } finally {
@@ -5248,14 +5251,14 @@ async function mobilePhotos() {
   r = await callJson(token, "GET", "/api/auth/me");
   check("Bearer: GET /api/auth/me devolve o usuário", r.status === 200 && r.data.user?.email === email, r.status);
   check("Bearer: sem credencial e token adulterado/malformado recebem 401", (await callJson(null, "GET", "/api/auth/me")).status === 401 && (await callJson(`${token}x`, "GET", "/api/auth/me")).status === 401 && (await callJson("abc", "GET", "/api/auth/me")).status === 401);
-  // Cookie válido tem prioridade; cookie inválido cai para o Bearer; sessão de troca de senha nunca vale.
+  // Bearer explicitamente enviado tem prioridade e nunca cai para cookie; sem Bearer, o fluxo Web usa cookie.
   const withHeaders = async (headers) => { const response = await fetch(`${baseUrl}/api/auth/me`, { headers }); return response.status; };
   const mixed = [await withHeaders({ cookie: "harmonize_session=lixo", Authorization: `Bearer ${token}` }), await withHeaders({ cookie, Authorization: "Bearer lixo" }), await withHeaders({ cookie: "harmonize_session=lixo", Authorization: "Bearer lixo" })];
-  check("cookie+Bearer: cookie inválido usa o Bearer válido (200), cookie válido ignora Bearer ruim (200), ambos inválidos 401", mixed.join("/") === "200/200/401", mixed.join("/"));
+  check("cookie+Bearer: Bearer válido vence cookie inválido (200), Bearer ruim não usa cookie válido (401), ambos inválidos 401", mixed.join("/") === "200/401/401", mixed.join("/"));
   const cookieMe = await api("GET", "/api/auth/me");
   check("cookie continua funcionando em /api/auth/me", cookieMe.status === 200 && cookieMe.data.user?.id === r.data.user?.id, cookieMe.status);
 
-  const patient = (await api("POST", "/api/patients", { name: `Foto App ${run}`, phone: "11999990101", age: 33 })).data.patient;
+  const patient = (await api("POST", "/api/patients", { ...regDefaults, cpf: randomCpf(), name: `Foto App ${run}`, phone: "11999990101", age: 33 })).data.patient;
   r = await callJson(token, "GET", `/api/patients/lookup?q=${encodeURIComponent(`Foto App ${run}`)}`);
   check("Bearer: GET /api/patients/lookup?q= encontra o paciente", r.status === 200 && JSON.stringify(r.data).includes(patient.id), `${r.status} ${JSON.stringify(r.data).slice(0, 100)}`);
 
@@ -5330,7 +5333,7 @@ async function mobilePhotos() {
   check("miniatura e original continuam auditados como VIEW (uma vez na janela)", viewAudit === 1, viewAudit);
 
   // --- Avaliação concluída nunca é reaberta ---
-  const closedPatient = (await api("POST", "/api/patients", { name: `Foto Concluída ${run}`, phone: "11999990102", age: 40 })).data.patient;
+  const closedPatient = (await api("POST", "/api/patients", { ...regDefaults, cpf: randomCpf(), name: `Foto Concluída ${run}`, phone: "11999990102", age: 40 })).data.patient;
   const closed = (await api("PUT", `/api/patients/${closedPatient.id}/evaluation`, { photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
   r = await upload(token, closedPatient.id, small, { evaluationId: closed.id });
   const closedRow = await prisma.evaluation.findUnique({ where: { id: closed.id }, select: { status: true, _count: { select: { photos: true } } } });
@@ -5341,7 +5344,7 @@ async function mobilePhotos() {
   check("upload: com concluída e rascunho novo, usa o rascunho", r.status === 201 && r.data.evaluation.created === false && r.data.evaluation.photoCount === 2, JSON.stringify(r.data.evaluation));
 
   // --- Limite de 20 fotos ---
-  const fullPatient = (await api("POST", "/api/patients", { name: `Foto Cheia ${run}`, phone: "11999990103", age: 41 })).data.patient;
+  const fullPatient = (await api("POST", "/api/patients", { ...regDefaults, cpf: randomCpf(), name: `Foto Cheia ${run}`, phone: "11999990103", age: 41 })).data.patient;
   const tiny = `data:image/jpeg;base64,${small.toString("base64")}`;
   const nineteen = Array.from({ length: 19 }, (_, index) => ({ name: `f${index}`, imageUrl: tiny, width: 400, height: 300, category: "Outra", sortOrder: index }));
   const draft19 = (await api("PUT", `/api/patients/${fullPatient.id}/evaluation`, { photos: nineteen })).data.evaluation;
@@ -5350,7 +5353,7 @@ async function mobilePhotos() {
   check("upload: a foto 20 entra (sortOrder 19) e a 21 devolve 409 sem gravar", twentieth.status === 201 && twentieth.data.photo.sortOrder === 19 && twentyFirst.status === 409 && (await prisma.evaluationPhoto.count({ where: { evaluationId: draft19.id } })) === 20, `${twentieth.status}/${twentyFirst.status}`);
 
   // --- Concorrência: paciente novo (sem jornada), 5 envios simultâneos ---
-  const racePatient = (await api("POST", "/api/patients", { name: `Foto Corrida ${run}`, phone: "11999990104", age: 29 })).data.patient;
+  const racePatient = (await api("POST", "/api/patients", { ...regDefaults, cpf: randomCpf(), name: `Foto Corrida ${run}`, phone: "11999990104", age: 29 })).data.patient;
   const race = await Promise.all(Array.from({ length: 5 }, (_, index) => upload(token, racePatient.id, small, { name: `r${index}` })));
   const raceEvals = await prisma.evaluation.findMany({ where: { patientId: racePatient.id }, select: { id: true, photos: { select: { sortOrder: true } } } });
   const orders = raceEvals.flatMap((evaluation) => evaluation.photos.map((photo) => photo.sortOrder)).sort();
@@ -5377,9 +5380,9 @@ async function mobilePhotos() {
       check("isolamento: outra clínica recebe 404 no upload (paciente e avaliação) e na imagem, e nada é gravado", crossPatient.status === 404 && crossEval.status === 404 && crossImage.status === 404 && (await prisma.evaluationPhoto.count({ where: { evaluation: { patientId: patient.id } } })) === before, `${crossPatient.status}/${crossEval.status}/${crossImage.status}`);
     } else check("segunda clínica criada para testar o app", false, `registro ${r.status}`);
 
-    r = await api("POST", "/api/team", { name: "E2E Atendente App", email: staffEmail, password: staffPassword, role: "STAFF" });
+    r = await api("POST", "/api/team", { name: "E2E Atendente App", email: staffEmail, password: staffPassword, role: "STAFF", ...teamProfile() });
     staffTeam = r.status === 201 ? r.data.member : null;
-    r = await api("POST", "/api/team", { name: "E2E Profissional App", email: proEmail, password: proPassword, role: "PROFESSIONAL" });
+    r = await api("POST", "/api/team", { name: "E2E Profissional App", email: proEmail, password: proPassword, role: "PROFESSIONAL", ...teamProfile() });
     proTeam = r.status === 201 ? r.data.member : null;
     if (staffTeam && proTeam) {
       const first403 = await mobileLogin(staffEmail, staffPassword);
@@ -5430,7 +5433,7 @@ async function mobilePhotosGaps() {
     return form;
   };
   const up = (token, patientId, buffer, fields, options) => raw(bearer(token), "POST", `/api/patients/${patientId}/evaluation/photos`, makeForm(buffer, fields, options));
-  const newPatient = async (label, n) => (await api("POST", "/api/patients", { name: `${label} ${run}`, phone: `1199999${String(n).padStart(4, "0")}`, age: 30 })).data.patient;
+  const newPatient = async (label, n) => (await api("POST", "/api/patients", { ...regDefaults, cpf: randomCpf(), name: `${label} ${run}`, phone: `1199999${String(n).padStart(4, "0")}`, age: 30 })).data.patient;
   const imgUrl = (patientId, photoId, query = "") => `/api/patients/${patientId}/photos/${encodeURIComponent(`evaluation:${photoId}`)}/image${query}`;
   const small = await jpg(400, 300);
   const ownerToken = (await mobileLogin(email, password)).data.token;
@@ -5457,8 +5460,8 @@ async function mobilePhotosGaps() {
     const wrongKnown = await mobileLogin(email, "senha-errada-x");
     check("login mobile: usuário inexistente e senha errada têm a mesma resposta (401, mesma mensagem, no-store)", unknown.status === 401 && wrongKnown.status === 401 && unknown.data.message === wrongKnown.data.message && /no-store/.test(unknown.headers.get("cache-control") ?? ""), `${unknown.status}/${wrongKnown.status}`);
     check("login mobile: sucesso traz Cache-Control no-store; GET na rota devolve 405", /no-store/.test(r.headers.get("cache-control") ?? "") && (await raw({}, "GET", "/api/mobile/auth/login")).status === 405);
-    r = await api("POST", "/api/team", { name: "E2E Gap Pro", email: proEmail, password: proPass, role: "PROFESSIONAL" }); proTeam = r.status === 201 ? r.data.member : null;
-    r = await api("POST", "/api/team", { name: "E2E Gap Staff", email: staffEmail, password: staffPass, role: "STAFF" }); staffTeam = r.status === 201 ? r.data.member : null;
+    r = await api("POST", "/api/team", { name: "E2E Gap Pro", email: proEmail, password: proPass, role: "PROFESSIONAL", ...teamProfile() }); proTeam = r.status === 201 ? r.data.member : null;
+    r = await api("POST", "/api/team", { name: "E2E Gap Staff", email: staffEmail, password: staffPass, role: "STAFF", ...teamProfile() }); staffTeam = r.status === 201 ? r.data.member : null;
     if (!proTeam || !staffTeam) { check("equipe de teste criada", false, r.status); return; }
     const firstPro = await mobileLogin(proEmail, proPass);
     const firstProWrong = await mobileLogin(proEmail, "errada");
@@ -5534,7 +5537,7 @@ async function mobilePhotosGaps() {
     check("upload: recusas não gravaram nada (só as 5 fotos válidas)", countTypes === 5, countTypes);
     const exact = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(4 * 1024 * 1024 - 3)]);
     const over = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(4 * 1024 * 1024 - 2)]);
-    const pBig = await newPatient("Gap 4MB", 3);
+    const pBig = await newPatient("Gap quatro MB", 3);
     const rExact = await up(ownerToken, pBig.id, exact);
     const rOver = await up(ownerToken, pBig.id, over);
     check("upload: exatamente 4 MB = 201 e 4 MB + 1 byte = 413", rExact.status === 201 && rOver.status === 413 && (await prisma.evaluationPhoto.count({ where: { evaluation: { patientId: pBig.id } } })) === 1, `${rExact.status}/${rOver.status}`);
@@ -5653,7 +5656,7 @@ async function mobilePhotosGaps() {
     const race10 = await Promise.all(Array.from({ length: 10 }, (_, i) => up(ownerToken, pRace.id, small, { name: `c${i}` })));
     const ord10 = (await prisma.evaluationPhoto.findMany({ where: { evaluation: { patientId: pRace.id } }, select: { sortOrder: true } })).map((z) => z.sortOrder).sort((a, b) => a - b);
     check("concorrência: 10 envios com rascunho existente = 10x 201, 1 avaliação, sortOrder 0..10 únicos, nenhum created", race10.every((y) => y.status === 201 && !y.data.evaluation.created) && (await prisma.evaluation.count({ where: { patientId: pRace.id } })) === 1 && ord10.join(",") === Array.from({ length: 11 }, (_, i) => i).join(","), `${race10.map((y) => y.status)} ${ord10}`);
-    const pRace2 = await newPatient("Gap Corrida2", 13);
+    const pRace2 = await newPatient("Gap Corrida dois", 13);
     const race10n = await Promise.all(Array.from({ length: 10 }, (_, i) => up(ownerToken, pRace2.id, small, { name: `n${i}` })));
     const ord10n = (await prisma.evaluationPhoto.findMany({ where: { evaluation: { patientId: pRace2.id } }, select: { sortOrder: true } })).map((z) => z.sortOrder).sort((a, b) => a - b);
     check("concorrência: 10 envios SEM rascunho/jornada = 10x 201, 1 avaliação, 1 jornada, 1 created, sortOrder 0..9", race10n.every((y) => y.status === 201) && race10n.filter((y) => y.data.evaluation.created).length === 1 && (await prisma.evaluation.count({ where: { patientId: pRace2.id } })) === 1 && (await prisma.patientJourney.count({ where: { patientId: pRace2.id } })) === 1 && ord10n.join(",") === "0,1,2,3,4,5,6,7,8,9", `${race10n.map((y) => y.status)} ${ord10n}`);
@@ -5742,13 +5745,13 @@ async function mobilePhotosGaps() {
     if (reg.status === 201) {
       const tClinic = (await prisma.clinicMembership.findFirst({ where: { user: { email: trialEmail } }, select: { clinicId: true } })).clinicId;
       const tPatient = await prisma.patient.create({ data: { clinicId: tClinic, name: `Trial Pac ${run}`, phone: "11999990131", age: 30 } });
-      await prisma.clinic.update({ where: { id: tClinic }, data: { trialEndsAt: new Date(Date.now() - 86_400_000) } });
+      await prisma.clinicSubscription.update({ where: { clinicId: tClinic }, data: { trialEndsAt: new Date(Date.now() - 86_400_000) } });
       const tLogin = await mobileLogin(trialEmail, trialPass);
       const tTok = tLogin.data?.token;
       const tUp = await up(tTok, tPatient.id, small);
       const tGet = await raw(bearer(tTok), "GET", "/api/patients");
       const tPhotos = await raw(bearer(tTok), "GET", `/api/patients/${tPatient.id}/photos`);
-      check("trial vencido: login mobile entra (200), envio de foto = 401 sem gravar, leituras (pacientes, photos) = 200", tLogin.status === 200 && tUp.status === 401 && tGet.status === 200 && tPhotos.status === 200 && (await prisma.evaluation.count({ where: { patientId: tPatient.id } })) === 0, `${tLogin.status}/${tUp.status}/${tGet.status}/${tPhotos.status}`);
+      check("trial vencido: login mobile entra (200), envio de foto = 403 SUBSCRIPTION_READONLY sem gravar, leituras (pacientes, photos) = 200", tLogin.status === 200 && tUp.status === 403 && tUp.data?.code === "SUBSCRIPTION_READONLY" && tGet.status === 200 && tPhotos.status === 200 && (await prisma.evaluation.count({ where: { patientId: tPatient.id } })) === 0, `${tLogin.status}/${tUp.status}/${tGet.status}/${tPhotos.status}`);
       const crossRead = await raw(bearer(tTok), "GET", `/api/patients/${pRace.id}/photos`);
       const crossThumb = await raw(bearer(tTok), "GET", imgUrl(pRace.id, first.data.photo.id, "?size=thumb"));
       check("isolamento: token de outra clínica não lê fotos/miniatura (404) nem vê pacientes da clínica de teste na lista", crossRead.status === 404 && crossThumb.status === 404 && !JSON.stringify(tGet.data).includes(pRace.id), `${crossRead.status}/${crossThumb.status}`);
@@ -5786,7 +5789,10 @@ async function mobilePhotosGaps() {
 
 // Etapa da jornada na lista de tratamentos: hasDraftEvaluation e o filtro ?stage= (Avaliação inclui rascunho; as demais exigem avaliação concluída).
 async function journeyStageFilter() {
-  const mk = async (label) => (await api("POST", "/api/patients", { name: `E2E Etapa ${label} ${run}`, phone: "11999990041", age: 35, cpf: randomCpf() })).data.patient;
+  const mk = async (label) => {
+    const name = `Etapa Jornada ${label} ${run}`;
+    return requireCreatedPatient(await api("POST", "/api/patients", { ...regDefaults, name, phone: "11999990041", age: 35, cpf: randomCpf() }), name, "jornadas_etapa");
+  };
   const patient = await mk("A");
   const other = await mk("B");
   const professional = (await api("GET", "/api/team/professionals")).data.professionals?.[0];
@@ -6060,7 +6066,8 @@ async function invitations() {
     const reg = await registerAs(tokenOf(inv.data.inviteUrl));
     const m = await prisma.clinicMembership.findFirst({ where: { clinicId, user: { email: to } }, select: { id: true } });
     const up = await api("PATCH", "/api/team", { membershipId: m?.id, role: "ADMIN" });
-    return { email: to, cookie: reg.cookie, membershipId: m?.id, ok: reg.status === 201 && up.status === 200, detail: `${inv.status}/${reg.status}/${up.status}` };
+    const admin = reg.status === 201 && up.status === 200 ? await loginAs(to, pw) : null;
+    return { email: to, cookie: admin?.status === 200 ? admin.cookie : "", membershipId: m?.id, ok: reg.status === 201 && up.status === 200 && admin?.status === 200, detail: `${inv.status}/${reg.status}/${up.status}/${admin?.status ?? "sem-login"}` };
   };
   try {
     // --- Criar ---
@@ -6136,10 +6143,16 @@ async function invitations() {
     r = await registerAs(tokenB, "", pw);
     check("cadastro por convite sem nome devolve 400", r.status === 400, r.status);
     const { cpf: _c, ...noCpf } = profile, { address: _a, ...noAddress } = profile, { city: _ci, ...noCity } = profile;
-    const badProfiles = [["sem corpo pessoal", {}], ["sem CPF", noCpf], ["CPF com 10 dígitos", { ...profile, cpf: "5299822472" }], ["sem endereço", noAddress], ["sem cidade", noCity], ["CEP com 7 dígitos", { ...profile, postalCode: "0131010" }], ["endereço > 200", { ...profile, address: "x".repeat(201) }]];
+    const badProfiles = [["sem corpo pessoal", {}], ["sem CPF", noCpf], ["CPF com 10 dígitos", { ...profile, cpf: "5299822472" }], ["CEP com 7 dígitos", { ...profile, postalCode: "0131010" }], ["endereço > 200", { ...profile, address: "x".repeat(201) }]];
     for (const [label, extra] of badProfiles) {
       r = await registerAs(tokenB, "E2E", pw, extra);
       check(`cadastro por convite ${label} devolve 400 e não cria conta nem consome o convite`, r.status === 400 && !r.cookie && (await byId(inv.data.invitation.id)).status === "PENDING" && !(await prisma.user.findUnique({ where: { email: mail("b") }, select: { id: true } })), r.status);
+    }
+    for (const [tag, label, extra, field] of [["sem-address", "sem endereço", noAddress, "address"], ["sem-city", "sem cidade", noCity, "city"]]) {
+      const optionalInvite = await invite(mail(tag), "STAFF");
+      const registration = await registerAs(tokenOf(optionalInvite.data.inviteUrl), "E2E", pw, extra);
+      const created = await prisma.user.findUnique({ where: { email: mail(tag) }, select: { [field]: true, memberships: { select: { id: true } } } });
+      check(`cadastro por convite ${label} opcional é aceito e fica null`, registration.status === 201 && Boolean(registration.cookie) && created?.[field] === null && created.memberships.length === 1, `${registration.status} ${JSON.stringify(created)}`);
     }
     r = await registerAs(tokenB, "N".repeat(101), pw);
     check("cadastro por convite com nome > 100 devolve 400", r.status === 400, r.status);
@@ -6196,8 +6209,8 @@ async function invitations() {
       const own = await invite(mail("own"), "STAFF");
       check("admin convidado cria convites (201)", g1.status === 201 && g2.status === 201 && own.status === 201, `${g1.status}/${g2.status}/${own.status}`);
       r = await api("PATCH", "/api/team", { membershipId: admB.membershipId, role: "STAFF" });
-      const st = await Promise.all([g1, g2, own].map((x) => byId(x.data.invitation.id)));
-      check("rebaixar o convidante cancela os convites PENDING dele e preserva os de outros", r.status === 200 && st[0].status === "CANCELLED" && st[1].status === "CANCELLED" && st[2].status === "PENDING", `${r.status} ${st.map((x) => x.status).join()}`);
+      const st = await Promise.all([g1, g2, own].map((x) => x.data?.invitation?.id ? byId(x.data.invitation.id) : Promise.resolve(null)));
+      check("rebaixar o convidante cancela os convites PENDING dele e preserva os de outros", r.status === 200 && st[0]?.status === "CANCELLED" && st[1]?.status === "CANCELLED" && st[2]?.status === "PENDING", `${r.status} ${st.map((x) => x?.status ?? "ausente").join()}`);
       // O PATCH /api/team invalida o cache de auth do membro afetado (nesta instância): o 403 vale logo após o rebaixamento.
       r = await invite(mail("g3"), "STAFF", admB.cookie);
       check("convidante rebaixado a STAFF não cria mais convites logo após o rebaixamento (403 imediato)", r.status === 403, r.status);
@@ -6311,14 +6324,59 @@ async function activeClinic() {
     check("clínica ativa: troca para clínica onde é membro (200) grava activeClinicId", r.status === 200 && r.data.clinicId === clinicB.id && await activeInDb() === clinicB.id, r.status);
     r = await api("GET", "/api/auth/me");
     check("clínica ativa: /me reflete a outra clínica logo após a troca", r.data.user?.clinic?.id === clinicB.id && r.data.user?.clinic?.name === nameB && r.data.clinics?.length === 2, JSON.stringify(r.data.user?.clinic));
-    r = await api("GET", "/api/patients");
-    const txt = JSON.stringify(r.data);
-    check("clínica ativa: dados re-escopados (vê paciente de B, não vê o de A nem o da clínica C)", r.status === 200 && txt.includes(`Paciente Ativa B ${run}`) && !txt.includes(`Paciente Ativa A ${run}`) && !txt.includes(`Paciente Ativa C ${run}`), r.status);
+    const patientsMatching = (name) => api("GET", `/api/patients?q=${encodeURIComponent(name)}`);
+    const [patientB, patientAHidden, patientCHidden] = await Promise.all([
+      patientsMatching(`Paciente Ativa B ${run}`),
+      patientsMatching(`Paciente Ativa A ${run}`),
+      patientsMatching(`Paciente Ativa C ${run}`),
+    ]);
+    check("clínica ativa: dados re-escopados (vê paciente de B, não vê paciente de A nem o da clínica C)",
+      patientB.status === 200 && patientB.data.patients?.some((p) => p.name === `Paciente Ativa B ${run}`) && patientAHidden.status === 200 && patientAHidden.data.patients?.length === 0 && patientCHidden.status === 200 && patientCHidden.data.patients?.length === 0,
+      `${patientB.status}/${patientAHidden.status}/${patientCHidden.status}`);
     r = await api("POST", "/api/auth/active-clinic", { clinicId: home });
-    r = await api("GET", "/api/patients");
-    check("clínica ativa: voltando para A, vê o paciente de A e não o de B", r.status === 200 && JSON.stringify(r.data).includes(`Paciente Ativa A ${run}`) && !JSON.stringify(r.data).includes(`Paciente Ativa B ${run}`), r.status);
+    const [patientAVisible, patientBHidden] = await Promise.all([patientsMatching(`Paciente Ativa A ${run}`), patientsMatching(`Paciente Ativa B ${run}`)]);
+    check("clínica ativa: voltando para A, vê paciente de A e não vê paciente de B",
+      patientAVisible.status === 200 && patientAVisible.data.patients?.some((p) => p.name === `Paciente Ativa A ${run}`) && patientBHidden.status === 200 && patientBHidden.data.patients?.length === 0,
+      `${patientAVisible.status}/${patientBHidden.status}`);
     const dbl = await Promise.all([1, 2].map(() => api("POST", "/api/auth/active-clinic", { clinicId: clinicB.id })));
     check("clínica ativa: clique duplo na troca devolve 200 nas duas e estado consistente", dbl.every((x) => x.status === 200) && await activeInDb() === clinicB.id, dbl.map((x) => x.status).join("/"));
+
+    // Regressão: operações simultâneas entre abas (mesma sessão). src/lib/auth.ts lia activeClinicId duas vezes por
+    // requisição (uma para a chave do cache, outra para a membership), podendo divergir sob concorrência; agora lê
+    // uma única vez e usa o MESMO valor nas duas. Dispara, em paralelo, uma criação de paciente e uma troca de clínica,
+    // repetindo a ida e volta, e confere que cada paciente criado pertence exatamente a uma das clínicas do usuário
+    // (nunca perdido, nunca com clinicId misturado) e que a próxima chamada já reflete só a clínica atual.
+    await api("POST", "/api/auth/active-clinic", { clinicId: home });
+    const raceIds = [home, clinicB.id];
+    const racePatients = [];
+    for (let round = 0; round < 6; round += 1) {
+      const target = raceIds[(round + 1) % 2];
+      const label = `Paciente Race ${["Um", "Dois", "Tres", "Quatro", "Cinco", "Seis"][round]} ${run}`;
+      const [switchRes, createRes] = await Promise.all([
+        api("POST", "/api/auth/active-clinic", { clinicId: target }),
+        api("POST", "/api/patients", { ...regDefaults, name: label, phone: `11999990${300 + round}`, age: 30, cpf: randomCpf() }),
+      ]);
+      check(`clínica ativa (corrida ${round}): troca e criação de paciente simultâneas não dão 500`, switchRes.status !== 500 && createRes.status !== 500, `${switchRes.status}/${createRes.status}`);
+      if (createRes.status === 201 && createRes.data?.patient?.id) racePatients.push(createRes.data.patient.id);
+      const meAfter = await api("GET", "/api/auth/me");
+      check(`clínica ativa (corrida ${round}): a próxima chamada ("aba antiga") já reflete só a clínica atual, nunca a anterior`, meAfter.data.user?.clinic?.id === target, `${meAfter.data.user?.clinic?.id} vs ${target}`);
+    }
+    const raceRows = await prisma.patient.findMany({ where: { id: { in: racePatients } }, select: { id: true, clinicId: true } });
+    check("clínica ativa (corrida): nenhum paciente perdido e cada um pertence a exatamente UMA das clínicas do usuário",
+      raceRows.length === racePatients.length && raceRows.every((p) => raceIds.includes(p.clinicId)), JSON.stringify(raceRows));
+    const raceSplit = await Promise.all(raceIds.map((clinicId) => prisma.patient.count({ where: { clinicId, id: { in: racePatients } } })));
+    check("clínica ativa (corrida): a soma dos pacientes nas 2 clínicas é igual ao total criado (sem duplicar, sem perder)", raceSplit.reduce((a, b) => a + b, 0) === racePatients.length, JSON.stringify(raceSplit));
+
+    // Várias leituras em paralelo durante a troca: nenhuma resposta mistura dados das duas clínicas.
+    await api("POST", "/api/auth/active-clinic", { clinicId: home });
+    const [switchDuring, ...meReads] = await Promise.all([
+      api("POST", "/api/auth/active-clinic", { clinicId: clinicB.id }),
+      ...Array.from({ length: 4 }, () => api("GET", "/api/auth/me")),
+    ]);
+    check("clínica ativa (corrida): leituras em paralelo durante a troca nunca devolvem uma clínica fora das do usuário (sem mistura)",
+      meReads.every((r) => r.status === 200 && raceIds.includes(r.data.user?.clinic?.id)), JSON.stringify(meReads.map((r) => r.data.user?.clinic?.id)));
+    check("clínica ativa (corrida): depois das leituras simultâneas, a clínica ativa gravada é a do switch disparado em paralelo", switchDuring.status === 200 && await activeInDb() === clinicB.id, `${switchDuring.status} ${await activeInDb()}`);
+    await prisma.patient.deleteMany({ where: { id: { in: racePatients } } });
   } finally {
     await prisma.user.update({ where: { id: me.id }, data: { activeClinicId: null } }).catch(() => {});
     const created = [clinicB?.id, clinicC?.id].filter(Boolean);
@@ -7268,7 +7326,8 @@ async function setupWizard() {
     // Materiais pulado.
     r = await api("PATCH", "/api/setup", { action: "decide", step: "materiais", decision: "skipped" });
     const mat = stepOf(r.data, "materiais");
-    check("setup: materiais pulado fica done e skipped", r.status === 200 && mat?.done && mat?.skipped, `${r.status} ${JSON.stringify(mat)}`);
+    // Com materiais já cadastrados (ex.: a parte `estoque` rodou antes na mesma clínica) a etapa já é done por dados reais, não por "pular".
+    check("setup: materiais pulado fica done e skipped", r.status === 200 && mat?.done && (mat?.skipped || r.data?.summary?.materials > 0), `${r.status} ${JSON.stringify(mat)}`);
 
     // Clique duplo no finish: ambos 200 e estado consistente.
     const fin = await Promise.all([1, 2].map(() => api("PATCH", "/api/setup", { action: "finish" })));
@@ -7949,11 +8008,15 @@ async function security2fa() {
       const recAsCode = await call(jar, "POST", "/api/security/mfa/recovery/regenerate", { password: pw, code: pro.recovery[2] });
       check("regenerar: sem senha = 403, senha errada = 403 invalid_password, código errado = 400, recuperação no lugar do TOTP = 400", noPass.s === 403 && badPass.s === 403 && badPass.d.code === "invalid_password" && badCode.s === 400 && recAsCode.s === 400, `${noPass.s}/${badPass.s}/${badCode.s}/${recAsCode.s}`);
       const tdBefore = await session(pro, { trust: true });
+      const mobileTrustResponse = await fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json", "X-Harmonize-Platform": "ios" }, body: JSON.stringify({ login: pro.email, password: pw, mfaCode: await fresh(pro), trustDevice: true }) });
+      const mobileTrustBeforeRegeneration = await mobileTrustResponse.json().catch(() => null);
       const regen = await call(jar, "POST", "/api/security/mfa/recovery/regenerate", { password: pw, code: await fresh(pro) });
+      const mobileAfterRegeneration = await fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json", "X-Harmonize-Trusted-Device": mobileTrustBeforeRegeneration?.trustedDeviceToken }, body: JSON.stringify({ login: pro.email, password: pw }) }).then(async (response) => ({ status: response.status, data: await response.json().catch(() => null) }));
       const fresh10 = regen.d.recoveryCodes ?? []; fresh10.forEach((c) => seen.recovery.add(c));
       const oldTry = await pending(pro); const ro = await call(oldTry.jar, "POST", "/api/auth/mfa/verify", { recoveryCode: pro.recovery[2] });
       const newTry = await pending(pro); const rn = await call(newTry.jar, "POST", "/api/auth/mfa/verify", { recoveryCode: fresh10[0] });
       check("regenerar: devolve 10 novos, os antigos deixam de valer, os novos valem e os dispositivos confiáveis são revogados", regen.s === 200 && fresh10.length === 10 && fresh10.every((c) => !pro.recovery.includes(c)) && ro.s === 401 && rn.s === 200 && rn.d.recoveryCodesRemaining === 9 && (await pending(pro, { harmonize_td: tdBefore.c.harmonize_td })).r.d.mfaRequired === true, `${regen.s} ${ro.s} ${rn.s}`);
+      check("regenerar: a credencial nativa anterior é revogada e volta a exigir TOTP", Boolean(mobileTrustBeforeRegeneration?.trustedDeviceToken) && mobileAfterRegeneration.status === 401 && mobileAfterRegeneration.data.mfaRequired === true && mobileAfterRegeneration.data.trustedDeviceInvalid === true && !mobileAfterRegeneration.data.token);
       check("regenerar: grava RECOVERY_CODES_REGENERATED", await dbEvents(pro, "RECOVERY_CODES_REGENERATED") === 1);
       pro.recovery = fresh10;
     }
@@ -8072,7 +8135,7 @@ async function security2fa() {
 
     // ===== 17) app mobile =====
     {
-      const mob = async (loginName, secret, extra = {}) => { const r = await fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ login: loginName, password: secret, ...extra }) }); return { status: r.status, data: await r.json().catch(() => null), cache: r.headers.get("cache-control") }; };
+      const mob = async (loginName, secret, extra = {}, extraHeaders = {}) => { const r = await fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json", ...extraHeaders }, body: JSON.stringify({ login: loginName, password: secret, ...extra }) }); return { status: r.status, data: await r.json().catch(() => null), cache: r.headers.get("cache-control") }; };
       const bearerMe = (token) => rawGet("/api/auth/me", { authorization: `Bearer ${token}` });
       const noCode = await mob(pro.email, pw), badCode = await mob(pro.email, pw, { mfaCode: wrongCode(pro) }), junk = await mob(pro.email, pw, { mfaCode: "abc" }), badPw = await mob(pro.email, "errada");
       check("mobile: usuário com 2FA sem mfaCode = 401 mfaRequired (sem token); código errado/lixo = 401 mfaRequired", noCode.status === 401 && noCode.data.mfaRequired === true && !noCode.data.token && badCode.status === 401 && badCode.data.mfaRequired === true && junk.status === 401 && !badCode.data.token && !junk.data.token, `${noCode.status}/${badCode.status}/${junk.status}`);
@@ -8085,13 +8148,91 @@ async function security2fa() {
       check("mobile: código válido = 200 com token que carrega sid de uma AuthSession ativa, ~3 dias, no-store, e o Bearer autentica", ok.status === 200 && claims.userId === pro.id && typeof claims.sid === "string" && (await prisma.authSession.findFirst({ where: { id: claims.sid, userId: pro.id, revokedAt: null } })) !== null && days > 2.9 && days < 3.1 && /no-store/.test(ok.cache ?? "") && await bearerMe(ok.data.token) === 200, `${ok.status} ${days.toFixed(2)}`);
       const replay = await mob(pro.email, pw, { mfaCode: mcode });
       check("mobile: o mesmo código de novo (replay) = 401", replay.status === 401 && !replay.data.token, replay.status);
-      const viaRecovery = await mob(pro.email, pw, { mfaCode: pro.recovery[1] });
-      check("mobile: código de recuperação no mfaCode entra (200) e é de uso único (2ª vez = 401)", viaRecovery.status === 200 && Boolean(viaRecovery.data.token) && (await mob(pro.email, pw, { mfaCode: pro.recovery[1] })).status === 401, viaRecovery.status);
+      await prisma.trustedDevice.deleteMany({ where: { userId: pro.id } });
+      const viaRecovery = await mob(pro.email, pw, { mfaCode: pro.recovery[1], trustDevice: true });
+      check("mobile: recuperação entra sem criar confiança mesmo com trustDevice=true; código continua de uso único", viaRecovery.status === 200 && Boolean(viaRecovery.data.token) && !viaRecovery.data.trustedDeviceToken && await prisma.trustedDevice.count({ where: { userId: pro.id, revokedAt: null } }) === 0 && (await mob(pro.email, pw, { mfaCode: pro.recovery[1], trustDevice: true })).status === 401, viaRecovery.status);
+
+      const unauthenticatedDevices = await fetch(`${baseUrl}/api/mobile/auth/trusted-devices`).then((r) => r.status);
+      const noBearerDelete = await fetch(`${baseUrl}/api/mobile/auth/trusted-devices`, { method: "DELETE" }).then((r) => r.status);
+      check("mobile trusted devices: listagem e revogação exigem Bearer", unauthenticatedDevices === 401 && noBearerDelete === 401, `${unauthenticatedDevices}/${noBearerDelete}`);
+
+      const createMobileTrust = async () => mob(pro.email, pw, { mfaCode: await fresh(pro), trustDevice: true }, { "X-Harmonize-Platform": "ios" });
+      const mobileTrusted = await createMobileTrust();
+      const mobileTrustToken = mobileTrusted.data?.trustedDeviceToken;
+      const mobileClaims = mobileTrusted.data?.token ? JSON.parse(Buffer.from(mobileTrusted.data.token.split(".")[1], "base64url").toString()) : {};
+      if (mobileTrusted.data?.token) seen.tokens.add(mobileTrusted.data.token);
+      if (mobileTrustToken) seen.td.add(mobileTrustToken);
+      const mobileTrustRow = mobileTrustToken ? await prisma.trustedDevice.findUnique({ where: { tokenHash: createHash("sha256").update(mobileTrustToken).digest("hex") } }) : null;
+      const mobileTrustSession = mobileClaims.sid ? await prisma.authSession.findUnique({ where: { id: mobileClaims.sid } }) : null;
+      const mobileTtlDays = mobileTrustRow ? (mobileTrustRow.expiresAt.getTime() - Date.now()) / 86_400_000 : 0;
+      check("mobile: somente TOTP com consentimento cria confiança de 30 dias; banco guarda hash e sessão recebe trustedDeviceId separado", mobileTrusted.status === 200 && mobileTrustToken?.length === 43 && mobileTrustToken !== mobileTrusted.data.token && mobileTrustRow?.tokenHash !== mobileTrustToken && mobileTrustRow?.userId === pro.id && /Mobile em iOS/.test(mobileTrustRow?.label ?? "") && mobileTtlDays > 29.9 && mobileTtlDays < 30.1 && mobileTrustSession?.trustedDeviceId === mobileTrustRow?.id && mobileClaims.sid && !mobileTrusted.data.token.includes(mobileTrustToken), `${mobileTrusted.status} ${mobileTtlDays.toFixed(2)}d`);
+
+      const trustedLogin = await mob(pro.email, pw, {}, { "X-Harmonize-Trusted-Device": mobileTrustToken });
+      const trustedClaims = trustedLogin.data?.token ? JSON.parse(Buffer.from(trustedLogin.data.token.split(".")[1], "base64url").toString()) : {};
+      const trustedSession = trustedClaims.sid ? await prisma.authSession.findUnique({ where: { id: trustedClaims.sid } }) : null;
+      if (trustedLogin.data?.token) seen.tokens.add(trustedLogin.data.token);
+      check("mobile: credencial válida dispensa TOTP após senha e cria JWT de sessão independente associado ao TrustedDevice", trustedLogin.status === 200 && trustedLogin.data.trustedDeviceUsed === true && trustedSession?.trustedDeviceId === mobileTrustRow?.id && trustedLogin.data.token !== mobileTrustToken && trustedClaims.sid !== undefined, `${trustedLogin.status}`);
+      check("mobile: credencial confiável não funciona como Bearer de sessão", await bearerMe(mobileTrustToken) === 401);
+
+      const deviceListResponse = await fetch(`${baseUrl}/api/mobile/auth/trusted-devices`, { headers: { authorization: `Bearer ${trustedLogin.data.token}`, "X-Harmonize-Trusted-Device": mobileTrustToken } });
+      const deviceList = await deviceListResponse.json();
+      check("mobile: resumo lista o dispositivo atual sem revelar token ou tokenHash", deviceListResponse.status === 200 && deviceList.devices?.some((d) => d.id === mobileTrustRow?.id && d.current) && !JSON.stringify(deviceList).includes(mobileTrustToken) && !JSON.stringify(deviceList).includes("tokenHash"));
+
+      const bearerWithForeignCookieResponse = await fetch(`${baseUrl}/api/mobile/auth/trusted-devices`, { headers: { authorization: `Bearer ${trustedLogin.data.token}`, cookie: pro2Jar.c.harmonize_session } });
+      const bearerWithForeignCookie = await bearerWithForeignCookieResponse.json().catch(() => null);
+      const invalidBearerWithCookie = await fetch(`${baseUrl}/api/mobile/auth/trusted-devices`, { headers: { authorization: "Bearer invalid-token", cookie: pro2Jar.c.harmonize_session } }).then((r) => r.status);
+      const sharedMeResponse = await fetch(`${baseUrl}/api/auth/me`, { headers: { authorization: `Bearer ${trustedLogin.data.token}`, cookie: pro2Jar.c.harmonize_session } });
+      const sharedMe = await sharedMeResponse.json().catch(() => null);
+      const invalidSharedMe = await fetch(`${baseUrl}/api/auth/me`, { headers: { authorization: "Bearer invalid-token", cookie: pro2Jar.c.harmonize_session } }).then((r) => r.status);
+      check("mobile Bearer: cookie Web de outro usuário não troca identidade nas rotas mobile nem compartilhadas; Bearer inválido não faz fallback", bearerWithForeignCookieResponse.status === 200 && bearerWithForeignCookie.devices?.every((d) => d.id === mobileTrustRow?.id) && sharedMeResponse.status === 200 && sharedMe.user?.id === pro.id && invalidBearerWithCookie === 401 && invalidSharedMe === 401, `${bearerWithForeignCookieResponse.status}/${sharedMeResponse.status}/${invalidBearerWithCookie}/${invalidSharedMe}`);
+
+      const foreignTrust = await mob(pro2.email, pw, {}, { "X-Harmonize-Trusted-Device": mobileTrustToken });
+      check("mobile: credencial de outro usuário não pula MFA e é indicada para limpeza local", foreignTrust.status === 401 && foreignTrust.data.mfaRequired === true && foreignTrust.data.trustedDeviceInvalid === true && !foreignTrust.data.token, `${foreignTrust.status}`);
+
+      const tamperedTrust = await mob(pro.email, pw, {}, { "X-Harmonize-Trusted-Device": `${"X".repeat(42)}X` });
+      check("mobile: credencial adulterada não pula MFA", tamperedTrust.status === 401 && tamperedTrust.data.mfaRequired === true && tamperedTrust.data.trustedDeviceInvalid === true && !tamperedTrust.data.token, `${tamperedTrust.status}`);
+
+      const webRevokeJar = await session(pro);
+      const webRevoke = await call(webRevokeJar, "DELETE", `/api/security/trusted-devices/${mobileTrustRow.id}`);
+      const afterWebRevoke = await mob(pro.email, pw, {}, { "X-Harmonize-Trusted-Device": mobileTrustToken });
+      check("mobile: revogação individual pelo Web impede o próximo login nativo sem TOTP", webRevoke.s === 200 && afterWebRevoke.status === 401 && afterWebRevoke.data.trustedDeviceInvalid === true && !afterWebRevoke.data.token, `${webRevoke.s}/${afterWebRevoke.status}`);
+
+      const individualTrust = await createMobileTrust();
+      const individualId = individualTrust.data?.trustedDeviceToken ? (await prisma.trustedDevice.findUnique({ where: { tokenHash: createHash("sha256").update(individualTrust.data.trustedDeviceToken).digest("hex") }, select: { id: true } }))?.id : undefined;
+      const otherUserSession = await mob(pro2.email, pw, { mfaCode: await fresh(pro2) });
+      const wrongOwnerDelete = await fetch(`${baseUrl}/api/mobile/auth/trusted-devices/${individualId}`, { method: "DELETE", headers: { authorization: `Bearer ${otherUserSession.data?.token}` } }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
+      check("mobile: usuário diferente não pode revogar o dispositivo de outro usuário", Boolean(individualId) && wrongOwnerDelete.status === 404, `${wrongOwnerDelete.status}`);
+      const individualDelete = await fetch(`${baseUrl}/api/mobile/auth/trusted-devices/${individualId}`, { method: "DELETE", headers: { authorization: `Bearer ${individualTrust.data.token}` } }).then((r) => r.status);
+      const afterIndividualDelete = await mob(pro.email, pw, {}, { "X-Harmonize-Trusted-Device": individualTrust.data.trustedDeviceToken });
+      check("mobile: revogação individual impede o próximo login confiável", individualDelete === 200 && afterIndividualDelete.status === 401 && afterIndividualDelete.data.trustedDeviceInvalid === true, `${individualDelete}/${afterIndividualDelete.status}`);
+
+      const allTrustA = await createMobileTrust();
+      const allTrustB = await createMobileTrust();
+      const allDelete = await fetch(`${baseUrl}/api/mobile/auth/trusted-devices`, { method: "DELETE", headers: { authorization: `Bearer ${allTrustB.data.token}` } }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) }));
+      const allDenied = await Promise.all([allTrustA, allTrustB].map((t) => mob(pro.email, pw, {}, { "X-Harmonize-Trusted-Device": t.data.trustedDeviceToken })));
+      check("mobile: revogação geral invalida imediatamente todas as credenciais", allDelete.status === 200 && allDelete.body.removed >= 2 && allDenied.every((r) => r.status === 401 && r.data.trustedDeviceInvalid === true), `${allDelete.status}/${allDelete.body.removed}`);
+
+      const expiredTrust = await createMobileTrust();
+      const expiredRow = await prisma.trustedDevice.findUnique({ where: { tokenHash: createHash("sha256").update(expiredTrust.data.trustedDeviceToken).digest("hex") } });
+      if (expiredRow) await prisma.trustedDevice.update({ where: { id: expiredRow.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+      const expiredLogin = await mob(pro.email, pw, {}, { "X-Harmonize-Trusted-Device": expiredTrust.data.trustedDeviceToken });
+      check("mobile: credencial expirada volta a exigir MFA e manda limpar o SecureStore", expiredLogin.status === 401 && expiredLogin.data.mfaRequired === true && expiredLogin.data.trustedDeviceInvalid === true && !expiredLogin.data.token, `${expiredLogin.status}`);
+
       const web = await session(pro);
       const revoked = await call(web, "DELETE", `/api/security/sessions/${claims.sid}`);
       check("mobile: revogar a sessão do app pela tela de segurança invalida o Bearer na hora (401)", revoked.s === 200 && await bearerMe(ok.data.token) === 401, `${revoked.s}`);
       const plain = await mob(proN.email, pw);
       check("mobile: usuário SEM 2FA entra só com senha (200) e o token tem sid", plain.status === 200 && Boolean(plain.data.token) && JSON.parse(Buffer.from(plain.data.token.split(".")[1], "base64url").toString()).sid !== undefined);
+      const logoutOne = await mob(proN.email, pw), logoutOther = await mob(proN.email, pw);
+      const logoutClaims = logoutOne.data?.token ? JSON.parse(Buffer.from(logoutOne.data.token.split(".")[1], "base64url").toString()) : {};
+      const logoutResponse = await fetch(`${baseUrl}/api/mobile/auth/logout`, { method: "POST", headers: { authorization: `Bearer ${logoutOne.data?.token}` } }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => null) }));
+      check("mobile logout: revoga só a sessão do Bearer; repetição do JWT revogado = 401 e outra sessão do mesmo usuário permanece válida", logoutResponse.status === 200 && logoutResponse.data?.success === true && Boolean(logoutClaims.sid) && await bearerMe(logoutOne.data.token) === 401 && await bearerMe(logoutOther.data.token) === 200 && await prisma.authSession.findUnique({ where: { id: logoutClaims.sid } }).then((row) => Boolean(row?.revokedAt)));
+
+      const crossInstance = await mob(proN.email, pw);
+      const crossInstanceClaims = crossInstance.data?.token ? JSON.parse(Buffer.from(crossInstance.data.token.split(".")[1], "base64url").toString()) : {};
+      const warmed = await bearerMe(crossInstance.data?.token);
+      await prisma.authSession.updateMany({ where: { id: crossInstanceClaims.sid, userId: proN.id, revokedAt: null }, data: { revokedAt: new Date() } });
+      check("sessões: revogação no banco por outra instância invalida o Bearer na próxima requisição apesar do cache local aquecido", warmed === 200 && Boolean(crossInstanceClaims.sid) && await bearerMe(crossInstance.data.token) === 401);
       const need = await mob(adm2.email, pw);
       check("mobile: ADMIN que exige 2FA e ainda não ativou = 403 mfaSetupRequired, sem token", need.status === 403 && need.data.mfaSetupRequired === true && !need.data.token, `${need.status}`);
       const unknownBefore = await prisma.securityEvent.count({ where: { userId: null } });
@@ -8105,6 +8246,8 @@ async function security2fa() {
       const jm = await enable(proM);
       const trusted = await session(proM, { trust: true });
       const other = await session(proM);
+      const mobileTrustResponse = await fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json", "X-Harmonize-Platform": "android" }, body: JSON.stringify({ login: proM.email, password: pw, mfaCode: await fresh(proM), trustDevice: true }) });
+      const mobileTrustBeforePasswordChange = await mobileTrustResponse.json().catch(() => null);
       await prisma.user.update({ where: { id: proM.id }, data: { mustChangePassword: true } });
       const { jar, r } = await pending(proM, { harmonize_td: trusted.c.harmonize_td });
       const gated = [await call(jar, "GET", "/api/auth/me"), await call(jar, "GET", "/api/patients"), await call(jar, "GET", "/api/security/overview")];
@@ -8115,6 +8258,8 @@ async function security2fa() {
       const ch = await call(jar, "POST", "/api/auth/change-password", { password: newPw });
       const tds = await prisma.trustedDevice.findMany({ where: { userId: proM.id }, select: { revokedAt: true } });
       check("troca de senha: com 2FA ativo, não abre sessão (mfaRequired), revoga TODAS as sessões e dispositivos confiáveis", ch.s === 200 && ch.d.mfaRequired === true && !jar.c.harmonize_session && (await call(jm, "GET", "/api/auth/me")).s === 401 && (await call(other, "GET", "/api/auth/me")).s === 401 && (await call(trusted, "GET", "/api/auth/me")).s === 401 && tds.length > 0 && tds.every((t) => t.revokedAt !== null), `${ch.s} ${JSON.stringify(ch.d)}`);
+      const mobileAfterPasswordChange = await fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json", "X-Harmonize-Trusted-Device": mobileTrustBeforePasswordChange?.trustedDeviceToken }, body: JSON.stringify({ login: proM.email, password: newPw }) }).then(async (response) => ({ status: response.status, data: await response.json().catch(() => null) }));
+      check("troca de senha: a credencial mobile anterior é revogada e volta a exigir TOTP", Boolean(mobileTrustBeforePasswordChange?.trustedDeviceToken) && mobileAfterPasswordChange.status === 401 && mobileAfterPasswordChange.data.mfaRequired === true && mobileAfterPasswordChange.data.trustedDeviceInvalid === true && !mobileAfterPasswordChange.data.token);
       const viaOldTd = await pending(proM, { harmonize_td: trusted.c.harmonize_td }, newPw);
       check("troca de senha: o dispositivo confiável antigo volta a pedir TOTP (senha nova) e PASSWORD_CHANGED é registrado", viaOldTd.r.d.mfaRequired === true && !viaOldTd.jar.c.harmonize_session && await dbEvents(proM, "PASSWORD_CHANGED") === 1);
       const vv = await call(jar, "POST", "/api/auth/mfa/verify", { code: await fresh(proM) });
@@ -8662,6 +8807,7 @@ async function googleAgenda() {
   const mem = await prisma.clinicMembership.findFirst({ where: { user: { email: email.toLowerCase() }, clinic: { name: testClinicName } }, select: { clinicId: true, userId: true } });
   if (!mem) { ck("clínica de teste encontrada", false); return; }
   const clinicId = mem.clinicId, ownerId = mem.userId, ownerSess = cookie;
+  const notificationLogIdsBefore = new Set((await prisma.calendarNotificationLog.findMany({ where: { clinicId }, select: { id: true } })).map((row) => row.id));
   const ownerUser = await prisma.user.findUnique({ where: { id: ownerId }, select: { email: true, name: true } });
   const fake = await startFakeGoogle({ port: PORT, clientId, clientSecret });
 
@@ -9283,14 +9429,14 @@ async function googleAgenda() {
     const tFlow = await startFlow(outSess, "ADMIN", gOut);
     await gc(outSess, "POST", `${GC}/disconnect`, { type: "ADMIN" });
     const tFlow2 = await startFlow(outSess, "ADMIN", gOut);
-    await prisma.clinic.update({ where: { id: outsiderClinicId }, data: { trialEndsAt: new Date(Date.now() - 86_400_000) } });
+    await prisma.clinicSubscription.update({ where: { clinicId: outsiderClinicId }, data: { trialEndsAt: new Date(Date.now() - 86_400_000) } });
     const outLogin2 = await loginAs(outsider.email, outsider.password);
     const expired = outLogin2.cookie;
     ck("trial vencido: a sessão nova continua válida (status 200); só as ações que exigem trial ativo são bloqueadas", Boolean(expired) && (await gc(expired, "GET", `${GC}/status`)).s === 200, `${outLogin2.status}`);
     r = await gc(expired, "POST", `${GC}/connect`, { type: "ADMIN" });
-    ck("trial vencido: connect é bloqueado", r.s === 401 || r.s === 402 || r.s === 403, `${r.s} ${JSON.stringify(r.d)}`);
+    ck("trial vencido: connect é bloqueado (403 SUBSCRIPTION_READONLY)", r.s === 403 && r.d?.code === "SUBSCRIPTION_READONLY", `${r.s} ${JSON.stringify(r.d)}`);
     r = await gc(expired, "POST", `${GC}/sync`, {});
-    ck("trial vencido: sync é bloqueado", r.s === 401 || r.s === 402 || r.s === 403, `${r.s} ${JSON.stringify(r.d)}`);
+    ck("trial vencido: sync é bloqueado (403 SUBSCRIPTION_READONLY)", r.s === 403 && r.d?.code === "SUBSCRIPTION_READONLY", `${r.s} ${JSON.stringify(r.d)}`);
     const rowBefore = await prisma.googleCalendarConnection.findFirst({ where: { clinicId: outsiderClinicId, connectionType: "ADMIN" } });
     const cbExpired = await callbackOf(expired, tFlow2);
     const rowAfter = await prisma.googleCalendarConnection.findFirst({ where: { clinicId: outsiderClinicId, connectionType: "ADMIN" } });
@@ -9299,8 +9445,9 @@ async function googleAgenda() {
 
     // ---------- S20: fechamento ----------
     ck("nenhuma resposta das rotas de integração/cron vazou accessToken, refreshToken, Encrypted, tokenHash, JWT (eyJ), googleAccountId nem tokens/sub reais", leaks.length === 0, [...new Set(leaks)].join(", "));
-    const logs = await prisma.calendarNotificationLog.count({ where: { clinicId: { in: [clinicId, outsiderClinicId].filter(Boolean) } } });
-    ck("nenhum e-mail ao profissional foi tentado (CalendarNotificationLog vazio: log é gravado antes de qualquer envio)", logs === 0, `${logs} registros`);
+    const notificationLogs = await prisma.calendarNotificationLog.findMany({ where: { clinicId: { in: [clinicId, outsiderClinicId].filter(Boolean) } }, select: { id: true } });
+    const newNotificationLogs = notificationLogs.filter((row) => !notificationLogIdsBefore.has(row.id));
+    ck("nenhum e-mail ao profissional foi tentado por esta suíte", newNotificationLogs.length === 0, `${newNotificationLogs.length} registros novos, ${notificationLogs.length} preexistentes/totais`);
     ck("nenhum job ficou preso em PROCESSING na clínica de teste", (await prisma.calendarSyncJob.count({ where: { clinicId, status: "PROCESSING" } })) === 0);
   } finally {
     fake.clearFaults();
@@ -9357,7 +9504,7 @@ async function myProfile() {
   const personal = { name: true, phone: true, cpf: true, postalCode: true, address: true, country: true, state: true, city: true };
   const ownerBefore = await prisma.user.findUnique({ where: { id: testMembership.userId }, select: personal });
   const ownerHadAvatar = Boolean(await prisma.userAvatar.findUnique({ where: { userId: testMembership.userId }, select: { userId: true } }));
-  const clinicBefore = await prisma.clinic.findUnique({ where: { id: testMembership.clinicId }, select: { trialEndsAt: true } });
+  const clinicBefore = await prisma.clinicSubscription.findUnique({ where: { clinicId: testMembership.clinicId }, select: { trialEndsAt: true } });
   try {
     // ---- contas ----
     const mk = async (tag, role) => {
@@ -9633,7 +9780,7 @@ async function myProfile() {
     } else check("meu perfil: login da conta só-Google", false, `${googLogin.status} ${JSON.stringify(googLogin.data).slice(0, 120)}`);
 
     // ---- 8. trial vencido não bloqueia perfil nem senha ----
-    await prisma.clinic.updateMany({ where: { name: otherClinic }, data: { trialEndsAt: new Date(Date.now() - 86_400_000) } });
+    await prisma.clinicSubscription.updateMany({ where: { clinic: { name: otherClinic } }, data: { trialEndsAt: new Date(Date.now() - 86_400_000) } });
     const expired = await loginAs(mail("outro"), pw); // sessão nova: sem o cache de autenticação anterior
     if (expired.status === 200) {
       const e = expired.cookie;
@@ -9655,7 +9802,7 @@ async function myProfile() {
     // restaura a conta de teste (dados pessoais, foto e prazo do trial)
     await prisma.user.update({ where: { id: testMembership.userId }, data: ownerBefore });
     if (!ownerHadAvatar) await prisma.userAvatar.deleteMany({ where: { userId: testMembership.userId } });
-    await prisma.clinic.update({ where: { id: testMembership.clinicId }, data: { trialEndsAt: clinicBefore.trialEndsAt } });
+    await prisma.clinicSubscription.update({ where: { clinicId: testMembership.clinicId }, data: { trialEndsAt: clinicBefore.trialEndsAt } });
     const leftUsers = await prisma.user.count({ where: { email: { in: emails } } });
     const leftClinics = await prisma.clinic.count({ where: { name: otherClinic } });
     const members = await prisma.clinicMembership.count({ where: { clinicId: testMembership.clinicId } });
@@ -9894,7 +10041,11 @@ async function reportsUi() {
   const proA = `Prof RelUi ${run}`;
 
   // Dados: 4 atendimentos realizados + 1 cancelado hoje (criados para amanhã pela API e movidos para hoje no banco, pois a API recusa datas passadas), 1 Pago, 1 Pendente, 1 orçamento aprovado.
-  const mkPatient = async (label) => (await api("POST", "/api/patients", { ...regDefaults, name: `RelUi ${label} ${run}`, phone: "11999990071", age: 33, cpf: randomCpf() })).data.patient;
+  const mkPatient = async (label) => {
+    const name = `RelUi ${label} ${run}`;
+    const response = await api("POST", "/api/patients", { ...regDefaults, name, phone: "11999990071", age: 33, cpf: randomCpf() });
+    return requireCreatedPatient(response, name);
+  };
   const ids = [];
   let slot = 8;
   for (const [status, label] of [["Atendido", "aa"], ["Finalizado", "ab"], ["Atendido", "ac"], ["Atendido", "ad"], ["Cancelado", "ae"]]) {
@@ -9975,11 +10126,14 @@ async function reportsUi() {
     await page.waitForTimeout(800);
     const withCompare = await kpiText("Atendimentos realizados");
     check("relatorios_ui: ligar 'Comparar' refaz a consulta (compare=1) e muda o card", ok && withCompare !== before && !/Sem comparação/i.test(withCompare), `${before} => ${withCompare}`);
-    wait = page.waitForResponse((r) => r.url().includes("/api/reports/overview") && !r.url().includes("compare=1") && r.status() === 200).catch(() => null);
     await page.getByRole("switch", { name: /Comparar com período anterior/ }).click();
-    ok = Boolean(await wait);
-    await page.waitForTimeout(800);
-    check("relatorios_ui: desligar 'Comparar' volta ao card anterior (resposta sem compare pode vir do cache do cliente)", (await kpiText("Atendimentos realizados")) === before, await kpiText("Atendimentos realizados"));
+    const compareOff = await until(async () => {
+      const text = await kpiText("Atendimentos realizados");
+      return /\b4\b/.test(text) && /Sem comparação/i.test(text) && !/vs período anterior/i.test(text);
+    }, 5000);
+    const afterCompareOff = await kpiText("Atendimentos realizados");
+    const compareSwitchOff = await page.getByRole("switch", { name: /Comparar com período anterior/ }).getAttribute("aria-checked") === "false";
+    check("relatorios_ui: desligar 'Comparar' mantém o controle desligado e restaura 4 atendimentos sem comparação", compareOff && compareSwitchOff, `${afterCompareOff} controle=${compareSwitchOff}`);
 
     // Abas.
     const tabs = [["Procedimentos", "procedures"], ["Profissionais", "professionals"], ["Clientes", "clients"], ["Orçamentos", "quotes"], ["Financeiro", "finance"], ["Estoque", "stock"]];
@@ -10579,7 +10733,1482 @@ async function reportsUi2() {
   });
 }
 
+// Estado da assinatura (ClinicSubscription é a fonte dos direitos): teste ativo/vencido, planos, carência, isolamento entre clínicas,
+// GETs que não gravam, sync de despesas fixas e telas com a clínica vencida. Usa clínicas próprias (apagadas no fim).
+async function planStates() {
+  const pw = `E2e-${run}-Pl99!`;
+  const tags = ["alfa", "beta"];
+  const mailOf = (tag) => `e2e-planos-${tag}-${run}@example.invalid`;
+  const staffMail = `e2e-planos-staff-${run}@example.invalid`, proMail = `e2e-planos-pro-${run}@example.invalid`;
+  const clinicNameOf = (tag) => `Clinica Planos ${tag} ${run}`;
+  const allMails = [...tags.map(mailOf), staffMail, proMail];
+  const DAY = 86_400_000;
+  const ago = (days) => new Date(Date.now() - days * DAY);
+  const ahead = (days) => new Date(Date.now() + days * DAY);
+  const mk = async (tag) => {
+    const reg = await api("POST", "/api/auth/register", { clinicName: clinicNameOf(tag), name: `E2E Planos ${tag}`, email: mailOf(tag), password: pw });
+    const clinicId = (await prisma.clinicMembership.findFirst({ where: { user: { email: mailOf(tag) } }, select: { clinicId: true } }))?.clinicId;
+    const session = reg.status === 201 ? await loginAs(mailOf(tag), pw) : { status: reg.status, cookie: "" };
+    return { tag, clinicId, cookie: session.cookie, loginStatus: session.status };
+  };
+  const as = (c, fn) => withSession(c, fn);
+  const setSub = (clinicId, data) => prisma.clinicSubscription.update({ where: { clinicId }, data: { status: "TRIALING", plan: null, trialEndsAt: ahead(3), currentPeriodEnd: null, ...data } });
+  const writeProbe = (c) => as(c, () => api("POST", "/api/patients", { ...regDefaults, name: `Plano ${run} ${["aa", "bb", "cc", "dd"][Math.floor(Math.random() * 4)]}`, phone: "11999990000", age: 30, cpf: randomCpf() }));
+  const isReadonly = (res) => res.status === 403 && res.data?.code === "SUBSCRIPTION_READONLY";
+  const counts = async (clinicId) => [await prisma.expense.count({ where: { clinicId } }), await prisma.stockMovement.count({ where: { clinicId } }), await prisma.recurringExpense.count({ where: { clinicId } }), await prisma.payment.count({ where: { clinicId } }), await prisma.appointment.count({ where: { clinicId } }), await prisma.patient.count({ where: { clinicId } })].join("/");
+  const getList = ["/api/patients", "/api/appointments/options", "/api/finance/summary", "/api/expenses", "/api/recurring-expenses", "/api/invitations"];
+  const fiveGets = ["/api/expenses", "/api/finance/accounts?kind=payable", "/api/finance/summary", "/api/recurring-expenses"];
+  const clinicIds = [];
+  try {
+    const A = await mk("alfa");
+    const B = await mk("beta");
+    clinicIds.push(A.clinicId, B.clinicId);
+    if (!A.cookie || !B.cookie || !A.clinicId || !B.clinicId) { check("planos: clínicas de teste criadas e com login", false, `${A.loginStatus}/${B.loginStatus}`); return; }
+    const subA = await prisma.clinicSubscription.findUnique({ where: { clinicId: A.clinicId } });
+    check("planos: o trigger cria a assinatura TRIALING da clínica nova espelhando o teste", subA?.status === "TRIALING" && subA.trialEndsAt !== null, JSON.stringify(subA));
+
+    // (1) teste ativo
+    let r = await writeProbe(A.cookie);
+    const meA = await as(A.cookie, () => api("GET", "/api/auth/me"));
+    check("planos: clínica em teste ativo escreve (201) e /me tem access.mode full, sem a chave entitlements", r.status === 201 && meA.status === 200 && meA.data.user?.access?.mode === "full" && !("entitlements" in meA.data.user) && !("entitlements" in meA.data) && Array.isArray(meA.data.user.access.features) && meA.data.user.trialExpired === false, `${r.status}/${meA.status} ${JSON.stringify(meA.data.user?.access)?.slice(0, 160)}`);
+
+    // (3) e (4) antes de expirar: despesa fixa com início no passado, ocorrências removidas para provar que GET não gera
+    r = await as(A.cookie, () => api("POST", "/api/recurring-expenses", { description: `Plano fixa ${run}`, category: "Aluguel", amountCents: 12_300, paymentMethod: "Pix", frequency: "monthly", dayOfMonth: 5, startsOn: day(-75) }));
+    const rec = r.data.recurringExpense;
+    const generated = await prisma.expense.count({ where: { recurringExpenseId: rec?.id ?? "" } });
+    check("planos: POST de despesa fixa cria e gera as ocorrências do período", r.status === 201 && rec?.id && generated >= 2, `${r.status} ocorrências=${generated}`);
+    const removeOcc = () => prisma.expense.deleteMany({ where: { recurringExpenseId: rec.id } });
+    await removeOcc();
+    let before = await counts(A.clinicId);
+    const active = await as(A.cookie, () => Promise.all(fiveGets.map((p) => api("GET", p))));
+    check("planos: GETs de despesas, contas, resumo e despesas fixas (teste ativo) não gravam nada no banco", active.every((x) => x.status === 200) && before === await counts(A.clinicId) && (await prisma.expense.count({ where: { recurringExpenseId: rec.id } })) === 0, `${active.map((x) => x.status)} ${before} -> ${await counts(A.clinicId)}`);
+    const detail = await as(A.cookie, () => api("GET", `/api/recurring-expenses/${rec.id}`));
+    check("planos: GET /api/recurring-expenses/[id] (ativo) também não gera ocorrências", detail.status === 200 && (await prisma.expense.count({ where: { recurringExpenseId: rec.id } })) === 0, detail.status);
+
+    // sync
+    r = await as(A.cookie, () => api("POST", "/api/recurring-expenses/sync"));
+    const afterSync = await prisma.expense.count({ where: { recurringExpenseId: rec.id } });
+    check("planos: sync (ativo) responde 200 { created: n } e recria as ocorrências faltantes", r.status === 200 && Number.isInteger(r.data.created) && r.data.created === generated && afterSync === generated, `${r.status} ${JSON.stringify(r.data)} ${afterSync}/${generated}`);
+    r = await as(A.cookie, () => api("POST", "/api/recurring-expenses/sync"));
+    check("planos: segunda chamada do sync devolve created 0", r.status === 200 && r.data.created === 0, JSON.stringify(r.data));
+    await removeOcc();
+    const pair = await as(A.cookie, () => Promise.all([1, 2].map(() => api("POST", "/api/recurring-expenses/sync"))));
+    const rows = await prisma.expense.findMany({ where: { recurringExpenseId: rec.id }, select: { occurrenceOn: true } });
+    const uniq = new Set(rows.map((x) => x.occurrenceOn?.toISOString())).size;
+    check("planos: duas chamadas simultâneas do sync não duplicam ocorrências (índice único)", pair.every((x) => x.status === 200) && rows.length === generated && uniq === rows.length, `${pair.map((x) => `${x.status}:${x.data.created}`)} linhas=${rows.length} únicas=${uniq} esperado=${generated}`);
+    // permissões: STAFF e PROFESSIONAL sem finance:manage; sem sessão 401
+    const members = [];
+    for (const [role, mail] of [["STAFF", staffMail], ["PROFESSIONAL", proMail]]) {
+      const created = await as(A.cookie, () => api("POST", "/api/team", { name: `E2E Planos ${role}`, email: mail, password: pw, role, cpf: randomCpf(), address: "Rua A, 1", country: "Brasil", state: "SP", city: "São Paulo" }));
+      if (created.status !== 201) { check(`planos: usuário ${role} criado`, false, `${created.status} ${JSON.stringify(created.data).slice(0, 100)}`); continue; }
+      const sess = await loginAs(mail, pw);
+      const res = await as(sess.cookie, () => api("POST", "/api/recurring-expenses/sync"));
+      check(`planos: sync com ${role} (sem finance:manage) = 403 sem code`, res.status === 403 && !res.data?.code, `${res.status} ${JSON.stringify(res.data)}`);
+      members.push(sess);
+    }
+    const anonSync = await as("", () => api("POST", "/api/recurring-expenses/sync"));
+    check("planos: sync sem sessão = 401", anonSync.status === 401, anonSync.status);
+
+    // (2) expira pela assinatura
+    const sessionBeforeExpiry = A.cookie;
+    await setSub(A.clinicId, { trialEndsAt: ago(1) });
+    await removeOcc();
+    const newSess = await loginAs(mailOf("alfa"), pw);
+    const exp = newSess.cookie;
+    const meExp = await as(exp, () => api("GET", "/api/auth/me"));
+    check("planos: sessão NOVA com teste vencido continua válida (me 200, access.mode readonly, trialExpired true)", newSess.status === 200 && meExp.status === 200 && meExp.data.user?.access?.mode === "readonly" && meExp.data.user.trialExpired === true && !("entitlements" in meExp.data.user), `${newSess.status}/${meExp.status} ${JSON.stringify(meExp.data.user?.access)?.slice(0, 160)}`);
+    const gets = await as(exp, () => Promise.all(getList.map((p) => api("GET", p))));
+    check("planos: vencida, GETs de pacientes, agenda, resumo, despesas, despesas fixas e convites = 200", gets.every((x) => x.status === 200), gets.map((x, i) => `${getList[i]}=${x.status}`).join(" "));
+    before = await counts(A.clinicId);
+    const expiredGets = await as(exp, () => Promise.all([...fiveGets.map((p) => api("GET", p)), api("GET", `/api/recurring-expenses/${rec.id}`)]));
+    check("planos: vencida, os GETs de despesas/contas/resumo/despesas fixas não gravam nada (contagens idênticas, nenhuma ocorrência gerada)", expiredGets.every((x) => x.status === 200) && before === await counts(A.clinicId) && (await prisma.expense.count({ where: { recurringExpenseId: rec.id } })) === 0, `${expiredGets.map((x) => x.status)} ${before} -> ${await counts(A.clinicId)}`);
+    const writes = await as(exp, async () => [
+      await api("POST", "/api/patients", { ...regDefaults, name: `Plano ${run} zz`, phone: "11999990000", age: 30, cpf: randomCpf() }),
+      await api("POST", "/api/expenses", { description: `Plano desp ${run}`, category: "Aluguel", amountCents: 1000, dueOn: day(0), paymentMethod: "Pix" }),
+      await api("PATCH", "/api/clinic/preferences", { key: "patientEmailsEnabled", enabled: true }),
+      await api("POST", "/api/recurring-expenses/sync"),
+      await api("POST", "/api/recurring-expenses", { description: `Plano fixa2 ${run}`, category: "Aluguel", amountCents: 100, paymentMethod: "Pix", frequency: "monthly", dayOfMonth: 5, startsOn: day(-5) }),
+    ]);
+    check("planos: vencida, escritas (paciente, despesa, preferência da clínica, sync, despesa fixa) = 403 SUBSCRIPTION_READONLY e nunca 401", writes.every(isReadonly) && writes.every((x) => x.status !== 401), writes.map((x) => `${x.status}:${x.data?.code}`).join(" "));
+    check("planos: as escritas bloqueadas não gravaram nada", await prisma.expense.count({ where: { clinicId: A.clinicId, description: { startsWith: "Plano desp" } } }) === 0 && await prisma.patient.count({ where: { clinicId: A.clinicId, name: `Plano ${run} zz` } }) === 0 && await prisma.recurringExpense.count({ where: { clinicId: A.clinicId } }) === 1 && (await prisma.expense.count({ where: { recurringExpenseId: rec.id } })) === 0);
+    const again = await as(exp, () => api("GET", "/api/patients"));
+    const antiga = await as(sessionBeforeExpiry, () => api("GET", "/api/patients"));
+    const revoked = await prisma.authSession.count({ where: { user: { email: mailOf("alfa") }, revokedAt: { not: null } } });
+    check("planos: depois da 403, a MESMA sessão (e a anterior à expiração) segue com GET 200 e nenhuma AuthSession foi revogada", again.status === 200 && antiga.status === 200 && revoked === 0, `${again.status}/${antiga.status} revogadas=${revoked}`);
+    const writeAfterGet = await as(exp, () => api("POST", "/api/recurring-expenses/sync"));
+    check("planos: a sessão vencida continua recebendo 403 (não 401) nas escritas seguintes", isReadonly(writeAfterGet), `${writeAfterGet.status}`);
+    const mobile = await fetch(`${baseUrl}/api/auth/me`, { headers: { cookie: exp } });
+    check("planos: /api/auth/me da sessão vencida tem Cache-Control sem cache compartilhado", mobile.status === 200 && !/public/i.test(mobile.headers.get("cache-control") ?? ""), mobile.headers.get("cache-control"));
+
+    // (5) estados da assinatura
+    const states = [
+      ["legado (TRIALING sem trialEndsAt)", { trialEndsAt: null }, true],
+      ["ACTIVE pro sem currentPeriodEnd", { status: "ACTIVE", plan: "pro", trialEndsAt: null }, true],
+      ["ACTIVE com período vencido", { status: "ACTIVE", plan: "pro", trialEndsAt: null, currentPeriodEnd: ago(1) }, false],
+      ["ACTIVE com período futuro", { status: "ACTIVE", plan: "pro", trialEndsAt: null, currentPeriodEnd: ahead(10) }, true],
+      ["CANCELED com período futuro", { status: "CANCELED", plan: "pro", trialEndsAt: null, currentPeriodEnd: ahead(10) }, true],
+      ["CANCELED com período passado", { status: "CANCELED", plan: "pro", trialEndsAt: null, currentPeriodEnd: ago(1) }, false],
+      ["PAST_DUE há 3 dias (carência)", { status: "PAST_DUE", plan: "pro", trialEndsAt: null, currentPeriodEnd: ago(3) }, true],
+      ["PAST_DUE há 8 dias", { status: "PAST_DUE", plan: "pro", trialEndsAt: null, currentPeriodEnd: ago(8) }, false],
+      ["EXPIRED com período futuro", { status: "EXPIRED", plan: "pro", trialEndsAt: null, currentPeriodEnd: ahead(10) }, false],
+      ["teste vencido (TRIALING)", { trialEndsAt: ago(1) }, false],
+    ];
+    for (const [label, data, canWrite] of states) {
+      await setSub(A.clinicId, data);
+      const fresh = await loginAs(mailOf("alfa"), pw);
+      const w = await writeProbe(fresh.cookie);
+      const g = await as(fresh.cookie, () => api("GET", "/api/patients"));
+      const m = await as(fresh.cookie, () => api("GET", "/api/auth/me"));
+      const ok = g.status === 200 && m.status === 200 && m.data.user?.access?.mode === (canWrite ? "full" : "readonly") && (canWrite ? w.status === 201 : isReadonly(w));
+      check(`planos: ${label} -> ${canWrite ? "escreve (201)" : "somente leitura (403 SUBSCRIPTION_READONLY)"}, GET 200`, ok, `escrita=${w.status}:${w.data?.code ?? ""} get=${g.status} modo=${m.data.user?.access?.mode} motivo=${m.data.user?.access?.reason}`);
+    }
+    const noPlan = await prisma.clinicSubscription.update({ where: { clinicId: A.clinicId }, data: { status: "ACTIVE", plan: null, currentPeriodEnd: ahead(10), trialEndsAt: null } }).then(async () => as((await loginAs(mailOf("alfa"), pw)).cookie, () => api("GET", "/api/auth/me")));
+    check("planos: ACTIVE com plan nulo não vira acesso completo (somente leitura ou erro, nunca full)", noPlan.status !== 200 || noPlan.data.user?.access?.mode === "readonly", `${noPlan.status} ${JSON.stringify(noPlan.data.user?.access)?.slice(0, 120)}`);
+
+    // (6) isolamento: A vencida, B ativa
+    await setSub(A.clinicId, { trialEndsAt: ago(1) });
+    const bpat = await as(B.cookie, () => api("POST", "/api/patients", { ...regDefaults, name: `Plano ${run} bb`, phone: "11999990001", age: 30, cpf: randomCpf() }));
+    // O estado da assinatura entra no cache de autenticação (15 s por sessão): sessões novas leem o banco na hora.
+    const fresh = async (tag) => (await loginAs(mailOf(tag), pw)).cookie;
+    const aW = await writeProbe(await fresh("alfa"));
+    const bW = await writeProbe(await fresh("beta"));
+    const bMe = await as(await fresh("beta"), () => api("GET", "/api/auth/me"));
+    check("planos: A vencida, B ativa: A recebe 403 e B continua escrevendo (access full)", isReadonly(aW) && bpat.status === 201 && bW.status === 201 && bMe.data.user?.access?.mode === "full", `${aW.status}/${bpat.status}/${bW.status}/${bMe.data.user?.access?.mode}`);
+    await setSub(B.clinicId, { trialEndsAt: ago(1) });
+    await setSub(A.clinicId, { trialEndsAt: ahead(3) });
+    const aW2 = await writeProbe(await fresh("alfa"));
+    const bW2 = await writeProbe(await fresh("beta"));
+    check("planos: trocar os estados (A ativa, B vencida) inverte o resultado: a mudança em uma assinatura não afeta a outra", aW2.status === 201 && isReadonly(bW2), `${aW2.status}/${bW2.status}`);
+    const aReadB = await as(A.cookie, () => api("GET", `/api/patients/${bpat.data.patient?.id}`));
+    const aList = await as(A.cookie, () => api("GET", "/api/patients"));
+    check("planos: a clínica A não lê paciente da clínica B (404 e fora da lista)", aReadB.status === 404 && !JSON.stringify(aList.data).includes(bpat.data.patient?.id ?? "x"), `${aReadB.status}`);
+    await setSub(B.clinicId, { trialEndsAt: ahead(3) });
+
+    // (C) telas
+    await setSub(A.clinicId, { trialEndsAt: ago(1) });
+    const expiredCookie = (await loginAs(mailOf("alfa"), pw)).cookie;
+    await as(expiredCookie, () => withPage(async (page, pageErrors) => {
+      const syncCalls = [];
+      page.on("request", (request) => { if (request.method() === "POST" && request.url().includes("/api/recurring-expenses/sync")) syncCalls.push(request.url()); });
+      for (const route of ["clientes", "financeiro"]) {
+        await page.goto(`${baseUrl}/${route}`, { waitUntil: "domcontentloaded" });
+        await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => undefined);
+        await page.waitForTimeout(1500);
+        const url = new URL(page.url());
+        const body = (await page.locator("body").innerText()).trim();
+        check(`planos (tela): clínica vencida abre /${route} sem ir para /login, sem erro de página e com conteúdo`, url.pathname === `/${route}` && body.length > 50 && pageErrors.length === 0, `${url.pathname} erros=${pageErrors.join("|").slice(0, 150)}`);
+      }
+    }));
+    await setSub(A.clinicId, { trialEndsAt: ahead(3) });
+    const adminCookie = (await loginAs(mailOf("alfa"), pw)).cookie;
+    await as(adminCookie, () => withPage(async (page, pageErrors) => {
+      const syncCalls = [];
+      page.on("request", (request) => { if (request.method() === "POST" && request.url().includes("/api/recurring-expenses/sync")) syncCalls.push(request.url()); });
+      await page.goto(`${baseUrl}/financeiro`, { waitUntil: "domcontentloaded" });
+      await page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => undefined);
+      await page.waitForTimeout(1500);
+      const body = (await page.locator("body").innerText()).trim();
+      check("planos (tela): clínica ativa, ADMIN abre /financeiro: dispara POST /api/recurring-expenses/sync e a tela carrega", syncCalls.length >= 1 && new URL(page.url()).pathname === "/financeiro" && body.length > 50 && pageErrors.length === 0, `sync=${syncCalls.length} ${new URL(page.url()).pathname} erros=${pageErrors.join("|").slice(0, 150)}`);
+    }));
+  } finally {
+    const ids = (await prisma.user.findMany({ where: { email: { in: allMails } }, select: { id: true } })).map((u) => u.id);
+    for (const id of ids) touchedUsers.add(id);
+    await wipeSecurityOf(ids).catch(() => undefined);
+    await prisma.clinicMembership.deleteMany({ where: { userId: { in: ids } } });
+    await prisma.clinic.deleteMany({ where: { name: { in: tags.map(clinicNameOf) } } });
+    await prisma.user.deleteMany({ where: { id: { in: ids } } });
+    const left = await prisma.clinic.count({ where: { name: { in: tags.map(clinicNameOf) } } }) + await prisma.user.count({ where: { email: { in: allMails } } });
+    check("planos: limpeza das clínicas e usuários criados", left === 0, left);
+  }
+}
+
+// Limites de plano (Etapa 4) pelas ROTAS HTTP reais: profissionais (dono + equipe + convites pendentes), pacientes, cargo,
+// aceite de convite, concorrência, downgrade, somente leitura, isolamento entre clínicas, sync de despesas fixas e desconexão do
+// Google Agenda em somente leitura. Clínicas e usuários próprios (prefixo e2e-pl-), apagados no fim.
+// Inicie com o mock local de Resend (E2E_RESEND_URL) e credenciais de teste; nenhum e-mail real e enviado.
+async function planLimits() {
+  const pw = `E2e-${run}-Lim9!`;
+  const nameOf = (k) => `Clinica PlLim ${k} ${run}`;
+  const mailOf = (k) => `e2e-pl-${k}-${run}@example.invalid`;
+  const keys = [];
+  const as = (c, fn) => withSession(c, fn);
+  let seq = 0;
+  const nextMail = (p) => mailOf(`${p}${++seq}`);
+  const setPlan = (clinicId, plan, status = "ACTIVE", extra = {}) => prisma.clinicSubscription.update({ where: { clinicId }, data: { plan, status, trialEndsAt: null, currentPeriodEnd: null, ...extra } });
+  // Clínica nova (teste grátis = Premium). plan: coloca no plano antes do login; login:false não abre sessão.
+  const mk = async (key, plan, { login = true } = {}) => {
+    keys.push(key);
+    const reg = await api("POST", "/api/auth/register", { clinicName: nameOf(key), name: `E2E Lim ${key}`, email: mailOf(key), password: pw });
+    const m = await prisma.clinicMembership.findFirst({ where: { user: { email: mailOf(key) } }, select: { clinicId: true, userId: true } });
+    if (reg.status !== 201 || !m) throw new Error(`clínica ${key} não criada (${reg.status})`);
+    if (plan) await setPlan(m.clinicId, plan);
+    const s = login ? await loginAs(mailOf(key), pw) : { status: 0, cookie: "" };
+    if (login && (s.status !== 200 || !s.cookie)) throw new Error(`login da clínica ${key} falhou (${s.status})`);
+    return { key, clinicId: m.clinicId, userId: m.userId, mail: mailOf(key), cookie: s.cookie };
+  };
+  const relogin = async (c) => (await loginAs(c.mail, pw)).cookie;
+  const seedMembers = async (clinicId, role, n) => {
+    const out = [];
+    for (let i = 0; i < n; i += 1) {
+      const mail = nextMail("s");
+      const u = await prisma.user.create({ data: { name: `E2E Seed ${role}`, email: mail, passwordHash: "x", emailVerifiedAt: new Date(), role } });
+      const m = await prisma.clinicMembership.create({ data: { userId: u.id, clinicId, role }, select: { id: true } });
+      out.push({ userId: u.id, membershipId: m.id, mail });
+    }
+    return out;
+  };
+  const seedPatients = (clinicId, n) => prisma.patient.createMany({ data: Array.from({ length: n }, (_, i) => ({ clinicId, name: `E2E Seed Paciente ${i}`, phone: "(11) 99999-0000", age: 30 })) });
+  const slots = async (clinicId) => (await prisma.clinicMembership.count({ where: { clinicId, role: { in: ["ADMIN", "PROFESSIONAL"] } } })) + (await prisma.clinicInvitation.count({ where: { clinicId, status: "PENDING", expiresAt: { gt: new Date() }, role: { in: ["ADMIN", "PROFESSIONAL"] } } }));
+  const memberCount = (clinicId) => prisma.clinicMembership.count({ where: { clinicId } });
+  const teamPost = async (c, role, p = "m") => {
+    const mail = nextMail(p);
+    const res = await as(c, () => api("POST", "/api/team", { name: `E2E ${role} ${p}`, email: mail, password: pw, role, ...teamProfile() }));
+    return { res, mail };
+  };
+  const invite = (c, to, role = "PROFESSIONAL") => as(c, () => api("POST", "/api/invitations", { email: to, role }));
+  const tokenOf = (r) => String(r.data?.inviteUrl ?? "").split("/convite/")[1] ?? "";
+  const patientBody = () => ({ ...regDefaults, name: `Limite Plano ${run}`, phone: "11999990000", age: 30, cpf: randomCpf() });
+  const postPatient = (c) => as(c, () => api("POST", "/api/patients", patientBody()));
+  const patientCount = (clinicId) => prisma.patient.count({ where: { clinicId } });
+  const lim = (r, resource, limit, used) => r.status === 403 && r.data?.code === "PLAN_LIMIT" && r.data.resource === resource && r.data.limit === limit && r.data.used === used;
+  const brief = (r) => `${r.status} ${JSON.stringify(r.data).slice(0, 170)}`;
+  const rawPost = async (cookieStr, path, body) => {
+    const res = await fetch(`${baseUrl}${path}`, { method: "POST", headers: { "Content-Type": "application/json", origin: baseUrl, ...(cookieStr ? { cookie: cookieStr } : {}) }, body: JSON.stringify(body), redirect: "manual" });
+    const text = await res.text();
+    let data; try { data = JSON.parse(text); } catch { data = text.slice(0, 200); }
+    return { status: res.status, data };
+  };
+  const registerBy = (token, tag) => rawPost("", "/api/auth/invite/register", { token, name: `E2E Convidado ${tag}`, password: pw, ...teamProfile() });
+  const acceptBy = (sessionCookie, token) => rawPost(sessionCookie, "/api/invitations/accept", { token });
+  const roleOf = async (membershipId) => (await prisma.clinicMembership.findUnique({ where: { id: membershipId }, select: { role: true } }))?.role;
+  const jarFor = (sessionCookie) => { const jar = newJar(); jar.c.harmonize_session = sessionCookie.split("=")[1]; return jar; };
+  const cleanup = async () => {
+    const users = await prisma.user.findMany({ where: { email: { startsWith: "e2e-pl-", endsWith: `-${run}@example.invalid` } }, select: { id: true } });
+    const ids = users.map((u) => u.id);
+    for (const id of ids) touchedUsers.add(id);
+    await wipeSecurityOf(ids).catch(() => undefined);
+    await prisma.clinicMembership.deleteMany({ where: { userId: { in: ids } } });
+    await prisma.clinic.deleteMany({ where: { name: { in: keys.map(nameOf) } } });
+    await prisma.user.deleteMany({ where: { id: { in: ids } } });
+    return (await prisma.clinic.count({ where: { name: { in: keys.map(nameOf) } } })) + (await prisma.user.count({ where: { email: { startsWith: "e2e-pl-", endsWith: `-${run}@example.invalid` } } }));
+  };
+  try {
+    // ---------------------------------------------------------------- 1. Start: 2 profissionais
+    const S1 = await mk("s1", "start");
+    let t = await teamPost(S1.cookie, "PROFESSIONAL", "a");
+    check("planos_limites 1: Start, dono + 1 PROFESSIONAL por POST /api/team = 201", t.res.status === 201 && await slots(S1.clinicId) === 2, brief(t.res));
+    const before1 = [await memberCount(S1.clinicId), await prisma.user.count()];
+    const denied1 = [await teamPost(S1.cookie, "PROFESSIONAL", "b"), await teamPost(S1.cookie, "ADMIN", "c")];
+    check("planos_limites 1: Start 2/2, o 3º profissional (PROFESSIONAL) e o ADMIN = 403 PLAN_LIMIT {professionals, limit 2, used 2}", denied1.every((d) => lim(d.res, "professionals", 2, 2)), denied1.map((d) => brief(d.res)).join(" | "));
+    check("planos_limites 1: nos 403 nada foi criado (usuários e memberships iguais; e-mails inexistentes)", before1[0] === await memberCount(S1.clinicId) && before1[1] === await prisma.user.count() && (await prisma.user.count({ where: { email: { in: denied1.map((d) => d.mail) } } })) === 0, `${before1} -> ${await memberCount(S1.clinicId)}/${await prisma.user.count()}`);
+    t = await teamPost(S1.cookie, "STAFF", "d");
+    const t2 = await teamPost(S1.cookie, "STAFF", "e");
+    check("planos_limites 1: STAFF por POST /api/team = 201 mesmo com 2/2 e não consome vaga (slots segue 2)", t.res.status === 201 && t2.res.status === 201 && await slots(S1.clinicId) === 2 && await memberCount(S1.clinicId) === 4, `${t.res.status}/${t2.res.status} slots=${await slots(S1.clinicId)}`);
+    const anon = await as("", () => api("POST", "/api/team", { name: "x", email: nextMail("z"), password: pw, role: "PROFESSIONAL", ...teamProfile() }));
+    check("planos_limites 1: sem sessão = 401 (não 403 de plano)", anon.status === 401, anon.status);
+
+    // ---------------------------------------------------------------- 2. Pro, Premium e teste grátis
+    const P2 = await mk("p2", "pro");
+    await seedMembers(P2.clinicId, "PROFESSIONAL", 3); // dono + 3 = 4
+    t = await teamPost(P2.cookie, "PROFESSIONAL", "a");
+    const sixth = await teamPost(P2.cookie, "PROFESSIONAL", "b");
+    const sixthAdmin = await teamPost(P2.cookie, "ADMIN", "c");
+    check("planos_limites 2: Pro, dono + 4 = 5 (201) e o 6º PROFESSIONAL/ADMIN = 403 PLAN_LIMIT limit 5 used 5", t.res.status === 201 && lim(sixth.res, "professionals", 5, 5) && lim(sixthAdmin.res, "professionals", 5, 5) && await slots(P2.clinicId) === 5, `${t.res.status} | ${brief(sixth.res)} | ${brief(sixthAdmin.res)}`);
+    const M2 = await mk("pm2", "premium");
+    await seedMembers(M2.clinicId, "PROFESSIONAL", 6); // 7
+    const prem = [await teamPost(M2.cookie, "PROFESSIONAL", "a"), await teamPost(M2.cookie, "ADMIN", "b"), await invite(M2.cookie, nextMail("i"), "PROFESSIONAL")];
+    check("planos_limites 2: Premium passa de 5 profissionais sem bloqueio (membro PROFESSIONAL, ADMIN e convite = 201)", prem.slice(0, 2).every((x) => x.res.status === 201) && prem[2].status === 201 && await slots(M2.clinicId) === 10, `${prem[0].res.status}/${prem[1].res.status}/${prem[2].status} slots=${await slots(M2.clinicId)}`);
+    const T2 = await mk("tr2", null);
+    await seedMembers(T2.clinicId, "PROFESSIONAL", 5); // 6
+    const trial = await teamPost(T2.cookie, "PROFESSIONAL", "a");
+    const trialSub = await prisma.clinicSubscription.findUnique({ where: { clinicId: T2.clinicId }, select: { status: true, plan: true } });
+    check("planos_limites 2: teste grátis (assinatura intocada, TRIALING) = Premium: 7º profissional sem bloqueio", trial.res.status === 201 && trialSub?.status === "TRIALING", `${trial.res.status} ${JSON.stringify(trialSub)}`);
+
+    // ---------------------------------------------------------------- 3. convite pendente reserva vaga
+    const C3 = await mk("c3", "start");
+    const inv3 = await invite(C3.cookie, nextMail("i"), "PROFESSIONAL");
+    check("planos_limites 3: Start, convite PROFESSIONAL pendente = 201 e reserva a vaga (slots 2)", inv3.status === 201 && await slots(C3.clinicId) === 2, brief(inv3));
+    const invCount3 = await prisma.clinicInvitation.count({ where: { clinicId: C3.clinicId } });
+    const inv3b = await invite(C3.cookie, nextMail("i"), "PROFESSIONAL");
+    const team3 = await teamPost(C3.cookie, "PROFESSIONAL", "a");
+    check("planos_limites 3: com a vaga reservada, novo convite PROFESSIONAL e POST /api/team PROFESSIONAL = 403 PLAN_LIMIT (limit 2 used 2) e nada gravado", lim(inv3b, "professionals", 2, 2) && lim(team3.res, "professionals", 2, 2) && await prisma.clinicInvitation.count({ where: { clinicId: C3.clinicId } }) === invCount3 && await memberCount(C3.clinicId) === 1, `${brief(inv3b)} | ${brief(team3.res)}`);
+    const inv3s = await invite(C3.cookie, nextMail("i"), "STAFF");
+    check("planos_limites 3: convite STAFF = 201 (não reserva vaga)", inv3s.status === 201 && await slots(C3.clinicId) === 2, brief(inv3s));
+    const cancel3 = await as(C3.cookie, () => api("DELETE", `/api/invitations/${inv3.data.invitation?.id}`));
+    const afterCancel = await invite(C3.cookie, nextMail("i"), "PROFESSIONAL");
+    check("planos_limites 3: cancelar o convite (DELETE) libera a vaga: novo convite PROFESSIONAL = 201", cancel3.status === 200 && afterCancel.status === 201 && await slots(C3.clinicId) === 2, `${cancel3.status}/${afterCancel.status}`);
+    // convite vencido não reserva
+    await prisma.clinicInvitation.updateMany({ where: { id: afterCancel.data.invitation?.id }, data: { expiresAt: new Date(Date.now() - 60_000) } });
+    const afterExpire = await teamPost(C3.cookie, "PROFESSIONAL", "b");
+    check("planos_limites 3: convite VENCIDO não reserva vaga (POST /api/team PROFESSIONAL = 201)", afterExpire.res.status === 201, brief(afterExpire.res));
+
+    // ---------------------------------------------------------------- 4. aceite sem ultrapassar e sem dupla contagem
+    const C4 = await mk("c4", "start");
+    const i4 = await invite(C4.cookie, nextMail("i"), "PROFESSIONAL");
+    const slotsBefore = await slots(C4.clinicId);
+    const reg4 = await registerBy(tokenOf(i4), "c4");
+    const team4 = await as(C4.cookie, () => api("GET", "/api/team"));
+    const m4 = await prisma.clinicMembership.findFirst({ where: { clinicId: C4.clinicId, user: { email: i4.data.invitation?.email } }, select: { role: true } });
+    check("planos_limites 4: registro pelo convite (2/2 por reserva) = 201, vira membro PROFESSIONAL e o total de vagas segue 2 (sem dupla contagem)", reg4.status === 201 && m4?.role === "PROFESSIONAL" && slotsBefore === 2 && await slots(C4.clinicId) === 2 && team4.data.members?.length === 2, `${reg4.status} ${JSON.stringify(reg4.data).slice(0, 100)} slots ${slotsBefore}->${await slots(C4.clinicId)} equipe=${team4.data.members?.length}`);
+    const after4 = await invite(C4.cookie, nextMail("i"), "PROFESSIONAL");
+    check("planos_limites 4: depois do aceite, novo convite PROFESSIONAL = 403 PLAN_LIMIT (limit 2 used 2)", lim(after4, "professionals", 2, 2), brief(after4));
+    const reuse = await registerBy(tokenOf(i4), "c4b");
+    check("planos_limites 4: reusar o token já aceito não cria nada (404/409, nunca 201)", reuse.status !== 201 && await memberCount(C4.clinicId) === 2, brief(reuse));
+    // aceite por sessão (convidado já tem conta em outra clínica)
+    const G1 = await mk("g1", null);
+    const C4b = await mk("c4b", "pro");
+    await seedMembers(C4b.clinicId, "PROFESSIONAL", 3); // dono + 3 = 4
+    const i4b = await as(C4b.cookie, () => api("POST", "/api/invitations", { email: G1.mail, role: "PROFESSIONAL" }));
+    const acc4 = await acceptBy(G1.cookie, tokenOf(i4b));
+    const m4b = await prisma.clinicMembership.findFirst({ where: { clinicId: C4b.clinicId, userId: G1.userId }, select: { role: true } });
+    check("planos_limites 4: aceite com sessão (Pro 4 membros + convite = 5) = 200, vira membro e total segue 5", i4b.status === 201 && acc4.status === 200 && m4b?.role === "PROFESSIONAL" && await slots(C4b.clinicId) === 5, `${i4b.status}/${brief(acc4)} slots=${await slots(C4b.clinicId)}`);
+    const after4b = await invite(C4b.cookie, nextMail("i"), "PROFESSIONAL");
+    check("planos_limites 4: Pro 5/5 após o aceite: novo convite = 403 PLAN_LIMIT (limit 5 used 5)", lim(after4b, "professionals", 5, 5), brief(after4b));
+
+    // ---------------------------------------------------------------- 5. aceites simultâneos e downgrade
+    const C5 = await mk("c5", "pro");
+    await seedMembers(C5.clinicId, "PROFESSIONAL", 2); // 3
+    const i5 = [await invite(C5.cookie, nextMail("i"), "PROFESSIONAL"), await invite(C5.cookie, nextMail("i"), "PROFESSIONAL")];
+    const both5 = await Promise.all(i5.map((r, n) => registerBy(tokenOf(r), `c5${n}`)));
+    check("planos_limites 5: Pro 3 membros + 2 convites: dois registros simultâneos = ambos 201 e total 5", both5.every((x) => x.status === 201) && await slots(C5.clinicId) === 5 && await memberCount(C5.clinicId) === 5 && await prisma.clinicInvitation.count({ where: { clinicId: C5.clinicId, status: "ACCEPTED" } }) === 2, `${both5.map((x) => x.status)} membros=${await memberCount(C5.clinicId)} slots=${await slots(C5.clinicId)}`);
+    const C5d = await mk("c5d", "pro");
+    const G2 = await mk("g2", null);
+    await seedMembers(C5d.clinicId, "PROFESSIONAL", 2);
+    const i5d = [await invite(C5d.cookie, nextMail("i"), "PROFESSIONAL"), await as(C5d.cookie, () => api("POST", "/api/invitations", { email: G2.mail, role: "PROFESSIONAL" }))];
+    await setPlan(C5d.clinicId, "start");
+    const mailsD = [i5d[0].data.invitation?.email];
+    const both5d = await Promise.all([registerBy(tokenOf(i5d[0]), "c5d"), acceptBy(G2.cookie, tokenOf(i5d[1]))]);
+    check("planos_limites 5: após downgrade (Pro -> Start), registro e aceite com sessão simultâneos = ambos 403 PLAN_LIMIT", both5d.every((x) => x.status === 403 && x.data?.code === "PLAN_LIMIT"), both5d.map(brief).join(" | "));
+    check("planos_limites 5: negados: os convites continuam PENDING, nenhum usuário/membership criado e o corpo não expõe limite/uso do plano", await prisma.clinicInvitation.count({ where: { clinicId: C5d.clinicId, status: "PENDING" } }) === 2 && await prisma.user.count({ where: { email: { in: mailsD } } }) === 0 && await memberCount(C5d.clinicId) === 3 && await prisma.clinicMembership.count({ where: { clinicId: C5d.clinicId, userId: G2.userId } }) === 0 && both5d.every((x) => x.data?.used === undefined && x.data?.limit === undefined), `pend=${await prisma.clinicInvitation.count({ where: { clinicId: C5d.clinicId, status: "PENDING" } })} membros=${await memberCount(C5d.clinicId)}`);
+    const retry = await registerBy(tokenOf(i5d[0]), "c5dr");
+    await setPlan(C5d.clinicId, "pro");
+    const retryOk = await registerBy(tokenOf(i5d[0]), "c5dr2");
+    check("planos_limites 5: o convite negado segue válido: com o plano de volta ao Pro o registro dá 201", retry.status === 403 && retryOk.status === 201, `${retry.status}/${retryOk.status}`);
+
+    // ---------------------------------------------------------------- 6. disputa pela última vaga
+    const R6 = await mk("r6", "pro");
+    await seedMembers(R6.clinicId, "PROFESSIONAL", 3); // 4 de 5
+    const race6 = await as(R6.cookie, () => Promise.all([
+      ...Array.from({ length: 5 }, () => api("POST", "/api/invitations", { email: nextMail("r"), role: "PROFESSIONAL" })),
+      ...Array.from({ length: 5 }, () => api("POST", "/api/team", { name: "E2E Corrida", email: nextMail("r"), password: pw, role: "PROFESSIONAL", ...teamProfile() })),
+    ]));
+    const ok6 = race6.filter((x) => x.status === 201), no6 = race6.filter((x) => lim(x, "professionals", 5, 5));
+    check("planos_limites 6: Pro 4/5, 5 convites + 5 cadastros simultâneos = exatamente 1 sucesso, 9 PLAN_LIMIT e total 5", ok6.length === 1 && no6.length === 9 && await slots(R6.clinicId) === 5, `ok=${ok6.length} limite=${no6.length} outros=${race6.filter((x) => x.status !== 201 && !lim(x, "professionals", 5, 5)).map(brief)} slots=${await slots(R6.clinicId)}`);
+
+    // ---------------------------------------------------------------- 7. mudança de cargo
+    const R7 = await mk("r7", "start");
+    const p7 = await teamPost(R7.cookie, "PROFESSIONAL", "p");
+    const staff7 = (await seedMembers(R7.clinicId, "STAFF", 1))[0];
+    const pm = await prisma.clinicMembership.findFirst({ where: { clinicId: R7.clinicId, user: { email: p7.mail } }, select: { id: true } });
+    const patch = (c, membershipId, role) => as(c, () => api("PATCH", "/api/team", { membershipId, role }));
+    let r = await patch(R7.cookie, staff7.membershipId, "PROFESSIONAL");
+    check("planos_limites 7: Start 2/2, STAFF -> PROFESSIONAL = 403 PLAN_LIMIT e o cargo não muda", lim(r, "professionals", 2, 2) && await roleOf(staff7.membershipId) === "STAFF", `${brief(r)} cargo=${await roleOf(staff7.membershipId)}`);
+    r = await patch(R7.cookie, staff7.membershipId, "ADMIN");
+    check("planos_limites 7: STAFF -> ADMIN em Start cheio também = 403 PLAN_LIMIT", lim(r, "professionals", 2, 2), brief(r));
+    const toAdmin = await patch(R7.cookie, pm.id, "ADMIN");
+    const roleAdmin = await roleOf(pm.id);
+    const toPro = await patch(R7.cookie, pm.id, "PROFESSIONAL");
+    check("planos_limites 7: ADMIN <-> PROFESSIONAL em Start cheio = 200 (não consome vaga)", toAdmin.status === 200 && roleAdmin === "ADMIN" && toPro.status === 200 && await roleOf(pm.id) === "PROFESSIONAL", `${toAdmin.status}/${toPro.status}`);
+    const toStaff = await patch(R7.cookie, pm.id, "STAFF");
+    const freed = await patch(R7.cookie, staff7.membershipId, "PROFESSIONAL");
+    check("planos_limites 7: PROFESSIONAL -> STAFF = 200 e a vaga liberada permite STAFF -> PROFESSIONAL = 200", toStaff.status === 200 && freed.status === 200 && await roleOf(staff7.membershipId) === "PROFESSIONAL" && await slots(R7.clinicId) === 2, `${toStaff.status}/${freed.status}`);
+    const full7 = await patch(R7.cookie, pm.id, "PROFESSIONAL");
+    check("planos_limites 7: com a vaga ocupada de novo, o ex-profissional (STAFF) não volta (403 PLAN_LIMIT)", lim(full7, "professionals", 2, 2) && await roleOf(pm.id) === "STAFF", brief(full7));
+    const R7b = await mk("r7b", "pro");
+    await seedMembers(R7b.clinicId, "PROFESSIONAL", 3); // 4 de 5
+    const st = await seedMembers(R7b.clinicId, "STAFF", 2);
+    const race7 = await as(R7b.cookie, () => Promise.all(st.map((s) => api("PATCH", "/api/team", { membershipId: s.membershipId, role: "PROFESSIONAL" }))));
+    check("planos_limites 7: duas promoções simultâneas disputando 1 vaga = exatamente 1 × 200 e 1 × 403 PLAN_LIMIT; total 5", race7.filter((x) => x.status === 200).length === 1 && race7.filter((x) => lim(x, "professionals", 5, 5)).length === 1 && await slots(R7b.clinicId) === 5, race7.map(brief).join(" | "));
+
+    // ---------------------------------------------------------------- 8. downgrade de profissionais
+    const D8 = await mk("d8", "premium");
+    const seeded8 = await seedMembers(D8.clinicId, "PROFESSIONAL", 6); // 7
+    await setPlan(D8.clinicId, "start");
+    const list8 = await as(D8.cookie, () => api("GET", "/api/team"));
+    check("planos_limites 8: Premium com 7 profissionais -> Start: nada é removido (7 memberships) e GET /api/team lista os 7", await memberCount(D8.clinicId) === 7 && list8.status === 200 && list8.data.members?.length === 7, `${await memberCount(D8.clinicId)} ${list8.status} ${list8.data.members?.length}`);
+    const d8t = await teamPost(D8.cookie, "PROFESSIONAL", "a");
+    const d8i = await invite(D8.cookie, nextMail("i"), "PROFESSIONAL");
+    check("planos_limites 8: no downgrade, POST /api/team PROFESSIONAL e convite PROFESSIONAL = 403 PLAN_LIMIT (limit 2 used 7)", lim(d8t.res, "professionals", 2, 7) && lim(d8i, "professionals", 2, 7) && await memberCount(D8.clinicId) === 7, `${brief(d8t.res)} | ${brief(d8i)}`);
+    const d8s = await teamPost(D8.cookie, "STAFF", "b");
+    const d8si = await invite(D8.cookie, nextMail("i"), "STAFF");
+    check("planos_limites 8: no downgrade, STAFF (cadastro e convite) segue 201", d8s.res.status === 201 && d8si.status === 201, `${d8s.res.status}/${d8si.status}`);
+    const d8role = await as(D8.cookie, () => api("PATCH", "/api/team", { membershipId: seeded8[0].membershipId, role: "ADMIN" }));
+    check("planos_limites 8: no downgrade, ADMIN <-> PROFESSIONAL continua permitido (200)", d8role.status === 200, brief(d8role));
+
+    // ---------------------------------------------------------------- 9. pacientes
+    const P9 = await mk("p9", "start");
+    await seedPatients(P9.clinicId, 99);
+    let pr = await postPatient(P9.cookie);
+    check("planos_limites 9: Start com 99 pacientes, o 100º = 201", pr.status === 201 && await patientCount(P9.clinicId) === 100, brief(pr));
+    const last9 = pr.data.patient;
+    pr = await postPatient(P9.cookie);
+    check("planos_limites 9: o 101º = 403 PLAN_LIMIT {patients, limit 100, used 100} e nada é criado", lim(pr, "patients", 100, 100) && await patientCount(P9.clinicId) === 100, brief(pr));
+    const lastCpf = (await prisma.patient.findUnique({ where: { id: last9.id }, select: { cpf: true } })).cpf;
+    const dup = await as(P9.cookie, () => api("POST", "/api/patients", { ...patientBody(), cpf: lastCpf }));
+    check("planos_limites 9: CPF duplicado com Start cheio devolve o erro de CPF duplicado (409, checado antes do limite) e não cria", dup.status === 409 && await patientCount(P9.clinicId) === 100, brief(dup));
+    const invalidCpf = await as(P9.cookie, () => api("POST", "/api/patients", { ...patientBody(), cpf: "123" }));
+    check("planos_limites 9: entrada inválida com Start cheio continua 400 de validação (não PLAN_LIMIT)", invalidCpf.status === 400 && invalidCpf.data?.code !== "PLAN_LIMIT", brief(invalidCpf));
+    const P9b = await mk("p9b", "start");
+    await seedPatients(P9b.clinicId, 99);
+    const race9 = await as(P9b.cookie, () => Promise.all([1, 2].map(() => api("POST", "/api/patients", patientBody()))));
+    check("planos_limites 9: dois POST simultâneos disputando o último (99 -> 100) = exatamente 1 × 201 e 1 × 403 PLAN_LIMIT; total 100", race9.filter((x) => x.status === 201).length === 1 && race9.filter((x) => lim(x, "patients", 100, 100)).length === 1 && await patientCount(P9b.clinicId) === 100, `${race9.map(brief).join(" | ")} total=${await patientCount(P9b.clinicId)}`);
+    await seedPatients(P2.clinicId, 100); await seedPatients(M2.clinicId, 100);
+    const unl = [await postPatient(P2.cookie), await postPatient(M2.cookie)];
+    check("planos_limites 9: Pro e Premium com 100 pacientes: o 101º = 201 (sem limite de pacientes)", unl.every((x) => x.status === 201) && await patientCount(P2.clinicId) === 101 && await patientCount(M2.clinicId) === 101, unl.map(brief).join(" | "));
+
+    // ---------------------------------------------------------------- 10. downgrade de pacientes
+    const D10 = await mk("d10", "premium");
+    await seedPatients(D10.clinicId, 150);
+    await setPlan(D10.clinicId, "start");
+    const list10 = await as(D10.cookie, () => api("GET", "/api/patients"));
+    const one10 = await prisma.patient.findFirst({ where: { clinicId: D10.clinicId }, select: { id: true } });
+    const edit10 = await as(D10.cookie, () => api("PATCH", `/api/patients/${one10.id}`, { name: `Editado Downgrade ${run}`, phone: "11999990888" }));
+    const row10 = await prisma.patient.findUnique({ where: { id: one10.id }, select: { name: true, phone: true } });
+    const post10 = await postPatient(D10.cookie);
+    check("planos_limites 10: Premium com 150 pacientes -> Start: tudo preservado (150), GET /api/patients = 200 listando", await patientCount(D10.clinicId) === 150 && list10.status === 200 && Array.isArray(list10.data.patients) && list10.data.patients.length > 0, `${list10.status} keys=${Object.keys(list10.data ?? {})} n=${list10.data.patients?.length}`);
+    check("planos_limites 10: no downgrade, PATCH /api/patients/[id] (nome/telefone) = 200 e grava", edit10.status === 200 && row10.name === `Editado Downgrade ${run}` && row10.phone === "(11) 99999-0888", `${brief(edit10)} ${JSON.stringify(row10)}`);
+    check("planos_limites 10: no downgrade, POST /api/patients = 403 PLAN_LIMIT (limit 100 used 150) e nada criado", lim(post10, "patients", 100, 150) && await patientCount(D10.clinicId) === 150, brief(post10));
+
+    // ---------------------------------------------------------------- 11. somente leitura
+    const RO = await mk("ro", "pro", { login: false });
+    await prisma.clinicSubscription.update({ where: { clinicId: RO.clinicId }, data: { status: "EXPIRED" } });
+    RO.cookie = await relogin(RO);
+    const roBefore = [await patientCount(RO.clinicId), await memberCount(RO.clinicId)];
+    const roW = [await postPatient(RO.cookie), (await teamPost(RO.cookie, "PROFESSIONAL", "a")).res, (await teamPost(RO.cookie, "STAFF", "b")).res];
+    const roG = [await as(RO.cookie, () => api("GET", "/api/patients")), await as(RO.cookie, () => api("GET", "/api/team"))];
+    check("planos_limites 11: ACTIVE pro com status EXPIRED: POST paciente e POST /api/team (PROFESSIONAL e STAFF) = 403 SUBSCRIPTION_READONLY (não PLAN_LIMIT), nada gravado", roW.every((x) => x.status === 403 && x.data?.code === "SUBSCRIPTION_READONLY") && roBefore[0] === await patientCount(RO.clinicId) && roBefore[1] === await memberCount(RO.clinicId), roW.map(brief).join(" | "));
+    check("planos_limites 11: somente leitura: GET /api/patients e GET /api/team = 200", roG.every((x) => x.status === 200), roG.map((x) => x.status).join());
+    const roInv = await invite(RO.cookie, nextMail("i"), "STAFF");
+    check("planos_limites 11: somente leitura: criar convite = 403 SUBSCRIPTION_READONLY", roInv.status === 403 && roInv.data?.code === "SUBSCRIPTION_READONLY", brief(roInv));
+
+    // ---------------------------------------------------------------- 12. isolamento entre clínicas
+    const A12 = await mk("a12", "start");
+    const aPro = await teamPost(A12.cookie, "PROFESSIONAL", "a"); // 2/2
+    await seedPatients(A12.clinicId, 100);
+    const B12 = await mk("b12", "premium");
+    const bSeed = await seedMembers(B12.clinicId, "PROFESSIONAL", 4);
+    const bInv = await invite(B12.cookie, nextMail("i"), "PROFESSIONAL");
+    const bPat = (await postPatient(B12.cookie)).data.patient;
+    const aBlocked = [await postPatient(A12.cookie), (await teamPost(A12.cookie, "PROFESSIONAL", "b")).res];
+    const bFree = [await postPatient(B12.cookie), (await teamPost(B12.cookie, "PROFESSIONAL", "c")).res];
+    check("planos_limites 12: A (Start cheia) bloqueada (paciente e profissional = 403 PLAN_LIMIT) enquanto B (Premium) cria paciente e profissional (201)", aPro.res.status === 201 && lim(aBlocked[0], "patients", 100, 100) && lim(aBlocked[1], "professionals", 2, 2) && bFree.every((x) => x.status === 201) && bInv.status === 201, `${aBlocked.map(brief).join(" | ")} || ${bFree.map((x) => x.status)}`);
+    const aInv = await invite(A12.cookie, nextMail("i"), "STAFF");
+    check("planos_limites 12: convites/membros de A e B não se misturam (slots de B = 4 + dono + convite + 1 novo = 7; A = 2)", aInv.status === 201 && await slots(B12.clinicId) === 7 && await slots(A12.clinicId) === 2 && bSeed.length === 4, `A=${await slots(A12.clinicId)} B=${await slots(B12.clinicId)}`);
+    await setPlan(A12.clinicId, "pro");
+    const aAfter = [await postPatient(A12.cookie), (await teamPost(A12.cookie, "PROFESSIONAL", "d")).res];
+    const bSub = await prisma.clinicSubscription.findUnique({ where: { clinicId: B12.clinicId }, select: { plan: true, status: true } });
+    check("planos_limites 12: trocar A para Pro libera A (201) e não altera a assinatura nem o comportamento de B", aAfter.every((x) => x.status === 201) && bSub?.plan === "premium" && bSub?.status === "ACTIVE" && (await teamPost(B12.cookie, "PROFESSIONAL", "e")).res.status === 201, `${aAfter.map((x) => x.status)} ${JSON.stringify(bSub)}`);
+    const bRoleBefore = await roleOf(bSeed[0].membershipId);
+    const cross = [
+      await as(A12.cookie, () => api("PATCH", "/api/team", { membershipId: bSeed[0].membershipId, role: "STAFF" })),
+      await as(A12.cookie, () => api("DELETE", `/api/invitations/${bInv.data.invitation?.id}`)),
+      await as(A12.cookie, () => api("GET", `/api/patients/${bPat.id}`)),
+      await as(A12.cookie, () => api("DELETE", "/api/team", { membershipId: bSeed[0].membershipId })),
+    ];
+    check("planos_limites 12: admin de A não age sobre membro, convite nem paciente de B (404/403) e nada muda em B", cross.every((x) => x.status === 404 || x.status === 403) && await roleOf(bSeed[0].membershipId) === bRoleBefore && (await prisma.clinicInvitation.findUnique({ where: { id: bInv.data.invitation?.id }, select: { status: true } }))?.status === "PENDING" && await memberCount(B12.clinicId) >= 7, cross.map((x) => x.status).join());
+    const crossAccept = await acceptBy(A12.cookie, tokenOf(bInv));
+    check("planos_limites 12: o admin de A não aceita convite endereçado a outro e-mail da clínica B (404, sem membership)", crossAccept.status === 404 && await prisma.clinicMembership.count({ where: { clinicId: B12.clinicId, userId: A12.userId } }) === 0, brief(crossAccept));
+
+    // ---------------------------------------------------------------- 13. sync de despesas fixas (finance:access)
+    const F13 = await mk("f13", "premium");
+    const F13b = await mk("f13b", "premium", { login: false });
+    const mkRecurring = (clinicId) => prisma.recurringExpense.create({ data: { clinicId, description: `Fixa Lim ${run}`, category: "Aluguel", amountCents: 12_300, paymentMethod: "Pix", frequency: "monthly", dayOfMonth: 5, startsOn: new Date(`${day(-75)}T00:00:00Z`) } });
+    const rec = await mkRecurring(F13.clinicId);
+    const recB = await mkRecurring(F13b.clinicId);
+    const matrixRes = await as(F13.cookie, () => api("GET", "/api/clinic/role-permissions"));
+    const matrix = JSON.parse(JSON.stringify(matrixRes.data.matrix ?? {}));
+    if (matrix.PROFESSIONAL) { matrix.PROFESSIONAL["finance:access"] = true; matrix.PROFESSIONAL["finance:manage"] = false; }
+    const grant = await as(F13.cookie, () => api("PATCH", "/api/clinic/role-permissions", { matrix }));
+    check("planos_limites 13: matriz da clínica: PROFESSIONAL com finance:access e SEM finance:manage", matrixRes.status === 200 && grant.status === 200 && grant.data.matrix?.PROFESSIONAL?.["finance:access"] === true && grant.data.matrix?.PROFESSIONAL?.["finance:manage"] === false, `${matrixRes.status}/${grant.status}`);
+    const proF = await teamPost(F13.cookie, "PROFESSIONAL", "f");
+    const staffF = await teamPost(F13.cookie, "STAFF", "g");
+    let proSess = (await loginAs(proF.mail, pw)).cookie;
+    const staffSess = (await loginAs(staffF.mail, pw)).cookie;
+    const syncAs = (c) => as(c, () => api("POST", "/api/recurring-expenses/sync"));
+    const first = await syncAs(F13.cookie);
+    const occ = await prisma.expense.findMany({ where: { recurringExpenseId: rec.id }, orderBy: { occurrenceOn: "asc" } });
+    check("planos_limites 13: ADMIN (Premium): sync = 200 { created } e gera as ocorrências desde o início", first.status === 200 && first.data.created === occ.length && occ.length >= 2, `${brief(first)} n=${occ.length}`);
+    // edita uma ocorrência (paga, outro valor) e apaga outra: o sync só pode recriar a que falta
+    await prisma.expense.update({ where: { id: occ[0].id }, data: { status: "paid", paidOn: new Date(`${day(0)}T00:00:00Z`), amountCents: 99_999, description: "Editada manualmente" } });
+    await prisma.expense.delete({ where: { id: occ[occ.length - 1].id } });
+    const keepIds = occ.slice(0, -1).map((x) => x.id);
+    const snap = async () => JSON.stringify(await prisma.expense.findMany({ where: { id: { in: keepIds } }, orderBy: { id: "asc" } }));
+    const snapBefore = await snap();
+    const otherBefore = await prisma.expense.count({ where: { clinicId: F13b.clinicId } });
+    const proSync = await syncAs(proSess);
+    check("planos_limites 13: PROFESSIONAL com finance:access sem finance:manage: sync = 200 { created: 1 } (só a ocorrência que faltava)", proSync.status === 200 && proSync.data.created === 1 && await prisma.expense.count({ where: { recurringExpenseId: rec.id } }) === occ.length, brief(proSync));
+    check("planos_limites 13: o sync NÃO alterou despesa existente (paga/editada e as demais idênticas, inclusive updatedAt)", await snap() === snapBefore && (await prisma.expense.findUnique({ where: { id: occ[0].id } })).amountCents === 99_999, "");
+    const again = await syncAs(proSess);
+    const pairSync = await as(proSess, () => Promise.all([1, 2].map(() => api("POST", "/api/recurring-expenses/sync"))));
+    check("planos_limites 13: sync idempotente (created 0) também em chamadas simultâneas", again.data.created === 0 && pairSync.every((x) => x.status === 200 && x.data.created === 0) && await snap() === snapBefore, `${brief(again)} ${pairSync.map(brief)}`);
+    check("planos_limites 13: o sync só gera para a clínica da sessão (a outra clínica segue sem ocorrências)", otherBefore === 0 && await prisma.expense.count({ where: { clinicId: F13b.clinicId } }) === 0 && recB.id !== rec.id, `${otherBefore} -> ${await prisma.expense.count({ where: { clinicId: F13b.clinicId } })}`);
+    const noAccess = await syncAs(staffSess);
+    check("planos_limites 13: STAFF sem finance:access: sync = 403 sem code de plano", noAccess.status === 403 && !noAccess.data?.code, brief(noAccess));
+    check("planos_limites 13: sem sessão = 401", (await syncAs("")).status === 401, "");
+    await setPlan(F13.clinicId, "start");
+    proSess = await (await loginAs(proF.mail, `${pw}-nova`)).cookie;
+    const ownerStart = await relogin(F13);
+    const startRes = [await syncAs(proSess), await syncAs(ownerStart)];
+    check("planos_limites 13: plano Start (sem o recurso finance): sync = 403 PLAN_FEATURE feature finance, para PROFESSIONAL e ADMIN", startRes.every((x) => x.status === 403 && x.data?.code === "PLAN_FEATURE" && x.data.feature === "finance"), startRes.map(brief).join(" | "));
+    await setPlan(F13.clinicId, "premium", "EXPIRED");
+    const roSync = [await syncAs((await loginAs(proF.mail, `${pw}-nova`)).cookie), await syncAs(await relogin(F13))];
+    check("planos_limites 13: somente leitura (EXPIRED): sync = 403 SUBSCRIPTION_READONLY", roSync.every((x) => x.status === 403 && x.data?.code === "SUBSCRIPTION_READONLY") && await snap() === snapBefore, roSync.map(brief).join(" | "));
+
+    // ---------------------------------------------------------------- 14. Google Agenda em somente leitura
+    const G14 = await mk("gc", "premium");
+    const G14b = await mk("gc2", "premium", { login: false });
+    const conn = (clinicId, userId) => prisma.googleCalendarConnection.create({ data: { clinicId, userId, googleEmail: `e2e-pl-google-${run}@example.invalid`, connectionType: "ADMIN", status: "CONNECTED", accessTokenEncrypted: "x", refreshTokenEncrypted: "x", tokenExpiresAt: new Date(Date.now() + 3_600_000), scope: "calendar" } });
+    const c14 = await conn(G14.clinicId, G14.userId);
+    const c14b = await conn(G14b.clinicId, G14b.userId);
+    await setPlan(G14.clinicId, "premium", "EXPIRED");
+    const jar14 = jarFor(await relogin(G14));
+    const gcall = (method, path, body) => jar14.call(method, path, body);
+    const conn14 = await gcall("POST", "/api/integrations/google-calendar/connect", { type: "ADMIN" });
+    const sync14 = await gcall("POST", "/api/integrations/google-calendar/sync", {});
+    check("planos_limites 14: somente leitura: conectar e sincronizar o Google Agenda = 403 SUBSCRIPTION_READONLY", [conn14, sync14].every((x) => x.s === 403 && x.d?.code === "SUBSCRIPTION_READONLY"), `${conn14.s}:${conn14.d?.code} ${sync14.s}:${sync14.d?.code}`);
+    const disc = await gcall("POST", "/api/integrations/google-calendar/disconnect", { type: "ADMIN" });
+    const row14 = await prisma.googleCalendarConnection.findUnique({ where: { id: c14.id } });
+    check("planos_limites 14: somente leitura: disconnect = 200, status DISCONNECTED e tokens locais nulos", disc.s === 200 && disc.d?.ok === true && row14.status === "DISCONNECTED" && row14.accessTokenEncrypted === null && row14.refreshTokenEncrypted === null && row14.tokenExpiresAt === null, `${disc.s} ${JSON.stringify(disc.d)} ${row14.status}/${row14.accessTokenEncrypted}/${row14.refreshTokenEncrypted}`);
+    const row14b = await prisma.googleCalendarConnection.findUnique({ where: { id: c14b.id } });
+    const disc2 = await gcall("POST", "/api/integrations/google-calendar/disconnect", { type: "ADMIN" });
+    check("planos_limites 14: a conexão de outra clínica não é tocada e desconectar de novo = 404 (nada ativo)", row14b.status === "CONNECTED" && row14b.accessTokenEncrypted === "x" && disc2.s === 404, `${row14b.status} ${disc2.s}`);
+    const noOrigin = await fetch(`${baseUrl}/api/integrations/google-calendar/disconnect`, { method: "POST", headers: { "Content-Type": "application/json", cookie: jar14.c.harmonize_session ? `harmonize_session=${jar14.c.harmonize_session}` : "" }, body: JSON.stringify({ type: "ADMIN" }) });
+    check("planos_limites 14: disconnect sem Origin segue recusado (403, proteção de origem preservada)", noOrigin.status === 403, noOrigin.status);
+  } catch (error) {
+    check("planos_limites: execução sem exceção", false, error.stack?.split("\n").slice(0, 3).join(" | ") ?? error.message);
+  } finally {
+    const left = await cleanup();
+    check("planos_limites: limpeza das clínicas e usuários criados", left === 0, left);
+  }
+}
+
+// Etapa 5 dos planos: gates de módulos (estoque, compras, ficha técnica, custos) pelas ROTAS HTTP reais, com cookie de sessão.
+// Clínica A (alterna Pro -> Start -> Pro -> Premium -> Pro vencido), B (Pro o tempo todo) e C (teste grátis); tudo com prefixo e2e-pmod- e apagado no fim.
+// Inicie com o mock local de Resend (E2E_RESEND_URL) e credenciais de teste; nenhum e-mail real e enviado.
+// Plano muda direto no banco (prisma.clinicSubscription) e cada mudança é seguida de login novo (cache de auth de 15 s por sessão).
+async function planModules() {
+  const P = "planos_modulos:";
+  const pw = `E2e-${run}-Pm99!`;
+  const mail = (tag) => `e2e-pmod-${tag}-${run}@example.invalid`;
+  const clinicNameOf = (tag) => `Clinica PlanMod ${tag} ${run}`;
+  const tags = ["a", "b", "c"];
+  const allMails = [...tags.map(mail), mail("n1"), mail("n2")];
+  const dataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+  const term = `Zzbusca${run}`;
+  const cookies = {};
+  const clinics = {};
+  const setPlan = (clinicId, plan, status = "ACTIVE") => prisma.clinicSubscription.update({ where: { clinicId }, data: { plan, status, trialEndsAt: null, currentPeriodEnd: null } });
+  const relog = async (tag) => { const s = await loginAs(mail(tag), pw); cookies[tag] = s.cookie; return s.status; };
+  const call = (tag, method, path, body) => withSession(cookies[tag], () => api(method, path, body));
+  const feat = (r, feature) => r.status === 403 && r.data?.code === "PLAN_FEATURE" && r.data.feature === feature && r.data.requiredPlan === "pro" && typeof r.data.message === "string" && r.data.message.length > 0;
+  const readonly = (r) => r.status === 403 && r.data?.code === "SUBSCRIPTION_READONLY";
+  const brief = (r) => `${r.status} ${JSON.stringify(r.data).slice(0, 120)}`;
+  const parse = (text) => { try { return JSON.parse(text); } catch { return {}; } };
+  try {
+    for (const tag of tags) {
+      const reg = await api("POST", "/api/auth/register", { clinicName: clinicNameOf(tag), name: `E2E PlanMod ${tag}`, email: mail(tag), password: pw });
+      clinics[tag] = (await prisma.clinicMembership.findFirst({ where: { user: { email: mail(tag) } }, select: { clinicId: true } }))?.clinicId;
+      if (reg.status !== 201 || !clinics[tag]) { check(`${P} clínica ${tag} criada`, false, reg.status); return; }
+    }
+    const idA = clinics.a, idB = clinics.b;
+    await setPlan(idA, "pro"); await setPlan(idB, "pro");
+    const logins = [await relog("a"), await relog("b"), await relog("c")];
+    check(`${P} clínicas A (Pro), B (Pro) e C (teste) criadas e com login`, logins.every((s) => s === 200) && cookies.a && cookies.b && cookies.c, logins.join());
+    if (!logins.every((s) => s === 200)) return;
+
+    // ---------------- Fase 1: Pro (A) cria os dados ----------------
+    const mkProduct = async (tag, name, cost) => (await call(tag, "POST", "/api/products", { name, kind: "material", unit: "frasco", costCents: cost, supplier: `${term} Forn`, minStock: 0 })).data?.product;
+    const pA = await mkProduct("a", `${term} Toxina`, 1000);
+    const pB = await mkProduct("a", `PM Sem Saldo ${run}`, 500);
+    const pTmp = await mkProduct("a", `PM Descartavel ${run}`, 100);
+    check(`${P} Pro: 3 produtos criados (201)`, pA?.id && pB?.id && pTmp?.id);
+    if (!(pA?.id && pB?.id && pTmp?.id)) return;
+    let r = await call("a", "POST", "/api/purchases", { supplier: `${term} Forn`, purchasedOn: day(0), paymentMethod: "Pix", installments: 2, items: [{ productId: pA.id, lotCode: `PM${run}`, expiresOn: day(300), quantity: 10, unitPriceCents: 1000 }] });
+    const purchaseId = r.data?.purchase?.id;
+    check(`${P} Pro: compra com 2 parcelas registrada`, r.status === 201 && purchaseId, brief(r));
+    const procName = `PM Proc ${run}`;
+    r = await call("a", "POST", "/api/procedures", { name: procName, category: "Facial", price: 500, durationMinutes: 30, margin: 30, technicalSheet: [{ productId: pA.id, quantity: 1 }] });
+    check(`${P} Pro: procedimento com ficha técnica criado (201)`, r.status === 201, brief(r));
+    let opts = (await call("a", "GET", "/api/quotes/options")).data;
+    const proc = opts.procedures?.find((item) => item.name === procName);
+    check(`${P} Pro: /quotes/options traz costs e materiais/unidade da ficha`, Boolean(proc?.id) && opts.costs && typeof opts.costs === "object" && proc.materials.length > 0 && proc.unit === "frasco", JSON.stringify({ costs: opts.costs, m: proc?.materials, u: proc?.unit }));
+    const procs = (await call("a", "GET", "/api/procedures")).data.procedures ?? [];
+    const procPro = procs.find((item) => item.id === proc?.id);
+    check(`${P} Pro: GET /procedures devolve technicalSheet (1 item) e materialsNeedReview`, procPro?.technicalSheet?.length === 1 && "materialsNeedReview" in procPro, JSON.stringify(Object.keys(procPro ?? {})));
+    r = await call("a", "PATCH", "/api/clinic/cost-settings", { laborCost: 40, facilityCost: 20, medicationCost: 10, appointmentToleranceMinutes: 15 });
+    check(`${P} Pro: cost-settings grava custos (200)`, r.status === 200, brief(r));
+    const owner = (await call("a", "GET", "/api/team")).data.members?.find((m) => m.isOwner);
+    r = await call("a", "PATCH", "/api/team", { membershipId: owner?.id, laborCostCents: 7500 });
+    check(`${P} Pro: PATCH /team grava laborCostCents 7500`, r.status === 200 && r.data.member?.laborCostCents === 7500, brief(r));
+    const teamPro = (await call("a", "GET", "/api/team")).data.members?.find((m) => m.isOwner);
+    const oneMemberPro = await call("a", "GET", `/api/team/${owner?.id}`);
+    check(`${P} Pro: GET /team e /team/[id] devolvem laborCostCents 7500`, teamPro?.laborCostCents === 7500 && oneMemberPro.data?.member?.laborCostCents === 7500, `${teamPro?.laborCostCents} ${oneMemberPro.status} ${oneMemberPro.data?.member?.laborCostCents}`);
+    opts = (await call("a", "GET", "/api/quotes/options")).data;
+    check(`${P} Pro: /quotes/options costs exatos (facility 20, medication 10)`, opts.costs?.facilityCost === 20 && opts.costs?.medicationCost === 10, JSON.stringify(opts.costs));
+
+    const patient = (await call("a", "POST", "/api/patients", { ...regDefaults, name: `${term} Paciente`, phone: "11999990070", age: 35, cpf: randomCpf() })).data?.patient;
+    const pid = patient?.id;
+    const professional = (await call("a", "GET", "/api/team/professionals")).data.professionals?.[0];
+    const J = (await call("a", "POST", `/api/patients/${pid}/journeys`, { name: `PM J ${run}`, professionalId: professional?.id })).data?.journey;
+    const ev = (await call("a", "PUT", `/api/patients/${pid}/evaluation`, { journeyId: J?.id, photos: [], assessment: fullAssessment, status: "Concluída" })).data?.evaluation;
+    check(`${P} Pro: paciente, jornada e avaliação criados`, pid && J?.id && ev?.id && proc?.id, `${pid} ${J?.id} ${ev?.id} ${professional?.id}`);
+    if (!(pid && J?.id && ev?.id && proc?.id)) return;
+    const approve = async (tag, quoteId) => { for (const status of ["Enviado", "Aprovado"]) await call(tag, "PATCH", `/api/quotes/${quoteId}`, { status, evaluationId: ev.id }); };
+    const mkQuote = (tag, details) => call(tag, "POST", "/api/quotes", { patientId: pid, journeyId: J.id, evaluationId: ev.id, details, paymentMethod: "Pix", installments: 1, notes: "" });
+    const dbQuote = (id) => prisma.quote.findUnique({ where: { id }, select: { details: true, totalCents: true, status: true } });
+    const q1 = await mkQuote("a", [{ procedureId: proc.id, quantity: 2, discountCents: 0 }]);
+    const Q1 = q1.data?.quote?.id;
+    const q1Row = await dbQuote(Q1);
+    const d1 = parse(q1Row?.details);
+    const costSum = (d1.costs?.laborCents ?? 0) + (d1.costs?.facilityCents ?? 0) + (d1.costs?.medicationCents ?? 0);
+    check(`${P} Pro: POST /quotes salva retrato de custos (facility 2000, medication 1000, labor > 0) e total = itens + custos`, q1.status === 201 && d1.costs?.facilityCents === 2000 && d1.costs?.medicationCents === 1000 && d1.costs?.laborCents > 0 && d1.costTotalCents === costSum && q1Row.totalCents === 100000 + costSum && parse(q1.data.quote.details).costs?.facilityCents === 2000, `${q1.status} ${JSON.stringify(d1.costs)} total=${q1Row?.totalCents}`);
+    await approve("a", Q1);
+    const Q1b = (await mkQuote("a", [{ procedureId: proc.id, quantity: 1, discountCents: 0 }])).data?.quote?.id;
+    await approve("a", Q1b);
+    const sUrl = `/api/patients/${pid}/procedure-sessions`;
+    r = await call("a", "POST", sUrl, { journeyId: J.id, quoteId: Q1 });
+    const S1 = r.data?.session;
+    check(`${P} Pro: sessão semeia materiais da ficha (1 produto, quantidade 2 = 1 x 2)`, r.status === 201 && S1?.materials?.length === 1 && S1.materials[0].quantity === 2 && S1.materials[0].productId === pA.id, brief(r));
+    r = await call("a", "POST", sUrl, { journeyId: J.id, quoteId: Q1b });
+    const S1b = r.data?.session;
+    check(`${P} Pro: segunda sessão (rascunho) semeada`, r.status === 201 && S1b?.materials?.length === 1, brief(r));
+    if (!S1?.id || !S1b?.id) return;
+    const listPro = (await call("a", "GET", `${sUrl}?journeyId=${J.id}&quoteId=${Q1b}`)).data;
+    check(`${P} Pro: GET da sessão traz catálogo de materiais, suggestedMaterials e sessions[].materials`, listPro.materials?.some((m) => m.id === pA.id) && listPro.procedures?.[0]?.suggestedMaterials?.length === 1 && listPro.sessions?.[0]?.materials?.length === 1, JSON.stringify({ m: listPro.materials?.length, s: listPro.procedures?.[0]?.suggestedMaterials }));
+    // termo assinado + finalizar a primeira sessão com baixa
+    const form = new FormData();
+    form.set("file", new Blob([Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n")], { type: "application/pdf" }), "Termo pm.pdf");
+    form.set("category", "TERMOS"); form.set("signatureStatus", "ASSINADO"); form.set("journeyId", J.id);
+    const up = await fetch(`${baseUrl}/api/patients/${pid}/documents`, { method: "POST", headers: { cookie: cookies.a }, body: form });
+    check(`${P} Pro: termo assinado enviado`, up.status === 201, up.status);
+    const photo = (id, phase) => ({ id, phase, imageUrl: dataUrl, name: id, width: 1, height: 1 });
+    const matBody = S1.materials.map((m) => ({ productId: m.productId, quantity: m.quantity, allocations: m.allocations.map(({ lotId, quantity }) => ({ lotId, quantity })) }));
+    const base = { technique: "E2E técnica", treatedAreas: "E2E região" };
+    r = await call("a", "PATCH", `${sUrl}/${S1.id}`, { ...base, materials: matBody, status: "Em execução", photos: [photo(`pm-b1-${run}`, "Antes")] });
+    check(`${P} Pro: iniciar sessão com materiais (200)`, r.status === 200, brief(r));
+    r = await call("a", "PATCH", `${sUrl}/${S1.id}`, { ...base, materials: matBody, status: "Concluída", photos: [photo(`pm-b1-${run}`, "Antes"), photo(`pm-a1-${run}`, "Imediatamente após")] });
+    const moves1 = await prisma.stockMovement.findMany({ where: { procedureSessionId: S1.id }, select: { quantity: true, type: true } });
+    check(`${P} Pro: finalizar sessão baixa 2 unidades do lote (StockMovement attendance -2)`, r.status === 200 && moves1.length === 1 && moves1[0].quantity === -2 && moves1[0].type === "attendance", `${r.status} ${JSON.stringify(moves1)}`);
+
+    // atendimentos
+    const appt = async (tag, procedure, time) => (await call(tag, "POST", "/api/appointments", { patientId: pid, procedure, professional: "Teste", time, date: `${day(1)}T00:00:00` })).data?.appointment;
+    const dbCheck = (id) => prisma.appointment.findUnique({ where: { id }, select: { status: true, materialsCheck: true } });
+    const aPend = await appt("a", procName, "08:00");
+    r = await call("a", "PATCH", `/api/appointments/${aPend?.id}`, { status: "Atendido" });
+    check(`${P} Pro: atendimento Atendido cria materialsCheck "pending"`, r.status === 200 && (await dbCheck(aPend.id)).materialsCheck === "pending", brief(r));
+    const aChk = await appt("a", `PM Chk ${run}`, "09:00");
+    await call("a", "PATCH", `/api/appointments/${aChk?.id}`, { status: "Atendido" });
+    r = await call("a", "POST", `/api/appointments/${aChk?.id}/materials`, { items: [{ productId: pB.id, quantity: 3 }] });
+    const pendingRow = await prisma.pendingStockOutput.findFirst({ where: { clinicId: idA, appointmentId: aChk?.id }, select: { id: true } });
+    check(`${P} Pro: conferência sem saldo gera saída pendente`, r.status === 200 && r.data.pending?.length === 1 && pendingRow?.id, brief(r));
+    const yesterday = new Date(Date.now() - 86_400_000);
+    const mkDb = (data) => prisma.appointment.create({ data: { clinicId: idA, patientId: pid, journeyId: J.id, professional: "Teste", date: yesterday, notes: "", ...data }, select: { id: true } });
+    await mkDb({ procedure: procName, time: "14:00", status: "Atendido" }); // alimenta o relatório de procedimentos
+    const autoPro = await mkDb({ procedure: `PM Auto Pro ${run}`, time: "10:00", status: "Em atendimento" });
+    r = await call("a", "POST", "/api/appointments/auto-process");
+    const autoProDb = await dbCheck(autoPro.id);
+    check(`${P} Pro: auto-process conclui atendimento vencido e cria pending`, r.status === 200 && autoProDb.status === "Atendido" && autoProDb.materialsCheck === "pending", `${brief(r)} ${JSON.stringify(autoProDb)}`);
+    const followAppt = (time) => mkDb({ procedure: `Retorno - ${S1.procedureName}`, time, status: "Em atendimento", date: new Date() });
+    const fuPro = await followAppt("15:00");
+    r = await call("a", "POST", `${sUrl}/${S1.id}/follow-ups`, { appointmentId: fuPro.id, observations: "pm retorno pro", removedPhotoIds: [] });
+    const fuProDb = await dbCheck(fuPro.id);
+    check(`${P} Pro: retorno que conclui o agendamento cria pending`, r.status === 201 && fuProDb.status === "Atendido" && fuProDb.materialsCheck === "pending", `${brief(r)} ${JSON.stringify(fuProDb)}`);
+    const pendingCount = () => prisma.appointment.count({ where: { clinicId: idA, materialsCheck: "pending" } });
+    const pendingBase = await pendingCount();
+    const histUrl = `/api/patients/${pid}/history?tab=Hist%C3%B3rico`;
+    const proHistory = (await call("a", "GET", histUrl)).data.patient;
+    const proProfile = JSON.stringify((await call("a", "GET", `/api/patients/${pid}/profile`)).data);
+    check(`${P} Pro: history mostra materialsCheck pending (3) e materiais pendentes; profile mostra "Conferência de materiais pendente"`, proHistory?.appointments?.filter((a) => a.materialsCheck === "pending").length === 3 && proHistory.materialsUsed?.length > 0 && proProfile.includes("Conferência de materiais pendente"), `${proHistory?.appointments?.map((a) => a.materialsCheck)} ${proHistory?.materialsUsed?.length}`);
+
+    // busca, assistente, relatórios (Pro)
+    const searchSections = async (tag, q) => ((await call(tag, "GET", `/api/search?q=${encodeURIComponent(q)}`)).data.results ?? []).map((x) => x.section);
+    let sec = await searchSections("a", term);
+    check(`${P} Pro: busca encontra estoque, compras e clientes`, ["estoque", "compras", "clientes"].every((s) => sec.includes(s)), sec.join());
+    let setup = (await call("a", "GET", "/api/setup")).data;
+    const setupKeysPro = (setup.steps ?? []).map((s) => s.key);
+    check(`${P} Pro: /setup sem etapas indisponíveis e com materiais, produtos e custos`, Array.isArray(setup.unavailableSteps) && setup.unavailableSteps.length === 0 && ["materiais", "produtos", "custos"].every((k) => setupKeysPro.includes(k)), JSON.stringify({ u: setup.unavailableSteps, k: setupKeysPro }));
+    const setupTotalPro = setup.total;
+    const repPro = await call("a", "GET", "/api/reports/procedures");
+    const rowPro = repPro.data.rows?.find((x) => JSON.stringify(x).includes(procName));
+    check(`${P} Pro: relatório de procedimentos mostra custo de material (1000 por execução)`, repPro.status === 200 && rowPro?.materialCostCents === 1000, `${repPro.status} ${JSON.stringify(rowPro)}`);
+    r = await call("a", "GET", "/api/reports/stock");
+    check(`${P} Pro: /reports/stock = 200`, r.status === 200, r.status);
+
+    // convites (A ativa): criados agora para o teste de somente leitura
+    const inviteTok = async (to, role) => { const x = await call("a", "POST", "/api/invitations", { email: to, role }); return { status: x.status, token: String(x.data?.inviteUrl ?? "").split("/convite/")[1] ?? "" }; };
+    const invS = await inviteTok(mail("c"), "STAFF");
+    const invR1 = await inviteTok(mail("n1"), "PROFESSIONAL");
+    const invR2 = await inviteTok(mail("n2"), "STAFF");
+    const tokenMatchesInvite = async (tag, invite) => { const row = await prisma.clinicInvitation.findFirst({ where: { clinicId: idA, email: mail(tag) }, select: { tokenHash: true, status: true } }); return Boolean(invite.token && row?.status === "PENDING" && createHash("sha256").update(invite.token).digest("hex") === row.tokenHash); };
+    const tokenMatches = await Promise.all([["c", invS], ["n1", invR1], ["n2", invR2]].map(([tag, invite]) => tokenMatchesInvite(tag, invite)));
+    check(`${P} convites: token da resposta corresponde ao hash armazenado`, tokenMatches.every(Boolean), tokenMatches.join(","));
+    check(`${P} Pro: três convites criados (STAFF existente, PROFESSIONAL novo, STAFF novo)`, [invS, invR1, invR2].every((x) => x.status === 201 && x.token), [invS, invR1, invR2].map((x) => x.status).join());
+
+    // B (Pro) cria seus dados, que A não pode alcançar
+    const bProduct = await mkProduct("b", `${term}B Toxina`, 700);
+    r = await call("b", "POST", "/api/purchases", { supplier: `${term}B Forn`, purchasedOn: day(0), paymentMethod: "Pix", installments: 1, items: [{ productId: bProduct?.id, lotCode: `PMB${run}`, expiresOn: day(300), quantity: 5, unitPriceCents: 700 }] });
+    const bPurchase = r.data?.purchase?.id;
+    const bProcName = `PM B Proc ${run}`;
+    await call("b", "POST", "/api/procedures", { name: bProcName, category: "Facial", price: 300, durationMinutes: 30, margin: 30, technicalSheet: [{ productId: bProduct?.id, quantity: 1 }] });
+    const bProc = ((await call("b", "GET", "/api/procedures")).data.procedures ?? []).find((x) => x.name === bProcName);
+    check(`${P} B (Pro): produto, compra e procedimento com ficha criados`, bProduct?.id && bPurchase && bProc?.technicalSheet?.length === 1, brief(r));
+    if (!(bProduct?.id && bPurchase && bProc?.id)) return;
+    const bState = async () => [await prisma.product.count({ where: { clinicId: idB } }), (await prisma.purchase.findUnique({ where: { id: bPurchase }, select: { status: true } }))?.status, await prisma.procedureMaterial.count({ where: { procedure: { clinicId: idB } } }), (await prisma.procedure.findUnique({ where: { id: bProc.id }, select: { price: true } }))?.price];
+    const bBefore = JSON.stringify(await bState());
+
+    // ---------------- Snapshot Pro ----------------
+    const snap = async () => JSON.stringify({
+      products: await prisma.product.count({ where: { clinicId: idA } }),
+      lots: await prisma.stockLot.count({ where: { product: { clinicId: idA } } }),
+      movements: await prisma.stockMovement.count({ where: { clinicId: idA } }),
+      pendings: await prisma.pendingStockOutput.count({ where: { clinicId: idA } }),
+      purchases: await prisma.purchase.count({ where: { clinicId: idA } }),
+      expenses: await prisma.expense.count({ where: { clinicId: idA } }),
+      sheet: await prisma.procedureMaterial.count({ where: { procedure: { clinicId: idA } } }),
+      quotesWithCosts: (await prisma.quote.findMany({ where: { clinicId: idA }, select: { details: true } })).filter((x) => x.details.includes('"costs"')).length,
+      labor: (await prisma.clinicMembership.findFirst({ where: { clinicId: idA, isOwner: true }, select: { laborCostCents: true } }))?.laborCostCents,
+      pendingChecks: await pendingCount(),
+    });
+    const snapPro = await snap();
+    const sp = JSON.parse(snapPro);
+    check(`${P} Pro: snapshot do banco (3 produtos, 1 lote, 2 parcelas, 1 ficha, 2 orçamentos com custo, 7500 de mão de obra, 1 pendência)`, sp.products === 3 && sp.lots === 1 && sp.expenses === 2 && sp.purchases === 1 && sp.sheet === 1 && sp.quotesWithCosts === 2 && sp.labor === 7500 && sp.movements >= 2 && sp.pendings === 1, snapPro);
+
+    // ---------------- Fase 2: Start ----------------
+    await setPlan(idA, "start");
+    check(`${P} Start: login novo da clínica A`, (await relog("a")) === 200);
+    const mvId = (await prisma.stockMovement.findFirst({ where: { clinicId: idA }, select: { id: true } }))?.id;
+    const shortUrl = (p2) => p2.replace(/c[a-z0-9]{20,}/g, ":id");
+    const stockCalls = [
+      ["GET", "/api/products"], ["POST", "/api/products", { name: `PM x ${run}`, kind: "material", unit: "un", costCents: 1, supplier: "F" }],
+      ["GET", `/api/products/${pA.id}`], ["PATCH", `/api/products/${pA.id}`, { minStock: 1 }], ["DELETE", `/api/products/${pTmp.id}`],
+      ["GET", `/api/products/${pA.id}/movements`], ["POST", `/api/products/${pA.id}/movements`, {}], ["POST", `/api/products/${pA.id}/initial-balance`, {}],
+      ["GET", "/api/stock-catalog"], ["POST", "/api/stock-catalog", {}], ["GET", "/api/stock/alerts"], ["GET", "/api/stock/pending"],
+      ["POST", `/api/stock/pending/${pendingRow.id}`, {}], ["POST", `/api/stock/movements/${mvId}/reverse`, {}],
+      ["GET", "/api/clinic/stock-settings"], ["PATCH", "/api/clinic/stock-settings", {}],
+      ["GET", `/api/appointments/${aPend.id}/materials`], ["POST", `/api/appointments/${aPend.id}/materials`, { items: [] }],
+    ];
+    const badStock = [];
+    for (const [m, p2, b] of stockCalls) { const x = await call("a", m, p2, b); if (!feat(x, "stock")) badStock.push(`${m} ${shortUrl(p2)} -> ${brief(x)}`); }
+    check(`${P} Start: ${stockCalls.length} rotas de estoque (GET e escritas) = 403 PLAN_FEATURE feature stock`, badStock.length === 0, badStock.join(" | "));
+    const purchCalls = [["GET", "/api/purchases"], ["POST", "/api/purchases", {}], ["PATCH", `/api/purchases/${purchaseId}`, { action: "cancel" }]];
+    const badPurch = [];
+    for (const [m, p2, b] of purchCalls) { const x = await call("a", m, p2, b); if (!feat(x, "purchases")) badPurch.push(`${m} ${shortUrl(p2)} -> ${brief(x)}`); }
+    check(`${P} Start: rotas de compras = 403 PLAN_FEATURE feature purchases`, badPurch.length === 0, badPurch.join(" | "));
+    const costCalls = [["PATCH", "/api/clinic/cost-settings", { laborCost: 1, facilityCost: 1, medicationCost: 1, appointmentToleranceMinutes: 15 }], ["PATCH", "/api/clinic/cost-settings", { professionalHourlyCost: 5, appointmentToleranceMinutes: 15 }], ["PATCH", "/api/clinic/cost-settings", { facilityCost: 9 }], ["PATCH", "/api/team", { membershipId: owner?.id, laborCostCents: 1 }]];
+    const badCost = [];
+    for (const [m, p2, b] of costCalls) { const x = await call("a", m, p2, b); if (!feat(x, "costs")) badCost.push(`${m} ${p2} -> ${brief(x)}`); }
+    check(`${P} Start: cost-settings e PATCH /team laborCostCents = 403 PLAN_FEATURE feature costs`, badCost.length === 0, badCost.join(" | "));
+    const costKeys = ["laborCost", "facilityCost", "medicationCost", "professionalHourlyCost"];
+    const csStart = await call("a", "GET", "/api/clinic/cost-settings");
+    check(`${P} Start: GET /clinic/cost-settings = 200 com dados gerais e SEM as chaves de custo (ausentes, nunca 0)`, csStart.status === 200 && csStart.data.settings?.name && "appointmentToleranceMinutes" in csStart.data.settings && costKeys.every((k) => !(k in csStart.data.settings)), brief(csStart));
+    r = await call("a", "PATCH", "/api/clinic/cost-settings", { appointmentToleranceMinutes: 20 });
+    const clinicRow = await prisma.clinic.findUnique({ where: { id: idA }, select: { laborCost: true, facilityCost: true, medicationCost: true, appointmentToleranceMinutes: true } });
+    check(`${P} Start: PATCH /clinic/cost-settings só com campos gerais = 200 e os custos gravados ficam intactos (40/20/10)`, r.status === 200 && costKeys.every((k) => !(k in (r.data.settings ?? {}))) && clinicRow.appointmentToleranceMinutes === 20 && clinicRow.laborCost === 40 && clinicRow.facilityCost === 20 && clinicRow.medicationCost === 10, `${brief(r)} ${JSON.stringify(clinicRow)}`);
+    const snapAfterBlocked = await snap();
+    check(`${P} Start: nada foi apagado nem alterado pelas chamadas bloqueadas (snapshot idêntico ao Pro)`, snapAfterBlocked === snapPro, snapAfterBlocked);
+    const teamStart = (await call("a", "GET", "/api/team")).data.members?.find((m) => m.isOwner);
+    const oneStart = await call("a", "GET", `/api/team/${owner.id}`);
+    check(`${P} Start: GET /team e /team/[id] devolvem laborCostCents null (valor segue no banco)`, teamStart?.laborCostCents === null && oneStart.data?.member?.laborCostCents === null && JSON.parse(await snap()).labor === 7500, `${teamStart?.laborCostCents} ${oneStart.status} ${oneStart.data?.member?.laborCostCents}`);
+
+    // ficha técnica
+    const procStart = ((await call("a", "GET", "/api/procedures")).data.procedures ?? []).find((x) => x.id === proc.id);
+    check(`${P} Start: GET /procedures sem technicalSheet e sem materialsNeedReview`, procStart && !("technicalSheet" in procStart) && !("materialsNeedReview" in procStart), JSON.stringify(Object.keys(procStart ?? {})));
+    const startName = `PM Start ${run}`;
+    r = await call("a", "POST", "/api/procedures", { name: `${startName} Ficha`, category: "Facial", price: 100, durationMinutes: 30, margin: 30, technicalSheet: [{ productId: pA.id, quantity: 1 }] });
+    check(`${P} Start: POST procedimento com ficha não vazia = 403 PLAN_FEATURE technicalSheet e nada gravado`, feat(r, "technicalSheet") && await prisma.procedure.count({ where: { clinicId: idA, name: { startsWith: `${startName} Ficha` } } }) === 0, brief(r));
+    const created = [];
+    for (const [suffix, sheet] of [["Vazia", []], ["Ausente", undefined]]) {
+      created.push(await call("a", "POST", "/api/procedures", { name: `${startName} ${suffix}`, category: "Facial", price: 100, durationMinutes: 30, margin: 30, ...(sheet ? { technicalSheet: sheet } : {}) }));
+    }
+    check(`${P} Start: POST procedimento com ficha [] ou ausente = 201, resposta sem technicalSheet nem materialsNeedReview`, created.every((x) => x.status === 201 && !("technicalSheet" in (x.data.procedure ?? {})) && !("materialsNeedReview" in (x.data.procedure ?? {}))), created.map(brief).join(" | "));
+    const sheetRows = () => prisma.procedureMaterial.findMany({ where: { procedureId: proc.id }, select: { productId: true, quantity: true } });
+    r = await call("a", "PATCH", `/api/procedures/${proc.id}`, { technicalSheet: [{ productId: pA.id, quantity: 9 }] });
+    const afterBlocked = await sheetRows();
+    check(`${P} Start: PATCH com ficha não vazia = 403 technicalSheet e a ficha existente segue intacta (1 x 1)`, feat(r, "technicalSheet") && afterBlocked.length === 1 && afterBlocked[0].quantity === 1, `${brief(r)} ${JSON.stringify(afterBlocked)}`);
+    const patches = [await call("a", "PATCH", `/api/procedures/${proc.id}`, { price: 500 }), await call("a", "PATCH", `/api/procedures/${proc.id}`, { price: 500, technicalSheet: [] })];
+    const afterOk = await sheetRows();
+    check(`${P} Start: PATCH sem ficha ou com [] = 200, sem technicalSheet na resposta e ficha do banco intacta`, patches.every((x) => x.status === 200 && !("technicalSheet" in (x.data.procedure ?? {})) && !("materialsNeedReview" in (x.data.procedure ?? {}))) && afterOk.length === 1 && afterOk[0].productId === pA.id && afterOk[0].quantity === 1, `${patches.map((x) => x.status)} ${JSON.stringify(afterOk)}`);
+
+    // custos no orçamento
+    opts = (await call("a", "GET", "/api/quotes/options")).data;
+    const optStart = opts.procedures?.find((x) => x.id === proc.id);
+    check(`${P} Start: /quotes/options sem a chave costs, materials "" e unit null`, !("costs" in opts) && optStart?.materials === "" && optStart?.unit === null, JSON.stringify({ hasCosts: "costs" in opts, m: optStart?.materials, u: optStart?.unit }));
+    const q3 = await mkQuote("a", [{ procedureId: proc.id, quantity: 3, discountCents: 1000 }]);
+    const Q3 = q3.data?.quote?.id;
+    let d3 = await dbQuote(Q3);
+    check(`${P} Start: POST /quotes salva details sem "costs" e total = soma dos itens (3 x 500,00 - 10,00 = 1490,00)`, q3.status === 201 && !d3.details.includes('"costs"') && d3.totalCents === 149000 && !("costs" in parse(q3.data.quote.details)), `${q3.status} total=${d3?.totalCents} ${d3?.details.slice(0, 160)}`);
+    r = await call("a", "PATCH", `/api/quotes/${Q3}`, { details: [{ procedureId: proc.id, quantity: 1, discountCents: 0 }] });
+    d3 = await dbQuote(Q3);
+    check(`${P} Start: PATCH /quotes recalcula sem custos (total 500,00) e sem "costs" no banco`, r.status === 200 && d3.totalCents === 50000 && !d3.details.includes('"costs"') && !("costs" in parse(r.data.quote.details)), `${brief(r)} total=${d3?.totalCents}`);
+    await call("a", "PATCH", `/api/quotes/${Q3}`, { details: [{ procedureId: proc.id, quantity: 3, discountCents: 1000 }] });
+    await approve("a", Q3);
+    const list = (await call("a", "GET", `/api/quotes?patientId=${pid}`)).data.quotes ?? [];
+    const q1Start = list.find((x) => x.id === Q1);
+    const q1Details = parse(q1Start?.details);
+    const q1Db = parse((await dbQuote(Q1)).details);
+    check(`${P} Start: GET /quotes?patientId devolve orçamento antigo (Pro) sem costs/costTotalCents; o banco mantém costs`, q1Start && !("costs" in q1Details) && !("costTotalCents" in q1Details) && q1Db.costs?.facilityCents === 2000 && q1Details.items?.length === 1, JSON.stringify({ k: Object.keys(q1Details), db: q1Db.costs }));
+    r = await call("a", "POST", `/api/quotes/${Q3}/send`);
+    check(`${P} Start: envio do orçamento não é bloqueado por plano`, !(r.status === 403 && /^PLAN_|SUBSCRIPTION/.test(r.data?.code ?? "")), brief(r));
+
+    // sessões de procedimento
+    const listStart = (await call("a", "GET", `${sUrl}?journeyId=${J.id}&quoteId=${Q1b}`)).data;
+    const s1bDb = await prisma.patientProcedureSession.findUnique({ where: { id: S1b.id }, select: { materials: true, status: true } });
+    check(`${P} Start: GET da sessão devolve materials=[], suggestedMaterials=[] e sessions[].materials=[] (banco mantém a lista)`, listStart.materials?.length === 0 && listStart.procedures?.[0]?.suggestedMaterials?.length === 0 && listStart.sessions?.[0]?.materials?.length === 0 && JSON.parse(s1bDb.materials).length === 1, JSON.stringify({ m: listStart.materials?.length, s: listStart.procedures?.[0]?.suggestedMaterials, sm: listStart.sessions?.[0]?.materials }));
+    const lotId = (await prisma.stockLot.findFirst({ where: { productId: pA.id }, select: { id: true } })).id;
+    r = await call("a", "PATCH", `${sUrl}/${S1b.id}`, { materials: [{ productId: pA.id, quantity: 1, allocations: [{ lotId, quantity: 1 }] }] });
+    const s1bAfter = await prisma.patientProcedureSession.findUnique({ where: { id: S1b.id }, select: { materials: true, status: true } });
+    check(`${P} Start: PATCH da sessão com materials não vazio = 403 PLAN_FEATURE stock e nada gravado`, feat(r, "stock") && s1bAfter.materials === s1bDb.materials && s1bAfter.status === s1bDb.status, brief(r));
+    const mvBefore = await prisma.stockMovement.count({ where: { clinicId: idA } });
+    const pdBefore = await prisma.pendingStockOutput.count({ where: { clinicId: idA } });
+    r = await call("a", "PATCH", `${sUrl}/${S1b.id}`, { ...base, status: "Em execução", photos: [photo(`pm-b2-${run}`, "Antes")] });
+    check(`${P} Start: PATCH sem materials inicia a sessão (200)`, r.status === 200 && r.data.session?.status === "Em execução", brief(r));
+    const fin = await Promise.all([1, 2].map(() => call("a", "PATCH", `${sUrl}/${S1b.id}`, { ...base, materials: [], status: "Concluída", photos: [photo(`pm-b2-${run}`, "Antes"), photo(`pm-a2-${run}`, "Imediatamente após")] })));
+    check(`${P} Start: clique duplo ao finalizar com materials [] conclui sem 5xx e sem 403 de plano`, fin.some((x) => x.status === 200) && fin.every((x) => x.status < 500 && !x.data?.code) && (await prisma.patientProcedureSession.findUnique({ where: { id: S1b.id }, select: { status: true } })).status === "Concluída", fin.map(brief).join(" | "));
+    check(`${P} Start: finalizar não criou StockMovement nem PendingStockOutput`, await prisma.stockMovement.count({ where: { clinicId: idA } }) === mvBefore && await prisma.pendingStockOutput.count({ where: { clinicId: idA } }) === pdBefore && await prisma.stockMovement.count({ where: { procedureSessionId: S1b.id } }) === 0, `${mvBefore}/${pdBefore}`);
+    r = await call("a", "POST", sUrl, { journeyId: J.id, quoteId: Q3 });
+    const s3Db = r.data?.session ? await prisma.patientProcedureSession.findUnique({ where: { id: r.data.session.id }, select: { materials: true } }) : null;
+    check(`${P} Start: POST da sessão não semeia materiais da ficha (materials [] na resposta e no banco)`, r.status === 201 && r.data.session.materials.length === 0 && s3Db?.materials === "[]", brief(r));
+
+    // atendimento
+    const aStart = await appt("a", `PM Start Atend ${run}`, "10:00");
+    const dbl = await Promise.all([1, 2].map(() => call("a", "PATCH", `/api/appointments/${aStart?.id}`, { status: "Atendido" })));
+    const aStartDb = await dbCheck(aStart.id);
+    check(`${P} Start: atendimento Atendido (clique duplo) = 200 e materialsCheck permanece null`, dbl.every((x) => x.status === 200) && aStartDb.status === "Atendido" && aStartDb.materialsCheck === null, `${dbl.map((x) => x.status)} ${JSON.stringify(aStartDb)}`);
+    const autoStart = await mkDb({ procedure: `PM Auto Start ${run}`, time: "11:00", status: "Em atendimento" });
+    r = await call("a", "POST", "/api/appointments/auto-process");
+    const autoSDb = await dbCheck(autoStart.id);
+    check(`${P} Start: auto-process e bloqueado sem agendaAutomations e nao altera atendimento`, r.status === 403 && r.data?.code === "PLAN_FEATURE" && r.data.feature === "agendaAutomations" && autoSDb.status === "Em atendimento" && autoSDb.materialsCheck === null, `${brief(r)} ${JSON.stringify(autoSDb)}`);
+    const fuStart = await followAppt("16:00");
+    r = await call("a", "POST", `${sUrl}/${S1.id}/follow-ups`, { appointmentId: fuStart.id, observations: "pm retorno start", removedPhotoIds: [] });
+    const fuSDb = await dbCheck(fuStart.id);
+    check(`${P} Start: retorno que conclui o agendamento não cria pending`, r.status === 201 && fuSDb.status === "Atendido" && fuSDb.materialsCheck === null, `${brief(r)} ${JSON.stringify(fuSDb)}`);
+    const hist = (await call("a", "GET", histUrl)).data.patient;
+    const profStart = JSON.stringify((await call("a", "GET", `/api/patients/${pid}/profile`)).data);
+    const encStart = JSON.stringify((await call("a", "GET", `/api/patients/${pid}/encounters`)).data);
+    check(`${P} Start: history sem materialsCheck pending e sem materialsUsed; profile sem "Conferência de materiais pendente"; encounters sem pendência de materiais`, hist?.appointments?.length >= 5 && hist.appointments.every((a) => a.materialsCheck === null) && hist.materialsUsed?.length === 0 && !profStart.includes("Conferência de materiais pendente") && !encStart.includes('"pendingMaterials":true') && !encStart.includes("Conferir materiais usados"), `${hist?.appointments?.map((a) => a.materialsCheck)} ${hist?.materialsUsed?.length}`);
+    check(`${P} Start: as 3 conferências "pending" e a saída pendente de antes do downgrade seguem no banco`, await pendingCount() === pendingBase && pendingBase === 3 && await prisma.pendingStockOutput.count({ where: { clinicId: idA } }) === 1, `${await pendingCount()}/${pendingBase}`);
+
+    // busca, assistente, relatórios
+    sec = await searchSections("a", term);
+    check(`${P} Start: busca não devolve estoque nem compras (mas ainda acha o paciente)`, !sec.includes("estoque") && !sec.includes("compras") && sec.includes("clientes"), sec.join());
+    setup = (await call("a", "GET", "/api/setup")).data;
+    const setupKeysStart = (setup.steps ?? []).map((s) => s.key);
+    check(`${P} Start: /setup omite materiais, produtos, custos e financeiro indisponiveis`, JSON.stringify(setup.unavailableSteps) === '["materiais","produtos","custos","financeiro"]' && !["materiais","produtos","custos","financeiro"].some((k) => setupKeysStart.includes(k)) && setup.total === setupTotalPro - 4, JSON.stringify({ u: setup.unavailableSteps, t: setup.total, pro: setupTotalPro }));
+    r = await call("a", "GET", "/api/reports/stock");
+    const repStart = await call("a", "GET", "/api/reports/procedures");
+    const rowStart = repStart.data.rows?.find((x) => JSON.stringify(x).includes(procName));
+    check(`${P} Start: relatórios são bloqueados pelo plano`, r.status === 403 && r.data?.code === "PLAN_FEATURE" && r.data.feature === "reports" && repStart.status === 403 && repStart.data?.code === "PLAN_FEATURE" && repStart.data.feature === "reports", `${brief(r)} | ${brief(repStart)}`);
+
+    // isolamento com B (Pro) em paralelo
+    const bProdList = await call("b", "GET", "/api/products");
+    const bExtra = await mkProduct("b", `PMB Extra ${run}`, 10);
+    const bUse = [{ status: bExtra?.id ? 201 : 400 }, await call("b", "GET", "/api/purchases"), await call("b", "GET", "/api/clinic/cost-settings"), await call("b", "GET", "/api/stock/alerts")];
+    check(`${P} Isolamento: com A no Start, B (Pro) usa estoque, compras, custos e alertas normalmente`, bProdList.status === 200 && bUse.every((x) => x.status === 200 || x.status === 201), `${bProdList.status} ${bUse.map((x) => x.status)}`);
+    const aVsB = [await call("a", "GET", `/api/products/${bProduct.id}`), await call("a", "PATCH", `/api/purchases/${bPurchase}`, { action: "cancel" })];
+    const aProcB = await call("a", "PATCH", `/api/procedures/${bProc.id}`, { price: 1 });
+    check(`${P} Isolamento: A (Start) com ids de B = 403 PLAN_FEATURE; PATCH de procedimento de B = 404`, feat(aVsB[0], "stock") && feat(aVsB[1], "purchases") && aProcB.status === 404, `${aVsB.map(brief).join(" | ")} ${aProcB.status}`);
+    const bAfter = JSON.stringify(await bState());
+    check(`${P} Isolamento: dados e plano de B não mudaram com o downgrade/ataque de A`, (await prisma.clinicSubscription.findUnique({ where: { clinicId: idB } })).plan === "pro" && bAfter.replace(/^\[\d+/, "[") === bBefore.replace(/^\[\d+/, "["), `${bBefore} -> ${bAfter}`);
+
+    // ---------------- Fase 3: volta a Pro ----------------
+    await setPlan(idA, "pro");
+    await relog("a");
+    const snapBack = JSON.parse(await snap());
+    check(`${P} Downgrade e volta: nada sumiu do banco e as rotas voltam a responder`, JSON.stringify({ ...snapBack, movements: 0, pendingChecks: 0 }) === JSON.stringify({ ...sp, movements: 0, pendingChecks: 0 }) && snapBack.movements === sp.movements && (await call("a", "GET", "/api/products")).status === 200 && (await call("a", "GET", "/api/purchases")).status === 200 && (await call("a", "GET", "/api/clinic/cost-settings")).data.settings?.laborCost === 40 && (await call("a", "GET", "/api/clinic/cost-settings")).data.settings?.facilityCost === 20, JSON.stringify(snapBack));
+    const back = ((await call("a", "GET", "/api/procedures")).data.procedures ?? []).find((x) => x.id === proc.id);
+    const backQuote = ((await call("a", "GET", `/api/quotes?patientId=${pid}`)).data.quotes ?? []).find((x) => x.id === Q1);
+    const backTeam = (await call("a", "GET", "/api/team")).data.members?.find((m) => m.isOwner);
+    const backHist = (await call("a", "GET", histUrl)).data.patient;
+    const backProfile = JSON.stringify((await call("a", "GET", `/api/patients/${pid}/profile`)).data);
+    check(`${P} Pro de volta: ficha, custos do orçamento, mão de obra e conferências pendentes reaparecem`, back?.technicalSheet?.length === 1 && parse(backQuote?.details).costs?.facilityCents === 2000 && backTeam?.laborCostCents === 7500 && backHist?.appointments?.filter((a) => a.materialsCheck === "pending").length === 3 && backHist.materialsUsed?.length > 0 && backProfile.includes("Conferência de materiais pendente"), `${back?.technicalSheet?.length} ${backTeam?.laborCostCents} ${backHist?.appointments?.map((a) => a.materialsCheck)}`);
+    sec = await searchSections("a", term);
+    check(`${P} Pro de volta: busca volta a achar estoque e compras`, sec.includes("estoque") && sec.includes("compras"), sec.join());
+    const bIds = [await call("a", "GET", `/api/products/${bProduct.id}`), await call("a", "PATCH", `/api/purchases/${bPurchase}`, { action: "cancel" }), await call("a", "GET", `/api/products/${bProduct.id}/movements`)];
+    const aList = JSON.stringify((await call("a", "GET", "/api/products")).data);
+    const aSearchB = await searchSections("a", `${term}B`);
+    check(`${P} Isolamento: A (Pro) com ids de B = 404/403, lista de A sem produtos de B, busca de A não acha B, B intacta`, bIds.slice(0, 2).every((x) => x.status === 404 || x.status === 403) && (bIds[2].status === 404 || bIds[2].status === 403 || (bIds[2].status === 200 && bIds[2].data?.movements?.length === 0)) && !aList.includes(`${term}B`) && !aSearchB.includes("estoque") && !aSearchB.includes("compras") && JSON.stringify(await bState()).replace(/^\[\d+/, "[") === bBefore.replace(/^\[\d+/, "["), `${bIds.map((x) => x.status)} ${aSearchB.join()}`);
+    // ---------------- Ajustes finais: dados históricos após downgrade Pro -> Start -> Pro ----------------
+    const mkSession = async (label) => {
+      const qid = (await mkQuote("a", [{ procedureId: proc.id, quantity: 1, discountCents: 0 }])).data?.quote?.id;
+      await approve("a", qid);
+      const rs = await call("a", "POST", sUrl, { journeyId: J.id, quoteId: qid });
+      const sess = rs.data?.session;
+      if (!sess?.id) return null;
+      const mats = sess.materials.map((m) => ({ productId: m.productId, quantity: m.quantity, allocations: m.allocations.map(({ lotId, quantity }) => ({ lotId, quantity })) }));
+      const st = await call("a", "PATCH", `${sUrl}/${sess.id}`, { ...base, materials: mats, status: "Em execução", photos: [photo(`pm-${label}-${run}`, "Antes")] });
+      return st.status === 200 ? { id: sess.id, label } : null;
+    };
+    const qx = await mkQuote("a", [{ procedureId: proc.id, quantity: 2, discountCents: 0 }]);
+    const QX = qx.data?.quote?.id;
+    const origQx = (await dbQuote(QX))?.details;
+    const origCosts = parse(origQx).costs;
+    const origCostTotal = parse(origQx).costTotalCents;
+    const sessFin = await mkSession("fin");
+    const sessDraft = await mkSession("rasc");
+    check(`${P} Ajustes (Pro): orçamento com retrato de custos (labor/facility/medication) e duas sessões com materiais prontas`, origCosts?.laborCents > 0 && origCosts?.facilityCents === 2000 && origCosts?.medicationCents === 1000 && sessFin?.id && sessDraft?.id, `${JSON.stringify(origCosts)} ${sessFin?.id} ${sessDraft?.id}`);
+    if (!(sessFin?.id && sessDraft?.id && QX)) return;
+    const jSearch = async (tag, q) => ((await call(tag, "GET", `/api/patients/${pid}/journeys?page=1&search=${encodeURIComponent(q)}`)).data.journeys ?? []).map((j) => j.id);
+    check(`${P} Ajustes (Pro): busca de jornadas por "laborCents" (só existe no JSON de custos) acha a jornada`, (await jSearch("a", "laborCents")).includes(J.id), "");
+    const purchaseExp = await prisma.expense.findMany({ where: { clinicId: idA, source: "purchase" }, orderBy: { dueOn: "asc" }, select: { id: true, status: true, description: true, amountCents: true } });
+    const expCount = await prisma.expense.count({ where: { clinicId: idA } });
+    await setPlan(idA, "start");
+    await relog("a");
+    // 1) orçamento antigo com custos editado no Start
+    r = await call("a", "PATCH", `/api/quotes/${QX}`, { details: [{ procedureId: proc.id, quantity: 3, discountCents: 1000 }] });
+    const afterQx = await dbQuote(QX);
+    const afterD = parse(afterQx.details);
+    check(`${P} Ajustes (Start): PATCH /quotes com details = 200 e a resposta não traz costs nem costTotalCents`, r.status === 200 && !("costs" in parse(r.data.quote?.details)) && !("costTotalCents" in parse(r.data.quote?.details)), brief(r));
+    check(`${P} Ajustes (Start): no banco costs segue IDÊNTICO ao original (sem zeros) e total = 3 x 500,00 - 10,00 + custos históricos`, JSON.stringify(afterD.costs) === JSON.stringify(origCosts) && afterD.items?.[0]?.quantity === 3 && afterQx.totalCents === 150000 - 1000 + origCostTotal, `${JSON.stringify(afterD.costs)} vs ${JSON.stringify(origCosts)} total=${afterQx.totalCents} custo=${origCostTotal}`);
+    const qNew = await mkQuote("a", [{ procedureId: proc.id, quantity: 1, discountCents: 0 }]);
+    const qNewDb = await dbQuote(qNew.data?.quote?.id);
+    check(`${P} Ajustes (Start): orçamento NOVO no Start não tem costs no banco nem na resposta e total = itens`, qNew.status === 201 && !qNewDb.details.includes('"costs"') && !("costs" in parse(qNew.data.quote.details)) && qNewDb.totalCents === 50000, `${qNew.status} total=${qNewDb?.totalCents}`);
+    // 2) busca de jornadas
+    check(`${P} Ajustes (Start): busca de jornadas por "laborCents" NÃO acha a jornada`, !(await jSearch("a", "laborCents")).includes(J.id), "");
+    // 3) sessões
+    r = await call("a", "PATCH", `${sUrl}/${sessFin.id}`, { ...base, materials: [], status: "Concluída", photos: [photo(`pm-fin-${run}`, "Antes"), photo(`pm-fin2-${run}`, "Imediatamente após")] });
+    const finDb = await prisma.patientProcedureSession.findUnique({ where: { id: sessFin.id }, select: { materials: true, status: true } });
+    check(`${P} Ajustes (Start): finalizar sessão = 200, resposta materials [] e banco "[]", sem StockMovement`, r.status === 200 && Array.isArray(r.data.session?.materials) && r.data.session.materials.length === 0 && finDb.materials === "[]" && finDb.status === "Concluída" && await prisma.stockMovement.count({ where: { procedureSessionId: sessFin.id } }) === 0, `${brief(r)} ${finDb?.materials} ${finDb?.status}`);
+    const draftDb = await prisma.patientProcedureSession.findUnique({ where: { id: sessDraft.id }, select: { materials: true, status: true } });
+    check(`${P} Ajustes (Start): sessão NÃO finalizada mantém o JSON de materiais após o downgrade`, JSON.parse(draftDb.materials).length === 1 && draftDb.status !== "Concluída", `${draftDb?.materials} ${draftDb?.status}`);
+    // 4) despesas de compra
+    const [e1, e2] = purchaseExp;
+    const payR = await call("a", "PATCH", `/api/expenses/${e1.id}`, { action: "pay" });
+    const unpayR = await call("a", "PATCH", `/api/expenses/${e1.id}`, { action: "unpay" });
+    const financeDenied = (x) => x.status === 403 && x.data?.code === "PLAN_FEATURE" && x.data.feature === "finance";
+    check(`${P} Ajustes (Start): pagar e reabrir despesa sao bloqueados sem finance`, financeDenied(payR) && financeDenied(unpayR) && (await prisma.expense.findUnique({ where: { id: e1.id }, select: { status: true } })).status === "open", `${brief(payR)} | ${brief(unpayR)}`);
+    const cancelR = await call("a", "PATCH", `/api/expenses/${e2.id}`, { action: "cancel" });
+    const editR = await call("a", "PATCH", `/api/expenses/${e2.id}`, { description: "Mudou", amountCents: 1 });
+    const editR1 = await call("a", "PATCH", `/api/expenses/${e1.id}`, { dueOn: day(5) });
+    check(`${P} Ajustes (Start): cancelar e editar despesas sao bloqueados sem finance`, [cancelR, editR, editR1].every(financeDenied), `${brief(cancelR)} | ${brief(editR)} | ${brief(editR1)}`);
+    const expAfter = await prisma.expense.findMany({ where: { clinicId: idA, source: "purchase" }, orderBy: { dueOn: "asc" }, select: { id: true, status: true, description: true, amountCents: true } });
+    const expList = await call("a", "GET", "/api/expenses");
+    check(`${P} Ajustes (Start): despesas ficam intactas e GET /expenses e bloqueado sem finance`, JSON.stringify(expAfter) === JSON.stringify(purchaseExp) && await prisma.expense.count({ where: { clinicId: idA } }) === expCount && financeDenied(expList), `${expList.status} ${brief(expList)}`);
+    // volta ao Pro: custos originais reaparecem
+    await setPlan(idA, "pro"); await relog("a");
+    const backQx = ((await call("a", "GET", `/api/quotes?patientId=${pid}`)).data.quotes ?? []).find((x) => x.id === QX);
+    check(`${P} Ajustes (Pro de volta): o orçamento editado no Start mostra de novo os custos originais e a busca de jornada volta a achar`, JSON.stringify(parse(backQx?.details).costs) === JSON.stringify(origCosts) && (await jSearch("a", "laborCents")).includes(J.id), JSON.stringify(parse(backQx?.details).costs));
+    // Premium
+    await setPlan(idA, "premium"); await relog("a");
+    const premiumQuote = await mkQuote("a", [{ procedureId: proc.id, quantity: 1, discountCents: 0 }]);
+    const premAppt = await appt("a", `PM Premium ${run}`, "12:00");
+    await call("a", "PATCH", `/api/appointments/${premAppt?.id}`, { status: "Atendido" });
+    const premChecks = [await call("a", "GET", "/api/products"), await call("a", "GET", "/api/purchases"), await call("a", "GET", "/api/clinic/cost-settings"), await call("a", "GET", "/api/stock/alerts")];
+    check(`${P} Premium: estoque, compras e custos liberados, orçamento com custos e atendimento com pending`, premChecks.every((x) => x.status === 200) && parse((await dbQuote(premiumQuote.data?.quote?.id))?.details).costs?.facilityCents === 2000 && (await dbCheck(premAppt.id)).materialsCheck === "pending", premChecks.map((x) => x.status).join());
+    // Teste grátis (C): recursos do Premium
+    const cTrial = [await call("c", "GET", "/api/products"), await call("c", "GET", "/api/purchases"), await call("c", "GET", "/api/clinic/cost-settings")];
+    check(`${P} Teste grátis (C): estoque, compras e custos liberados (200)`, cTrial.every((x) => x.status === 200), cTrial.map((x) => x.status).join());
+
+    // ---------------- Fase 4: Pro vencido (somente leitura) ----------------
+    await setPlan(idA, "pro", "EXPIRED"); await relog("a");
+    const readGets = ["/api/products", "/api/purchases", "/api/stock/alerts", "/api/clinic/cost-settings", "/api/clinic/stock-settings", `/api/products/${pA.id}`, `/api/products/${pA.id}/movements`];
+    const readRes = [];
+    for (const p2 of readGets) readRes.push(await call("a", "GET", p2));
+    check(`${P} Somente leitura (Pro EXPIRED): GETs de estoque, compras e custos = 200 com os dados visíveis`, readRes.every((x) => x.status === 200) && JSON.stringify(readRes[0].data).includes(pA.id), readRes.map((x) => x.status).join());
+    const snapRoBefore = await snap();
+    const writeCalls = [
+      ["POST", "/api/products", { name: `PM ro ${run}`, kind: "material", unit: "un", costCents: 1, supplier: "F" }], ["PATCH", `/api/products/${pA.id}`, { minStock: 2 }], ["POST", `/api/products/${pA.id}/movements`, {}],
+      ["POST", "/api/purchases", {}], ["PATCH", `/api/purchases/${purchaseId}`, { action: "cancel" }], ["PATCH", "/api/clinic/stock-settings", {}],
+      ["PATCH", "/api/clinic/cost-settings", { laborCost: 1, facilityCost: 1, medicationCost: 1, appointmentToleranceMinutes: 15 }], ["PATCH", "/api/team", { membershipId: owner.id, laborCostCents: 1 }],
+      ["POST", "/api/procedures", { name: `PM ro ${run}`, category: "Facial", price: 1, durationMinutes: 30, margin: 30, technicalSheet: [] }], ["PATCH", `/api/procedures/${proc.id}`, { technicalSheet: [{ productId: pA.id, quantity: 1 }] }],
+      ["POST", "/api/quotes", { patientId: pid, details: [{ procedureId: proc.id, quantity: 1, discountCents: 0 }] }], ["POST", `/api/appointments/${aPend.id}/materials`, { items: [] }],
+    ];
+    const badRo = [];
+    for (const [m, p2, b] of writeCalls) { const x = await call("a", m, p2, b); if (!readonly(x)) badRo.push(`${m} ${shortUrl(p2)} -> ${brief(x)}`); }
+    check(`${P} Somente leitura: ${writeCalls.length} escritas = 403 SUBSCRIPTION_READONLY (nunca 401)`, badRo.length === 0, badRo.join(" | "));
+    check(`${P} Somente leitura: as escritas bloqueadas não alteraram o banco`, (await snap()) === snapRoBefore, await snap());
+
+    // convites com a clínica vencida
+    const inviteRow = (tag) => prisma.clinicInvitation.findFirst({ where: { clinicId: idA, email: mail(tag) }, select: { status: true } });
+    const generic = (x) => x.status === 403 && x.data?.code === "PLAN_LIMIT" && typeof x.data.message === "string" && !("limit" in x.data) && !("used" in x.data) && !("resource" in x.data);
+    const regRaw = async (token, name) => {
+      const res = await fetch(`${baseUrl}/api/auth/invite/register`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, name, password: pw, ...teamProfile() }), redirect: "manual" });
+      const text = await res.text();
+      return { status: res.status, data: parse(text), cookie: res.headers.getSetCookie().find((c) => c.startsWith("harmonize_session=")) };
+    };
+    const acc = await call("c", "POST", "/api/invitations/accept", { token: invS.token });
+    const reg1 = await regRaw(invR1.token, "E2E Novo Um");
+    const reg2 = await regRaw(invR2.token, "E2E Novo Dois");
+    check(`${P} Convite com clínica EXPIRED: accept (STAFF) e register (PROFESSIONAL e STAFF) = 403 PLAN_LIMIT genérico, sem limit/used/resource`, generic(acc) && generic(reg1) && generic(reg2), `${brief(acc)} | ${brief(reg1)} | ${brief(reg2)}`);
+    check(`${P} Convite com clínica EXPIRED: convites seguem PENDING e as contas novas não foram criadas`, (await inviteRow("c"))?.status === "PENDING" && (await inviteRow("n1"))?.status === "PENDING" && (await inviteRow("n2"))?.status === "PENDING" && !(await userIdOf(mail("n1"))) && !(await userIdOf(mail("n2"))) && !reg1.cookie && !reg2.cookie, "");
+    await setPlan(idA, "pro", "ACTIVE");
+    const acc2 = await call("c", "POST", "/api/invitations/accept", { token: invS.token });
+    const reg3 = await regRaw(invR2.token, "E2E Novo Dois");
+    check(`${P} Convite com clínica ACTIVE: o mesmo convite é aceito (accept 200, register 201)`, acc2.status === 200 && reg3.status === 201 && (await inviteRow("c"))?.status === "ACCEPTED" && (await inviteRow("n2"))?.status === "ACCEPTED", `${brief(acc2)} | ${reg3.status} ${JSON.stringify(reg3.data).slice(0, 80)}`);
+
+    // ---------------- Cache de auth: clínica ativa na chave (usuário "c": dono de C e STAFF de A) ----------------
+    const idC = clinics.c;
+    const meClinic = async () => (await call("c", "GET", "/api/auth/me")).data.user?.clinic?.id;
+    const patientsTxt = async () => JSON.stringify((await call("c", "GET", "/api/patients")).data);
+    const cPatName = `Cativa ${run}`;
+    const swC0 = await call("c", "POST", "/api/auth/active-clinic", { clinicId: idC });
+    const cPat = await call("c", "POST", "/api/patients", { ...regDefaults, name: cPatName, phone: "11999990072", age: 30, cpf: randomCpf() });
+    check(`${P} Clínica ativa: usuário com 2 clínicas (dono de C, STAFF de A) criou paciente na clínica C`, swC0.status === 200 && cPat.status === 201, `${swC0.status} ${brief(cPat)}`);
+    const swA = await call("c", "POST", "/api/auth/active-clinic", { clinicId: idA });
+    const meA = await meClinic();
+    const patA = await patientsTxt();
+    check(`${P} Clínica ativa: trocar para A e logo em seguida /me e /patients refletem A, sem dados de C`, swA.status === 200 && meA === idA && patA.includes(`${term} Paciente`) && !patA.includes(cPatName), `${swA.status} ${meA} (A=${idA})`);
+    const swC = await call("c", "POST", "/api/auth/active-clinic", { clinicId: idC });
+    const meC = await meClinic();
+    const patC = await patientsTxt();
+    check(`${P} Clínica ativa: voltar para C e logo em seguida /me e /patients refletem C, sem dados de A`, swC.status === 200 && meC === idC && patC.includes(cPatName) && !patC.includes(`${term} Paciente`), `${swC.status} ${meC} (C=${idC})`);
+
+    // ---------------- Ordem papel -> plano (Start): STAFF recebe erro de papel; ADMIN recebe PLAN_FEATURE ----------------
+    await call("c", "POST", "/api/auth/active-clinic", { clinicId: idA });
+    await setPlan(idA, "start");
+    await relog("c"); await relog("a");
+    const staffRole = (await prisma.clinicMembership.findFirst({ where: { clinicId: idA, user: { email: mail("c") } }, select: { role: true } }))?.role;
+    const staffCalls = [["GET", "/api/products"], ["POST", "/api/products", { name: `PM staff ${run}`, kind: "material", unit: "un", costCents: 1, supplier: "F" }], ["GET", "/api/stock/alerts"], ["GET", "/api/purchases"]];
+    const badStaff = [], badAdmin = [];
+    for (const [m, p2, b] of staffCalls) {
+      const s = await call("c", m, p2, b);
+      if (s.status !== 403 || s.data?.code) badStaff.push(`${m} ${p2} -> ${brief(s)}`);
+      const ad = await call("a", m, p2, b);
+      if (!feat(ad, p2 === "/api/purchases" ? "purchases" : "stock")) badAdmin.push(`${m} ${p2} -> ${brief(ad)}`);
+    }
+    check(`${P} Ordem papel->plano (Start): STAFF em products/alerts/purchases = 403 sem code PLAN_FEATURE (ativo: ${await meClinic() === idA ? "A" : "?"}, papel ${staffRole})`, staffRole === "STAFF" && await meClinic() === idA && badStaff.length === 0, badStaff.join(" | "));
+    check(`${P} Ordem papel->plano (Start): ADMIN nas mesmas rotas = 403 PLAN_FEATURE`, badAdmin.length === 0, badAdmin.join(" | "));
+    check(`${P} Ordem papel->plano: o POST do STAFF não criou produto`, await prisma.product.count({ where: { clinicId: idA, name: `PM staff ${run}` } }) === 0, "");
+  } finally {
+    const ids = (await prisma.user.findMany({ where: { email: { in: allMails } }, select: { id: true } })).map((u) => u.id);
+    for (const id of ids) touchedUsers.add(id);
+    await wipeSecurityOf(ids).catch(() => undefined);
+    const allClinics = (await prisma.clinic.findMany({ where: { name: { in: tags.map(clinicNameOf) } }, select: { id: true } })).map((c) => c.id);
+    for (const clinicId of allClinics) {
+      await prisma.$transaction([
+        prisma.stockMovement.deleteMany({ where: { clinicId } }), prisma.pendingStockOutput.deleteMany({ where: { clinicId } }),
+        prisma.expense.deleteMany({ where: { clinicId } }), prisma.purchase.deleteMany({ where: { clinicId } }), prisma.recurringExpense.deleteMany({ where: { clinicId } }),
+        prisma.product.deleteMany({ where: { clinicId } }), prisma.procedure.deleteMany({ where: { clinicId } }), prisma.quote.deleteMany({ where: { clinicId } }),
+        prisma.payment.deleteMany({ where: { clinicId } }), prisma.clinicalDocument.deleteMany({ where: { clinicId } }), prisma.clinicalPhoto.deleteMany({ where: { clinicId } }),
+        prisma.clinicalFileAudit.deleteMany({ where: { clinicId } }), prisma.patient.deleteMany({ where: { clinicId } }),
+      ]).catch((error) => console.error(`planos_modulos: limpeza parcial falhou: ${error.message}`));
+    }
+    await prisma.clinicMembership.deleteMany({ where: { userId: { in: ids } } });
+    await prisma.clinic.deleteMany({ where: { name: { in: tags.map(clinicNameOf) } } });
+    await prisma.user.deleteMany({ where: { id: { in: ids } } });
+    const left = await prisma.clinic.count({ where: { name: { in: tags.map(clinicNameOf) } } }) + await prisma.user.count({ where: { email: { in: allMails } } });
+    check(`${P} limpeza das clínicas e usuários criados`, left === 0, left);
+  }
+}
+
+// Etapa 6 dos planos: relatórios, financeiro, Google Agenda, automações e matriz de permissões pelas ROTAS HTTP reais (cookie de sessão).
+// Clínicas descartáveis (prefixo e2e-prel-, e-mails @example.invalid), plano trocado direto no banco (prisma.clinicSubscription) + login novo
+// (cache de auth de 15 s por sessão). A: Pro -> Start -> Pro -> Premium. B: Premium com dados (isolamento). T: teste grátis. G: Google em
+// downgrade. R: somente leitura (EXPIRED). M: usuário nas clínicas A e B. NUNCA chama o Google real (conexão com token inválido "x";
+// o processador falha antes da rede). Tudo apagado no fim. Precisa de servidor SEM provedor de e-mail.
+async function planReports() {
+  const P = "planos_relatorios:";
+  const pw = `E2e-${run}-Rel9!`;
+  const keys = ["a", "b", "t", "g", "r"];
+  const nameOf = (k) => `Clinica PlRel ${k} ${run}`;
+  const mailOf = (k) => `e2e-prel-${k}-${run}@example.invalid`;
+  const mailLike = { startsWith: "e2e-prel-", endsWith: `-${run}@example.invalid` };
+  const term = `Zzrel${run}`;
+  const otherProf = `Prof Outra Clinica ${run}`;
+  const ck = {};
+  const cid = {};
+  const setPlan = (clinicId, plan, status = "ACTIVE", extra = {}) => prisma.clinicSubscription.update({ where: { clinicId }, data: { plan, status, trialEndsAt: null, currentPeriodEnd: null, ...extra } });
+  const relog = async (k) => { const s = await loginAs(mailOf(k), pw); ck[k] = s.cookie; if (s.status !== 200 || !s.cookie) throw new Error(`login ${k} falhou (${s.status})`); return s.status; };
+  const hc = async (k, method, path, body) => {
+    const res = await fetch(`${baseUrl}${path}`, { method, redirect: "manual", headers: { ...(body !== undefined ? { "content-type": "application/json" } : {}), origin: baseUrl, "user-agent": e2eUserAgent, ...(ck[k] ? { cookie: ck[k] } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
+    const buf = Buffer.from(await res.arrayBuffer());
+    const type = res.headers.get("content-type") ?? "";
+    let data = null;
+    if (/json/.test(type)) { try { data = JSON.parse(buf.toString("utf8")); } catch { data = null; } }
+    return { status: res.status, data, type, size: buf.length };
+  };
+  const feat = (r, feature, plan) => r.status === 403 && r.data?.code === "PLAN_FEATURE" && r.data.feature === feature && r.data.requiredPlan === plan && typeof r.data.message === "string" && r.data.message.length > 0;
+  const roleErr = (r) => r.status === 403 && !r.data?.code;
+  const readonly = (r) => r.status === 403 && r.data?.code === "SUBSCRIPTION_READONLY";
+  const notPlan = (r) => !(r.status === 403 && /^PLAN_|SUBSCRIPTION/.test(r.data?.code ?? ""));
+  const brief = (r) => `${r.status} ${JSON.stringify(r.data).slice(0, 130)}`;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const planBlocked = (r, central, individual) => r.status === 200 && JSON.stringify(Object.keys(r.data ?? {}).sort()) === JSON.stringify(["central", "individual", "planBlocked"]) && r.data.planBlocked === true && r.data.central === central && r.data.individual === individual;
+  const noLeak = (r) => !/@|email|token|lastError|lastSync|pending|failed|erro-secreto|e2e-prel/i.test(JSON.stringify(r.data ?? {}));
+  const fakeConn = (clinicId, userId, extra = {}) => prisma.googleCalendarConnection.create({ data: { clinicId, userId, googleEmail: `e2e-prel-gst-${run}@example.invalid`, connectionType: "ADMIN", status: "CONNECTED", accessTokenEncrypted: "x", refreshTokenEncrypted: "x", tokenExpiresAt: new Date(Date.now() + 3_600_000), scope: "calendar", ...extra } });
+  const cronSecret = process.env.CRON_SECRET ?? "e2e-cron-secret-test-1234567890";
+  const cron = async () => { const r = await fetch(`${baseUrl}/api/cron/calendar-sync`, { headers: { authorization: `Bearer ${cronSecret}` } }); await r.text(); return r.status; };
+  const { hash } = await import("bcryptjs");
+  const mkMember = async (clinicId, role, k, name) => {
+    let u = await prisma.user.findUnique({ where: { email: mailOf(k) } });
+    if (!u) u = await prisma.user.create({ data: { name, email: mailOf(k), passwordHash: await hash(pw, 4), emailVerifiedAt: new Date(), role } });
+    await prisma.clinicMembership.create({ data: { userId: u.id, clinicId, role } });
+    return u;
+  };
+  const areas = ["appointments", "clients", "procedures", "professionals", "quotes", "finance", "stock"];
+  const exportTypes = { xlsx: /spreadsheetml/, csv: /csv/, pdf: /pdf/ };
+  // Todas as rotas da etapa 6 com o recurso e o plano que o 403 deve citar (Start).
+  const startTable = (E1, R1) => [
+    ...areas.map((a) => ["GET", `/api/reports/${a}`, undefined, "reports", "pro"]),
+    ["GET", "/api/reports/overview", undefined, "reports", "pro"],
+    ...["all", "overview", "appointments", "finance"].map((t) => ["GET", `/api/reports/document?tab=${t}`, undefined, "reports", "pro"]),
+    ...["xlsx", "csv", "pdf"].map((f) => ["GET", `/api/reports/export?format=${f}&tab=appointments`, undefined, "reports", "pro"]),
+    ["GET", "/api/reports/export?format=xlsx&tab=all", undefined, "reports", "pro"],
+    ...["accounts?kind=receivable", "accounts?kind=payable", "flow", "movements", "summary"].map((s) => ["GET", `/api/finance/${s}`, undefined, "finance", "pro"]),
+    ["GET", "/api/expenses", undefined, "finance", "pro"],
+    ["POST", "/api/expenses", { description: `${term} x`, category: "Outros", amountCents: 100, dueOn: day(0), paymentMethod: "Pix" }, "finance", "pro"],
+    ["PATCH", `/api/expenses/${E1}`, { action: "pay" }, "finance", "pro"],
+    ["GET", "/api/recurring-expenses", undefined, "finance", "pro"],
+    ["POST", "/api/recurring-expenses", { description: `${term} y`, category: "Outros", amountCents: 100, paymentMethod: "Pix", frequency: "monthly", dayOfMonth: 5, startsOn: day(0) }, "finance", "pro"],
+    ["GET", `/api/recurring-expenses/${R1}`, undefined, "finance", "pro"],
+    ["PATCH", `/api/recurring-expenses/${R1}`, { amountCents: 1 }, "finance", "pro"],
+    ["DELETE", `/api/recurring-expenses/${R1}`, undefined, "finance", "pro"],
+    ["POST", "/api/recurring-expenses/sync", {}, "finance", "pro"],
+    ["POST", "/api/integrations/google-calendar/connect", { type: "ADMIN" }, "googleCalendar", "premium"],
+    ["POST", "/api/integrations/google-calendar/sync", {}, "googleCalendar", "premium"],
+    ["POST", "/api/appointments/auto-process", {}, "agendaAutomations", "pro"],
+    ...["autoMarkMissedAppointmentsEnabled", "autoCompleteAppointmentsEnabled", "autoAdvancePatientJourneyEnabled"].flatMap((key) => [true, false].map((enabled) => ["PATCH", "/api/clinic/preferences", { key, enabled }, "agendaAutomations", "pro"])),
+    ["PATCH", "/api/clinic/role-permissions", { matrix: {} }, "rolePermissions", "pro"],
+  ];
+  const cleanup = async () => {
+    const users = await prisma.user.findMany({ where: { email: mailLike }, select: { id: true } });
+    const ids = users.map((u) => u.id);
+    for (const id of ids) touchedUsers.add(id);
+    await wipeSecurityOf(ids).catch(() => undefined);
+    const clinicIds = (await prisma.clinic.findMany({ where: { name: { in: keys.map(nameOf) } }, select: { id: true } })).map((c) => c.id);
+    for (const clinicId of clinicIds) {
+      await prisma.$transaction([
+        prisma.googleCalendarEvent.deleteMany({ where: { clinicId } }), prisma.googleCalendarConnection.deleteMany({ where: { clinicId } }),
+        prisma.calendarSyncJob.deleteMany({ where: { clinicId } }), prisma.calendarNotificationLog.deleteMany({ where: { clinicId } }),
+        prisma.expense.deleteMany({ where: { clinicId } }), prisma.recurringExpense.deleteMany({ where: { clinicId } }),
+        prisma.appointment.deleteMany({ where: { clinicId } }), prisma.quote.deleteMany({ where: { clinicId } }), prisma.payment.deleteMany({ where: { clinicId } }),
+        prisma.procedure.deleteMany({ where: { clinicId } }), prisma.patient.deleteMany({ where: { clinicId } }),
+      ]).catch((error) => console.error(`planos_relatorios: limpeza parcial falhou: ${error.message}`));
+    }
+    await prisma.clinicMembership.deleteMany({ where: { userId: { in: ids } } });
+    await prisma.clinic.deleteMany({ where: { name: { in: keys.map(nameOf) } } });
+    await prisma.user.deleteMany({ where: { id: { in: ids } } });
+    return (await prisma.clinic.count({ where: { name: { in: keys.map(nameOf) } } })) + (await prisma.user.count({ where: { email: mailLike } }));
+  };
+  try {
+    for (const k of keys) {
+      const reg = await api("POST", "/api/auth/register", { clinicName: nameOf(k), name: `E2E PlRel ${k}`, email: mailOf(k), password: pw });
+      cid[k] = (await prisma.clinicMembership.findFirst({ where: { user: { email: mailOf(k) } }, select: { clinicId: true } }))?.clinicId;
+      if (reg.status !== 201 || !cid[k]) { check(`${P} clínica ${k} criada`, false, reg.status); return; }
+    }
+    await setPlan(cid.a, "pro"); await setPlan(cid.b, "premium"); await setPlan(cid.g, "premium"); await setPlan(cid.r, "premium");
+    // t fica com a assinatura intocada (TRIALING = Premium)
+    await mkMember(cid.a, "PROFESSIONAL", "pa", `Prel Profissional ${run}`);
+    await mkMember(cid.a, "STAFF", "sa", `Prel Atendente ${run}`);
+    const multi = await mkMember(cid.a, "ADMIN", "m", `Prel Multi ${run}`);
+    await prisma.clinicMembership.create({ data: { userId: multi.id, clinicId: cid.b, role: "ADMIN" } });
+    for (const k of ["a", "b", "t", "g", "r", "pa", "sa"]) await relog(k);
+    check(`${P} clínicas A (Pro), B (Premium), T (teste), G, R e usuários PROFESSIONAL/STAFF com login`, Object.keys(ck).length === 7, Object.keys(ck).join());
+    const subT = await prisma.clinicSubscription.findUnique({ where: { clinicId: cid.t }, select: { status: true } });
+    check(`${P} clínica T segue em teste grátis (TRIALING)`, subT?.status === "TRIALING", subT?.status);
+
+    // ---------------- Fase 1: Pro (A) cria os dados financeiros ----------------
+    const patient = (await hc("a", "POST", "/api/patients", { ...regDefaults, name: `${term} Paciente`, phone: "11999990081", age: 35, cpf: randomCpf() })).data?.patient;
+    const pid = patient?.id;
+    const professional = (await hc("a", "GET", "/api/team/professionals")).data?.professionals?.[0];
+    const J = (await hc("a", "POST", `/api/patients/${pid}/journeys`, { name: `PR J ${run}`, professionalId: professional?.id })).data?.journey;
+    const ev = (await hc("a", "PUT", `/api/patients/${pid}/evaluation`, { journeyId: J?.id, photos: [], assessment: fullAssessment, status: "Concluída" })).data?.evaluation;
+    const procName = `PR Proc ${run}`;
+    await hc("a", "POST", "/api/procedures", { name: procName, category: "Facial", price: 300, durationMinutes: 30, margin: 30 });
+    const proc = ((await hc("a", "GET", "/api/procedures")).data?.procedures ?? []).find((x) => x.name === procName);
+    check(`${P} Pro: paciente, jornada, avaliação e procedimento criados`, pid && J?.id && ev?.id && proc?.id, `${pid} ${J?.id} ${ev?.id} ${proc?.id}`);
+    if (!(pid && J?.id && ev?.id && proc?.id)) return;
+    let r = await hc("a", "POST", "/api/expenses", { description: `${term} Despesa`, category: "Aluguel", amountCents: 123456, dueOn: day(0), paymentMethod: "Pix" });
+    const E1 = r.data?.expense?.id;
+    check(`${P} Pro: POST /expenses = 201 com amountCents 123456`, r.status === 201 && E1 && r.data.expense.amountCents === 123456, brief(r));
+    r = await hc("a", "POST", "/api/recurring-expenses", { description: `${term} Fixa`, category: "Outros", amountCents: 5000, paymentMethod: "Pix", frequency: "monthly", dayOfMonth: 5, startsOn: day(-40) });
+    const R1 = r.data?.recurringExpense?.id;
+    check(`${P} Pro: POST /recurring-expenses = 201 e gera ocorrências`, r.status === 201 && R1 && await prisma.expense.count({ where: { recurringExpenseId: R1 } }) >= 1, brief(r));
+    if (!E1 || !R1) return;
+    const finState = async (clinicId) => JSON.stringify({ e: (await prisma.expense.findMany({ where: { clinicId }, orderBy: { id: "asc" }, select: { id: true, amountCents: true, status: true, description: true } })), r: await prisma.recurringExpense.findMany({ where: { clinicId }, orderBy: { id: "asc" }, select: { id: true, amountCents: true, description: true } }) });
+    const finPro = await finState(cid.a);
+    const approvedQuote = async (qty = 1) => {
+      const q = await hc("a", "POST", "/api/quotes", { patientId: pid, journeyId: J.id, evaluationId: ev.id, details: [{ procedureId: proc.id, quantity: qty, discountCents: 0 }], paymentMethod: "Pix", installments: 1, notes: "" });
+      const id = q.data?.quote?.id;
+      for (const status of ["Enviado", "Aprovado"]) await hc("a", "PATCH", `/api/quotes/${id}`, { status, evaluationId: ev.id });
+      return id;
+    };
+    const proApi = [];
+    for (const a of areas) proApi.push([a, await hc("a", "GET", `/api/reports/${a}`)]);
+    check(`${P} Pro: reports por área (${areas.join(", ")}) = 200 JSON`, proApi.every(([, x]) => x.status === 200 && /json/.test(x.type)), proApi.map(([a, x]) => `${a}:${x.status}`).join(" "));
+    const bad = [];
+    for (const a of areas) for (const [fmt, re] of Object.entries(exportTypes)) {
+      const x = await hc("a", "GET", `/api/reports/export?format=${fmt}&tab=${a}`);
+      if (x.status !== 200 || !re.test(x.type) || x.size < 20) bad.push(`${a}.${fmt}:${x.status}/${x.type}/${x.size}`);
+    }
+    check(`${P} Pro: export individual xlsx/csv/pdf em ${areas.length} áreas = 200 com tipo certo e arquivo não vazio`, bad.length === 0, bad.join(" | "));
+    const docs = [await hc("a", "GET", "/api/reports/document?tab=appointments"), await hc("a", "GET", "/api/reports/document?tab=finance")];
+    check(`${P} Pro: document tab=appointments e tab=finance = 200`, docs.every((x) => x.status === 200), docs.map((x) => x.status).join());
+    const proDeny = [
+      ["overview", await hc("a", "GET", "/api/reports/overview"), "reportsAdvanced"],
+      ["document all", await hc("a", "GET", "/api/reports/document?tab=all"), "reportsConsolidated"],
+      ["document overview", await hc("a", "GET", "/api/reports/document?tab=overview"), "reportsAdvanced"],
+      ["export all xlsx", await hc("a", "GET", "/api/reports/export?format=xlsx&tab=all"), "reportsConsolidated"],
+      ["export all pdf", await hc("a", "GET", "/api/reports/export?format=pdf&tab=all"), "reportsConsolidated"],
+      ["export overview xlsx", await hc("a", "GET", "/api/reports/export?format=xlsx&tab=overview"), "reportsAdvanced"],
+    ];
+    check(`${P} Pro: overview, document/export tab=all e tab=overview = 403 PLAN_FEATURE (reportsAdvanced / reportsConsolidated, requiredPlan premium)`, proDeny.every(([, x, f]) => feat(x, f, "premium")), proDeny.map(([n, x]) => `${n}:${brief(x)}`).join(" | "));
+    const fin = [];
+    for (const s of ["accounts?kind=receivable", "accounts?kind=payable", "flow", "movements", "summary"]) fin.push([s, await hc("a", "GET", `/api/finance/${s}`)]);
+    fin.push(["expenses", await hc("a", "GET", "/api/expenses")], ["recurring", await hc("a", "GET", "/api/recurring-expenses")], ["recurring/id", await hc("a", "GET", `/api/recurring-expenses/${R1}`)], ["sync", await hc("a", "POST", "/api/recurring-expenses/sync", {})]);
+    check(`${P} Pro: finance/{accounts,flow,movements,summary}, expenses, recurring (+id, +sync) = 200`, fin.every(([, x]) => x.status === 200), fin.map(([n, x]) => `${n}:${x.status}`).join(" "));
+    const expPro = (await hc("a", "GET", "/api/expenses")).data?.expenses ?? [];
+    check(`${P} Pro: GET /expenses traz a despesa com 123456 centavos`, expPro.find((x) => x.id === E1)?.amountCents === 123456, JSON.stringify(expPro.map((x) => x.amountCents)));
+    const auto = [await hc("a", "POST", "/api/appointments/auto-process", {}), ...(await Promise.all(["autoMarkMissedAppointmentsEnabled", "autoCompleteAppointmentsEnabled", "autoAdvancePatientJourneyEnabled"].map((key) => hc("a", "PATCH", "/api/clinic/preferences", { key, enabled: true }))))];
+    check(`${P} Pro: auto-process e PATCH preferences auto* = 200`, auto.every((x) => x.status === 200), auto.map((x) => x.status).join());
+    const flagSel = { autoMarkMissedAppointmentsEnabled: true, autoCompleteAppointmentsEnabled: true, autoAdvancePatientJourneyEnabled: true };
+    const flags = await prisma.clinic.findUnique({ where: { id: cid.a }, select: flagSel });
+    check(`${P} Pro: os três flags auto* gravados como true`, Object.values(flags).every((v) => v === true), JSON.stringify(flags));
+    const matrix = (await hc("a", "GET", "/api/clinic/role-permissions")).data?.matrix;
+    r = await hc("a", "PATCH", "/api/clinic/role-permissions", { matrix });
+    check(`${P} Pro: PATCH role-permissions com a matriz atual = 200`, r.status === 200 && r.data?.matrix, brief(r));
+    const gPro = [await hc("a", "POST", "/api/integrations/google-calendar/connect", { type: "ADMIN" }), await hc("a", "POST", "/api/integrations/google-calendar/sync", {})];
+    check(`${P} Pro: Google connect/sync = 403 PLAN_FEATURE googleCalendar (requiredPlan premium)`, gPro.every((x) => feat(x, "googleCalendar", "premium")), gPro.map(brief).join(" | "));
+    const gProSt = await hc("a", "GET", "/api/integrations/google-calendar/status");
+    check(`${P} Pro: Google status = 200 {planBlocked:true, central:false, individual:false} sem nada além disso`, planBlocked(gProSt, false, false) && noLeak(gProSt), brief(gProSt));
+    const bPatF = (await hc("b", "POST", "/api/patients", { ...regDefaults, name: `${term}BF Paciente`, phone: "11999990086", age: 41, cpf: randomCpf() })).data?.patient;
+    if (bPatF?.id) await prisma.appointment.create({ data: { clinicId: cid.b, patientId: bPatF.id, procedure: `PR B ${run}`, professional: otherProf, date: new Date(`${day(3)}T12:00:00-03:00`), time: "08:00", status: "Agendado", notes: "" } });
+    await prisma.appointment.create({ data: { clinicId: cid.a, patientId: pid, procedure: `PR A filtro ${run}`, professional: "Teste", date: new Date(`${day(3)}T12:00:00-03:00`), time: "09:30", status: "Agendado", notes: "" } });
+    const proFilt = await hc("a", "GET", "/api/reports/filters");
+    check(`${P} Pro: GET /reports/filters = 200 só {professionals}, com os profissionais da clínica e SEM os de outra clínica`, proFilt.status === 200 && JSON.stringify(Object.keys(proFilt.data ?? {})) === '["professionals"]' && proFilt.data.professionals.includes("Teste") && !proFilt.data.professionals.includes(otherProf), brief(proFilt));
+    const proOv = await hc("a", "GET", "/api/reports/overview");
+    check(`${P} Pro: overview segue 403 reportsAdvanced mesmo com filters liberado`, feat(proOv, "reportsAdvanced", "premium"), brief(proOv));
+    const discPro = await hc("a", "POST", "/api/integrations/google-calendar/disconnect", { type: "ADMIN" });
+    check(`${P} Pro: Google disconnect sem conexão responde sem 403 de plano (404 ok)`, notPlan(discPro) && discPro.status < 500, brief(discPro));
+    const pay1 = await hc("a", "POST", "/api/payments", { patientId: pid, value: 150.5, method: "Pix", status: "Pago", installments: "A vista" });
+    check(`${P} Pro: POST /payments = 201`, pay1.status === 201 && pay1.data?.payment, brief(pay1));
+    let sec = ((await hc("a", "GET", `/api/search?q=${encodeURIComponent(term)}`)).data?.results ?? []).map((x) => x.section);
+    check(`${P} Pro: busca acha despesas (financeiro) e o paciente (clientes)`, sec.includes("financeiro") && sec.includes("clientes"), sec.join());
+    // automação: falta marcada no histórico (Pro)
+    const past = (status, time) => prisma.appointment.create({ data: { clinicId: cid.a, patientId: pid, procedure: `PR Passado ${run}`, professional: "Teste", date: new Date(`${day(-1)}T12:00:00-03:00`), time, status, notes: "" } });
+    const histUrl = `/api/patients/${pid}/history?tab=Hist%C3%B3rico`;
+    const missPro = await past("Agendado", "08:00");
+    await hc("a", "GET", histUrl);
+    check(`${P} Pro: GET history marca o agendamento vencido como Faltou (controle positivo)`, (await prisma.appointment.findUnique({ where: { id: missPro.id } })).status === "Faltou", "");
+    // B (Premium) cria seus dados
+    const bPat = (await hc("b", "POST", "/api/patients", { ...regDefaults, name: `${term}B Paciente`, phone: "11999990082", age: 40, cpf: randomCpf() })).data?.patient;
+    const bExp = (await hc("b", "POST", "/api/expenses", { description: `${term}B Despesa`, category: "Aluguel", amountCents: 777700, dueOn: day(0), paymentMethod: "Pix" })).data?.expense;
+    const bRec = (await hc("b", "POST", "/api/recurring-expenses", { description: `${term}B Fixa`, category: "Outros", amountCents: 3300, paymentMethod: "Pix", frequency: "monthly", dayOfMonth: 6, startsOn: day(-3) })).data?.recurringExpense;
+    check(`${P} B (Premium): paciente, despesa e despesa fixa criados`, bPat?.id && bExp?.id && bRec?.id, `${bPat?.id} ${bExp?.id} ${bRec?.id}`);
+    if (!(bPat?.id && bExp?.id && bRec?.id)) return;
+    const bBefore = await finState(cid.b);
+    const bOv = await hc("b", "GET", "/api/reports/overview");
+    check(`${P} B (Premium): overview 200 e document tab=all 200`, bOv.status === 200 && (await hc("b", "GET", "/api/reports/document?tab=all")).status === 200, brief(bOv));
+    // isolamento com A em Pro
+    const iso = [await hc("a", "PATCH", `/api/expenses/${bExp.id}`, { action: "pay" }), await hc("a", "GET", `/api/recurring-expenses/${bRec.id}`), await hc("a", "DELETE", `/api/recurring-expenses/${bRec.id}`)];
+    const listA = JSON.stringify((await hc("a", "GET", "/api/expenses")).data);
+    const secB = JSON.stringify((await hc("a", "GET", `/api/search?q=${encodeURIComponent(`${term}B`)}`)).data?.results ?? []);
+    check(`${P} Isolamento (A Pro): PATCH/GET/DELETE em despesas de B = 404, lista e busca de A sem dados de B`, iso.every((x) => x.status === 404) && !listA.includes(bExp.id) && !listA.includes("777700") && !secB.includes(`${term}B`), `${iso.map((x) => x.status)} ${secB.slice(0, 100)}`);
+    check(`${P} Isolamento: dados de B intactos depois das tentativas de A`, await finState(cid.b) === bBefore, "");
+
+    // ---------------- Fase 2: Start (A) ----------------
+    await setPlan(cid.a, "start"); await relog("a"); await relog("pa"); await relog("sa");
+    const table = startTable(E1, R1);
+    const start = [];
+    for (const [m, p2, b, f, pl] of table) {
+      const body = p2 === "/api/clinic/role-permissions" ? { matrix } : b;
+      const x = await hc("a", m, p2, body);
+      if (!feat(x, f, pl)) start.push(`${m} ${p2.slice(0, 55)} -> ${brief(x)}`);
+    }
+    check(`${P} Start: ${table.length} rotas da etapa 6 (reports, finance, expenses, recurring, Google, auto-process, preferences auto*, role-permissions) = 403 PLAN_FEATURE com recurso e plano certos`, start.length === 0, start.join(" | "));
+    check(`${P} Start: dados financeiros intactos no banco (despesas, ocorrências, fixa) e flags auto* gravados`, await finState(cid.a) === finPro && JSON.stringify(await prisma.clinic.findUnique({ where: { id: cid.a }, select: flagSel })) === JSON.stringify(flags), "");
+    const prefStart = [await hc("a", "GET", "/api/clinic/role-permissions")];
+    check(`${P} Start: GET role-permissions segue 200 (clinic/preferences não tem GET: só PATCH)`, prefStart.every((x) => x.status === 200), prefStart.map((x) => x.status).join());
+    const prefOk = await hc("a", "PATCH", "/api/clinic/preferences", { key: "requireCancellationReason", enabled: true });
+    check(`${P} Start: PATCH preferences de chave sem automação (requireCancellationReason) = 200`, prefOk.status === 200, brief(prefOk));
+    const discStart = await hc("a", "POST", "/api/integrations/google-calendar/disconnect", { type: "ADMIN" });
+    check(`${P} Start: Google disconnect sem 403 de plano (404 sem conexão é ok)`, notPlan(discStart) && discStart.status < 500, brief(discStart));
+    // filters + status do Google no Start; a clínica B (Premium) com conexão e profissional próprios não afeta A
+    const bOwner = await prisma.clinicMembership.findFirst({ where: { clinicId: cid.b, isOwner: true }, select: { userId: true } });
+    const aOwner = await prisma.clinicMembership.findFirst({ where: { clinicId: cid.a, isOwner: true }, select: { userId: true } });
+    const bGoogle = await fakeConn(cid.b, bOwner.userId);
+    const stFilt = await hc("a", "GET", "/api/reports/filters");
+    check(`${P} Start: GET /reports/filters = 403 PLAN_FEATURE reports (requiredPlan pro)`, feat(stFilt, "reports", "pro"), brief(stFilt));
+    const roleFilt = [await hc("pa", "GET", "/api/reports/filters"), await hc("sa", "GET", "/api/reports/filters")];
+    check(`${P} Start: /reports/filters para PROFESSIONAL e STAFF sem permissão = 403 de papel (sem code), papel antes do plano`, roleFilt.every(roleErr), roleFilt.map(brief).join(" | "));
+    const stNone = await hc("a", "GET", "/api/integrations/google-calendar/status");
+    check(`${P} Start: Google status sem conexão = 200 {planBlocked:true, central:false, individual:false}, mesmo com a clínica B conectada`, planBlocked(stNone, false, false) && noLeak(stNone), brief(stNone));
+    const aCentral = await fakeConn(cid.a, aOwner.userId, { lastError: "erro-secreto-do-google" });
+    const stCentral = await hc("a", "GET", "/api/integrations/google-calendar/status");
+    check(`${P} Start: Google status com central conectada = central:true e NADA de e-mail, tokens, erro ou contadores`, planBlocked(stCentral, true, false) && noLeak(stCentral), brief(stCentral));
+    const aIndiv = await fakeConn(cid.a, aOwner.userId, { connectionType: "PROFESSIONAL" });
+    const stBoth = await hc("a", "GET", "/api/integrations/google-calendar/status");
+    const stProf = await hc("pa", "GET", "/api/integrations/google-calendar/status");
+    const stStaff = await hc("sa", "GET", "/api/integrations/google-calendar/status");
+    check(`${P} Start: status com individual do ADMIN = individual:true; PROFESSIONAL não vê a central (false/false); STAFF = 403 de papel`, planBlocked(stBoth, true, true) && planBlocked(stProf, false, false) && roleErr(stStaff), `${brief(stBoth)} | ${brief(stProf)} | ${brief(stStaff)}`);
+    const discConn = await hc("a", "POST", "/api/integrations/google-calendar/disconnect", { type: "ADMIN" });
+    const aCentralRow = await prisma.googleCalendarConnection.findUnique({ where: { id: aCentral.id } });
+    const bGoogleNow = await prisma.googleCalendarConnection.findUnique({ where: { id: bGoogle.id } });
+    const stAfter = await hc("a", "GET", "/api/integrations/google-calendar/status");
+    check(`${P} Start: disconnect com conexão = 200 ok, central DISCONNECTED sem tokens, status vira central:false (individual segue), conexão da clínica B intacta`, discConn.status === 200 && discConn.data?.ok === true && aCentralRow?.status === "DISCONNECTED" && aCentralRow.accessTokenEncrypted === null && planBlocked(stAfter, false, true) && bGoogleNow?.status === "CONNECTED" && bGoogleNow.accessTokenEncrypted === "x", `${brief(discConn)} ${aCentralRow?.status} ${brief(stAfter)}`);
+    await prisma.googleCalendarConnection.deleteMany({ where: { id: { in: [aCentral.id, aIndiv.id] } } });
+    const payBefore = await prisma.payment.count({ where: { clinicId: cid.a } });
+    const payStart = await hc("a", "POST", "/api/payments", { patientId: pid, value: 20, method: "Pix", status: "Pago", installments: "A vista" });
+    const q2 = await approvedQuote(2);
+    const qPaid = await hc("a", "PATCH", `/api/quotes/${q2}`, { status: "Pago", evaluationId: ev.id });
+    const q2Row = await prisma.quote.findUnique({ where: { id: q2 }, select: { status: true } });
+    check(`${P} Start: POST /payments = 201 e orçamento aprovado -> status Pago = 200 (núcleo, sem módulo financeiro)`, payStart.status === 201 && qPaid.status === 200 && q2Row?.status === "Pago" && await prisma.payment.count({ where: { clinicId: cid.a } }) > payBefore, `${payStart.status} ${brief(qPaid)} ${q2Row?.status}`);
+    const apS = (await hc("a", "POST", "/api/appointments", { patientId: pid, procedure: procName, professional: "Teste", time: "10:00", date: `${day(1)}T00:00:00` })).data?.appointment;
+    const atS = await hc("a", "PATCH", `/api/appointments/${apS?.id}`, { status: "Atendido" });
+    check(`${P} Start: criar e atender agendamento = 200 (núcleo)`, apS?.id && atS.status === 200 && (await prisma.appointment.findUnique({ where: { id: apS.id } })).status === "Atendido", brief(atS));
+    sec = ((await hc("a", "GET", `/api/search?q=${encodeURIComponent(term)}`)).data?.results ?? []).map((x) => x.section);
+    check(`${P} Start: busca sem despesas (financeiro) e ainda acha o paciente`, !sec.includes("financeiro") && sec.includes("clientes"), sec.join());
+    const missStart = await past("Agendado", "09:00");
+    const histStart = await hc("a", "GET", histUrl);
+    check(`${P} Start: GET history = 200 e NÃO marca Faltou (agendamento vencido segue Agendado no banco)`, histStart.status === 200 && (await prisma.appointment.findUnique({ where: { id: missStart.id } })).status === "Agendado", `${histStart.status}`);
+    // ordem papel -> plano, matriz padrão
+    const roleCalls = [["GET", "/api/reports/finance"], ["GET", "/api/reports/appointments"], ["GET", "/api/finance/summary"], ["GET", "/api/expenses"]];
+    const badRole = [];
+    for (const k of ["pa", "sa"]) for (const [m, p2] of roleCalls) { const x = await hc(k, m, p2); if (!roleErr(x)) badRole.push(`${k} ${p2} -> ${brief(x)}`); }
+    check(`${P} Ordem papel->plano (Start): PROFESSIONAL e STAFF sem permissão = 403 de papel (sem code PLAN_FEATURE) em reports/finance, reports/appointments, finance/summary e expenses`, badRole.length === 0, badRole.join(" | "));
+    // isolamento com A em Start
+    const isoStart = [await hc("a", "GET", `/api/recurring-expenses/${bRec.id}`), await hc("a", "PATCH", `/api/expenses/${bExp.id}`, { action: "pay" })];
+    check(`${P} Isolamento (A Start): rotas de despesa de B = 403 PLAN_FEATURE (nada de B), B intacta`, isoStart.every((x) => feat(x, "finance", "pro")) && await finState(cid.b) === bBefore, isoStart.map(brief).join(" | "));
+    const bStill = [await hc("b", "GET", "/api/reports/overview"), await hc("b", "GET", "/api/expenses"), await hc("b", "GET", "/api/finance/summary")];
+    check(`${P} Isolamento: B (Premium) segue com tudo 200 enquanto A está no Start`, bStill.every((x) => x.status === 200) && JSON.stringify(bStill[1].data).includes("777700"), bStill.map((x) => x.status).join());
+    // usuário em duas clínicas
+    await relog("m");
+    const sw = async (id) => hc("m", "POST", "/api/auth/active-clinic", { clinicId: id });
+    const mRes = [];
+    mRes.push(await sw(cid.a), await hc("m", "GET", "/api/reports/overview"), await hc("m", "GET", "/api/finance/summary"));
+    mRes.push(await sw(cid.b), await hc("m", "GET", "/api/reports/overview"), await hc("m", "GET", "/api/finance/summary"));
+    mRes.push(await sw(cid.a), await hc("m", "GET", "/api/reports/overview"));
+    check(`${P} Duas clínicas: ativa A (Start) = 403 PLAN_FEATURE; ativa B (Premium) = 200; volta A = 403 de novo`, mRes[0].status === 200 && feat(mRes[1], "reports", "pro") && feat(mRes[2], "finance", "pro") && mRes[3].status === 200 && mRes[4].status === 200 && mRes[5].status === 200 && mRes[6].status === 200 && feat(mRes[7], "reports", "pro"), mRes.map((x) => x.status).join());
+
+    // ---------------- Fase 3: volta ao Pro, dados voltam ----------------
+    await setPlan(cid.a, "pro"); await relog("a");
+    const back = [await hc("a", "GET", "/api/expenses"), await hc("a", "GET", `/api/recurring-expenses/${R1}`), await hc("a", "GET", "/api/finance/summary"), await hc("a", "GET", "/api/reports/finance")];
+    const expBack = back[0].data?.expenses ?? [];
+    check(`${P} Upgrade Start->Pro: despesas, fixa e financeiro voltam intactos (123456)`, back.every((x) => x.status === 200) && expBack.find((x) => x.id === E1)?.amountCents === 123456 && await finState(cid.a) === finPro, back.map((x) => x.status).join());
+    sec = ((await hc("a", "GET", `/api/search?q=${encodeURIComponent(term)}`)).data?.results ?? []).map((x) => x.section);
+    check(`${P} Upgrade: busca volta a achar despesas`, sec.includes("financeiro"), sec.join());
+
+    // ---------------- Fase 4: Premium (A) ----------------
+    await setPlan(cid.a, "premium"); await relog("a"); await relog("pa"); await relog("sa");
+    const prem = [await hc("a", "GET", "/api/reports/overview"), await hc("a", "GET", "/api/reports/document?tab=all"), await hc("a", "GET", "/api/reports/document?tab=overview"), await hc("a", "GET", "/api/reports/export?format=xlsx&tab=all"), await hc("a", "GET", "/api/reports/export?format=pdf&tab=all"), await hc("a", "GET", "/api/reports/export?format=pdf&tab=overview")];
+    check(`${P} Premium: overview, document all/overview e export all/overview = 200`, prem.every((x) => x.status === 200 && x.size > 100), prem.map((x) => `${x.status}/${x.size}`).join());
+    const premG = [await hc("a", "GET", "/api/integrations/google-calendar/status"), await hc("a", "POST", "/api/integrations/google-calendar/connect", { type: "ADMIN" })];
+    check(`${P} Premium: Google status e connect não dão 403 de plano`, premG.every(notPlan) && premG[0].status === 200, premG.map(brief).join(" | "));
+    // PROFESSIONAL ganha acesso por matriz (Pro+): nunca vê o financeiro em Relatórios
+    const m2 = JSON.parse(JSON.stringify(matrix));
+    for (const key of ["reports:access", "finance:access", "finance:manage"]) m2.PROFESSIONAL[key] = true;
+    r = await hc("a", "PATCH", "/api/clinic/role-permissions", { matrix: m2 });
+    await relog("pa");
+    const profRes = { fin: await hc("pa", "GET", "/api/reports/finance"), area: await hc("pa", "GET", "/api/reports/appointments"), docFin: await hc("pa", "GET", "/api/reports/document?tab=finance"), expFin: await hc("pa", "GET", "/api/reports/export?format=csv&tab=finance") };
+    check(`${P} Premium: PROFESSIONAL com finance:access na matriz nunca vê o financeiro nos relatórios (403 de papel, sem PLAN_FEATURE); relatório de atendimentos próprio = 200`, r.status === 200 && roleErr(profRes.fin) && roleErr(profRes.docFin) && roleErr(profRes.expFin) && profRes.area.status === 200, `${r.status} ${Object.entries(profRes).map(([n, x]) => `${n}:${x.status}`).join(" ")}`);
+    const premFilt = await hc("a", "GET", "/api/reports/filters");
+    check(`${P} Premium: GET /reports/filters = 200 com os profissionais da clínica e sem os de outra clínica`, premFilt.status === 200 && premFilt.data.professionals.includes("Teste") && !premFilt.data.professionals.includes(otherProf), brief(premFilt));
+    const profFilt = await hc("pa", "GET", "/api/reports/filters");
+    check(`${P} Premium: PROFESSIONAL com reports:access na matriz recebe professionals: [] (não vê a equipe)`, profFilt.status === 200 && JSON.stringify(profFilt.data) === '{"professionals":[]}', brief(profFilt));
+    const stfRes = [await hc("sa", "GET", "/api/reports/finance"), await hc("sa", "GET", "/api/reports/appointments"), await hc("sa", "GET", "/api/reports/overview")];
+    check(`${P} Premium: STAFF sem reports:access = 403 de papel nos relatórios`, stfRes.every(roleErr), stfRes.map(brief).join(" | "));
+    const stfFilt = await hc("sa", "GET", "/api/reports/filters");
+    check(`${P} Premium: STAFF em /reports/filters = 403 de papel (sem code)`, roleErr(stfFilt), brief(stfFilt));
+    const pro2 = await hc("a", "PATCH", "/api/clinic/role-permissions", { matrix });
+    check(`${P} Premium: PATCH role-permissions restaurando a matriz = 200`, pro2.status === 200, brief(pro2));
+    // teste grátis
+    const tRes = [await hc("t", "GET", "/api/reports/overview"), await hc("t", "GET", "/api/reports/document?tab=all"), await hc("t", "GET", "/api/reports/export?format=xlsx&tab=all"), await hc("t", "GET", "/api/finance/summary"), await hc("t", "GET", "/api/expenses"), await hc("t", "GET", "/api/integrations/google-calendar/status")];
+    const tConn = await hc("t", "POST", "/api/integrations/google-calendar/connect", { type: "ADMIN" });
+    check(`${P} Teste grátis: overview, consolidado, financeiro e Google status = 200; connect sem 403 de plano`, tRes.every((x) => x.status === 200) && notPlan(tConn), `${tRes.map((x) => x.status)} ${brief(tConn)}`);
+
+    // ---------------- Google em downgrade (G) ----------------
+    const gOwner = await prisma.clinicMembership.findFirst({ where: { clinicId: cid.g, isOwner: true }, select: { userId: true } });
+    const gConn = await prisma.googleCalendarConnection.create({ data: { clinicId: cid.g, userId: gOwner.userId, googleEmail: `e2e-prel-google-${run}@example.invalid`, connectionType: "ADMIN", status: "CONNECTED", accessTokenEncrypted: "x", refreshTokenEncrypted: "x", tokenExpiresAt: new Date(Date.now() + 3_600_000), scope: "calendar" } });
+    const gPat = (await hc("g", "POST", "/api/patients", { ...regDefaults, name: `${term} G Paciente`, phone: "11999990083", age: 33, cpf: randomCpf() })).data?.patient;
+    const mkAp = async (time, offset = 2) => { const x = await hc("g", "POST", "/api/appointments", { patientId: gPat?.id, procedure: `PR G${offset} ${run}`, professional: "Teste", time, date: `${day(offset)}T00:00:00` }); if (!x.data?.appointment) console.error(`mkAp ${time}/${offset}: ${brief(x)}`); return x.data?.appointment; };
+    const jobsOf = (appointmentId) => prisma.calendarSyncJob.count({ where: { clinicId: cid.g, ...(appointmentId ? { appointmentId } : {}) } });
+    const g1 = await mkAp("08:00");
+    if (!g1?.id) throw new Error("agendamento G1 não criado");
+    await sleep(1500);
+    check(`${P} Google Premium: agendar com conexão enfileira job de sincronização (controle positivo)`, g1?.id && await jobsOf(g1.id) >= 1, `${g1?.id} jobs=${g1?.id ? await jobsOf(g1.id) : "-"}`);
+    const g2 = await mkAp("08:00", 3);
+    if (!g2?.id) throw new Error("agendamento G2 não criado");
+    await sleep(2500);
+    const jobPending = await prisma.calendarSyncJob.create({ data: { clinicId: cid.g, appointmentId: g2.id, operation: "UPDATE", dedupeKey: `${g2.id}:UPDATE:prel` } });
+    // o drain do Premium falhou com o token "x" e marcou a conexão como ERROR: volta a CONNECTED para provar que, no Pro, o processador nem a toca
+    await prisma.googleCalendarConnection.update({ where: { id: gConn.id }, data: { status: "CONNECTED", lastError: null } });
+    await setPlan(cid.g, "pro"); await relog("g");
+    const jobsBefore = await jobsOf();
+    const evBefore = await prisma.googleCalendarEvent.count({ where: { clinicId: cid.g } });
+    const g3 = await mkAp("08:00", 4);
+    const upd = await hc("g", "PATCH", `/api/appointments/${g1.id}`, { time: "17:00" });
+    await sleep(1500);
+    const cr1 = await cron(); await sleep(500); const cr2 = await cron();
+    const jobAfter = await prisma.calendarSyncJob.findUnique({ where: { id: jobPending.id } });
+    const connAfter = await prisma.googleCalendarConnection.findUnique({ where: { id: gConn.id } });
+    check(`${P} Google em downgrade (Pro): agendar e remarcar = 200 mas NÃO criam job novo`, g3?.id && upd.status === 200 && await jobsOf() === jobsBefore && await jobsOf(g3.id) === 0, `${upd.status} jobs ${jobsBefore} -> ${await jobsOf()}`);
+    check(`${P} Google em downgrade: cron (${cr1}/${cr2}) não processa o job PENDING (attempts 0, sem erro, não travado) e nada é apagado`, [cr1, cr2].every((s) => s === 200) && jobAfter?.status === "PENDING" && jobAfter.attempts === 0 && !jobAfter.lastError && !jobAfter.lockedAt && connAfter?.status === "CONNECTED" && connAfter.accessTokenEncrypted === "x" && await prisma.googleCalendarEvent.count({ where: { clinicId: cid.g } }) === evBefore, `${cr1}/${cr2} ${JSON.stringify(jobAfter && { s: jobAfter.status, a: jobAfter.attempts, e: jobAfter.lastError })} ${connAfter?.status}`);
+    const gSt = await hc("g", "GET", "/api/integrations/google-calendar/status");
+    check(`${P} Google em downgrade (Pro) com conexão: status = 200 {planBlocked:true, central:true, individual:false} sem e-mail, tokens, erros ou contadores`, planBlocked(gSt, true, false) && noLeak(gSt), brief(gSt));
+    const gConnNow = await prisma.googleCalendarConnection.findUnique({ where: { id: gConn.id } });
+    const gAfterJob = await prisma.calendarSyncJob.findUnique({ where: { id: jobPending.id } });
+    check(`${P} Google em downgrade: o status não altera a conexão nem o job (PENDING, attempts 0)`, gConnNow?.status === "CONNECTED" && gAfterJob?.status === "PENDING" && gAfterJob.attempts === 0, `${gConnNow?.status} ${gAfterJob?.status} ${gAfterJob?.attempts}`);
+    await setPlan(cid.g, "premium"); await relog("g");
+    let cr = 0;
+    for (let i = 0; i < 4; i += 1) { cr = await cron(); await sleep(600); const j = await prisma.calendarSyncJob.findUnique({ where: { id: jobPending.id } }); if (j && (j.attempts > 0 || j.status !== "PENDING")) break; }
+    const jobUp = await prisma.calendarSyncJob.findUnique({ where: { id: jobPending.id } });
+    check(`${P} Google upgrade (Premium): cron volta a processar o job que ficou na fila (tentativa registrada ou concluído), conexão preservada`, cr === 200 && jobUp && (jobUp.attempts > 0 || jobUp.status !== "PENDING") && await prisma.googleCalendarConnection.count({ where: { id: gConn.id } }) === 1, `${cr} ${JSON.stringify(jobUp && { s: jobUp.status, a: jobUp.attempts, e: jobUp.lastError })}`);
+    const gUp = await hc("g", "GET", "/api/integrations/google-calendar/status");
+    check(`${P} Google upgrade: status volta ao completo (200, sem planBlocked)`, gUp.status === 200 && gUp.data?.planBlocked !== true, brief(gUp));
+
+    // ---------------- Somente leitura (R) ----------------
+    const rPat = (await hc("r", "POST", "/api/patients", { ...regDefaults, name: `${term} R Paciente`, phone: "11999990084", age: 31, cpf: randomCpf() })).data?.patient;
+    const rE = (await hc("r", "POST", "/api/expenses", { description: `${term}R Despesa`, category: "Outros", amountCents: 4242, dueOn: day(0), paymentMethod: "Pix" })).data?.expense;
+    const rR = (await hc("r", "POST", "/api/recurring-expenses", { description: `${term}R Fixa`, category: "Outros", amountCents: 900, paymentMethod: "Pix", frequency: "monthly", dayOfMonth: 7, startsOn: day(-5) })).data?.recurringExpense;
+    const rMatrix = (await hc("r", "GET", "/api/clinic/role-permissions")).data?.matrix;
+    check(`${P} Somente leitura: preparo (paciente, despesa, fixa)`, rPat?.id && rE?.id && rR?.id && rMatrix, `${rPat?.id} ${rE?.id} ${rR?.id}`);
+    if (!(rPat?.id && rE?.id && rR?.id)) return;
+    const rPast = await prisma.appointment.create({ data: { clinicId: cid.r, patientId: rPat.id, procedure: `PR R ${run}`, professional: "Teste", date: new Date(`${day(-1)}T12:00:00-03:00`), time: "08:00", status: "Agendado", notes: "" } });
+    await setPlan(cid.r, "premium", "EXPIRED"); await relog("r");
+    const rBefore = await finState(cid.r);
+    const rGets = [];
+    for (const p2 of ["/api/reports/appointments", "/api/reports/finance", "/api/reports/overview", "/api/reports/document?tab=all", "/api/reports/export?format=csv&tab=finance", "/api/finance/summary", "/api/finance/accounts?kind=receivable", "/api/finance/flow", "/api/finance/movements", "/api/expenses", "/api/recurring-expenses", `/api/recurring-expenses/${rR.id}`, "/api/clinic/role-permissions", `/api/patients/${rPat.id}/history?tab=Hist%C3%B3rico`]) {
+      const x = await hc("r", "GET", p2); if (x.status !== 200) rGets.push(`${p2.slice(0, 50)} -> ${brief(x)}`);
+    }
+    check(`${P} Somente leitura (Premium EXPIRED): GETs de relatórios, financeiro, permissões e histórico = 200`, rGets.length === 0, rGets.join(" | "));
+    const rWrites = [
+      ["POST", "/api/expenses", { description: `${term}R x`, category: "Outros", amountCents: 100, dueOn: day(0), paymentMethod: "Pix" }],
+      ["PATCH", `/api/expenses/${rE.id}`, { action: "pay" }], ["POST", "/api/recurring-expenses", { description: `${term}R y`, category: "Outros", amountCents: 100, paymentMethod: "Pix", frequency: "monthly", dayOfMonth: 5, startsOn: day(0) }],
+      ["PATCH", `/api/recurring-expenses/${rR.id}`, { amountCents: 1 }], ["DELETE", `/api/recurring-expenses/${rR.id}`], ["POST", "/api/recurring-expenses/sync", {}],
+      ["POST", "/api/appointments/auto-process", {}], ["PATCH", "/api/clinic/preferences", { key: "autoMarkMissedAppointmentsEnabled", enabled: false }],
+      ["PATCH", "/api/clinic/role-permissions", { matrix: rMatrix }], ["POST", "/api/payments", { patientId: rPat.id, value: 10, method: "Pix", status: "Pago", installments: "A vista" }],
+      ["POST", "/api/integrations/google-calendar/connect", { type: "ADMIN" }], ["POST", "/api/integrations/google-calendar/sync", {}],
+    ];
+    const rBad = [];
+    for (const [m, p2, b] of rWrites) { const x = await hc("r", m, p2, b); if (!readonly(x)) rBad.push(`${m} ${p2.slice(0, 45)} -> ${brief(x)}`); }
+    check(`${P} Somente leitura: ${rWrites.length} escritas (despesas, fixas, sync, auto-process, preferências, permissões, pagamento, Google) = 403 SUBSCRIPTION_READONLY`, rBad.length === 0, rBad.join(" | "));
+    check(`${P} Somente leitura: nada mudou no banco e o agendamento vencido segue Agendado após o GET history`, await finState(cid.r) === rBefore && (await prisma.appointment.findUnique({ where: { id: rPast.id } })).status === "Agendado" && (await prisma.clinic.findUnique({ where: { id: cid.r }, select: { autoMarkMissedAppointmentsEnabled: true } })).autoMarkMissedAppointmentsEnabled === true && await prisma.payment.count({ where: { clinicId: cid.r } }) === 0, "");
+    const rDisc = await hc("r", "POST", "/api/integrations/google-calendar/disconnect", { type: "ADMIN" });
+    check(`${P} Somente leitura: Google disconnect sem 403 de plano/readonly (404 sem conexão é ok)`, notPlan(rDisc) && rDisc.status < 500, brief(rDisc));
+    const rOwner = await prisma.clinicMembership.findFirst({ where: { clinicId: cid.r, isOwner: true }, select: { userId: true } });
+    const rConn = await fakeConn(cid.r, rOwner.userId);
+    const rDisc2 = await hc("r", "POST", "/api/integrations/google-calendar/disconnect", { type: "ADMIN" });
+    const rConnRow = await prisma.googleCalendarConnection.findUnique({ where: { id: rConn.id } });
+    check(`${P} Somente leitura (EXPIRED): disconnect com conexão = 200 e conexão DISCONNECTED sem tokens`, rDisc2.status === 200 && rDisc2.data?.ok === true && rConnRow?.status === "DISCONNECTED" && rConnRow.accessTokenEncrypted === null, `${brief(rDisc2)} ${rConnRow?.status}`);
+
+    // Somente leitura (EXPIRED) via cron real: job PENDING não é processado (accessMode "full" exigido além do recurso googleCalendar);
+    // volta a processar só quando o acesso completo é restabelecido (ACTIVE).
+    const rConn2 = await prisma.googleCalendarConnection.update({ where: { id: rConn.id }, data: { status: "CONNECTED", accessTokenEncrypted: "x", refreshTokenEncrypted: "x", lastError: null } });
+    const rJob = await prisma.calendarSyncJob.create({ data: { clinicId: cid.r, appointmentId: rPast.id, operation: "UPDATE", dedupeKey: `${rPast.id}:UPDATE:ro` } });
+    const rCr1 = await cron(); await sleep(500); const rCr2 = await cron();
+    const rJobDuring = await prisma.calendarSyncJob.findUnique({ where: { id: rJob.id } });
+    check(`${P} Somente leitura (EXPIRED) via cron: job PENDING continua PENDING (attempts 0, não travado) enquanto o acesso é só leitura`, [rCr1, rCr2].every((s) => s === 200) && rJobDuring?.status === "PENDING" && rJobDuring.attempts === 0 && !rJobDuring.lockedAt, `${rCr1}/${rCr2} ${JSON.stringify(rJobDuring && { s: rJobDuring.status, a: rJobDuring.attempts })}`);
+    await setPlan(cid.r, "premium", "ACTIVE"); await relog("r");
+    let rCr = 0;
+    for (let i = 0; i < 6; i += 1) { rCr = await cron(); await sleep(600); const j = await prisma.calendarSyncJob.findUnique({ where: { id: rJob.id } }); if (j && (j.attempts > 0 || j.status !== "PENDING")) break; }
+    const rJobAfter = await prisma.calendarSyncJob.findUnique({ where: { id: rJob.id } });
+    check(`${P} Acesso completo restabelecido: cron volta a processar o job que ficou pendente (tentativa registrada ou concluído)`, rCr === 200 && rJobAfter && (rJobAfter.attempts > 0 || rJobAfter.status !== "PENDING"), `${rCr} ${JSON.stringify(rJobAfter && { s: rJobAfter.status, a: rJobAfter.attempts, e: rJobAfter.lastError })}`);
+    await setPlan(cid.r, "premium", "EXPIRED");
+
+    // B segue intacta ao final
+    check(`${P} Isolamento (final): dados da clínica B intactos no fim do roteiro`, await finState(cid.b) === bBefore && (await hc("b", "GET", "/api/reports/overview")).status === 200, "");
+  } catch (error) {
+    check(`${P} execução sem exceção`, false, error.stack?.split("\n").slice(0, 3).join(" | ") ?? error.message);
+  } finally {
+    const left = await cleanup();
+    check(`${P} limpeza das clínicas e usuários criados`, left === 0, left);
+  }
+}
+
 const suites = {
+  planos_limites: { needs: [], run: () => planLimits() },
+  planos_estado: { needs: [], run: () => planStates() },
+  planos_modulos: { needs: [], run: () => planModules() },
+  planos_relatorios: { needs: [], run: () => planReports() },
   relatorios_ui: { needs: [], run: async () => { await reportsUi(); await reportsUi2(); } },
   relatorios: { needs: [], run: async () => { await reports(); await reportsFiles(); } },
   meu_perfil: { needs: [], run: () => myProfile() },
@@ -10656,7 +12285,14 @@ async function main() {
   await resetTestClinic();
 
   const state = {};
-  for (const [name, suite] of Object.entries(suites)) if (selected.has(name)) await suite.run(state);
+  for (const [name, suite] of Object.entries(suites)) if (selected.has(name)) {
+    // Algumas suítes fazem muitos logins e limpam fixtures com outras sessões; renove a sessão
+    // principal antes das telas de relatórios, que usam o cookie global para criar seus dados.
+    if (name === "relatorios_ui") await login();
+    // A suíte de tela cria dados de relatório na clínica-base; a suíte de API seguinte exige uma base vazia.
+    if (name === "relatorios") await resetTestClinic();
+    await suite.run(state);
+  }
 
   for (const result of results) console.log(`${result.ok ? "OK    " : "FALHOU"} ${result.name}${result.detail ? ` — ${result.detail}` : ""}`);
   const failed = results.filter((result) => !result.ok).length;

@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { movementTypes } from "@/lib/stock";
@@ -8,9 +9,13 @@ import { movementTypes } from "@/lib/stock";
 // Estorna uma saída de atendimento registrada errada: devolve a quantidade ao lote e guarda
 // quem estornou, quando e por quê. Depois é possível registrar a saída correta.
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "stock:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const featureDenied = denyUnlessFeature(user, "stock", "write");
+  if (featureDenied) return featureDenied;
   const id = (await params).id;
   const body = await request.json().catch(() => null) as { reason?: string } | null;
   const reason = body?.reason?.trim();

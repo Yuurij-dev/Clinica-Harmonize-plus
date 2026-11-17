@@ -111,6 +111,22 @@ test("nunca lanca e so loga codigo estavel, sem PII", async () => {
   for (const l of lines) assert.match(l, /^\[email\] (provider_error|network|timeout)$/);
 });
 
+test("E2E_RESEND_URL so aceita loopback fora de producao; o padrao permanece no Resend", async () => {
+  const input = { to: "x@example.invalid", subject: "Teste", html: "", text: "" };
+  let seen;
+  const fetchImpl = async (url) => { seen = String(url); return new Response("{}", { status: 200 }); };
+  const local = await email.sendEmail(input, { env: { ...env, NODE_ENV: "development", E2E_RESEND_URL: "http://127.0.0.1:4011/emails" }, fetchImpl });
+  assert.deepEqual(local, { sent: true });
+  assert.equal(seen, "http://127.0.0.1:4011/emails");
+  const production = await email.sendEmail(input, { env: { ...env, NODE_ENV: "production", E2E_RESEND_URL: "http://127.0.0.1:4011/emails" }, fetchImpl });
+  assert.deepEqual(production, { sent: true });
+  assert.equal(seen, "https://api.resend.com/emails");
+  let calls = 0;
+  const rejected = await email.sendEmail(input, { env: { ...env, NODE_ENV: "development", E2E_RESEND_URL: "https://example.com/emails" }, fetchImpl: async () => { calls++; return new Response("{}"); } });
+  assert.deepEqual(rejected, { sent: false, reason: "network" });
+  assert.equal(calls, 0);
+});
+
 test("isEmailDeliveryReady exige chave e remetente", () => {
   assert.equal(email.isEmailDeliveryReady(env), true);
   assert.equal(email.isEmailDeliveryReady({ RESEND_API_KEY: "k" }), false);

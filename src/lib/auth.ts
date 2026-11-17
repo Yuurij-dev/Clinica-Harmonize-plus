@@ -5,11 +5,12 @@ import { getAuthSecret } from "./auth-secret";
 import { prisma } from "./prisma";
 import { pickMembership } from "./active-clinic-rules";
 import { mfaRequiredForMemberships } from "./mfa-rules";
+import { resolveEntitlements, type Entitlements } from "./entitlements.ts";
 import { canForUser, normalizeRolePermissionMatrix, type Permission, type RolePermissionMatrix } from "./permissions";
 
 export const sessionCookieName = "harmonize_session";
-// Cache em memória por instância (chave userId:sid) com o estado da sessão. Revogar na mesma instância limpa na hora (invalidateUserAuthCache);
-// em OUTRAS instâncias uma sessão revogada ainda vale por até 15s (janela documentada do cache).
+// Cache de perfil/permissões por instância (chave userId:sid:activeClinicId). O estado da AuthSession é consultado no banco em toda requisição,
+// para que revogações feitas por qualquer instância tenham efeito na próxima requisição.
 const authCacheTtl = 15_000;
 const authCacheMaxEntries = 5000;
 // lastSeenAt da sessão só é regravado se estiver mais velho que isto (evita escrita a cada request).
@@ -22,6 +23,9 @@ type AuthenticatedUser = {
   role: "ADMIN" | "PROFESSIONAL" | "STAFF";
   isOwner: boolean;
   clinicId: string;
+  /** Direitos da clínica (plano, modo de acesso, recursos, limites). Só no servidor: o cliente recebe `access` de /api/auth/me. */
+  entitlements: Entitlements;
+  /** Compat com a UI: true quando a clínica está em somente leitura. Não é fonte de autorização (use entitlements). */
   trialExpired: boolean;
   rolePermissions: RolePermissionMatrix;
   clinic: { id: string; name: string; slug: string; trialEndsAt: Date | null };
@@ -32,7 +36,6 @@ type AuthenticatedUser = {
 };
 
 type CurrentUserOptions = {
-  requireActiveTrial?: boolean;
   allowMfaSetup?: boolean;
 };
 
@@ -97,10 +100,9 @@ async function verifiedSession(token: string | null | undefined) {
   }
 }
 
-async function loadAuthenticatedUser(userId: string, sid: string): Promise<AuthenticatedUser | null> {
-  const [session, user] = await Promise.all([
-    prisma.authSession.findUnique({ where: { id: sid }, select: { userId: true, expiresAt: true, revokedAt: true, lastSeenAt: true } }),
-    prisma.user.findUnique({
+// activeClinicId vem da mesma leitura que montou a chave do cache: o perfil guardado sob `u:sid:A` e sempre o da clinica A (sem corrida na troca de clinica).
+async function loadAuthenticatedUser(userId: string, sid: string, activeClinicId: string | null): Promise<AuthenticatedUser | null> {
+  const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
         id: true,
@@ -111,17 +113,17 @@ async function loadAuthenticatedUser(userId: string, sid: string): Promise<Authe
         mfaSetting: { select: { enabledAt: true } },
         memberships: {
           orderBy: { id: "asc" },
-          select: { role: true, isOwner: true, clinic: { select: { id: true, name: true, slug: true, trialEndsAt: true, rolePermissions: true } } },
+          // A assinatura vem no mesmo select da clínica (um único round-trip, já coberto pelo cache de 15 s).
+          select: { role: true, isOwner: true, clinic: { select: { id: true, name: true, slug: true, trialEndsAt: true, rolePermissions: true, subscription: { select: { plan: true, status: true, trialEndsAt: true, currentPeriodEnd: true } } } } },
         },
       },
-    }),
-  ]);
-  if (!session || session.userId !== userId || session.revokedAt || session.expiresAt.getTime() <= Date.now()) return null;
-  const membership = user ? pickMembership(user.memberships, user.activeClinicId) : undefined;
+    });
+  const membership = user ? pickMembership(user.memberships, activeClinicId) : undefined;
   if (!user || !membership) return null;
-  if (Date.now() - session.lastSeenAt.getTime() > lastSeenRefreshMs) {
-    void prisma.authSession.updateMany({ where: { id: sid, revokedAt: null }, data: { lastSeenAt: new Date() } }).catch(() => undefined);
-  }
+  // A ASSINATURA é a fonte oficial dos direitos de acesso (Clinic.trialEndsAt fica só por compatibilidade). Clínica sem
+  // assinatura (não deveria existir: o trigger cria uma por clínica) falha fechada: somente leitura, sem recursos de plano.
+  const subscription = membership.clinic.subscription;
+  const entitlements = resolveEntitlements(subscription, new Date());
   return {
     id: user.id,
     name: user.name,
@@ -129,33 +131,47 @@ async function loadAuthenticatedUser(userId: string, sid: string): Promise<Authe
     role: membership.role,
     isOwner: membership.isOwner,
     clinicId: membership.clinic.id,
-    trialExpired: Boolean(membership.clinic.trialEndsAt && membership.clinic.trialEndsAt.getTime() <= Date.now()),
+    entitlements,
+    // Compat com a UI atual: "teste encerrado" passa a significar "sem escrita" (teste vencido OU assinatura sem acesso completo).
+    trialExpired: entitlements.accessMode === "readonly",
     rolePermissions: normalizeRolePermissionMatrix(membership.clinic.rolePermissions),
-    clinic: { id: membership.clinic.id, name: membership.clinic.name, slug: membership.clinic.slug, trialEndsAt: membership.clinic.trialEndsAt },
+    // A contagem regressiva só existe durante o teste: o término vem da assinatura, não de Clinic.trialEndsAt.
+    clinic: { id: membership.clinic.id, name: membership.clinic.name, slug: membership.clinic.slug, trialEndsAt: subscription?.status === "TRIALING" ? subscription.trialEndsAt : null },
     sessionId: sid,
     mfaSetupRequired: mfaRequiredForMemberships(user.memberships) && !user.mfaSetting?.enabledAt,
   };
 }
 
-export async function getCurrentUser({ requireActiveTrial = false, allowMfaSetup = false }: CurrentUserOptions = {}) {
-  // Web: cookie. App mobile: "Authorization: Bearer <jwt>" (mesmo JWT). Cookie válido tem prioridade; cookie inválido/expirado cai para o Bearer.
-  const cookieToken = (await cookies()).get(sessionCookieName)?.value;
-  const session = await verifiedSession(cookieToken) ?? await verifiedSession(parseBearerToken((await headers()).get("authorization")));
+async function resolveCurrentUser(session: { userId: string; sid: string } | null, { allowMfaSetup = false }: CurrentUserOptions = {}) {
   if (!session) return null;
   const { userId, sid } = session;
-  const cacheKey = `${userId}:${sid}`;
   const finish = (user: AuthenticatedUser | null) => {
     if (!user) return null;
     if (user.mfaSetupRequired && !allowMfaSetup) return null;
-    return requireActiveTrial && user.trialExpired ? null : user;
+    return user;
   };
+
+  // Única leitura obrigatória por requisição: AuthSession é a fonte compartilhada de revogação entre instâncias.
+  // Os dados maiores de usuário/permissões continuam no cache local de 15 s.
+  // A clínica ativa vem na mesma leitura e entra na chave do cache: trocar de clínica em outra instância nunca serve o perfil da anterior.
+  // Mudança de plano/assinatura, ao contrário, só vale em outras instâncias após a janela de authCacheTtl (15 s); com pagamentos/webhooks
+  // será preciso invalidar o cache por clínica (ver docs/planos.md).
+  const sessionRow = await prisma.authSession.findUnique({ where: { id: sid }, select: { userId: true, expiresAt: true, revokedAt: true, lastSeenAt: true, user: { select: { activeClinicId: true } } } });
+  if (!sessionRow || sessionRow.userId !== userId || sessionRow.revokedAt || sessionRow.expiresAt.getTime() <= Date.now()) {
+    for (const key of [...authCache.keys()]) if (key.startsWith(`${userId}:${sid}:`)) authCache.delete(key);
+    return null;
+  }
+  const cacheKey = `${userId}:${sid}:${sessionRow.user?.activeClinicId ?? ""}`;
+  if (Date.now() - sessionRow.lastSeenAt.getTime() > lastSeenRefreshMs) {
+    void prisma.authSession.updateMany({ where: { id: sid, userId, revokedAt: null }, data: { lastSeenAt: new Date() } }).catch(() => undefined);
+  }
 
   const cached = authCache.get(cacheKey);
   if (cached?.expiresAt && cached.expiresAt > Date.now()) {
     return finish(cached.pending ? await cached.pending : cached.value ?? null);
   }
 
-  const pending = loadAuthenticatedUser(userId, sid);
+  const pending = loadAuthenticatedUser(userId, sid, sessionRow.user?.activeClinicId ?? null);
   const entry = { expiresAt: Date.now() + authCacheTtl, pending };
   sweepAuthCache();
   authCache.set(cacheKey, entry);
@@ -170,6 +186,23 @@ export async function getCurrentUser({ requireActiveTrial = false, allowMfaSetup
   // Só grava o resultado se a entrada não foi invalidada (revogação) enquanto a consulta rodava.
   if (authCache.get(cacheKey) === entry) authCache.set(cacheKey, { expiresAt: Date.now() + authCacheTtl, value: user });
   return finish(user);
+}
+
+// Devolve o usuário autenticado ou null (401). Somente leitura NÃO é falha de autenticação: o usuário é devolvido normalmente
+// e as rotas de escrita chamam denyIfReadonly (plan-guards.ts), que responde 403 SUBSCRIPTION_READONLY sem encerrar a sessão.
+export async function getCurrentUser({ allowMfaSetup = false }: CurrentUserOptions = {}) {
+  // Authorization explícito seleciona o Bearer e nunca cai para um cookie ambiental; Web sem Bearer segue autenticando por cookie.
+  const cookieToken = (await cookies()).get(sessionCookieName)?.value;
+  const authorization = (await headers()).get("authorization");
+  const session = authorization !== null
+    ? await verifiedSession(parseBearerToken(authorization))
+    : await verifiedSession(cookieToken);
+  return resolveCurrentUser(session, { allowMfaSetup });
+}
+
+/** Identidade exclusivamente do JWT fornecido; ignora cookies ambientais do navegador. */
+export async function getCurrentUserFromToken(token: string, options: CurrentUserOptions = {}) {
+  return resolveCurrentUser(await verifiedSession(token), options);
 }
 
 /** Claims (userId, sid) de um JWT de sessão válido, sem consultar o banco. Usado pelo logout para revogar mesmo se getCurrentUser devolver null. */

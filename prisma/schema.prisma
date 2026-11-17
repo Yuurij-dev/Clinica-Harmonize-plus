@@ -109,6 +109,8 @@ model Clinic {
   pendingStockOutputs         PendingStockOutput[]
   procedureImageAssets        ProcedureImageAsset[]
   googleCalendarConnections   GoogleCalendarConnection[]
+  subscription                ClinicSubscription?
+  subscriptionEvents          ClinicSubscriptionEvent[]
 }
 
 model ClinicMembership {
@@ -1174,4 +1176,66 @@ model CalendarNotificationLog {
   sentAt          DateTime @default(now()) @db.Timestamptz(6)
 
   @@index([clinicId, appointmentId])
+}
+
+// Plano contratado da clínica. Os valores são os mesmos ids do catálogo em src/lib/plans.ts (que é a fonte dos
+// recursos e limites; o banco guarda só plano + status + datas).
+enum SubscriptionPlan {
+  start
+  pro
+  premium
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  EXPIRED
+}
+
+enum SubscriptionEventType {
+  TRIAL_STARTED
+  BACKFILLED
+  PLAN_CHANGED
+  STATUS_CHANGED
+}
+
+// Uma assinatura por clínica. `plan` nulo = nenhum plano contratado (só teste). `trialEndsAt` nulo em TRIALING = clínica
+// legada sem data de término: nunca expira (mesma regra de src/lib/auth.ts). Espelha Clinic.trialStartedAt/trialEndsAt,
+// que continuam sendo a fonte lida pelo app até a etapa de integração. Sem gateway: os campos external* são reservados.
+model ClinicSubscription {
+  id                     String             @id @default(cuid())
+  clinicId               String             @unique
+  plan                   SubscriptionPlan?
+  status                 SubscriptionStatus @default(TRIALING)
+  trialStartedAt         DateTime?          @db.Timestamptz(6)
+  trialEndsAt            DateTime?          @db.Timestamptz(6)
+  currentPeriodStart     DateTime?          @db.Timestamptz(6)
+  currentPeriodEnd       DateTime?          @db.Timestamptz(6)
+  canceledAt             DateTime?          @db.Timestamptz(6)
+  externalCustomerId     String?
+  externalSubscriptionId String?
+  createdAt              DateTime           @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime           @default(now()) @updatedAt @db.Timestamptz(6)
+  clinic                 Clinic             @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([status, trialEndsAt])
+}
+
+// Histórico imutável (só inserções) de início de teste, mudanças de plano e de status.
+model ClinicSubscriptionEvent {
+  id          String                @id @default(cuid())
+  clinicId    String
+  type        SubscriptionEventType
+  fromPlan    SubscriptionPlan?
+  toPlan      SubscriptionPlan?
+  fromStatus  SubscriptionStatus?
+  toStatus    SubscriptionStatus?
+  reason      String                @default("")
+  actorUserId String?
+  createdAt   DateTime              @default(now()) @db.Timestamptz(6)
+  clinic      Clinic                @relation(fields: [clinicId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([clinicId, createdAt])
 }

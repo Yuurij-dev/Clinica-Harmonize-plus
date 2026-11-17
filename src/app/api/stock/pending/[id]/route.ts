@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { clinicToday, dateOnly } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
@@ -11,9 +12,13 @@ class PendingError extends Error {}
 // Conclui uma saída pendente: desconta do lote escolhido (ou dos que vencem primeiro) e
 // liga a saída ao mesmo atendimento. Recusa se não houver saldo para a quantidade toda.
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "purchases:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const featureDenied = denyUnlessFeature(user, "stock", "write");
+  if (featureDenied) return featureDenied;
   const id = (await params).id;
   const body = await request.json().catch(() => null) as { lotId?: string } | null;
 

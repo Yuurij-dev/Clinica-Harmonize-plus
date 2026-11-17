@@ -43,7 +43,7 @@ import { EmptyState, LoadingSkeleton } from "./shared";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { observationKindsFor, type ObservationKind } from "@/lib/permissions";
 import { patientTourReplayEvent } from "@/lib/section-events";
-import { useCan, useCurrentRole } from "./current-user";
+import { useCan, useCurrentRole, useHasFeature } from "./current-user";
 import { appointmentSlotError, appointmentWithinStartWindow, canRequestAppointmentStart, clinicNow, latestAppointmentStart, matchesProcedureAppointment } from "@/lib/clinic-time";
 import { mergePatientAppointments } from "@/lib/patient-appointments";
 import { FormField, fieldClassName } from "@/components/ui/modal";
@@ -864,6 +864,8 @@ function patientAppointmentSortValue(appointment: PatientAppointmentRecord) {
 
 function AppointmentsTab({ requestStart, patientId, history, loading, error, onRetry, journeyNames, onNew, onOpenJourney, returnAppointmentTarget, onReturnAppointmentClose }: { requestStart?: (proceed: () => void) => void; patientId: string; history?: PatientHistoryRecord; loading: boolean; error: boolean; onRetry: () => void; journeyNames: Record<string, string>; onNew: () => void; onOpenJourney: (journeyId: string) => void; returnAppointmentTarget: ReturnAppointmentTarget | null; onReturnAppointmentClose: () => void }) {
   const canRun = useCan("appointment:run");
+  // Conferência de materiais só com o recurso estoque (linhas antigas com materialsCheck "pending" não aparecem sem ele).
+  const hasStock = useHasFeature("stock");
   const [returnDate, setReturnDate] = useState(() => clinicDateAfterDays(0));
   const [returnTime, setReturnTime] = useState("09:00");
   const [clinicHours, setClinicHours] = useState<{ openingTime: string; closingTime: string; allowAppointmentsOutsideHours: boolean } | null>(() => readClientCache<{ openingTime: string; closingTime: string; allowAppointmentsOutsideHours: boolean }>("/api/appointments/options") ?? null);
@@ -920,7 +922,7 @@ function AppointmentsTab({ requestStart, patientId, history, loading, error, onR
       if (!response.ok) throw new Error(data?.message ?? "Não foi possível atualizar o atendimento.");
       setEditedAppointments((current) => ({ ...current, [appointment.id as string]: { ...appointment, status } }));
       invalidateClientCache(`/api/patients/${patientId}/history`, "/api/agenda", "/api/dashboard/bootstrap", ...(status === "Atendido" ? ["/api/patients"] : []));
-      if (status === "Atendido") setCheckAppointmentId(appointment.id);
+      if (status === "Atendido" && hasStock) setCheckAppointmentId(appointment.id);
       return true;
     } catch (statusError) {
       const message = statusError instanceof Error ? statusError.message : "Não foi possível atualizar o atendimento.";
@@ -1019,7 +1021,7 @@ function AppointmentsTab({ requestStart, patientId, history, loading, error, onR
         journeyNames={journeyNames}
         canRun={canRun}
         updatingId={updatingAppointmentId}
-        materialsPendingIds={new Set(appointments.flatMap((appointment) => appointment.id && appointment.status === "Atendido" && appointment.materialsCheck === "pending" && !checkedAppointmentIds.includes(appointment.id) ? [appointment.id] : []))}
+        materialsPendingIds={new Set(!hasStock ? [] : appointments.flatMap((appointment) => appointment.id && appointment.status === "Atendido" && appointment.materialsCheck === "pending" && !checkedAppointmentIds.includes(appointment.id) ? [appointment.id] : []))}
         startState={(appointment) => {
           const withinWindow = appointmentWithinStartWindow(appointment, history?.appointmentToleranceMinutes ?? 15, currentTime);
           const updating = updatingAppointmentId === appointment.id;
@@ -1058,7 +1060,7 @@ function AppointmentsTab({ requestStart, patientId, history, loading, error, onR
           <div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={Boolean(updatingAppointmentId)} onClick={() => setStartConfirmation(null)}>Cancelar</Button><Button type="button" disabled={Boolean(updatingAppointmentId)} onClick={() => void confirmAppointmentStart()}>{updatingAppointmentId ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clock3 className="h-3.5 w-3.5" />}{updatingAppointmentId ? "Iniciando..." : "Confirmar início"}</Button></div>
         </div>
       </Modal>
-      {checkAppointmentId ? <MaterialCheckModal appointmentId={checkAppointmentId} onClose={() => setCheckAppointmentId(null)} onDone={(message) => { setCheckedAppointmentIds((current) => [...current, checkAppointmentId]); setCheckAppointmentId(null); invalidateClientCache(`/api/patients/${patientId}/history`); toast.success(message); }} /> : null}
+      {hasStock && checkAppointmentId ? <MaterialCheckModal appointmentId={checkAppointmentId} onClose={() => setCheckAppointmentId(null)} onDone={(message) => { setCheckedAppointmentIds((current) => [...current, checkAppointmentId]); setCheckAppointmentId(null); invalidateClientCache(`/api/patients/${patientId}/history`); toast.success(message); }} /> : null}
     </div>
   );
 }

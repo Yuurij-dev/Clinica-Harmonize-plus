@@ -1,14 +1,17 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
 import { clinicToday, parseDateOnly } from "@/lib/clinic-time";
 import { maxPaymentReais, serializePayment, toCents } from "@/lib/finance";
 
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const denied = denyUnless(user, "payments:delete");
   if (denied) return denied;
   const { id } = await params;
@@ -24,8 +27,10 @@ const dayInstant = (day: string) => new Date(`${day}T12:00:00-03:00`);
 // Sem action: edita value (reais), method e/ou date (AAAA-MM-DD). Não muda paciente nem tratamento;
 // o status do orçamento é decidido pela tela do paciente, não derivado destes pagamentos.
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const denied = denyUnless(user, "payments:manage");
   if (denied) return denied;
   const { id } = await params;

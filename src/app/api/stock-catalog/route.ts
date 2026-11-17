@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { normalizeSearch, parseCatalogListParams } from "@/lib/procedure-catalog-rules";
@@ -16,6 +17,8 @@ export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (!canForUser(user, "stock:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const featureDenied = denyUnlessFeature(user, "stock", "read");
+  if (featureDenied) return featureDenied;
   const params = new URL(request.url).searchParams;
   const { q, limit, offset } = parseCatalogListParams(params);
   const kindParam = params.get("kind");
@@ -34,9 +37,13 @@ export async function GET(request: Request) {
 
 // Escolher um item do catálogo cria o Product da clínica (custo 0, sem fornecedor), sem duplicar o que já existe.
 export async function POST(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "stock:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const featureDenied = denyUnlessFeature(user, "stock", "write");
+  if (featureDenied) return featureDenied;
   const body = await request.json().catch(() => null) as { slug?: unknown } | null;
   if (typeof body?.slug !== "string" || !body.slug) return NextResponse.json({ message: "Informe o item do catálogo." }, { status: 400 });
   const item = findCatalogItem(body.slug);

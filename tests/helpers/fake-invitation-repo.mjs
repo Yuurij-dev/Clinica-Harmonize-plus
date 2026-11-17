@@ -6,6 +6,9 @@ export function makeRepo() {
   const p2002 = () => Object.assign(new Error("unique"), { code: "P2002" });
   const tx = {
     async lockClinicInvites() {},
+    // Sem limite de plano por padrao; os testes de limite injetam o resultado (ver tests/invitations.test.mjs).
+    async assertClinicWritable() { return db.clinicReadonly ? { ok: false } : { ok: true }; },
+    async reserveProfessionalSlot() { return db.professionalSlot?.() ?? { ok: true }; },
     async countSentSince({ clinicId, since }) {
       return db.invitations.filter((i) => i.clinicId === clinicId && i.lastSentAt >= since).length;
     },

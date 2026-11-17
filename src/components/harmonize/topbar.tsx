@@ -13,10 +13,11 @@ import { patientListKey } from "@/lib/patient-list-rules";
 import { collectFeatureSearchResults, collectSearchQuickActions, groupSearchResults, mergeSearchResults, navigateToSearchResult, normalizeSearchText, previewSearchResults, searchKeyboardAction, splitSearchHighlight, suggestFeatureSearchTerms, type GlobalSearchResult, type SearchAccess, type SearchQuickAction } from "@/lib/global-search-rules";
 import { StockAlertGroups, useStockAlerts } from "./stock-alerts";
 import { TrialStatus } from "./trial-status";
-import { useCan } from "./current-user";
+import { useCan, useHasFeature } from "./current-user";
 import type { UserClinic } from "./clinic-chooser";
 import { Modal } from "@/components/ui/modal";
 import { setupInviteEvent, tourReplayEvent } from "@/lib/section-events";
+import { canRunAgendaAutomation } from "@/lib/agenda-automation-rules";
 import { PatientAvatar } from "./patient-avatar";
 import { OwnAvatar } from "./own-avatar";
 
@@ -29,7 +30,7 @@ type TopbarProps = {
   onOpenSettingsSection: (section: string) => void;
   onOpenStockAlert: (alert: StockAlert) => void;
   onLogout: () => Promise<void>;
-  user?: { id: string; name: string; role: string; avatarVersion?: string | null; clinicId?: string; clinic?: { name?: string; trialEndsAt?: string | null } } | null;
+  user?: { id: string; name: string; role: string; avatarVersion?: string | null; clinicId?: string; clinic?: { name?: string; trialEndsAt?: string | null }; access?: { mode?: string; features?: readonly string[] } } | null;
   clinics?: UserClinic[];
   onSwitchClinic?: (clinicId: string) => Promise<void>;
 };
@@ -107,15 +108,21 @@ function appointmentMinutesFromTime(time: string) {
 export function Topbar({ onDashboard, onSettings, onProfile, onNavigate, onQuickCreate, onOpenSettingsSection, onOpenStockAlert, onLogout, user, clinics = [], onSwitchClinic }: TopbarProps) {
   const canAccessDashboard = useCan("dashboard:access");
   const canAccessSettings = useCan("settings:access");
-  const canAccessStock = useCan("stock:access");
+  // Estoque e Compras exigem papel e recurso do plano; sem o recurso não se chama /api/stock nem /api/products.
+  const hasStockFeature = useHasFeature("stock");
+  const hasPurchasesFeature = useHasFeature("purchases");
+  const hasCostsFeature = useHasFeature("costs");
+  const canAccessStock = useCan("stock:access") && hasStockFeature;
   const canSearchPatients = useCan("patients:access");
   const canSearchAgenda = useCan("agenda:access");
   const canSearchProcedures = useCan("procedures:access");
-  const canSearchPurchases = useCan("purchases:access");
+  const canSearchPurchases = useCan("purchases:access") && hasPurchasesFeature;
   const canSearchQuotes = useCan("quotes:access");
   const canSearchPayments = useCan("payments:access");
-  const canSearchFinance = useCan("finance:access");
-  const canSearchReports = useCan("reports:access");
+  const hasFinanceFeature = useHasFeature("finance");
+  const hasReportsFeature = useHasFeature("reports");
+  const canSearchFinance = useCan("finance:access") && hasFinanceFeature;
+  const canSearchReports = useCan("reports:access") && hasReportsFeature;
   const canSearchSettingsPermissions = useCan("settings:permissions");
   const canSearchSettingsTeam = useCan("settings:team");
   const canSearchClinical = useCan("clinical:read");
@@ -138,7 +145,8 @@ export function Topbar({ onDashboard, onSettings, onProfile, onNavigate, onQuick
     settingsTeam: canSearchSettingsTeam,
     clinical: canSearchClinical,
     anamnesis: canSearchAnamnesis,
-  }), [canAccessDashboard, canAccessSettings, canAccessStock, canSearchAgenda, canSearchAnamnesis, canSearchAppointmentRun, canSearchClinical, canSearchFinance, canSearchPatients, canSearchPayments, canSearchProcedures, canSearchPurchases, canSearchQuotes, canSearchReports, canSearchSettingsPermissions, canSearchSettingsTeam]);
+    costs: hasCostsFeature,
+  }), [hasCostsFeature, canAccessDashboard, canAccessSettings, canAccessStock, canSearchAgenda, canSearchAnamnesis, canSearchAppointmentRun, canSearchClinical, canSearchFinance, canSearchPatients, canSearchPayments, canSearchProcedures, canSearchPurchases, canSearchQuotes, canSearchReports, canSearchSettingsPermissions, canSearchSettingsTeam]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   // Confirmação antes de iniciar o tour: o Harmo se apresenta e o usuário decide.
   const [tourAskOpen, setTourAskOpen] = useState(false);
@@ -299,12 +307,14 @@ export function Topbar({ onDashboard, onSettings, onProfile, onNavigate, onQuick
     return () => window.removeEventListener("pointerdown", primeOnInteraction);
   }, []);
 
+  // Somente leitura ou sem o recurso de automação: o servidor recusaria (403), então nem chama. O backend segue protegido.
+  const automationAllowed = canRunAgendaAutomation(user?.access);
   useEffect(() => {
     if (!user?.id) return;
     let active = true;
 
     async function loadAppointmentAlerts() {
-      if (document.visibilityState === "visible") {
+      if (automationAllowed && document.visibilityState === "visible") {
         const automationResponse = await fetch("/api/appointments/auto-process", { method: "POST", cache: "no-store" }).catch(() => null);
         if (automationResponse?.ok) {
           const automation = await automationResponse.json().catch(() => null) as { updated?: Array<{ id: string; patientId: string; date: string }> } | null;
@@ -347,7 +357,7 @@ export function Topbar({ onDashboard, onSettings, onProfile, onNavigate, onQuick
     const handleSettingsChange = () => { void loadAppointmentAlerts(); };
     window.addEventListener("harmonize-notification-settings-updated", handleSettingsChange);
     return () => { active = false; window.clearInterval(timer); window.removeEventListener("harmonize-notification-settings-updated", handleSettingsChange); };
-  }, [user?.id, appointmentNotificationSoundEnabled]);
+  }, [user?.id, automationAllowed, appointmentNotificationSoundEnabled]);
 
   async function handleLogout() {
     setIsLoggingOut(true);

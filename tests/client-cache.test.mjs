@@ -349,3 +349,100 @@ test("a failed period request leaves other cached agenda periods intact", async 
   assert.deepEqual(readClientCache(key), { url: key });
   assert.equal(readClientCache("/api/agenda?from=2026-11-01&to=2026-11-30"), undefined);
 });
+
+test("403 comercial (plano/assinatura) não desloga: nada de evento unauthorized, escopo e dados mantidos", async () => {
+  const events = [];
+  const originalWindow = globalThis.window;
+  globalThis.window = { dispatchEvent: (event) => { events.push({ type: event.type, detail: event.detail }); return true; } };
+  try {
+    let requests = 0;
+    globalThis.fetch = async () => {
+      requests += 1;
+      if (requests === 1) return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      return new Response(JSON.stringify({ code: "SUBSCRIPTION_READONLY", message: "Somente leitura." }), { status: 403 });
+    };
+    setClientCacheScope("user-a:clinic-a");
+    events.length = 0; // ignora o evento de mudança de escopo
+    await getCachedJson("/api/patients");
+    await assert.rejects(getCachedJson("/api/finance/summary"), { name: "PlanBlockedError", message: "Somente leitura." });
+    assert.deepEqual(events.map((event) => event.type), ["client-cache:plan-blocked"]);
+    assert.equal(events[0].detail.code, "SUBSCRIPTION_READONLY");
+    // sessão e cache do mesmo usuário continuam: outros dados privados seguem disponíveis
+    assert.deepEqual(readClientCache("/api/patients"), { ok: true });
+    assert.equal(events.some((event) => event.type === "client-cache:unauthorized"), false);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test("403 de permissão do papel (sem code comercial) segue como erro comum, sem evento de plano nem logout", async () => {
+  const events = [];
+  const originalWindow = globalThis.window;
+  globalThis.window = { dispatchEvent: (event) => { events.push(event.type); return true; } };
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({ message: "Seu cargo não tem permissão para esta ação." }), { status: 403 });
+    setClientCacheScope("user-a:clinic-a");
+    events.length = 0;
+    await assert.rejects(getCachedJson("/api/stock"), (error) => error.name !== "PlanBlockedError" && /Não foi possível carregar/.test(error.message));
+    assert.deepEqual(events, []);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test("401 continua tratado como sessão expirada (limpa o escopo e avisa o app)", async () => {
+  const events = [];
+  const originalWindow = globalThis.window;
+  globalThis.window = { dispatchEvent: (event) => { events.push(event.type); return true; } };
+  try {
+    globalThis.fetch = async () => new Response("{}", { status: 401 });
+    setClientCacheScope("user-a:clinic-a");
+    events.length = 0;
+    await assert.rejects(getCachedJson("/api/patients"));
+    assert.ok(events.includes("client-cache:unauthorized"));
+    assert.equal(events.includes("client-cache:plan-blocked"), false);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test("403 comercial (PLAN_FEATURE) remove a entrada antiga da chave, sem limpar o escopo nem deslogar; erro comum continua restaurando", async () => {
+  let now = 1_000;
+  Date.now = () => now;
+  let mode = "ok";
+  globalThis.fetch = async (url) => {
+    if (mode === "plan") return new Response(JSON.stringify({ code: "PLAN_FEATURE", message: "Sem o recurso.", feature: "reports" }), { status: 403 });
+    if (mode === "fail") return new Response("{}", { status: 500 });
+    return new Response(JSON.stringify({ url }), { status: 200 });
+  };
+  setClientCacheScope("user-a:clinic-a");
+  await getCachedJson("/api/reports/appointments");
+  await getCachedJson("/api/patients");
+  now += 60_001;
+  mode = "fail";
+  await assert.rejects(getCachedJson("/api/reports/appointments"));
+  assert.deepEqual(readClientCache("/api/reports/appointments"), { url: "/api/reports/appointments" }, "falha comum mantém o dado antigo");
+  now += 60_001;
+  mode = "plan";
+  await assert.rejects(getCachedJson("/api/reports/appointments"), (error) => error.name === "PlanBlockedError");
+  assert.equal(readClientCache("/api/reports/appointments"), undefined, "dado de recurso bloqueado não volta");
+  assert.deepEqual(readClientCache("/api/patients"), { url: "/api/patients" }, "outras chaves e o escopo ficam intactos");
+});
+
+test("assinatura do plano no escopo: ordem dos recursos não muda o escopo; mudança de plano muda (e o cache é limpo)", async () => {
+  const { buildClientCacheScope, planAccessSignature } = await import("../src/lib/client-cache.ts");
+  const user = { id: "u", clinicId: "c", rolePermissions: { ADMIN: ["a"] } };
+  const pro = buildClientCacheScope({ ...user, access: { mode: "full", features: ["reports", "finance"] } });
+  assert.equal(pro, buildClientCacheScope({ ...user, access: { mode: "full", features: ["finance", "reports", "finance"] } }));
+  const start = buildClientCacheScope({ ...user, access: { mode: "full", features: [] } });
+  assert.notEqual(pro, start);
+  assert.notEqual(planAccessSignature({ mode: "full", features: ["a"] }), planAccessSignature({ mode: "readonly", features: ["a"] }));
+  assert.ok(!pro.includes("paciente"));
+  globalThis.fetch = async () => new Response(JSON.stringify({ ok: 1 }), { status: 200 });
+  setClientCacheScope(pro);
+  await getCachedJson("/api/reports/appointments");
+  setClientCacheScope(pro);
+  assert.deepEqual(readClientCache("/api/reports/appointments"), { ok: 1 });
+  setClientCacheScope(start);
+  assert.equal(readClientCache("/api/reports/appointments"), undefined);
+});

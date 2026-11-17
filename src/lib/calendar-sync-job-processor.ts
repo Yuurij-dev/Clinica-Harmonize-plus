@@ -5,6 +5,7 @@ import type { PrismaClient } from "@prisma/client";
 import { decideJobFailure, MAX_SYNC_ATTEMPTS, parseJobSnapshot, STALE_LOCK_MS, type SyncErrorKind } from "./calendar-sync-rules.ts";
 import { syncAppointment, type SyncDeps } from "./calendar-sync-service.ts";
 import { isGoogleCalendarError } from "./google-calendar-client.ts";
+import { clinicCanSyncCalendar, clinicsBlockedForCalendarSync } from "./plan-usage.ts";
 
 export const DEFAULT_PROCESS_LIMIT = 10;
 export const DEFAULT_BUDGET_MS = 40_000;
@@ -38,8 +39,13 @@ export async function processCalendarSyncJobs(input: { limit?: number; now?: Dat
       { status: "PENDING", nextRetryAt: { lte: now } },
       { status: "PROCESSING", OR: [{ lockedAt: null }, { lockedAt: { lt: staleCutoff } }] },
     ];
+    // Clínica sem o recurso googleCalendar OU em somente leitura (teste vencido, downgrade, inadimplência) não sincroniza:
+    // os jobs ficam PENDING, intactos, e voltam a processar quando o acesso completo é restabelecido.
+    const queued = await db.calendarSyncJob.groupBy({ by: ["clinicId"], where: { ...(input.clinicId ? { clinicId: input.clinicId } : {}), OR: runnable } });
+    const blocked = await clinicsBlockedForCalendarSync(db, queued.map((row) => row.clinicId), now);
+    if (blocked.length && input.clinicId && blocked.includes(input.clinicId)) return summary;
     const candidates = await db.calendarSyncJob.findMany({
-      where: { ...(input.clinicId ? { clinicId: input.clinicId } : {}), OR: runnable },
+      where: { ...(input.clinicId ? { clinicId: input.clinicId } : blocked.length ? { clinicId: { notIn: blocked } } : {}), OR: runnable },
       select: { id: true, status: true },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       take: limit,
@@ -81,6 +87,16 @@ async function processReserved(input: { now?: Date; clinicId?: string; deps: Pro
   try {
     const job = await db.calendarSyncJob.findFirst({ where: { id: jobId, lockedBy: workerId, status: "PROCESSING" }, select: { id: true, clinicId: true, appointmentId: true, attempts: true, snapshot: true } });
     if (!job) return;
+
+    // Revalida o plano E o modo de acesso direto no banco imediatamente antes de sincronizar: um downgrade ou entrada em
+    // somente leitura entre a listagem/reserva e a execução não pode sincronizar. Devolve o job à fila intacto (PENDING,
+    // tentativa não consumida, nada apagado) para voltar a processar quando o acesso completo for restabelecido.
+    if (!(await clinicCanSyncCalendar(db, job.clinicId, nowOf()))) {
+      await db.calendarSyncJob.updateMany({ where: { id: job.id, lockedBy: workerId, status: "PROCESSING" }, data: { status: "PENDING", lockedAt: null, lockedBy: null, ...(stale ? { attempts: { decrement: 1 } } : {}) } });
+      summary.skipped += 1;
+      summary.picked -= 1;
+      return;
+    }
 
     // Um job por agendamento por vez: se outro está em andamento (trava recente), devolve este à fila.
     const other = await db.calendarSyncJob.findFirst({

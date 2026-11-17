@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, hasFeature } from "@/lib/plan-guards";
 import { denyUnless } from "@/lib/api-guards";
 import { appointmentDay, clinicToday, dateOnly } from "@/lib/clinic-time";
 import { PROCEDURE_APPOINTMENT_PREFIX, scheduledAppointmentOrder } from "@/lib/procedure-session-rules";
@@ -37,10 +38,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const stored = parseJson<{ items?: Array<{ procedureId: string; name: string; quantity: number }> }>(quote.details, {});
   const storedItems = stored.items ?? [];
   const procedureIds = storedItems.map((item) => item.procedureId).filter(Boolean);
+  // Estoque e ficha tecnica sao recursos do plano: sem eles a resposta NAO traz materiais, lotes, saldos nem sugestoes da ficha
+  // (os registros continuam no banco). A sessao em si (fotos, tecnica, areas) funciona igual.
+  const stockAllowed = hasFeature(user, "stock");
+  const sheetAllowed = hasFeature(user, "technicalSheet");
   const [procedureCatalog, products, balances] = await Promise.all([
     prisma.procedure.findMany({ where: { clinicId: user.clinicId, ...(procedureIds.length ? { id: { in: procedureIds } } : {}) }, select: { id: true, name: true, durationMinutes: true, technicalSheet: { select: { productId: true, quantity: true } } } }),
-    prisma.product.findMany({ where: { clinicId: user.clinicId, archivedAt: null }, orderBy: { name: "asc" }, select: { id: true, name: true, kind: true, unit: true, lots: { where: { expiresOn: { gte: new Date(`${clinicToday()}T00:00:00Z`) } }, orderBy: { expiresOn: "asc" }, select: { id: true, code: true, expiresOn: true } } } }),
-    lotBalances(user.clinicId),
+    prisma.product.findMany({ where: { clinicId: user.clinicId, archivedAt: null, ...(stockAllowed ? {} : { id: { in: [] as string[] } }) }, orderBy: { name: "asc" }, select: { id: true, name: true, kind: true, unit: true, lots: { where: { expiresOn: { gte: new Date(`${clinicToday()}T00:00:00Z`) } }, orderBy: { expiresOn: "asc" }, select: { id: true, code: true, expiresOn: true } } } }),
+    stockAllowed ? lotBalances(user.clinicId) : Promise.resolve(new Map<string, number>()),
   ]);
   const selected = storedItems.length ? storedItems : restoreLegacyQuoteItems(quote.items, procedureCatalog);
   const selectedProcedureIds = new Set(selected.map((item) => item.procedureId));
@@ -50,9 +55,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     journey,
     quote: { id: quote.id, status: quote.status, approvedAt: quote.approvedAt, items: selected },
     evaluation: { id: evaluation.id, chiefComplaint: evaluation.chiefComplaint, patientGoal: evaluation.patientGoal, allergies: evaluation.allergies, contraindications: evaluation.contraindications, photos: evaluationPhotos },
-    procedures: procedures.map((procedure) => ({ ...procedure, suggestedMaterials: procedure.technicalSheet.map((item) => ({ productId: item.productId, quantity: item.quantity })) })),
+    procedures: procedures.map(({ technicalSheet, ...procedure }) => (sheetAllowed
+      ? { ...procedure, technicalSheet, suggestedMaterials: technicalSheet.map((item) => ({ productId: item.productId, quantity: item.quantity })) }
+      : { ...procedure, suggestedMaterials: [] })),
     materials: products.map((product) => ({ id: product.id, name: product.name, kind: product.kind, unit: product.unit, lots: product.lots.map((lot) => ({ id: lot.id, code: lot.code, expiresOn: dateOnly(lot.expiresOn), balance: balances.get(lot.id) ?? 0 })).filter((lot) => lot.balance > 0) })),
-    sessions: sessions.map((session) => ({ ...session, materials: parseJson<unknown[]>(session.materials, []), photos: resolvePhotos(session.photos, evaluation.photos), auditLog: parseJson<unknown[]>(session.auditLog, []) })),
+    sessions: sessions.map((session) => ({ ...session, materials: stockAllowed ? parseJson<unknown[]>(session.materials, []) : [], photos: resolvePhotos(session.photos, evaluation.photos), auditLog: parseJson<unknown[]>(session.auditLog, []) })),
     scheduledProcedure: scheduled ? { ...scheduled, date: appointmentDay(scheduled.date) } : null,
     consent: consentSummary(await consentCounts(user.clinicId, patientId, journeyId)),
     clinicName: user.clinic?.name ?? "",
@@ -60,8 +67,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const denied = denyUnless(user, "clinical:write");
@@ -117,9 +126,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return { session: created, reused: false };
   });
   // Fora da transação: falha ao semear nunca desfaz nem impede a criação da sessão.
-  const session = await seedDraftMaterials({ clinicId: user.clinicId, session: persisted, lines });
+  const stockAllowed = hasFeature(user, "stock");
+  const session = stockAllowed ? await seedDraftMaterials({ clinicId: user.clinicId, session: persisted, lines }) : persisted;
   // Em reuso o cliente recarrega a sessão completa (fotos resolvidas) pelo GET.
-  return NextResponse.json({ session: { ...session, materials: parseJson<unknown[]>(session.materials, []), photos: [], auditLog: parseJson<unknown[]>(session.auditLog, []) }, reused }, { status: reused ? 200 : 201 });
+  return NextResponse.json({ session: { ...session, materials: stockAllowed ? parseJson<unknown[]>(session.materials, []) : [], photos: [], auditLog: parseJson<unknown[]>(session.auditLog, []) }, reused }, { status: reused ? 200 : 201 });
 }
 
 function restoreLegacyQuoteItems(value: string, procedures: Array<{ id: string; name: string }>) {

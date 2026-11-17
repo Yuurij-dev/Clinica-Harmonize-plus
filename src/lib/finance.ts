@@ -76,7 +76,9 @@ export const expenseSelect = { id: true, description: true, category: true, amou
 
 // Cria como "a pagar" as ocorrências que faltam das despesas fixas até o fim do mês atual
 // (assim o card "A pagar" já mostra as do mês). O índice único (despesa fixa + data)
-// e o skipDuplicates garantem que abrir o Financeiro duas vezes não duplica nada.
+// e o skipDuplicates garantem que chamar duas vezes (ou duas requisições ao mesmo tempo) não duplica nada.
+// ESCRITA: só chamar de rotas de escrita autorizadas (POST/PATCH com permissão e acesso completo). NUNCA dentro de um GET:
+// leitura não grava (clínica em somente leitura precisa consultar sem alterar o banco). Devolve quantas despesas criou.
 export async function ensureRecurringOccurrences(clinicId: string, db: Prisma.TransactionClient | typeof prisma = prisma, recurringExpenseId?: string) {
   const until = periodRange("month", clinicToday()).end;
   const recurring = await db.recurringExpense.findMany({
@@ -91,7 +93,9 @@ export async function ensureRecurringOccurrences(clinicId: string, db: Prisma.Tr
     const day = new Date(`${date}T00:00:00Z`);
     return { clinicId, description: item.description, category: item.category, amountCents: item.amountCents, dueOn: day, paymentMethod: item.paymentMethod, status: "open", source: "recurring", recurringExpenseId: item.id, occurrenceOn: day };
   }));
-  if (data.length) await db.expense.createMany({ data, skipDuplicates: true });
+  if (!data.length) return 0;
+  const result = await db.expense.createMany({ data, skipDuplicates: true });
+  return result.count;
 }
 
 // O banco guarda centavos; a API de pagamentos e orçamentos continua em reais.

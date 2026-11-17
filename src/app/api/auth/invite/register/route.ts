@@ -12,7 +12,7 @@ export async function POST(request: Request) {
     cpf: body?.cpf, postalCode: body?.postalCode, address: body?.address, country: body?.country, state: body?.state, city: body?.city,
     hashPassword: (password) => hash(password, 12),
   });
-  if (!result.ok) return NextResponse.json({ message: result.message }, { status: result.status, headers: { "Cache-Control": "no-store" } });
+  if (!result.ok) return NextResponse.json("plan" in result ? result.plan : { message: result.message }, { status: result.status, headers: { "Cache-Control": "no-store" } });
 
   // Conta nova de convite não tem 2FA: sessão normal (se exigir 2FA, cai no assistente obrigatório).
   const login = await completeLogin({ request, userId: result.userId, origin: "password" });

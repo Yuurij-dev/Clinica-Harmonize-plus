@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { denyUnless } from "@/lib/api-guards";
+import { hasFeature } from "@/lib/plan-guards";
 import { observationKindsFor } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
@@ -42,7 +43,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     ...quotes.map((item) => ({ kind: "Orçamento", title: item.items, detail: item.status, date: item.createdAt.toISOString(), status: item.status })),
     ...payments.map((item) => ({ kind: "Pagamento", title: "Pagamento registrado", detail: `${(item.valueCents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} · ${item.method} · ${item.status}`, date: item.date.toISOString(), status: item.status })),
     ...observations.map((item) => ({ kind: item.kind === "clinical" ? "Observação clínica" : "Observação administrativa", title: item.kind === "clinical" ? "Observação clínica" : "Observação administrativa", detail: item.text, date: item.createdAt.toISOString() })),
-    ...appointments.filter((item) => item.materialsCheck === "pending").map((item) => ({ kind: "Material", title: "Conferência de materiais pendente", detail: item.procedure, date: item.date.toISOString(), status: "Pendente" })),
+    ...appointments.filter((item) => item.materialsCheck === "pending" && hasFeature(user, "stock")).map((item) => ({ kind: "Material", title: "Conferência de materiais pendente", detail: item.procedure, date: item.date.toISOString(), status: "Pendente" })),
     ...quotes.filter((item) => ["Pendente", "Aguardando aprovação"].includes(item.status)).map((item) => ({ kind: "Orçamento", title: "Orçamento aguardando aprovação", detail: item.items, date: item.createdAt.toISOString(), status: item.status })),
   ].sort((left, right) => right.date.localeCompare(left.date));
 

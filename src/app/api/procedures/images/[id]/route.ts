@@ -1,4 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { readStoredBytes } from "@/lib/clinical-storage";
@@ -28,8 +29,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
 // Remove uma imagem enviada que nenhum procedimento da clínica usa (ADMIN). Em uso → 409; de outra clínica ou inexistente → 404.
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return json("Não autenticado.", 401);
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "procedures:manage")) return json("Acesso restrito a administradores.", 403);
   const id = (await params).id;
   if (!isValidId(id)) return json("Imagem não encontrada.", 404);

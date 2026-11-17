@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { duplicateCpfResponse, rejectInvalidCpf } from "@/lib/patient-cpf";
 import { canSeeFullCpf, cpfForRole, maskCpf } from "@/lib/patient-cpf-mask";
 import { patientCreatedSelect, patientEditSelect, patientListSelect, withCurrentStage } from "@/lib/patient-list-server";
@@ -32,8 +33,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 }
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const denied = denyUnless(user, "patients:manage");

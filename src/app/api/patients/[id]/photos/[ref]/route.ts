@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
 import { cleanDisplayName, editActions, isPhotoPhase, photoCategoryNames } from "@/lib/clinical-files-rules";
@@ -31,8 +32,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
 // Edição/arquivamento só de fotos novas da galeria (ClinicalPhoto). Fotos de avaliação, sessão e retorno são registros clínicos e não mudam aqui.
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string; ref: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   // Permissão clínica antes de qualquer consulta: quem não pode ver foto não distingue "existe" de "não existe".
@@ -82,8 +85,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string; ref: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const denied = denyUnless(user, "clinical:delete");

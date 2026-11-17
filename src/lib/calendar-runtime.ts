@@ -7,6 +7,7 @@ import { enqueueAppointmentChange, notifyAppointmentChange, type AppointmentChan
 import type { JobSnapshot } from "./calendar-sync-rules";
 import { createCalendarClient, getCalendarConfig } from "./google-calendar-config";
 import { appointmentLink } from "./google-calendar-rules";
+import { clinicHasFeature } from "./plan-usage";
 import { prisma } from "./prisma";
 
 export const AFTER_DRAIN_LIMIT = 5;
@@ -74,6 +75,7 @@ export async function calendarAppointmentsDeleted(input: { clinicId: string; pat
 /** Backfill + drenagem (conexão nova, "Sincronizar agora"). `userId` limita aos agendamentos do profissional. */
 export async function backfillCalendar(input: { clinicId: string; userId?: string }) {
   try {
+    if (!(await clinicHasFeature(prisma, input.clinicId, "googleCalendar"))) return { enqueued: 0 };
     if (!(await clinicHasActiveConnection(prisma, input.clinicId))) return { enqueued: 0 };
     return await enqueueBackfill(prisma, input);
   } catch {

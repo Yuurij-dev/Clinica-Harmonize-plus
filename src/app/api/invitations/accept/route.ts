@@ -21,6 +21,8 @@ export async function POST(request: Request) {
     throw error;
   }
   if (!result.ok) {
+    // Limite de profissionais da clinica de destino: 403 comercial (a sessao continua valida; nada foi consumido).
+    if (result.code === "plan_limit" && result.plan) return NextResponse.json(result.plan, { status: 403, headers: noStore });
     if (result.code === "accepted") return NextResponse.json({ message: "Este convite já foi utilizado." }, { status: 409, headers: noStore });
     return NextResponse.json({ message: "Este convite não é válido para a sua conta." }, { status: 404, headers: noStore });
   }

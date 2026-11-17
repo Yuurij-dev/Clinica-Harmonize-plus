@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { denyUnless } from "@/lib/api-guards";
+import { hasFeature } from "@/lib/plan-guards";
 import { clinicToday } from "@/lib/clinic-time";
 import { evaluationEncounter, followUpDraftEncounter, followUpEncounter, sessionEncounter, sortEncounters } from "@/lib/clinical-record-rules";
 import { prisma } from "@/lib/prisma";
@@ -68,7 +69,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       where: { session: { patientId, clinicId } }, take: maxPerType,
       select: { sessionId: true, complaints: true, guidanceText: true, observations: true, complications: true, updatedAt: true, session: { select: { journeyId: true, procedureName: true, treatedAreas: true, professional: true } } },
     }),
-    prisma.pendingStockOutput.findMany({ where: { clinicId, patientId, status: "pending", procedureSessionId: { not: null } }, select: { procedureSessionId: true } }),
+    // Saidas de estoque pendentes so existem com o recurso stock (sem ele, nenhuma sessao fica "com materiais pendentes").
+    hasFeature(user, "stock") ? prisma.pendingStockOutput.findMany({ where: { clinicId, patientId, status: "pending", procedureSessionId: { not: null } }, select: { procedureSessionId: true } }) : Promise.resolve([] as Array<{ procedureSessionId: string | null }>),
     prisma.patientJourney.findMany({ where: { patientId, clinicId }, orderBy: { createdAt: "desc" }, take: 100, select: { id: true, name: true, status: true, professional: true, createdAt: true, archivedAt: true } }),
     prisma.appointment.findFirst({
       where: { patientId, clinicId, status: "Agendado", procedure: { contains: "retorno", mode: "insensitive" }, date: { gte: new Date(`${clinicToday()}T00:00:00-03:00`) } },

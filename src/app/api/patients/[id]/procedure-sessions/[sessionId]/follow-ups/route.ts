@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, hasFeature } from "@/lib/plan-guards";
 import { denyUnless } from "@/lib/api-guards";
 import { appointmentDay, clinicToday } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
@@ -8,8 +9,10 @@ import { parseJson } from "@/lib/procedure-session-rules";
 type FollowUpPhotoInput = { id: string; name: string; category: string; imageUrl: string; width: number; height: number; phase?: "Antes" | "Depois" | "Evolução" };
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string; sessionId: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const denied = denyUnless(user, "clinical:write");
@@ -89,8 +92,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 }
 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string; sessionId: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const denied = denyUnless(user, "clinical:write");
@@ -127,8 +132,10 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string; sessionId: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const denied = denyUnless(user, "clinical:write");
@@ -172,7 +179,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   let record;
   try {
     record = await prisma.$transaction(async (tx) => {
-      if (appointmentId) await tx.appointment.updateMany({ where: { id: appointmentId, clinicId: user.clinicId, status: "Em atendimento" }, data: { status: "Atendido", materialsCheck: "pending" } });
+      if (appointmentId) await tx.appointment.updateMany({ where: { id: appointmentId, clinicId: user.clinicId, status: "Em atendimento" }, data: { status: "Atendido", ...(hasFeature(user, "stock") ? { materialsCheck: "pending" } : {}) } });
       const created = await tx.patientProcedureFollowUp.create({
     data: {
       clinicId: user.clinicId, patientId, journeyId: session.journeyId, sessionId,

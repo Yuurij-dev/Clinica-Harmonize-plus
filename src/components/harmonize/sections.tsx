@@ -42,7 +42,7 @@ import {
   SectionIntro,
   StatusBadge,
 } from "./shared";
-import { useCan, useCurrentRole } from "./current-user";
+import { useCan, useCurrentRole, useHasFeature } from "./current-user";
 import { PatientForm, type NewPatientResult } from "./new-patient-form";
 import { PatientDetail } from "./patient-detail";
 import { useAnamnesisStartGate, type AnamnesisOpenMode } from "./anamnesis-start-gate";
@@ -63,6 +63,7 @@ import { PaginationBar } from "./clinical-pagination";
 import { TeamInvitations } from "./team-invitations";
 import { SecuritySettings } from "./security-settings";
 import { GoogleCalendarSettings } from "./google-calendar-settings";
+import { FeatureUpsellNote } from "./feature-locked-notice";
 import { gcalOutcomeToast } from "@/lib/google-calendar-ui-rules";
 import { TeamMemberDetail } from "./team-member-detail";
 import { usePatientLookup, type LookupPatient } from "./use-patient-lookup";
@@ -734,6 +735,8 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
   }
 
   const [materialCheck, setMaterialCheck] = useState<{ id: string; patientId: string } | null>(null);
+  // Sem o recurso estoque o atendimento conclui sem a conferência de materiais.
+  const hasStock = useHasFeature("stock");
   const agendaRouter = useRouter();
   // Mesmo gate de anamnese da ficha do cliente, aqui com o paciente do agendamento clicado.
   const anamnesisGate = useAnamnesisStartGate({ onOpenAnamnesis: (mode, patientId) => agendaRouter.push(`/clientes?patient=${encodeURIComponent(patientId)}&section=${mode}`) });
@@ -752,7 +755,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
     invalidateClientCache(agendaDayInvalidationKey(target.date), "/api/dashboard/bootstrap", `/api/patients/${target.patientId}/history`, ...(nextStatus === "Atendido" ? ["/api/patients"] : []));
     setUpdatingId(null);
     onSaved?.(`${target.patient}: ${nextStatus}.`);
-    if (nextStatus === "Atendido") setMaterialCheck({ id: target.id, patientId: target.patientId });
+    if (nextStatus === "Atendido" && hasStock) setMaterialCheck({ id: target.id, patientId: target.patientId });
   }
 
   async function markAppointmentAsMissed(target: AppointmentRow) {
@@ -1067,7 +1070,7 @@ export function ScheduleSection({ openCreate = false, onCreateOpen, onCreateClos
         <div className="space-y-4"><p className="rounded-[7px] bg-[#fff7f7] px-3 py-3 text-xs font-semibold leading-5 text-[#7e3b43]">Tem certeza que deseja excluir o agendamento de <strong>{deleteTarget?.patient}</strong> às <strong>{deleteTarget?.time}</strong>? Você poderá desfazer pelo aviso exibido após a exclusão.</p><div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={deleteSaving} onClick={() => setDeleteTarget(null)}>Cancelar</Button><Button type="button" variant="destructive" className="purchase-cancel-button text-white" disabled={deleteSaving} onClick={() => void deleteAppointment()}>{deleteSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{deleteSaving ? "Excluindo..." : "Excluir agendamento"}</Button></div></div>
       </Modal>
       {anamnesisGate.gate}
-      {materialCheck ? <MaterialCheckModal appointmentId={materialCheck.id} onClose={() => setMaterialCheck(null)} onDone={(message) => { invalidateClientCache(`/api/patients/${materialCheck.patientId}/history`); setMaterialCheck(null); onSaved?.(message); }} /> : null}
+      {hasStock && materialCheck ? <MaterialCheckModal appointmentId={materialCheck.id} onClose={() => setMaterialCheck(null)} onDone={(message) => { invalidateClientCache(`/api/patients/${materialCheck.patientId}/history`); setMaterialCheck(null); onSaved?.(message); }} /> : null}
     </div>
   );
 }
@@ -1308,7 +1311,7 @@ function appointmentTone(appointment: AppointmentRow) {
   return { card: "border-[#e0647d] bg-[#fff0f2] text-[#9b3a4f]", pill: "bg-[#ffe0e5] text-[#a8465b]" };
 }
 
-type ApiProcedure = { id: string; name: string; category?: string; price: number; durationMinutes: number; materialsNeedReview: boolean; catalogItemId?: string | null; image?: { kind: string; url: string | null } | null; technicalSheet: TechnicalSheetItem[] };
+type ApiProcedure = { id: string; name: string; category?: string; price: number; durationMinutes: number; materialsNeedReview?: boolean; catalogItemId?: string | null; image?: { kind: string; url: string | null } | null; technicalSheet?: TechnicalSheetItem[] };
 type ProcedureRow = Procedure & EditableProcedure;
 
 function mapApiProcedures(procedures: ApiProcedure[] = []): ProcedureRow[] {
@@ -1318,9 +1321,10 @@ function mapApiProcedures(procedures: ApiProcedure[] = []): ProcedureRow[] {
     price: item.price,
     duration: `${item.durationMinutes} min`,
     durationMinutes: item.durationMinutes,
-    materials: describeTechnicalSheet(item.technicalSheet),
-    technicalSheet: item.technicalSheet,
-    materialsNeedReview: item.materialsNeedReview,
+    // Sem o recurso ficha técnica o servidor omite a ficha e a marca de revisão.
+    materials: describeTechnicalSheet(item.technicalSheet ?? []),
+    technicalSheet: item.technicalSheet ?? [],
+    materialsNeedReview: item.materialsNeedReview ?? false,
     catalogItemId: item.catalogItemId ?? null,
     imageUrl: item.image?.url ?? null,
   }));
@@ -1328,7 +1332,9 @@ function mapApiProcedures(procedures: ApiProcedure[] = []): ProcedureRow[] {
 
 export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateClose = () => {}, onSaved }: CreateProps) {
   const cachedProcedures = readClientCache<{ procedures?: ApiProcedure[] }>("/api/procedures");
-  const cachedProducts = readClientCache<{ products?: Product[] }>("/api/products");
+  const hasTechnicalSheet = useHasFeature("technicalSheet");
+  // A ficha técnica depende do estoque; sem ela não se lê /api/products (o servidor responderia 403 de plano).
+  const cachedProducts = hasTechnicalSheet ? readClientCache<{ products?: Product[] }>("/api/products") : undefined;
   const [procedureRows, setProcedureRows] = useState<ProcedureRow[]>(() => mapApiProcedures(cachedProcedures?.procedures));
   const [productRows, setProductRows] = useState<Product[]>(cachedProducts?.products ?? []);
   // Quem abriu o modal (Novo procedimento ou Editar); o foco volta para lá ao fechar.
@@ -1374,11 +1380,12 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
   }, []);
 
   useEffect(() => {
+    if (!hasTechnicalSheet) return;
     // Inclui arquivados para mostrar na ficha técnica os materiais que já estavam nela.
     getCachedJson<{ products?: Product[] }>("/api/products?archived=1")
       .then((data) => setProductRows(data.products ?? []))
       .catch(() => setProductRows([]));
-  }, []);
+  }, [hasTechnicalSheet]);
 
   function closeProcedureModal() {
     setProcedureModalMounted(true);
@@ -1452,13 +1459,13 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
       <div>
         <SectionIntro
           title="Procedimentos"
-          description="Cadastro de serviços com valor sugerido, tempo estimado e a ficha técnica de materiais e produtos usada no estoque e no orçamento."
+          description={hasTechnicalSheet ? "Cadastro de serviços com valor sugerido, tempo estimado e a ficha técnica de materiais e produtos usada no estoque e no orçamento." : "Cadastro de serviços com valor sugerido e tempo estimado, usados na agenda e nos orçamentos."}
           action="Novo procedimento"
           actionTarget="procedimentos"
           onAction={() => { setProcedureModalKey("new-procedure"); setProcedureModalMounted(true); openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; onCreateOpen?.(); }}
         />
-        {isLoading ? <LoadingTable columns={5} /> : <MiniTable
-          columns={["Nome", "Valor sugerido", "Tempo", "Ficha técnica", "Ação"]}
+        {isLoading ? <LoadingTable columns={hasTechnicalSheet ? 5 : 4} /> : <MiniTable
+          columns={hasTechnicalSheet ? ["Nome", "Valor sugerido", "Tempo", "Ficha técnica", "Ação"] : ["Nome", "Valor sugerido", "Tempo", "Ação"]}
           rows={procedureRows.map((procedure) => [
             <span className="flex min-w-0 items-center gap-2" key={`name-${procedure.id}`}><ProcedureImage name={procedure.name} imageUrl={procedure.imageUrl} decorative className="h-8 w-8 rounded" /><strong className="min-w-0 truncate py-0.5 text-sm font-semibold text-foreground" title={procedure.name}>{procedure.name}</strong></span>,
             <span className="inline-flex rounded-md border border-border bg-muted/50 px-2.5 py-1.5 text-xs font-semibold tabular-nums text-foreground" key={`price-${procedure.id}`}>{currency.format(procedure.price)}</span>,
@@ -1483,7 +1490,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
             </div>,
-          ])}
+          ].filter((_, cellIndex) => hasTechnicalSheet || cellIndex !== 3))}
         />}
       </div>
 
@@ -1509,7 +1516,7 @@ export function ProceduresSection({ openCreate = false, onCreateOpen, onCreateCl
       >
         <div className="space-y-4">
           <div className="space-y-2 text-sm text-muted-foreground">
-            <p>A exclusão remove o procedimento do catálogo e das opções de <strong className="text-foreground">novos</strong> orçamentos e agendamentos. A ficha técnica de materiais dele também é removida.</p>
+            <p>A exclusão remove o procedimento do catálogo e das opções de <strong className="text-foreground">novos</strong> orçamentos e agendamentos.{hasTechnicalSheet ? " A ficha técnica de materiais dele também é removida." : ""}</p>
             <p>Atendimentos, orçamentos e agendamentos já registrados <strong className="text-foreground">não são afetados</strong>: eles mantêm o registro.</p>
             <p className="font-medium text-foreground">Esta ação não pode ser desfeita.</p>
           </div>
@@ -1539,7 +1546,9 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
   const [isSaving, setIsSaving] = useState(false);
   const [selectedQuotePatient, setSelectedQuotePatient] = useState<LookupPatient | null>(null);
   const [quoteProcedures, setQuoteProcedures] = useState(cachedQuoteOptions?.procedures ?? []);
-  const [quoteCosts, setQuoteCosts] = useState(cachedQuoteOptions?.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
+  // Sem o recurso "custos" o servidor omite `costs`: fica ausente (null), nunca zerado.
+  const hasCosts = useHasFeature("costs");
+  const [quoteCosts, setQuoteCosts] = useState<NonNullable<QuoteOptions["costs"]> | null>(cachedQuoteOptions?.costs ?? null);
   const [optionsLoading, setOptionsLoading] = useState(!cachedQuoteOptions);
   const [patientQuery, setPatientQuery] = useState("");
   const [quoteSearch, setQuoteSearch] = useState("");
@@ -1567,7 +1576,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
   useEffect(() => {
     getCachedJson<QuoteOptions>("/api/quotes/options").then((data) => {
       setQuoteProcedures(data.procedures ?? []);
-      setQuoteCosts(data.costs ?? { laborCost: 0, facilityCost: 0, medicationCost: 0 });
+      setQuoteCosts(data.costs ?? null);
       setOptionsLoading(false);
     }).catch(() => setOptionsLoading(false));
   }, []);
@@ -1577,7 +1586,8 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
   const matchingQuotePatients = quotePatientLookup.patients;
   // Somado em centavos inteiros: preços têm centavos e 0,1 + 0,2 não pode acumular erro de ponto flutuante.
   const procedureSubtotal = selectedProcedureNames.reduce((total, name) => total + Math.round((quoteProcedures.find((procedure) => procedure.name === name)?.price ?? 0) * 100), 0) / 100;
-  const clinicCostsTotal = quoteCosts.laborCost + quoteCosts.facilityCost + quoteCosts.medicationCost;
+  const shownCosts = hasCosts ? quoteCosts : null;
+  const clinicCostsTotal = shownCosts ? shownCosts.laborCost + shownCosts.facilityCost + shownCosts.medicationCost : 0;
   const suggestedTotal = Math.round(procedureSubtotal * 100 + clinicCostsTotal * 100) / 100;
   const visibleQuotes = quoteRows.filter((quote) => {
     const normalizedName = quoteSearch.trim().toLocaleLowerCase("pt-BR");
@@ -1616,7 +1626,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
     <div>
       <SectionIntro
         title="Orçamentos"
-        description="Propostas associadas ao paciente, com os preços dos procedimentos e os custos padrão definidos na Calculadora."
+        description={hasCosts ? "Propostas associadas ao paciente, com os preços dos procedimentos e os custos padrão definidos na Calculadora." : "Propostas associadas ao paciente, com os preços dos procedimentos."}
         action="Novo orçamento"
         onAction={onCreateOpen}
       />
@@ -1656,7 +1666,7 @@ export function QuotesSection({ openCreate = false, onCreateOpen, onCreateClose 
           </div>
           <FormField label="Validade"><MaskedInput className={fieldClassName} formatter={formatDate} name="expires" inputMode="numeric" maxLength={10} placeholder="30/09/2026" required /></FormField>
           <div className="sm:col-span-2"><FormField label="Procedimentos"><div className="flex min-h-10 flex-wrap gap-1.5 rounded-[7px] border border-[#dddfea] bg-white p-2">{selectedProcedureNames.map((name) => <span className="flex items-center gap-1 rounded-full bg-[#f0efff] py-1 pl-1 pr-2 text-[10px] font-bold text-[#5147dc]" key={name}><ProcedureImage name={name} imageUrl={quoteProcedures.find((procedure) => procedure.name === name)?.image?.url ?? null} decorative className="h-6 w-6 rounded-full" />{name}<button className="ml-0.5 text-[#5147dc] hover:text-[#b42318]" type="button" onClick={() => setSelectedProcedureNames((current) => current.filter((item) => item !== name))}>×</button></span>)}<select className="min-w-[150px] flex-1 bg-transparent text-sm font-semibold text-[#858696] outline-none" value="" disabled={optionsLoading || !quoteProcedures.length} onChange={(event) => { if (event.target.value) setSelectedProcedureNames((current) => current.includes(event.target.value) ? current : [...current, event.target.value]); }}><option value="">{optionsLoading ? "Carregando procedimentos..." : quoteProcedures.length ? "Adicionar procedimento" : "Nenhum procedimento cadastrado"}</option>{quoteProcedures.map((procedure) => <option key={procedure.id} value={procedure.name}>{procedure.name} · {currency.format(procedure.price)}</option>)}</select></div><input className="sr-only" name="items" value={selectedProcedureNames.join(", ")} readOnly required /></FormField></div>
-          <div className="sm:col-span-2"><FormField label="Valor total"><MaskedInput key={selectedProcedureNames.join("|")} className={fieldClassName} formatter={formatCurrency} name="total" inputMode="decimal" defaultValue={suggestedTotal ? currency.format(suggestedTotal) : ""} placeholder="R$ 0,00" required /></FormField><p className="mt-1 text-[10px] text-[#858696]">Inclui {currency.format(procedureSubtotal)} em procedimentos e {currency.format(clinicCostsTotal)} em custos padrão da Calculadora.</p></div>
+          <div className="sm:col-span-2"><FormField label="Valor total"><MaskedInput key={selectedProcedureNames.join("|")} className={fieldClassName} formatter={formatCurrency} name="total" inputMode="decimal" defaultValue={suggestedTotal ? currency.format(suggestedTotal) : ""} placeholder="R$ 0,00" required /></FormField><p className="mt-1 text-[10px] text-[#858696]">Inclui {currency.format(procedureSubtotal)} em procedimentos{shownCosts ? <> e {currency.format(clinicCostsTotal)} em custos padrão da Calculadora</> : null}.</p></div>
           <div className="mt-2 flex justify-end gap-2 sm:col-span-2"><Button disabled={isSaving} type="button" variant="secondary" onClick={onCreateClose}>Cancelar</Button><Button disabled={isSaving || optionsLoading || !selectedPatientId || !selectedProcedureNames.length} type="submit">{isSaving ? "Salvando..." : "Salvar orçamento"}</Button></div>
         </form>
       </Modal>
@@ -1861,10 +1871,15 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const canManageRolePermissions = useCan("settings:permissions");
   const canManageTeam = useCan("settings:team");
   const canManageSettings = useCan("settings:manage");
+  const hasCosts = useHasFeature("costs");
+  const hasStock = useHasFeature("stock");
+  const hasAgendaAutomations = useHasFeature("agendaAutomations");
+  const hasRolePermissions = useHasFeature("rolePermissions");
+  // Os dados gerais vêm sempre de /api/clinic/cost-settings; sem o recurso "custos" o servidor omite os campos de custo e eles nunca são enviados.
   const [editing, setEditing] = useState<string | null>(null);
   const [settingsSearch, setSettingsSearch] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
-  const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection ?? (typeof window !== "undefined" && new URLSearchParams(window.location.search).has("gcal") ? "Integrações" : canManageSettings ? "Dados da clínica" : canManageTeam ? "Custos e orçamento" : "Segurança e permissões"));
+  const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection ?? (typeof window !== "undefined" && new URLSearchParams(window.location.search).has("gcal") ? "Integrações" : canManageSettings ? "Dados da clínica" : canManageTeam && hasCosts ? "Custos e orçamento" : "Segurança e permissões"));
   useEffect(() => {
     const focusSection = (event: Event) => {
       const section = (event as CustomEvent<string>).detail;
@@ -2116,15 +2131,17 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
     setCostSettingsSuccess("");
     const form = new FormData(event.currentTarget);
     const nextSettings = {
-      laborCost: form.has("laborCost") ? parseCurrency(form.get("laborCost")) : costSettings.laborCost,
-      facilityCost: form.has("facilityCost") ? parseCurrency(form.get("facilityCost")) : costSettings.facilityCost,
-      medicationCost: form.has("medicationCost") ? parseCurrency(form.get("medicationCost")) : costSettings.medicationCost,
+      ...(hasCosts ? {
+        laborCost: form.has("laborCost") ? parseCurrency(form.get("laborCost")) : costSettings.laborCost,
+        facilityCost: form.has("facilityCost") ? parseCurrency(form.get("facilityCost")) : costSettings.facilityCost,
+        medicationCost: form.has("medicationCost") ? parseCurrency(form.get("medicationCost")) : costSettings.medicationCost,
+        professionalHourlyCost: costSettings.professionalHourlyCost,
+      } : {}),
       appointmentToleranceMinutes: parseInteger(appointmentToleranceInput),
       appointmentNotificationsEnabled,
       appointmentNotificationSoundEnabled,
       stockNotificationsEnabled,
       requireCancellationReason,
-      professionalHourlyCost: costSettings.professionalHourlyCost,
       professionalOpeningTime: costSettings.professionalOpeningTime,
       professionalClosingTime: costSettings.professionalClosingTime,
       ...(form.has("name") ? { name: String(form.get("name")).trim() } : {}),
@@ -2326,7 +2343,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
     { label: "Dados da clínica", icon: Building2 },
     { label: "Profissionais e equipe", icon: UsersRound },
     { label: "Agenda e horários", icon: CalendarClock },
-    { label: "Custos e orçamento", icon: CircleDollarSign },
+    ...(hasCosts ? [{ label: "Custos e orçamento", icon: CircleDollarSign }] : []),
     { label: "Notificações", icon: Bell },
     { label: "Segurança e permissões", icon: ShieldCheck },
     { label: "Segurança da conta", icon: LockKeyhole },
@@ -2341,7 +2358,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
   const displayedSettingsSection = permittedSettingsNavigation.some((item) => item.label === activeSettingsSection) ? activeSettingsSection : permittedSettingsNavigation[0]?.label ?? "";
   const isSearchingClinicPreferences = displayedSettingsSection === "Dados da clínica" && Boolean(normalizedSettingsSearch);
   const matchesClinicPreference = (text: string) => !isSearchingClinicPreferences || normalizeSettingsSearch(text).includes(normalizedSettingsSearch);
-  const clinicPreferenceLabels = ["Alertas de agendamentos", "Alertas de estoque", "Exigir motivo ao cancelar", "Marcar faltas automaticamente", "Finalizar atendimentos automaticamente", "Avançar etapas do paciente automaticamente", "Permitir agendamentos fora do funcionamento"];
+  const clinicPreferenceLabels = ["Alertas de agendamentos", ...(hasStock ? ["Alertas de estoque"] : []), "Exigir motivo ao cancelar", "Marcar faltas automaticamente", "Finalizar atendimentos automaticamente", "Avançar etapas do paciente automaticamente", "Permitir agendamentos fora do funcionamento"];
   const matchingClinicPreferenceCount = clinicPreferenceLabels.filter(matchesClinicPreference).length;
   const isSearchingTeam = displayedSettingsSection === "Profissionais e equipe" && Boolean(normalizedSettingsSearch);
   const filteredTeamMembers = members.filter((member) => {
@@ -2429,11 +2446,12 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
                     <h3 className="pt-2 text-sm font-bold text-foreground">Preferências gerais</h3>
                     <p className="mb-2 mt-1 text-xs text-muted-foreground">Configuração para toda a clínica</p>
                     <SettingsToggle hidden={!matchesClinicPreference("Alertas de agendamentos")} label="Alertas de agendamentos" description="Exibe no menu superior os atendimentos que precisam de atenção. A equipe acompanha a agenda sem procurar cada horário manualmente." checked={appointmentNotificationsEnabled} saving={savingPreference === "appointmentNotificationsEnabled"} onChange={(next) => { setAppointmentNotificationsEnabled(next); void persistClinicPreference("appointmentNotificationsEnabled", next).then((ok) => { if (!ok) setAppointmentNotificationsEnabled(!next); }); }} />
-                    <SettingsToggle hidden={!matchesClinicPreference("Alertas de estoque")} label="Alertas de estoque" description="Mostra avisos de estoque baixo, vencimentos e pendências para a equipe agir antes que falte material." checked={stockNotificationsEnabled} saving={savingPreference === "stockNotificationsEnabled"} onChange={(next) => { setStockNotificationsEnabled(next); void persistClinicPreference("stockNotificationsEnabled", next).then((ok) => { if (!ok) setStockNotificationsEnabled(!next); }); }} />
+                    <SettingsToggle hidden={!hasStock || !matchesClinicPreference("Alertas de estoque")} label="Alertas de estoque" description="Mostra avisos de estoque baixo, vencimentos e pendências para a equipe agir antes que falte material." checked={stockNotificationsEnabled} saving={savingPreference === "stockNotificationsEnabled"} onChange={(next) => { setStockNotificationsEnabled(next); void persistClinicPreference("stockNotificationsEnabled", next).then((ok) => { if (!ok) setStockNotificationsEnabled(!next); }); }} />
                     <SettingsToggle hidden={!matchesClinicPreference("Exigir motivo ao cancelar")} label="Exigir motivo ao cancelar" description="Antes de cancelar um agendamento, a equipe precisa registrar o motivo, ajudando a clínica a entender cancelamentos e manter o histórico completo." checked={requireCancellationReason} saving={savingPreference === "requireCancellationReason"} onChange={(next) => { setRequireCancellationReason(next); void persistClinicPreference("requireCancellationReason", next).then((ok) => { if (!ok) setRequireCancellationReason(!next); }); }} />
-                    <SettingsToggle hidden={!matchesClinicPreference("Marcar faltas automaticamente")} label="Marcar faltas automaticamente" description="Após o horário e a tolerância definidos, agendamentos que continuam marcados são atualizados para Faltou." checked={autoMarkMissedAppointmentsEnabled} saving={savingPreference === "autoMarkMissedAppointmentsEnabled"} onChange={(next) => { setAutoMarkMissedAppointmentsEnabled(next); void persistClinicPreference("autoMarkMissedAppointmentsEnabled", next).then((ok) => { if (!ok) setAutoMarkMissedAppointmentsEnabled(!next); }); }} />
-                    <SettingsToggle hidden={!matchesClinicPreference("Finalizar atendimentos automaticamente")} label="Finalizar atendimentos automaticamente" description="Quando o horário previsto do atendimento termina, a agenda altera Em atendimento para Atendido." checked={autoCompleteAppointmentsEnabled} saving={savingPreference === "autoCompleteAppointmentsEnabled"} onChange={(next) => { setAutoCompleteAppointmentsEnabled(next); void persistClinicPreference("autoCompleteAppointmentsEnabled", next).then((ok) => { if (!ok) setAutoCompleteAppointmentsEnabled(!next); }); }} />
-                    <SettingsToggle hidden={!matchesClinicPreference("Avançar etapas do paciente automaticamente")} label="Avançar etapas do paciente automaticamente" description="A etapa exibida na lista de pacientes acompanha avaliações, orçamentos, procedimentos e retornos registrados no sistema." checked={autoAdvancePatientJourneyEnabled} saving={savingPreference === "autoAdvancePatientJourneyEnabled"} onChange={(next) => { setAutoAdvancePatientJourneyEnabled(next); void persistClinicPreference("autoAdvancePatientJourneyEnabled", next).then((ok) => { if (!ok) setAutoAdvancePatientJourneyEnabled(!next); }); }} />
+                    {!hasAgendaAutomations && !isSearchingClinicPreferences ? <FeatureUpsellNote feature="agendaAutomations" className="my-2">Marcar faltas, finalizar atendimentos e avançar etapas do paciente automaticamente fazem parte do plano Pro. Por enquanto, essas mudanças são feitas manualmente.</FeatureUpsellNote> : null}
+                    <SettingsToggle hidden={!hasAgendaAutomations || !matchesClinicPreference("Marcar faltas automaticamente")} label="Marcar faltas automaticamente" description="Após o horário e a tolerância definidos, agendamentos que continuam marcados são atualizados para Faltou." checked={autoMarkMissedAppointmentsEnabled} saving={savingPreference === "autoMarkMissedAppointmentsEnabled"} onChange={(next) => { setAutoMarkMissedAppointmentsEnabled(next); void persistClinicPreference("autoMarkMissedAppointmentsEnabled", next).then((ok) => { if (!ok) setAutoMarkMissedAppointmentsEnabled(!next); }); }} />
+                    <SettingsToggle hidden={!hasAgendaAutomations || !matchesClinicPreference("Finalizar atendimentos automaticamente")} label="Finalizar atendimentos automaticamente" description="Quando o horário previsto do atendimento termina, a agenda altera Em atendimento para Atendido." checked={autoCompleteAppointmentsEnabled} saving={savingPreference === "autoCompleteAppointmentsEnabled"} onChange={(next) => { setAutoCompleteAppointmentsEnabled(next); void persistClinicPreference("autoCompleteAppointmentsEnabled", next).then((ok) => { if (!ok) setAutoCompleteAppointmentsEnabled(!next); }); }} />
+                    <SettingsToggle hidden={!hasAgendaAutomations || !matchesClinicPreference("Avançar etapas do paciente automaticamente")} label="Avançar etapas do paciente automaticamente" description="A etapa exibida na lista de pacientes acompanha avaliações, orçamentos, procedimentos e retornos registrados no sistema." checked={autoAdvancePatientJourneyEnabled} saving={savingPreference === "autoAdvancePatientJourneyEnabled"} onChange={(next) => { setAutoAdvancePatientJourneyEnabled(next); void persistClinicPreference("autoAdvancePatientJourneyEnabled", next).then((ok) => { if (!ok) setAutoAdvancePatientJourneyEnabled(!next); }); }} />
                     <SettingsToggle hidden={!matchesClinicPreference("Permitir agendamentos fora do funcionamento")} label="Permitir agendamentos fora do funcionamento" description="Libera horários fora da abertura e fechamento configurados, mantendo as validações de data, conflitos e duração do atendimento." checked={allowAppointmentsOutsideHours} saving={savingPreference === "allowAppointmentsOutsideHours"} onChange={(next) => { setAllowAppointmentsOutsideHours(next); void persistClinicPreference("allowAppointmentsOutsideHours", next).then((ok) => { if (!ok) setAllowAppointmentsOutsideHours(!next); }); }} />
                     {isSearchingClinicPreferences && matchingClinicPreferenceCount === 0 ? <p className="py-4 text-sm text-muted-foreground">Nenhuma preferência geral encontrada.</p> : null}
                   </div>
@@ -2552,7 +2570,7 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
                       {permissionGroups.map((group) => <section className="space-y-2" key={group.label}>
                         <h4 className="text-xs font-bold text-foreground">{group.label}</h4>
                         <div className="divide-y divide-border/60 rounded-md border border-border/60">
-                          {group.permissions.map(({ key, label, description }) => <SettingsToggle key={key} label={label} description={description} checked={rolePermissionMatrix[role][key]} disabled={rolePermissionsSaving || rolePermissionsLoading} onChange={(enabled) => { setRolePermissionMatrix((current) => ({ ...current, [role]: { ...current[role], [key]: enabled } })); setRolePermissionsDirty(true); }} />)}
+                          {group.permissions.map(({ key, label, description }) => <SettingsToggle key={key} label={label} description={description} checked={rolePermissionMatrix[role][key]} disabled={rolePermissionsSaving || rolePermissionsLoading || !hasRolePermissions} onChange={(enabled) => { setRolePermissionMatrix((current) => ({ ...current, [role]: { ...current[role], [key]: enabled } })); setRolePermissionsDirty(true); }} />)}
                         </div>
                       </section>)}
                       {role === "ADMIN" ? <p className="text-xs leading-5 text-muted-foreground">O administrador principal sempre pode reabrir esta tela para recuperar permissões administrativas.</p> : null}
@@ -2560,9 +2578,10 @@ export function SettingsSection({ isOwner = false, clinicName, onClinicNameChang
                   </section>;
                 })}
                 {rolePermissionsError ? <p className="rounded-md bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">{rolePermissionsError}</p> : null}
+                {!hasRolePermissions ? <FeatureUpsellNote feature="rolePermissions">Permissões personalizadas por cargo fazem parte do plano Pro. Você vê as permissões atuais, mas não pode alterá-las neste plano.</FeatureUpsellNote> : null}
                 <div className="flex flex-wrap justify-between gap-2 border-t border-border/70 pt-4">
                   {canManageTeam ? <Button type="button" variant="secondary" onClick={() => setActiveSettingsSection("Profissionais e equipe")}>Gerenciar equipe</Button> : <span />}
-                  <Button type="button" disabled={rolePermissionsSaving || rolePermissionsLoading || !rolePermissionsDirty} onClick={() => void saveRolePermissions()}>{rolePermissionsSaving ? "Salvando permissões..." : "Salvar permissões"}</Button>
+                  {hasRolePermissions ? <Button type="button" disabled={rolePermissionsSaving || rolePermissionsLoading || !rolePermissionsDirty} onClick={() => void saveRolePermissions()}>{rolePermissionsSaving ? "Salvando permissões..." : "Salvar permissões"}</Button> : null}
                 </div>
               </CardContent>
             </Card>

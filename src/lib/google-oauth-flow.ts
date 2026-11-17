@@ -21,7 +21,7 @@ import {
 
 export type GoogleConfig = { clientId: string; clientSecret: string; redirectUri: string };
 
-export type GoogleLoginCode = "unavailable" | "denied" | "no_access" | "account_exists" | "locked" | "must_change_password" | "invite_invalid" | "invite_email_mismatch" | "error";
+export type GoogleLoginCode = "unavailable" | "denied" | "no_access" | "account_exists" | "locked" | "must_change_password" | "invite_invalid" | "invite_email_mismatch" | "invite_plan_limit" | "error";
 
 export type GoogleRepo = {
   findIdentity(sub: string): Promise<{ userId: string } | null>;
@@ -193,7 +193,7 @@ async function handleInviteLogin(
       if (access.lockedUntil && access.lockedUntil.getTime() > now.getTime()) return fail("locked");
       if (access.mustChangePassword) return fail("must_change_password");
       const accepted = await acceptInvitation(deps.invitations, { token, user: { id: identity.userId, email: access.email } }, now);
-      if (!accepted.ok) return accepted.code === "email_mismatch" ? backToInvite("invite_email_mismatch") : fail("invite_invalid");
+      if (!accepted.ok) return accepted.code === "email_mismatch" ? backToInvite("invite_email_mismatch") : accepted.code === "plan_limit" ? fail("invite_plan_limit") : fail("invite_invalid");
       otherClinic = accepted.alreadyInOtherClinic;
       // O convite ja foi consumido: falha ao registrar o ultimo login nao pode derrubar o acesso.
       try {

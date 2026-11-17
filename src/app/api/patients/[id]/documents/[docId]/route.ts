@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
 import { canAssignSignatureStatus, canModifySignedTerm, canViewDocumentCategory, canWriteDocumentCategory, cleanDisplayName, editActions, isDocumentCategory, isSignatureStatus } from "@/lib/clinical-files-rules";
@@ -19,8 +20,10 @@ function present(row: NonNullable<Awaited<ReturnType<typeof findDocument>>>) {
 
 // Renomear, recategorizar, vincular, assinatura (manual) e arquivar/desarquivar.
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string; docId: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const { id: patientId, docId } = await params;
@@ -82,8 +85,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
 // Exclusão definitiva: só ADMIN, com confirmação explícita. Apaga bytes e registro; a trilha mínima (quem, quando, nome, categoria, motivo) permanece.
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string; docId: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const denied = denyUnless(user, "clinical:delete");

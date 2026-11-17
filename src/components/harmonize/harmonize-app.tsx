@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { AppToaster } from "./app-toaster";
-import { TrialEndedModal } from "./trial-ended-modal";
+import { TrialEndedModal, type PlanModalVariant } from "./trial-ended-modal";
+import { FeatureLockedNotice } from "./feature-locked-notice";
 import { navItems } from "@/data/navigation";
 
 function sectionLabel(section: SectionId) {
@@ -36,8 +37,10 @@ import { ReportsSection } from "./reports/reports-section";
 import type { SectionId } from "@/types/clinic";
 import type { RolePermissionMatrix } from "@/lib/permissions";
 import type { StockAlert } from "@/lib/stock-rules";
-import { CLIENT_CACHE_UNAUTHORIZED_EVENT, getCachedJson, setClientCacheScope } from "@/lib/client-cache";
-import { visibleSections } from "@/lib/permissions";
+import { featureLabels } from "@/data/plans";
+import type { PlanErrorBody } from "@/lib/plan-errors";
+import { buildClientCacheScope, CLIENT_CACHE_PLAN_BLOCKED_EVENT, CLIENT_CACHE_UNAUTHORIZED_EVENT, getCachedJson, setClientCacheScope } from "@/lib/client-cache";
+import { lockedSections, visibleSections } from "@/lib/permissions";
 import type { SetupDestination } from "@/lib/setup-rules";
 import { splitMobileSections } from "@/lib/mobile-nav-rules";
 import { CurrentRoleProvider } from "./current-user";
@@ -48,10 +51,11 @@ import { clientsHomeEvent, profileUpdatedEvent, setupInviteEvent, type ProfileUp
 import { MyProfile } from "./my-profile";
 import { agendaPeriodKey, agendaPeriodRange } from "@/lib/agenda-period-rules";
 import { clinicToday } from "@/lib/clinic-time";
+import { planLabel } from "@/lib/plan-label";
 import { patientListKey } from "@/lib/patient-list-rules";
 import { guardDraftNavigation, hasDraftGuard } from "./use-draft-autosave";
 
-type CurrentUser = { id: string; clinicId: string; name: string; role: string; avatarVersion?: string | null; isOwner?: boolean; trialExpired?: boolean; rolePermissions?: RolePermissionMatrix; clinic?: { name: string; trialEndsAt?: string | null } };
+type CurrentUser = { id: string; clinicId: string; name: string; role: string; avatarVersion?: string | null; isOwner?: boolean; trialExpired?: boolean; access?: { mode?: "full" | "readonly"; reason?: string; plan?: string | null; contractedPlan?: string | null; features?: string[] }; rolePermissions?: RolePermissionMatrix; clinic?: { name: string; trialEndsAt?: string | null } };
 type AgendaFocus = { date: string; time: string };
 type CreateDialog = "appointment" | "client" | "procedure" | "quote" | "payment";
 type HarmonizeAppProps = { initialCreate?: CreateDialog };
@@ -61,6 +65,8 @@ type StartupState =
   | { status: "loading-data"; sessionConfirmed: true; clinicName?: string; message: string }
   | { status: "error"; sessionConfirmed: boolean; clinicName?: string; message: string }
   | { status: "ready"; sessionConfirmed: true; clinicName?: string; message?: string };
+
+const noFeatures: readonly string[] = [];
 
 const initialScreenResources: Partial<Record<SectionId, { key: string; extraKeys?: () => string[]; message: string }>> = {
   dashboard: { key: "/api/dashboard/bootstrap", message: "Carregando os indicadores da clínica..." },
@@ -155,9 +161,15 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   const undoNoticeId = useRef(0);
   // Funcionalidade que o usuário tentou usar com o teste encerrado; não nulo = modal de planos aberto (nunca abre sozinho).
   const [upgradeFeature, setUpgradeFeature] = useState<string | null>(null);
+  const [upgradeVariant, setUpgradeVariant] = useState<PlanModalVariant>("trial_ended");
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const showPlanModal = (feature: string | null, variant: PlanModalVariant = "trial_ended") => { setUpgradeFeature(feature); setUpgradeVariant(variant); setUpgradeOpen(true); };
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const trialExpired = currentUser?.trialExpired === true;
-  const allowedSections = visibleSections(currentUser?.role, currentUser?.rolePermissions, currentUser?.isOwner);
+  // Sem `access` (ainda carregando) = sem recurso: falha fechado na interface; quem decide de verdade é o servidor.
+  const planFeatures = currentUser?.access?.features ?? noFeatures;
+  const allowedSections = visibleSections(currentUser?.role, currentUser?.rolePermissions, currentUser?.isOwner, planFeatures);
+  const planLockedSections = currentUser ? lockedSections(currentUser.role, currentUser.rolePermissions, currentUser.isOwner ?? false, planFeatures) : [];
   const mobileSections = splitMobileSections(allowedSections);
   const [initialSection] = useState(active);
   const [initialProfile] = useState(profileView);
@@ -175,7 +187,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       return;
     }
     // Relatórios é recurso de plano: com o teste encerrado, abre o modal de planos em vez de navegar.
-    if (trialExpired && section === "relatorios") { setMoreOpen(false); setUpgradeFeature(sectionLabel(section)); return; }
+    if (trialExpired && section === "relatorios") { setMoreOpen(false); showPlanModal(sectionLabel(section)); return; }
     if (!await guardDraftNavigation()) return;
     if (section !== "configuracoes") setSettingsFocusSection(null);
     setAgendaFocus(section === "agenda" ? focus ?? null : null);
@@ -254,10 +266,10 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
           return;
         }
         clinicName = user.clinic?.name;
-        setClientCacheScope(`${user.id}:${user.clinicId}:${JSON.stringify(user.rolePermissions ?? {})}`);
+        setClientCacheScope(buildClientCacheScope(user));
         setCurrentUser(user);
 
-        const resource = !initialProfile && visibleSections(user.role, user.rolePermissions, user.isOwner).includes(initialSection) ? initialScreenResources[initialSection] : undefined;
+        const resource = !initialProfile && visibleSections(user.role, user.rolePermissions, user.isOwner, user.access?.features ?? noFeatures).includes(initialSection) ? initialScreenResources[initialSection] : undefined;
         setStartup({
           status: "loading-data",
           sessionConfirmed: true,
@@ -315,6 +327,40 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
     };
   }, [router]);
 
+  // Bloqueio comercial (403 com code de plano/assinatura): só abre o modal de planos. Nunca encerra a sessão nem limpa dados.
+  // Um PLAN_FEATURE indica que os direitos do plano podem ter mudado (ex.: downgrade em outra aba/dispositivo): recarrega
+  // /api/auth/me para atualizar `access.features`; o escopo do cache inclui a assinatura do plano, então respostas de recursos
+  // bloqueados saem da memória. Uma consulta por vez e no máximo uma a cada 10 s (sem loop); 401/falha não altera nada.
+  const currentUserRef = useRef<CurrentUser | null>(null);
+  useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
+  const planRefresh = useRef({ running: false, at: 0 });
+  const refreshPlanAccess = useCallback(async () => {
+    const state = planRefresh.current;
+    if (state.running || Date.now() - state.at < 10_000) return;
+    state.running = true;
+    state.at = Date.now();
+    try {
+      const session = await getSessionCheck();
+      const current = currentUserRef.current;
+      const user = session.user;
+      if (session.status !== 200 || !user || !current || user.id !== current.id || user.clinicId !== current.clinicId) return;
+      setClientCacheScope(buildClientCacheScope(user));
+      setCurrentUser(user);
+    } catch { /* sem rede: mantém o estado atual */ } finally { state.running = false; }
+  }, []);
+
+  useEffect(() => {
+    const handlePlanBlocked = (event: Event) => {
+      const detail = (event as CustomEvent<PlanErrorBody>).detail;
+      if (detail?.code === "PLAN_FEATURE") void refreshPlanAccess();
+      if (detail?.code === "PLAN_FEATURE") showPlanModal(detail.feature ? featureLabels[detail.feature] : null, "feature");
+      else if (detail?.code === "PLAN_LIMIT") showPlanModal(null, "limit");
+      else showPlanModal(detail?.feature ? featureLabels[detail.feature] : "Edição de dados");
+    };
+    window.addEventListener(CLIENT_CACHE_PLAN_BLOCKED_EVENT, handlePlanBlocked);
+    return () => window.removeEventListener(CLIENT_CACHE_PLAN_BLOCKED_EVENT, handlePlanBlocked);
+  }, [refreshPlanAccess]);
+
   // "Meu perfil" salvou nome ou foto: o usuário atual do shell (topbar, menu Mais, saudações) reflete na hora, sem recarregar.
   useEffect(() => {
     const handleProfileUpdated = (event: Event) => {
@@ -327,15 +373,17 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   }, []);
 
   // URL direta de uma seção que o papel não enxerga: vai para a primeira permitida (sempre permitida, então sem laço).
+  // Seção do papel mas fora do plano (ex.: /estoque no Start) não redireciona: mostra o aviso de recurso bloqueado.
   const fallbackSection = allowedSections[0];
+  const activeLocked = planLockedSections.includes(active);
   useEffect(() => {
-    if (!profileView && startup.status === "ready" && currentUser && fallbackSection && !allowedSections.includes(active)) router.replace(sectionPaths[fallbackSection]);
-  }, [profileView, startup.status, currentUser, active, fallbackSection, allowedSections, router]);
+    if (!profileView && startup.status === "ready" && currentUser && fallbackSection && !activeLocked && !allowedSections.includes(active)) router.replace(sectionPaths[fallbackSection]);
+  }, [profileView, startup.status, currentUser, active, activeLocked, fallbackSection, allowedSections, router]);
 
   async function openCreate(section: SectionId, dialog: NonNullable<typeof createDialog>) {
     if (trialExpired) {
       setMoreOpen(false);
-      setUpgradeFeature(sectionLabel(section));
+      showPlanModal(sectionLabel(section));
       return;
     }
     if (!await guardDraftNavigation()) return;
@@ -435,7 +483,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
   }
 
   return (
-    <CurrentRoleProvider value={currentUser ? { id: currentUser.id, tourEnabled: startup.status === "ready" && !trialExpired, role: currentUser.role, isOwner: currentUser.isOwner, rolePermissions: currentUser.rolePermissions } : null}>
+    <CurrentRoleProvider value={currentUser ? { id: currentUser.id, tourEnabled: startup.status === "ready" && !trialExpired, role: currentUser.role, isOwner: currentUser.isOwner, rolePermissions: currentUser.rolePermissions, features: planFeatures } : null}>
     <div className="harmonize-app min-h-screen bg-background text-foreground">
       <Sidebar
         active={shown}
@@ -445,12 +493,15 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
         role={currentUser?.role}
         isOwner={currentUser?.isOwner}
         rolePermissions={currentUser?.rolePermissions}
+        features={planFeatures}
+        planLabel={planLabel(currentUser?.access)}
       />
       <div className="lg:pl-[220px]">
         <Topbar user={currentUser} clinics={clinics} onSwitchClinic={switchClinic} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onProfile={openProfile} onNavigate={selectSection} onQuickCreate={openCreate} onOpenSettingsSection={openSettingsSearchSection} onOpenStockAlert={openStockAlert} onLogout={logout} />
         <main className={`mx-auto w-full ${shown === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
           <AnimatedPage routeKey={shown ?? "perfil"}>
           {currentUser && profileView ? <MyProfile /> : null}
+          {currentUser && !profileView && activeLocked ? <FeatureLockedNotice onSeePlans={() => showPlanModal(sectionLabel(active), "feature")} /> : null}
           {currentUser && allowedSections.includes("dashboard") && shown === "dashboard" ? <Dashboard userName={currentUser?.name} onNavigate={selectSection} /> : null}
           {currentUser && shown === "agenda" ? <ScheduleSection focus={agendaFocus} currentUserName={currentUser.name} openCreate={createDialog === "appointment"} onCreateOpen={() => openCreate("agenda", "appointment")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
           {currentUser && shown === "clientes" ? <ClientsSection openCreate={createDialog === "client"} onCreateOpen={() => openCreate("clientes", "client")} onCreateClose={closeCreate} onSaved={showNotice} /> : null}
@@ -462,19 +513,19 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
           {currentUser && allowedSections.includes("financeiro") && shown === "financeiro" ? <FinanceSection /> : null}
           {currentUser && allowedSections.includes("relatorios") && shown === "relatorios" ? <ReportsSection /> : null}
           {currentUser && allowedSections.includes("configuracoes") && shown === "configuracoes" ? <SettingsSection initialSection={settingsFocusSection} isOwner={currentUser.isOwner} clinicName={currentUser.clinic?.name} onClinicNameChange={(name) => setCurrentUser((current) => current ? { ...current, clinic: { ...(current.clinic ?? {}), name } } : current)} onRolePermissionsChange={(rolePermissions) => {
-            setClientCacheScope(`${currentUser.id}:${currentUser.clinicId}:${JSON.stringify(rolePermissions)}`);
+            setClientCacheScope(buildClientCacheScope(currentUser, rolePermissions));
             setCurrentUser((current) => current ? { ...current, rolePermissions } : current);
           }} /> : null}
           </AnimatedPage>
         </main>
       </div>
       <MobileNav active={shown} sections={mobileSections.bar} moreActive={shown !== null && mobileSections.more.includes(shown)} moreOpen={moreOpen} onSelect={selectSection} onOpenMore={() => setMoreOpen(true)} moreButtonRef={moreButtonRef} />
-      <MobileMoreSheet open={moreOpen} onOpenChange={setMoreOpen} active={shown} sections={mobileSections.more} onSelect={selectSection} onLogout={logout} onCloseAutoFocus={(event) => { event.preventDefault(); moreButtonRef.current?.focus(); }} user={currentUser} onProfile={openProfile} />
+      <MobileMoreSheet open={moreOpen} onOpenChange={setMoreOpen} active={shown} sections={mobileSections.more} onSelect={selectSection} onLogout={logout} onCloseAutoFocus={(event) => { event.preventDefault(); moreButtonRef.current?.focus(); }} user={currentUser} onProfile={openProfile} planLabel={planLabel(currentUser?.access)} />
       <QuickCreateFab sections={allowedSections} onCreate={(target) => { const section = { appointment: "agenda", client: "clientes", quote: "orcamentos", payment: "pagamentos" }[target] as SectionId; void openCreate(section, target); }} />
       {currentUser && startup.status === "ready" && !trialExpired ? <GuidedTour allowedSections={allowedSections} userId={currentUser.id} activeSection={shown ?? undefined} suppressAutoOpen={createDialog !== null || hasDraftGuard()} onFinished={() => window.dispatchEvent(new Event(setupInviteEvent))} onSelectSection={(section, replace) => selectSection(section, undefined, "purchases", replace)} /> : null}
       <SetupWizardHost onOpenDestination={openSetupDestination} onDashboard={() => { void selectSection("dashboard"); }} />
       <AppToaster />
-      <TrialEndedModal open={upgradeFeature !== null} feature={upgradeFeature} onClose={() => setUpgradeFeature(null)} />
+      <TrialEndedModal open={upgradeOpen} variant={upgradeVariant} feature={upgradeFeature} onClose={() => setUpgradeOpen(false)} />
       {undoNotice ? <div className={`${undoNotice.leaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-[calc(8.5rem+env(safe-area-inset-bottom))] left-1/2 lg:bottom-6 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] border border-border bg-card px-4 py-3 text-xs font-bold text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.18)]`} role="status"><div className="flex items-center gap-3"><span className="min-w-0 flex-1">{undoNotice.message}</span><button className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-[11px] font-black text-foreground transition hover:bg-muted/80" onClick={() => { const undo = undoNotice.undo; setUndoNotice(null); undo(); }}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-success" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
     </div>
     </CurrentRoleProvider>

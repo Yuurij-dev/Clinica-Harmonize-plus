@@ -2,6 +2,8 @@ import { after, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { getAuthSecret } from "@/lib/auth-secret";
 import { afterCalendarConnected, drainCalendarJobs } from "@/lib/calendar-runtime";
+import { canWriteCore } from "@/lib/entitlements";
+import { hasFeature } from "@/lib/plan-guards";
 import { createCalendarClient, createIdTokenVerifier, getCalendarConfig } from "@/lib/google-calendar-config";
 import { CALENDAR_FLOW_COOKIE, calendarOutcomeRedirect, handleCalendarCallback } from "@/lib/google-calendar-oauth-service";
 import { GOOGLE_CALENDAR_FLOW_COOKIE_PATH } from "@/lib/google-calendar-rules";
@@ -25,9 +27,10 @@ export async function GET(request: Request) {
         client: createCalendarClient(config),
         verifyIdToken: createIdTokenVerifier(config),
         getSessionUser: async () => {
-          // Mesma regra de connect/sync: trial vencido não conecta (sessão nula => redirect de erro).
-          const user = await getCurrentUser({ requireActiveTrial: true });
-          return user ? { id: user.id, clinicId: user.clinicId, role: user.role, isOwner: user.isOwner, rolePermissions: user.rolePermissions } : null;
+          // Mesma regra de connect/sync: sem acesso de escrita (somente leitura) não conecta (sessão nula => redirect de erro).
+          const user = await getCurrentUser();
+          // Sem o recurso googleCalendar também não conecta (a clínica pode ter caído de plano durante o consentimento).
+          return user && canWriteCore(user.entitlements) && hasFeature(user, "googleCalendar") ? { id: user.id, clinicId: user.clinicId, role: user.role, isOwner: user.isOwner, rolePermissions: user.rolePermissions } : null;
         },
         enqueueBackfill: async ({ clinicId, connectionType, userId }) => {
           await afterCalendarConnected({ clinicId, ...(connectionType === "PROFESSIONAL" ? { userId } : {}) });
