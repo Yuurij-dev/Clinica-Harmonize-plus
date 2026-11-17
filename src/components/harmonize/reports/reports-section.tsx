@@ -9,7 +9,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Skeleton } from "@/components/ui/skeleton";
 import { fieldClassName } from "@/components/ui/modal";
 import type { ExportExtension } from "@/lib/reports-document";
-import { exportFormatLabels } from "@/lib/reports-center-rules";
+import { exportFormatLabels, planReportCapabilities } from "@/lib/reports-center-rules";
 import { exportFormatsFor } from "@/lib/reports-export-rules";
 import type { ReportGranularity, ReportPeriod } from "@/lib/reports-rules";
 import {
@@ -17,6 +17,8 @@ import {
   reportKey, reportQueryString, variationInfo, type ReportFilters,
 } from "@/lib/reports-ui-rules";
 import { cn } from "@/lib/utils";
+import { useCan, useCurrentRole, useHasFeature } from "../current-user";
+import { FeatureUpsellNote } from "../feature-locked-notice";
 import { FinanceHeader, useFinanceResource } from "../finance-shared";
 import { ChartLegend, Note, PanelError, TrendChart, VariationLine, IconBox } from "./report-parts";
 import { ReportCenter } from "./report-center";
@@ -41,12 +43,21 @@ export function ReportsSection() {
   // Filtros que já foram enviados ao servidor: o período personalizado incompleto não consulta nada e mantém o último resultado.
   const [applied, setApplied] = useState<ReportFilters>(initialFilters);
   const [tab, setTab] = useState<ReportTabId>("procedures");
+  // Recursos do plano: só refletem o que o servidor aceita (visão geral = Premium; exportação individual = Pro+; consolidado = Premium).
+  const hasAdvanced = useHasFeature("reportsAdvanced");
+  const hasExport = useHasFeature("reportsExport");
+  const hasConsolidated = useHasFeature("reportsConsolidated");
+  const areaCapabilities = planReportCapabilities({
+    isProfessional: useCurrentRole() === "PROFESSIONAL", canFinance: useCan("finance:access"), canQuotes: useCan("quotes:access"), canStock: useCan("stock:access"),
+    hasFinance: useHasFeature("finance"), hasStock: useHasFeature("stock"),
+  });
   const { busy: exportBusy, run: runExport } = useReportExport(applied);
   const exporting = exportBusy !== null;
   const rangeError = filters.period === "custom" ? customRangeError(filters.from, filters.to) : null;
 
-  const overview = useFinanceResource<OverviewData>(reportKey("/api/reports/overview", applied), true);
+  const overview = useFinanceResource<OverviewData>(hasAdvanced ? reportKey("/api/reports/overview", applied) : null, true);
   const data = overview.data;
+  const filterOptions = useFinanceResource<{ professionals: string[] }>(hasAdvanced ? null : "/api/reports/filters");
   const stale = Boolean(data) && !overviewMatchesFilters(data as OverviewData, applied);
 
   function update(patch: Partial<ReportFilters>) {
@@ -61,11 +72,14 @@ export function ReportsSection() {
     else update({ period, granularity: null });
   }
 
-  const tabs = tabDefinitions.filter((definition) => data && (definition.needs === null || data.capabilities[definition.needs]));
+  // Com a visão geral, as capacidades vêm do servidor (papel e plano); sem ela (Pro), usa o mesmo critério calculado aqui.
+  const capabilities = data?.capabilities ?? areaCapabilities;
+  const tabs = tabDefinitions.filter((definition) => (data || !hasAdvanced) && (definition.needs === null || capabilities[definition.needs]));
   const activeTab = tabs.some((definition) => definition.id === tab) ? tab : (tabs[0]?.id ?? "procedures");
 
   const periodLabel = data && !stale ? formatRangeLabel(data.range) : periodPresetLabel(applied.period);
-  const professionals = data?.professionals ?? [];
+  // Pro: sem visão geral, a lista do filtro vem de uma rota própria (só nomes); Premium continua usando a do overview.
+  const professionals = data?.professionals ?? filterOptions.data?.professionals ?? [];
   const currentTabLabel = tabDefinitions.find((definition) => definition.id === activeTab)?.label ?? "Aba atual";
 
   return (
@@ -103,7 +117,7 @@ export function ReportsSection() {
             </label>
           ) : null}
 
-          <div className="ml-auto">
+          {hasExport ? <div className="ml-auto">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="secondary" disabled={exporting || Boolean(rangeError)} aria-busy={exporting} aria-label={exporting ? "Gerando arquivo…" : "Exportar relatório"}>
@@ -114,13 +128,19 @@ export function ReportsSection() {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-64">
                 <ExportGroup label={`Aba atual: ${currentTabLabel}`} formats={exportFormatsFor(activeTab)} onExport={(format) => void runExport(activeTab, format)} />
-                <DropdownMenuSeparator />
-                <ExportGroup label="Consolidado (todos os relatórios permitidos)" formats={exportFormatsFor("all")} onExport={(format) => void runExport("all", format)} />
+                {hasConsolidated ? (
+                  <>
+                    <DropdownMenuSeparator />
+                    <ExportGroup label="Consolidado (todos os relatórios permitidos)" formats={exportFormatsFor("all")} onExport={(format) => void runExport("all", format)} />
+                  </>
+                ) : null}
                 <p className="px-2 pb-1.5 pt-1 text-[11px] leading-4 text-muted-foreground">Excel (.xlsx) é a planilha formatada. CSV é texto simples (UTF-8, separador “;”) e abre sem formatação.</p>
               </DropdownMenuContent>
             </DropdownMenu>
-          </div>
+          </div> : null}
         </div>
+
+        {!hasAdvanced ? <FeatureUpsellNote feature="reportsAdvanced">A visão geral com indicadores, gráficos e insights faz parte do plano Premium. Os relatórios por área continuam disponíveis abaixo.</FeatureUpsellNote> : null}
 
         {filters.period === "custom" ? (
           <div className="flex flex-wrap items-end gap-3">
@@ -137,10 +157,10 @@ export function ReportsSection() {
         {data && professionals.length === 0 && data.appliedProfessional ? <Note>Mostrando apenas os atendimentos de {data.appliedProfessional}.</Note> : null}
       </div>
 
-      {overview.error ? <PanelError message={overview.error} onRetry={overview.reload} /> : !data ? <OverviewSkeleton /> : (
+      {hasAdvanced && overview.error ? <PanelError message={overview.error} onRetry={overview.reload} /> : hasAdvanced && !data ? <OverviewSkeleton /> : (
         <div className={cn("space-y-5 transition-opacity", stale && "opacity-60")} aria-busy={stale}>
-          <KpiCards data={data} />
-          <TrendCharts data={data} granularity={applied.granularity ?? data.series.granularity} onGranularity={(granularity) => update({ granularity })} stale={stale} />
+          {data ? <KpiCards data={data} /> : null}
+          {data ? <TrendCharts data={data} granularity={applied.granularity ?? data.series.granularity} onGranularity={(granularity) => update({ granularity })} stale={stale} /> : null}
 
           <Card>
             <div role="tablist" aria-label="Detalhamento do relatório" className="flex gap-1 overflow-x-auto border-b border-border px-2 pt-2" onKeyDown={(event) => moveTab(event, tabs.map((definition) => definition.id), activeTab, setTab)}>
@@ -170,8 +190,8 @@ export function ReportsSection() {
             </div>
           </Card>
 
-          <Insights data={data} />
-          <ReportCenter capabilities={data.capabilities} filters={applied} disabled={Boolean(rangeError)} />
+          {data ? <Insights data={data} /> : null}
+          <ReportCenter capabilities={capabilities} filters={applied} disabled={Boolean(rangeError)} canExport={hasExport} />
         </div>
       )}
     </div>

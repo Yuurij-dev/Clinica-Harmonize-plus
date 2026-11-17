@@ -1,3 +1,5 @@
+import { parsePlanErrorBody, type PlanErrorBody } from "./plan-errors.ts";
+
 type CacheEntry = {
   data?: unknown;
   updatedAt?: number;
@@ -65,6 +67,16 @@ export function clearClientCache() {
   for (const key of cache.keys()) remove(key);
 }
 
+/** Assinatura estável dos direitos do plano (modo + recursos ordenados). Muda quando o plano muda; nunca contém dado de paciente. */
+export function planAccessSignature(access: { mode?: string; features?: readonly string[] } | null | undefined) {
+  return `${access?.mode ?? "-"}|${[...new Set(access?.features ?? [])].sort().join(",")}`;
+}
+
+/** Escopo do cache: usuário + clínica + matriz de permissões + direitos do plano (mudança de plano limpa respostas em memória). */
+export function buildClientCacheScope(user: { id: string; clinicId: string; rolePermissions?: unknown; access?: { mode?: string; features?: readonly string[] } | null }, rolePermissions: unknown = user.rolePermissions) {
+  return `${user.id}:${user.clinicId}:${JSON.stringify(rolePermissions ?? {})}:${planAccessSignature(user.access)}`;
+}
+
 export function setClientCacheScope(nextScope: string | null) {
   if (scope === nextScope) return;
   clearClientCache();
@@ -101,6 +113,15 @@ export async function getCachedJson<T>(key: string, url = key) {
         setClientCacheScope(null);
         if (typeof window !== "undefined") window.dispatchEvent(new Event(CLIENT_CACHE_UNAUTHORIZED_EVENT));
       }
+      // 403 comercial (plano/assinatura) NÃO é sessão expirada: não limpa o escopo, não dispara "unauthorized" e não desloga.
+      // Avisa a interface (modal de planos) e falha só esta consulta. Outros 403 (permissão do papel) seguem o erro genérico.
+      if (response.status === 403) {
+        const planError = parsePlanErrorBody(await response.clone().json().catch(() => null));
+        if (planError) {
+          notifyPlanBlocked(planError);
+          throw new PlanBlockedError(planError);
+        }
+      }
       if (!response.ok) throw new Error(`Não foi possível carregar ${url}.`);
       const data = await response.json() as T;
       if (generation !== requestGeneration || controller.signal.aborted) throw new DOMException("Consulta cancelada.", "AbortError");
@@ -109,7 +130,9 @@ export async function getCachedJson<T>(key: string, url = key) {
     })
     .catch((error) => {
       if (cache.get(key) === entry) {
-        if (entry.updatedAt !== undefined) remember(key, { data: entry.data, updatedAt: entry.updatedAt });
+        // Bloqueio comercial (ex.: downgrade): o dado antigo é de um recurso que o plano não inclui mais, então some em vez de voltar.
+        if (error instanceof PlanBlockedError) cache.delete(key);
+        else if (entry.updatedAt !== undefined) remember(key, { data: entry.data, updatedAt: entry.updatedAt });
         else cache.delete(key);
       }
       throw error;
@@ -122,6 +145,22 @@ export async function getCachedJson<T>(key: string, url = key) {
 export const CLIENT_CACHE_INVALIDATED_EVENT = "client-cache:invalidated";
 export const CLIENT_CACHE_SCOPE_CHANGED_EVENT = "client-cache:scope-changed";
 export const CLIENT_CACHE_UNAUTHORIZED_EVENT = "client-cache:unauthorized";
+export const CLIENT_CACHE_PLAN_BLOCKED_EVENT = "client-cache:plan-blocked";
+
+/** Erro de uma consulta bloqueada por plano/assinatura (403 com `code`); a sessão continua válida. */
+export class PlanBlockedError extends Error {
+  readonly body: PlanErrorBody;
+  constructor(body: PlanErrorBody) {
+    super(body.message);
+    this.name = "PlanBlockedError";
+    this.body = body;
+  }
+}
+
+/** Avisa a interface (detail = PlanErrorBody) que uma ação/consulta foi bloqueada pelo plano. Nunca altera sessão nem cache. */
+export function notifyPlanBlocked(body: PlanErrorBody) {
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent<PlanErrorBody>(CLIENT_CACHE_PLAN_BLOCKED_EVENT, { detail: body }));
+}
 
 export function invalidateClientCache(...keys: string[]) {
   const affected = new Set(keys);

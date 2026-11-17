@@ -36,28 +36,28 @@ test("legacy financial snapshots expose missing breakdown instead of inventing a
   assert.ok(!html.includes("Custos de mão de obra"));
 });
 
-test("saved clinic costs reconcile the proposal total and payment conditions are shown once", () => {
+test("proposal for the patient never shows internal costs; total stays and payment conditions are shown once", () => {
   const html = buildQuoteProposalHtml({
     ...baseProposal,
     totalCents: 111_000,
     financial: {
       subtotalCents: 30_000,
       discountCents: 0,
-      additions: [{ label: "Custos adicionais da clínica", amountCents: 81_000 }],
       totalCents: 111_000,
     },
     conditions: { paymentStatus: "Concluído" },
   });
 
-  assert.ok(html.includes("R$ 300,00"));
-  assert.ok(html.includes("R$ 810,00"));
   assert.ok(html.includes("R$ 1.110,00"));
-  assert.ok(!html.includes("Ajuste sem detalhamento salvo"));
+  assert.ok(!html.includes("R$ 810,00"));
+  assert.ok(!/Custo|Ajuste sem detalhamento|Margem|Lucro/i.test(html.replace(/<style[\s\S]*?<\/style>/g, "")));
+  // Subtotal e desconto não fecham com o total: o resumo mostra só o total, sem revelar a diferença.
+  assert.ok(!html.includes("Subtotal dos procedimentos"));
   assert.equal(html.match(/Forma de pagamento/g)?.length, 1);
   assert.equal(html.match(/Pagamento<\/span>/g)?.length, 1);
 });
 
-test("financial snapshot falls back to the saved total cost without inventing its categories", () => {
+test("financial snapshot never carries internal costs to the patient document", () => {
   const details = JSON.stringify({
     items: [{ procedureId: "botox", name: "Botox", quantity: 1, unitPriceCents: 30_000, discountCents: 0, subtotalCents: 30_000 }],
     subtotalCents: 30_000,
@@ -68,7 +68,8 @@ test("financial snapshot falls back to the saved total cost without inventing it
   const financial = quoteFinancialSnapshot(details, 1);
 
   assert.equal(financial.totalCents, 111_000);
-  assert.deepEqual(financial.additions, [{ label: "Custos adicionais da clínica", amountCents: 81_000 }]);
+  assert.equal("additions" in financial, false);
+  assert.ok(!JSON.stringify(financial).includes("81000"));
   assert.equal(financial.compositionNote, null);
   assert.match(quoteFinancialSnapshot("[]", 111_000).compositionNote ?? "", /detalhamento financeiro original/);
 });
@@ -82,11 +83,11 @@ test("optional clinic, patient, professional, procedure details and financial br
     patient: { name: "Ana Cliente", identifier: "P-17", cpf: "123.456.789-00" },
     professional: { name: "Dra. Maria", registration: "CRM 123", specialty: "Dermatologia" },
     rows: [{ ...baseProposal.rows[0], description: "Suavização de linhas de expressão" }],
-    financial: { subtotalCents: 30_000, discountCents: 2_000, additions: [{ label: "Taxa clínica", amountCents: 500 }], totalCents: 28_500 },
+    financial: { subtotalCents: 30_000, discountCents: 2_000, totalCents: 28_000 },
     conditions: { appointment: "Sujeito à disponibilidade", special: "Condição comercial vigente" },
   });
 
-  for (const expected of ["Clínica da Vila", "PROP-42", "Ana Cliente", "Dra. Maria", "CRM 123", "Suavização de linhas de expressão", "Subtotal dos procedimentos", "Descontos", "Taxa clínica", "R$ 285,00", "Agendamento", "Condição comercial vigente"]) {
+  for (const expected of ["Clínica da Vila", "PROP-42", "Ana Cliente", "Dra. Maria", "CRM 123", "Suavização de linhas de expressão", "Subtotal dos procedimentos", "Descontos", "R$ 280,00", "Agendamento", "Condição comercial vigente"]) {
     assert.ok(html.includes(expected), `missing ${expected}`);
   }
   assert.match(html, /--brand:#123456/);

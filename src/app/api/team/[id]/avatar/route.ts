@@ -1,4 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { readUserAvatar, removeUserAvatar, storeUserAvatar } from "@/lib/user-avatar";
@@ -20,8 +21,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
 // Mesma regra do PATCH de dados: admin edita membros só desta clínica; owner só a si; conta compartilhada com outra clínica só o próprio.
 async function authorize(id: string) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return { error: json("Não autenticado.", 401) };
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return { error: readonlyDenied };
   const member = await findMember(id, user.clinicId);
   const isSelf = member?.userId === user.id;
   if (!isSelf && !canForUser(user, "settings:team")) return { error: json("Apenas administradores podem alterar os dados da equipe.", 403) };

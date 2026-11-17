@@ -8,7 +8,7 @@ const permission = "settings:team";
 const noStore = { "Cache-Control": "no-store" };
 
 export async function GET() {
-  const session = await adminUser(true, permission);
+  const session = await adminUser(false, permission);
   if ("error" in session) return session.error;
   // clinicId SEMPRE da sessao.
   const invitations = await listInvitations(prismaInvitationRepo, { clinicId: session.user.clinicId });
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ message: "Informe apenas e-mail e cargo." }, { status: 400, headers: noStore });
   }
   const result = await createInvitation(prismaInvitationRepo, { clinicId: user.clinicId, invitedById: user.id, email: body.email, role: body.role, deliveryReady: isInviteDeliveryReady() });
-  if (!result.ok) return NextResponse.json({ message: result.message }, { status: result.status, headers: noStore });
+  if (!result.ok) return NextResponse.json(result.plan ?? { message: result.message }, { status: result.status, headers: noStore });
 
   const delivery = await deliverInvitation(
     { buildUrl: buildInviteUrl, send: sendInvitationEmail, revealUrl: canRevealInviteUrl() },

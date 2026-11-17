@@ -77,6 +77,19 @@ export async function loadCalendarStatus(db: PrismaClient, user: CalendarActor, 
   return { configured, canConnectCentral: canCentral, canConnectIndividual: canIndividual, central, individual };
 }
 
+/** Estado mínimo quando o plano NÃO inclui o Google Agenda: só se há conexão ativa (permite oferecer "Desconectar"). Sem e-mail, contadores, erros, datas nem dados de outras pessoas. */
+export type PlanBlockedCalendarStatus = { planBlocked: true; central: boolean; individual: boolean };
+
+export async function loadPlanBlockedCalendarStatus(db: Pick<PrismaClient, "googleCalendarConnection">, user: CalendarActor): Promise<PlanBlockedCalendarStatus> {
+  const clinicId = user.clinicId;
+  // Mesma regra do desconectar: ADMIN enxerga/desconecta a central; PROFESSIONAL/ADMIN a própria individual.
+  const [central, individual] = await Promise.all([
+    canConnectCalendar(user, "ADMIN") ? db.googleCalendarConnection.findFirst({ where: activeCentral(clinicId), select: { id: true } }) : null,
+    canConnectCalendar(user, "PROFESSIONAL") ? db.googleCalendarConnection.findFirst({ where: { clinicId, connectionType: "PROFESSIONAL", userId: user.id, status: { not: "DISCONNECTED" } }, select: { id: true } }) : null,
+  ]);
+  return { planBlocked: true, central: Boolean(central), individual: Boolean(individual) };
+}
+
 /** Conexão central ativa de OUTRA pessoa na clínica (impede iniciar outra OAuth que falharia no índice único). */
 export async function centralOwnedByAnother(db: Pick<PrismaClient, "googleCalendarConnection">, user: CalendarActor) {
   const row = await db.googleCalendarConnection.findFirst({ where: { ...activeCentral(user.clinicId), userId: { not: user.id } }, select: { id: true } });

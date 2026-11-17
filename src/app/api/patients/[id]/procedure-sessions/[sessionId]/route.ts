@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature, hasFeature } from "@/lib/plan-guards";
 import { denyUnless } from "@/lib/api-guards";
 import { appointmentInstant, clinicNow, dateOnly } from "@/lib/clinic-time";
 import { registerAttendanceOutputs, AttendanceMaterialsError } from "@/lib/attendance-materials";
@@ -53,8 +54,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 }
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string; sessionId: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const denied = denyUnless(user, "clinical:write");
@@ -102,7 +105,15 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const preservedPhotos = photos ? unknownStoredPhotos(parseJson<Photo[]>(current.photos, []), photos.map((photo) => photo.id), knownPhotoIds) : [];
   const nextPhotos = photos ? [...photos, ...preservedPhotos] : undefined;
   if (nextPhotos && nextPhotos.length > 20) return NextResponse.json({ message: "A sessão recebeu novas fotos do aplicativo e passaria de 20. Recarregue a sessão e revise as fotos." }, { status: 409 });
-  const materials = Array.isArray(body?.materials) ? body.materials as Material[] : undefined;
+  // Materiais e baixa de estoque sao do recurso `stock`. Sem ele a sessao funciona normalmente: enviar materiais e recusado
+  // (PLAN_FEATURE) e a lista ja gravada NAO e tocada (historico preservado em downgrade).
+  const stockAllowed = hasFeature(user, "stock");
+  const materialsInput = Array.isArray(body?.materials) ? body.materials as Material[] : undefined;
+  if (!stockAllowed && materialsInput && materialsInput.length > 0) {
+    const featureDenied = denyUnlessFeature(user, "stock", "write");
+    if (featureDenied) return featureDenied;
+  }
+  const materials = stockAllowed ? materialsInput : undefined;
   if (nextStatus === "Em execução" && current.status === "Rascunho" && !nextPhotos?.some((photo) => photo.phase === "Antes")) return NextResponse.json({ message: "Registre uma foto de antes antes de iniciar o procedimento." }, { status: 400 });
   const startingWithBody = nextStatus === "Em execução" && current.status === "Rascunho";
   if (startingWithBody && (!technique || !treatedAreas || !professional)) return NextResponse.json({ message: "Informe a técnica, a região tratada e o profissional antes de iniciar o procedimento." }, { status: 400 });
@@ -144,6 +155,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     ...(body?.complications !== undefined ? { complications: String(body.complications).trim() } : {}),
     ...(body?.observations !== undefined ? { observations: String(body.observations).trim() } : {}),
     ...(materialSnapshot !== undefined ? { materials: materialSnapshot } : {}),
+    // Sem estoque a finalização não dá baixa: o rascunho semeado (do tempo do Pro) não vira "material usado" no upgrade.
+    ...(finalizing && !stockAllowed ? { materials: "[]" } : {}),
     // O profissional assumiu a lista do rascunho: a ficha técnica não é mais aplicada (nem se ele esvaziar tudo).
     ...(materials !== undefined && current.status === "Rascunho" && !current.materialsSeededAt ? { materialsSeededAt: new Date() } : {}),
     ...(photoSnapshot !== undefined ? { photos: photoSnapshot } : {}),
@@ -162,7 +175,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         if (!claimed.count) throw new AttendanceMaterialsError("Esta sessão já foi finalizada em outra ação.");
         const sessionDate = performedAt;
         const attendance = { id: current.id, procedure: current.procedureName, date: sessionDate, status: "Atendido", materialsCheck: "done", patientId, patient: { name: "" }, kind: "procedure" as const };
-        const pending = await registerAttendanceOutputs(tx, { clinicId: user.clinicId, userId: user.id, userName: user.name, attendance, items: (materials ?? []).map(({ productId, quantity, allocations }) => ({ productId, quantity, allocations })), procedureSessionId: sessionId });
+        const pending = !stockAllowed ? [] : await registerAttendanceOutputs(tx, { clinicId: user.clinicId, userId: user.id, userName: user.name, attendance, items: (materials ?? []).map(({ productId, quantity, allocations }) => ({ productId, quantity, allocations })), procedureSessionId: sessionId });
         await tx.patientProcedure.update({ where: { id: current.procedureId }, data: { professional, performedAt, notes: String(body?.observations ?? "").trim() } });
         await tx.patientJourney.update({ where: { id: current.journeyId }, data: { status: current.journey.status } });
         const completed = await tx.patientProcedureSession.findUnique({ where: { id: sessionId } });
@@ -211,7 +224,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       const source = sourcePhotos.find((item) => item.id === photo.sourceEvaluationPhotoId);
       return photo.sourceEvaluationPhotoId ? source ? [{ ...photo, name: source.name, imageUrl: source.imageUrl, width: source.width, height: source.height, category: source.category }] : [] : [photo];
     });
-    return NextResponse.json({ ...updated, session: updated.session ? { ...updated.session, materials: parseJson<unknown[]>(updated.session.materials, []), photos: resolvedPhotos, auditLog: parseJson<unknown[]>(updated.session.auditLog, []) } : null });
+    return NextResponse.json({ ...updated, session: updated.session ? { ...updated.session, materials: stockAllowed ? parseJson<unknown[]>(updated.session.materials, []) : [], photos: resolvedPhotos, auditLog: parseJson<unknown[]>(updated.session.auditLog, []) } : null });
   } catch (error) {
     if (error instanceof ConsentRequiredError) return NextResponse.json({ message: error.message || consentGate({ signed: 0, pending: 0 }).reason, code: consentRequiredCode }, { status: 409 });
     if (error instanceof AttendanceMaterialsError) return NextResponse.json({ message: error.message }, { status: 409 });

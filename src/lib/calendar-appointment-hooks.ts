@@ -8,6 +8,7 @@ import { resolveProfessionalMember, type JobOperation, type JobSnapshot } from "
 import { loadProfessionalMembers } from "./calendar-sync-service.ts";
 import { planNotifications } from "./calendar-notification-rules.ts";
 import { sendCalendarNotifications, type NotificationDeps, type NotificationSummary } from "./calendar-notification-service.ts";
+import { clinicHasFeature } from "./plan-usage.ts";
 import { changeAffectsCalendar, diffAppointmentState, type CalendarAppointmentState } from "./google-calendar-rules.ts";
 
 /** Campos do agendamento que importam para o Google/e-mail (date é o instante gravado; o dia da clínica é recuperado). */
@@ -51,6 +52,8 @@ export function operationForChange(change: Pick<AppointmentChange, "prev" | "nex
 export async function enqueueAppointmentChange(db: PrismaClient, change: AppointmentChange): Promise<boolean> {
   const operation = operationForChange(change);
   if (!operation) return false;
+  // Google Agenda é recurso do plano (Premium): sem ele nada entra na fila. A conexão fica inerte e os dados preservados.
+  if (!(await clinicHasFeature(db, change.clinicId, "googleCalendar"))) return false;
   if (!(await clinicHasActiveConnection(db, change.clinicId))) return false;
   const result = await enqueueCalendarSync(db, { clinicId: change.clinicId, appointmentId: change.appointmentId, operation, snapshot: operation === "DELETE" ? change.snapshot : null });
   return result.enqueued;
@@ -61,6 +64,8 @@ export async function notifyAppointmentChange(db: PrismaClient, change: Appointm
   const empty: NotificationSummary = { sent: 0, failed: 0, skipped: 0 };
   try {
     if (!change.prev && !change.next) return empty;
+    // E-mails automáticos ao profissional são do plano Pro+ (emailNotifications).
+    if (!(await clinicHasFeature(db, change.clinicId, "emailNotifications"))) return empty;
     // Sem consultas quando nada que afete calendário/notificação mudou (só status Atendido/Faltou/Em atendimento ou notas).
     if (change.prev && change.next && operationForChange({ prev: change.prev, next: change.next }) === null) return empty;
     const names = [change.prev?.procedure, change.next?.procedure].filter((name): name is string => Boolean(name));

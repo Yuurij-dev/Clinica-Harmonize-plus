@@ -12,7 +12,7 @@ import { TeamMemberPhotoDialog } from "./team-member-photo-dialog";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { formatCpf } from "@/lib/input-masks";
 import { profileUpdatedEvent, type ProfileUpdatedDetail } from "@/lib/section-events";
-import { useCurrentUserId } from "./current-user";
+import { useCurrentUserId, useHasFeature } from "./current-user";
 
 export type TeamMemberDetailData = {
   id: string;
@@ -35,6 +35,8 @@ const toDraft = (u: TeamMemberDetailData["user"]): Draft => ({ name: u.name, cpf
 const sectionTitle = "border-b border-border pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground";
 
 export function TeamMemberDetail({ memberId, onBack }: { memberId: string; onBack: () => void }) {
+  // Custo de mão de obra só existe com o recurso "custos" (sem ele o servidor devolve null e o campo some).
+  const hasCosts = useHasFeature("costs");
   const key = `/api/team/${encodeURIComponent(memberId)}`;
   const [member, setMember] = useState<TeamMemberDetailData | undefined>(() => readClientCache<Response>(key)?.member);
   const currentUserId = useCurrentUserId();
@@ -203,7 +205,7 @@ export function TeamMemberDetail({ memberId, onBack }: { memberId: string; onBac
                   <div className="grid gap-4 sm:grid-cols-2">
                     <FormField label="E-mail de acesso" description="O e-mail é o login e não pode ser alterado aqui."><input className={fieldClassName} value={user.email} readOnly /></FormField>
                     <FormField label="Membro desde"><input className={fieldClassName} value={user.createdAt ? new Date(user.createdAt).toLocaleDateString("pt-BR") : "—"} readOnly /></FormField>
-                    {member.role === "PROFESSIONAL" || member.role === "ADMIN" ? <FormField label="Custo de mão de obra" description="Editado em Custos e orçamento."><input className={fieldClassName} readOnly value={member.laborCostCents === null ? "—" : (member.laborCostCents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} /></FormField> : null}
+                    {hasCosts && (member.role === "PROFESSIONAL" || member.role === "ADMIN") ? <FormField label="Custo de mão de obra" description="Editado em Custos e orçamento."><input className={fieldClassName} readOnly value={member.laborCostCents === null ? "—" : (member.laborCostCents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} /></FormField> : null}
                   </div>
                 </section>
                 <section className="space-y-3">

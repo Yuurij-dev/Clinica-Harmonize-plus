@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
 import { checkUpload, maxUploadBytes, sanitizeFileName } from "@/lib/clinical-files-rules";
@@ -13,8 +14,10 @@ import { readImageSize } from "@/lib/thumb";
 // também busca sozinho (~5 s) as fotos novas e as anexa ao estado. Limitação residual: cliente antigo, sem knownPhotoIds, ainda recria a lista inteira
 // e descarta fotos enviadas pelo app depois do seu carregamento. Com knownPhotoIds, o PUT cruzando com este POST não perde foto.
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const denied = denyUnless(user, "clinical:write");

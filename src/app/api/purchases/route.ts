@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { dateOnly, parseDateOnly } from "@/lib/clinic-time";
 import { splitInstallments } from "@/lib/finance-rules";
@@ -13,6 +14,8 @@ export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (!canForUser(user, "purchases:access")) return NextResponse.json({ message: "Acesso restrito." }, { status: 403 });
+  const featureDenied = denyUnlessFeature(user, "purchases", "read");
+  if (featureDenied) return featureDenied;
   const purchases = await prisma.purchase.findMany({
     where: { clinicId: user.clinicId },
     orderBy: [{ purchasedOn: "desc" }, { createdAt: "desc" }],
@@ -35,9 +38,13 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "purchases:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const featureDenied = denyUnlessFeature(user, "purchases", "write");
+  if (featureDenied) return featureDenied;
   const body = await request.json().catch(() => null) as { supplier?: string; invoiceNumber?: string; purchasedOn?: string; paymentMethod?: string; installments?: number; firstDueOn?: string; paid?: boolean; items?: ItemInput[] } | null;
   const supplier = body?.supplier?.trim();
   const purchasedOn = parseDateOnly(body?.purchasedOn);

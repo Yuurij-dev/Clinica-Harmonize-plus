@@ -73,3 +73,13 @@ test("texto de configurações não promete equipe nem permissões", () => {
   const cfg = visibleTourSteps(["configuracoes"]).find((s) => s.key === "configuracoes");
   assert.doesNotMatch(cfg.text, /equipe|permiss/i);
 });
+
+test("passo Dashboard só cita resultados financeiros quando a clínica tem o recurso finance", () => {
+  const dashboard = (...args) => visibleTourSteps(visibleSections("ADMIN"), ...args).find((s) => s.key === "dashboard").text;
+  assert.match(dashboard(true, true, true), /resultados financeiros/);
+  assert.match(dashboard(), /resultados financeiros/);
+  assert.doesNotMatch(dashboard(true, true, false), /financ/i);
+  assert.doesNotMatch(dashboard(false, true, false), /financ/i);
+  // estoque não interfere no texto do dashboard
+  assert.match(dashboard(true, false, true), /resultados financeiros/);
+});

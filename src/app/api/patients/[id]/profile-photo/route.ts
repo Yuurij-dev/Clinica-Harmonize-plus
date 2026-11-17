@@ -1,4 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { denyUnless } from "@/lib/api-guards";
 import { can } from "@/lib/permissions";
 import { loadPhotoBytes } from "@/lib/photo-image";
@@ -88,8 +89,10 @@ async function findFallbackRef(clinicId: string, patientId: string): Promise<str
 }
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return json("Não autenticado.", 401);
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const denied = denyUnless(user, "patients:access");
   if (denied) return denied;
   if (!can(user.role, "clinical:write", user.rolePermissions)) return json("Acesso restrito à equipe clínica.", 403);

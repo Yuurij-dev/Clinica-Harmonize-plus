@@ -15,8 +15,7 @@ export async function GET(request: Request) {
   const scope = parseExportScope(params.get("tab"));
   if (!format || !scope) return reportJson({ message: "Informe format (xlsx, pdf ou csv) e tab válidos." }, 400);
 
-
-  const prepared = await reportDocumentRequest(request, scope, user);
+  const prepared = await reportDocumentRequest(request, scope, user, true); // reports + reportsExport (+ recurso do relatório; consolidado = reportsConsolidated)
   if ("response" in prepared) return prepared.response;
   // Depois da permissão (403 antes de 400): o consolidado não tem CSV.
   if (format === "csv" && scope === "all") return reportJson({ message: CSV_ALL_MESSAGE }, 400);

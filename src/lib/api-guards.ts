@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "./auth";
+import { denyIfReadonly, denyUnlessFeature } from "./plan-guards";
+import type { Feature } from "./plans";
 import { canForUser, type Permission, type PermissionPrincipal } from "./permissions";
 
 const messages: Partial<Record<Permission, string>> = {
@@ -21,9 +23,19 @@ export function denyUnless(user: PermissionPrincipal, permission: Permission) {
 }
 
 // Sessão de administrador (estoque e demais telas só de ADMIN): { user } ou { error } com 401/403 pronto para devolver.
-export async function adminUser(requireActiveTrial = false, permission: Permission = "stock:manage") {
-  const user = await getCurrentUser({ requireActiveTrial });
+// `write` = true: é uma escrita, então somente leitura (teste/assinatura sem acesso completo) responde 403 SUBSCRIPTION_READONLY.
+export async function adminUser(write = false, permission: Permission = "stock:manage", feature?: Feature) {
+  const user = await getCurrentUser();
   if (!user) return { error: NextResponse.json({ message: "Não autenticado." }, { status: 401 }) };
+  if (write) {
+    const readonlyDenied = denyIfReadonly(user);
+    if (readonlyDenied) return { error: readonlyDenied };
+  }
   if (!canForUser(user, permission)) return { error: NextResponse.json({ message: "Seu cargo não tem permissão para esta ação." }, { status: 403 }) };
+  // Recurso do plano (ex.: estoque): permissao do papel E recurso da clinica. Em downgrade os dados ficam, mas inacessiveis.
+  if (feature) {
+    const featureDenied = denyUnlessFeature(user, feature, write ? "write" : "read");
+    if (featureDenied) return { error: featureDenied };
+  }
   return { user };
 }

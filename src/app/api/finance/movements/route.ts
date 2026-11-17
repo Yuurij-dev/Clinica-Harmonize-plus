@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { canForUser } from "@/lib/permissions";
+import { denyUnlessFeature } from "@/lib/plan-guards";
 import { clinicToday, dateOnly } from "@/lib/clinic-time";
 import { parsePagination, paymentDayBounds, requestedDateRange } from "@/lib/finance";
 import { expenseCategories, mergeMovements } from "@/lib/finance-rules";
@@ -16,6 +17,8 @@ export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (!canForUser(user, "finance:access")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const planDenied = denyUnlessFeature(user, "finance", "read");
+  if (planDenied) return planDenied;
 
   const params = new URL(request.url).searchParams;
   const type = params.get("type") || "all";

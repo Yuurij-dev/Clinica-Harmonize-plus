@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature, hasFeature } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { parsePatchProcedure } from "@/lib/procedure-catalog-rules";
@@ -9,8 +10,10 @@ import { discardAssetIfUnused, lockAsset, procedureSelect, serializeProcedure } 
 import { parseTechnicalSheet } from "@/lib/stock";
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "procedures:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
   const clinicId = user.clinicId;
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
@@ -31,7 +34,14 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (image.catalogImageId && !await prisma.procedureCatalogItem.findFirst({ where: { id: image.catalogImageId, active: true }, select: { id: true } })) return NextResponse.json({ message: "Imagem da biblioteca não encontrada." }, { status: 400 });
     imageData = { imageAssetId: image.assetId, imageCatalogItemId: image.catalogImageId };
   }
-  const sheet = body?.technicalSheet === undefined ? null : await parseTechnicalSheet(clinicId, body.technicalSheet, current.technicalSheet.map((item) => item.productId));
+  // Sem o recurso technicalSheet a ficha existente fica INTACTA (preservada em downgrade): so uma ficha com materiais e recusada
+  // (PLAN_FEATURE); `[]` e ausente nao alteram nada.
+  const sheetAllowed = hasFeature(user, "technicalSheet");
+  if (!sheetAllowed && Array.isArray(body?.technicalSheet) && body.technicalSheet.length > 0) {
+    const featureDenied = denyUnlessFeature(user, "technicalSheet", "write");
+    if (featureDenied) return featureDenied;
+  }
+  const sheet = body?.technicalSheet === undefined || !sheetAllowed ? null : await parseTechnicalSheet(clinicId, body.technicalSheet, current.technicalSheet.map((item) => item.productId));
   if (sheet && "error" in sheet) return NextResponse.json({ message: sheet.error }, { status: 400 });
 
   // Salvar a ficha técnica tira a marca de revisão da conversão automática.
@@ -48,7 +58,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     });
     if (!procedure) return NextResponse.json({ message: "Imagem não encontrada." }, { status: 400 });
     if (imageData && current.imageAssetId && current.imageAssetId !== imageData.imageAssetId) await discardAssetIfUnused(clinicId, current.imageAssetId);
-    return NextResponse.json({ procedure: serializeProcedure(procedure) });
+    return NextResponse.json({ procedure: serializeProcedure(procedure, sheetAllowed) });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") return NextResponse.json({ message: "Imagem não encontrada." }, { status: 400 });
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return NextResponse.json({ message: "Já existe um procedimento com este nome." }, { status: 409 });
@@ -58,8 +68,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
 // Orçamentos, atendimentos e agendamentos guardam só o nome do procedimento (sem FK); a ficha técnica cai por cascade.
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "procedures:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
   const id = (await params).id;
   if (!isValidId(id)) return NextResponse.json({ message: "Procedimento não encontrado." }, { status: 404 });

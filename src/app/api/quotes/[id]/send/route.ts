@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { denyUnless } from "@/lib/api-guards";
 import { prisma } from "@/lib/prisma";
 import { buildQuotePdf } from "@/lib/quote-pdf";
@@ -9,8 +10,10 @@ import { PATIENT_EMAILS_DISABLED_MESSAGE, patientEmailsAllowed } from "@/lib/pat
 
 // Envia o orçamento ao paciente por e-mail com o PDF anexado. Não muda o status; só registra sentAt/sentBy se o e-mail saiu.
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const denied = denyUnless(user, "quotes:manage");
   if (denied) return denied;
   const id = (await params).id;

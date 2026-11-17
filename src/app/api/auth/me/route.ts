@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { serializeAccess } from "@/lib/entitlements";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
@@ -17,6 +18,7 @@ export async function GET() {
     prisma.userAvatar.findUnique({ where: { userId: user.id }, select: { updatedAt: true } }),
   ]);
   const clinics = memberships.map((membership) => ({ id: membership.clinic.id, name: membership.clinic.name, role: membership.role, isOwner: membership.isOwner }));
-  const publicUser = { ...user, sessionId: undefined, avatarVersion: avatar?.updatedAt.toISOString() ?? null }; // sid não vai ao cliente
+  // sid não vai ao cliente; `entitlements` (contém Set) vira o resumo serializável `access`.
+  const publicUser = { ...user, sessionId: undefined, entitlements: undefined, access: serializeAccess(user.entitlements), avatarVersion: avatar?.updatedAt.toISOString() ?? null };
   return NextResponse.json({ user: publicUser, mfaSetupRequired: user.mfaSetupRequired, clinics });
 }

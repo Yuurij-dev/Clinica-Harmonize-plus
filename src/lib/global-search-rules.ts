@@ -3,7 +3,9 @@ import { navItems } from "../data/navigation.ts";
 import type { SectionId } from "../types/clinic";
 
 export type GlobalSearchResult = { id: string; title: string; description: string; section: SectionId; kind: string; settingsSection?: string };
-export type SearchAccess = { dashboard: boolean; patients: boolean; agenda: boolean; appointmentRun: boolean; procedures: boolean; stock: boolean; purchases: boolean; quotes: boolean; payments: boolean; finance: boolean; reports: boolean; settings: boolean; settingsPermissions: boolean; settingsTeam: boolean; clinical: boolean; anamnesis: boolean };
+export type SearchAccess = { dashboard: boolean; patients: boolean; agenda: boolean; appointmentRun: boolean; procedures: boolean; stock: boolean; purchases: boolean; quotes: boolean; payments: boolean; finance: boolean; reports: boolean; settings: boolean; settingsPermissions: boolean; settingsTeam: boolean; clinical: boolean; anamnesis: boolean;
+  /** Recurso "custos" do plano; `false` esconde a configuração de custos. Ausente = sem restrição de plano. */
+  costs?: boolean };
 export type SearchResultGroup = { id: string; label: string; results: GlobalSearchResult[] };
 export type SearchQuickAction = { id: string; title: string; description: string; section: SectionId; dialog: "appointment" | "client" | "procedure" | "quote" | "payment"; terms: string };
 export const SEARCH_RESULTS_PREVIEW_LIMIT = 5;
@@ -149,7 +151,7 @@ export function suggestFeatureSearchTerms(query: string, access: SearchAccess) {
   };
   const candidates = [
     ...navItems.filter((item) => accessBySection[item.id]).map((item) => item.label),
-    ...settingsSearchFeatures.filter((item) => access[item.access]).map((item) => item.title),
+    ...settingsSearchFeatures.filter((item) => access[item.access] && settingsFeatureInPlan(item, access)).map((item) => item.title),
   ];
   const maxDistance = Math.min(2, Math.floor(normalizedQuery.length * 0.25));
   return candidates.map((title) => {
@@ -171,6 +173,11 @@ const settingsSearchFeatures = [
   { title: "Segurança e permissões", description: "Cargos, acesso, segurança e permissões da equipe", synonyms: "seguranca permissao permissoes cargo acesso controle", focus: "Segurança e permissões", access: "settingsPermissions" },
   { title: "Integrações", description: "Integrações e serviços conectados", synonyms: "conectar serviços", focus: "Integrações", access: "settings" },
 ] as const;
+
+// A configuração de custos só existe com o recurso "custos" do plano.
+function settingsFeatureInPlan(item: { focus: string }, access: SearchAccess) {
+  return item.focus !== "Custos e orçamento" || access.costs !== false;
+}
 
 function sectionForPermission(permission: string): SectionId | null {
   if (permission.startsWith("dashboard:")) return "dashboard";
@@ -213,7 +220,7 @@ export function collectFeatureSearchResults(query: string, access: SearchAccess)
   }
   for (const item of settingsSearchFeatures) {
     const text = normalizeSearchText(`${item.title} ${item.description} ${item.synonyms}`);
-    if (access[item.access] && text.includes(normalizedQuery)) features.push({ id: `config:${item.focus}`, title: item.title, description: item.description, section: "configuracoes", kind: "Configuração", settingsSection: item.focus });
+    if (access[item.access] && settingsFeatureInPlan(item, access) && text.includes(normalizedQuery)) features.push({ id: `config:${item.focus}`, title: item.title, description: item.description, section: "configuracoes", kind: "Configuração", settingsSection: item.focus });
   }
   for (const group of permissionGroups) {
     const section = sectionForPermission(group.permissions[0]?.key ?? "");

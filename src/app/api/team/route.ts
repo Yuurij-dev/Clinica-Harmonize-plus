@@ -2,6 +2,9 @@ import { hash } from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser, invalidateUserAuthCache } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature, hasFeature, planErrorResponse } from "@/lib/plan-guards";
+import { lockPlanResource, reserveCapacity } from "@/lib/plan-usage";
+import { countsAsProfessional } from "@/lib/plans";
 import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { parseCollaboratorProfile } from "@/lib/collaborator-profile-rules";
@@ -17,12 +20,16 @@ export async function GET() {
     orderBy: { user: { name: "asc" } },
     select: { id: true, role: true, isOwner: true, laborCostCents: true, user: { select: { id: true, name: true, email: true, createdAt: true } } },
   });
-  return NextResponse.json({ members });
+  // Custo/hora do profissional e recurso `costs`: sem ele a resposta NAO traz o valor (nem zerado); o dado fica no banco.
+  const costsAllowed = hasFeature(user, "costs");
+  return NextResponse.json({ members: costsAllowed ? members : members.map((member) => ({ ...member, laborCostCents: null })) });
 }
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "settings:team")) return NextResponse.json({ message: "Apenas administradores podem cadastrar colaboradores." }, { status: 403 });
 
   const body = await request.json().catch(() => null) as { name?: string; email?: string; password?: string; role?: "ADMIN" | "PROFESSIONAL" | "STAFF"; cpf?: string; postalCode?: string; address?: string; country?: string; state?: string; city?: string } | null;
@@ -42,14 +49,21 @@ export async function POST(request: Request) {
 
   try {
     const passwordHash = await hash(password, 12);
-    const member = await prisma.$transaction(async (transaction) => {
+    const outcome = await prisma.$transaction(async (transaction) => {
+      // ADMIN e PROFESSIONAL consomem vaga do plano (STAFF nao). Trava por clinica + contagem + criacao na MESMA transacao.
+      if (countsAsProfessional(role)) {
+        const capacity = await reserveCapacity(transaction, user.clinicId, "professionals");
+        if (!capacity.ok) return { denied: capacity.body } as const;
+      }
       const createdUser = await transaction.user.create({ data: { name, email, passwordHash, role, mustChangePassword: true, emailVerifiedAt: new Date(), cpf, postalCode, address, country, state, city } });
-      return transaction.clinicMembership.create({
+      const member = await transaction.clinicMembership.create({
         data: { userId: createdUser.id, clinicId: user.clinicId, role },
         select: { id: true, role: true, isOwner: true, laborCostCents: true, user: { select: { id: true, name: true, email: true, createdAt: true } } },
       });
+      return { member } as const;
     });
-    return NextResponse.json({ member }, { status: 201 });
+    if (outcome.denied) return planErrorResponse(outcome.denied);
+    return NextResponse.json({ member: hasFeature(user, "costs") ? outcome.member : { ...outcome.member, laborCostCents: null } }, { status: 201 });
   } catch (error) {
     console.error("Failed to create clinic collaborator", error);
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
@@ -60,8 +74,10 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "settings:team")) return NextResponse.json({ message: "Apenas administradores podem alterar os dados da equipe." }, { status: 403 });
 
   const body = await request.json().catch(() => null) as { membershipId?: string; laborCostCents?: number; role?: string } | null;
@@ -82,21 +98,38 @@ export async function PATCH(request: Request) {
     }
     // B3: rebaixar o cargo cancela, na mesma transação, os convites PENDING que este membro criou nesta clínica.
     const newRole = body.role as "ADMIN" | "PROFESSIONAL" | "STAFF";
-    const updated = await prisma.$transaction(async (transaction) => {
+    const outcome = await prisma.$transaction(async (transaction) => {
+      // Passar a ADMIN/PROFESSIONAL aumenta o consumo de vagas. Trava primeiro e RELE o cargo atual com a trava tomada
+      // (duas mudancas simultaneas nao enxergam o mesmo cargo antigo); so quem sai de fora (STAFF) pede vaga.
+      await lockPlanResource(transaction, user.clinicId, "professionals");
+      const current = await transaction.clinicMembership.findFirst({ where: { id: member.id, clinicId: user.clinicId }, select: { role: true, isOwner: true } });
+      if (!current) return { gone: true } as const;
+      if (current.isOwner) return { owner: true } as const;
+      if (countsAsProfessional(newRole) && !countsAsProfessional(current.role)) {
+        const capacity = await reserveCapacity(transaction, user.clinicId, "professionals");
+        if (!capacity.ok) return { denied: capacity.body } as const;
+      }
       const result = await transaction.clinicMembership.update({
         where: { id: member.id },
         data: { role: newRole },
         select: { id: true, role: true, isOwner: true, laborCostCents: true, user: { select: { id: true, name: true, email: true, createdAt: true } } },
       });
-      if (isRoleDemotion(member.role, newRole)) await cancelPendingByInviter(transaction, { clinicId: user.clinicId, invitedById: member.userId });
-      return result;
+      if (isRoleDemotion(current.role, newRole)) await cancelPendingByInviter(transaction, { clinicId: user.clinicId, invitedById: member.userId });
+      return { updated: result } as const;
     });
+    if (outcome.gone) return NextResponse.json({ message: "Colaborador não encontrado nesta clínica." }, { status: 404 });
+    if (outcome.owner) return NextResponse.json({ message: "O cargo do administrador principal não pode ser alterado." }, { status: 409 });
+    if (outcome.denied) return planErrorResponse(outcome.denied);
+    const updated = outcome.updated;
     // Só depois do sucesso, só o usuário afetado. O cache de auth é em memória por instância: em serverless a janela
     // de 15 s pode persistir em outras instâncias; por isso o aceite continua exigindo que o convidante seja membro.
     invalidateUserAuthCache(member.userId);
-    return NextResponse.json({ member: updated });
+    return NextResponse.json({ member: hasFeature(user, "costs") ? updated : { ...updated, laborCostCents: null } });
   }
 
+  // Alterar custo de mao de obra: recurso `costs` (Pro/Premium).
+  const costsDenied = denyUnlessFeature(user, "costs", "write");
+  if (costsDenied) return costsDenied;
   const laborCostCents = body?.laborCostCents;
   if (typeof laborCostCents !== "number" || !Number.isSafeInteger(laborCostCents) || laborCostCents < 0 || laborCostCents > 2_000_000_000) {
     return NextResponse.json({ message: "Informe um profissional e um valor válido em reais." }, { status: 400 });
@@ -112,8 +145,10 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "settings:team") || !user.isOwner) return NextResponse.json({ message: "Apenas o administrador principal pode remover colaboradores." }, { status: 403 });
 
   const body = await request.json().catch(() => null) as { membershipId?: string } | null;

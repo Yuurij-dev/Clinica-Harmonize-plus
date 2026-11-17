@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { checkUpload, maxUploadBytes } from "@/lib/clinical-files-rules";
@@ -16,8 +17,10 @@ const dimension = (value: FormDataEntryValue | null) => {
 // Upload de UMA imagem personalizada de procedimento (multipart, campo "file"). Só administradores.
 // JPEG/PNG/WebP validados pelos bytes (SVG e demais formatos são recusados), até 4 MB. Devolve { id, url } para usar em imageAssetId.
 export async function POST(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "procedures:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
   const clinicId = user.clinicId;
 

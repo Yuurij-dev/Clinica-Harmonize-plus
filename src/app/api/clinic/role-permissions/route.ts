@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser, invalidateAllUserAuthCache } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature } from "@/lib/plan-guards";
 import { canForUser, normalizeRolePermissionMatrix, permissionGroups, roles, type RolePermissionMatrix } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
@@ -25,9 +26,14 @@ export async function GET() {
 }
 
 export async function PATCH(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "settings:permissions")) return NextResponse.json({ message: "Acesso restrito à administração das permissões." }, { status: 403 });
+  // Editar a matriz por cargo é recurso do plano (rolePermissions, Pro+). A matriz já gravada continua valendo no Start (só a edição some).
+  const planDenied = denyUnlessFeature(user, "rolePermissions", "write");
+  if (planDenied) return planDenied;
 
   const body = await request.json().catch(() => null) as { matrix?: unknown } | null;
   if (!isCompleteMatrix(body?.matrix)) return NextResponse.json({ message: "A matriz de permissões está incompleta ou inválida." }, { status: 400 });

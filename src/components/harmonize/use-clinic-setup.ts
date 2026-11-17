@@ -11,11 +11,12 @@ export type SetupSummary = {
   professionals: number;
   pendingInvitations: number;
   procedures: number;
-  materials: number;
-  products: number;
-  recurringExpenses: number;
+  /** Ausentes quando o plano não inclui estoque. */
+  materials?: number;
+  products?: number;
+  recurringExpenses?: number;
   hours: { opening: string; closing: string; professionalOpening: string; professionalClosing: string };
-  alerts: { appointments: boolean; sound: boolean; stock: boolean; expiryWarningDays: number };
+  alerts: { appointments: boolean; sound: boolean; stock?: boolean; expiryWarningDays?: number };
 };
 
 export type SetupPayload = SetupEvaluation & { status: SetupStatus; currentStep: SetupStepKey; summary: SetupSummary };

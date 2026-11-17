@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature } from "@/lib/plan-guards";
 import { getAuthSecret } from "@/lib/auth-secret";
 import { getCalendarConfig } from "@/lib/google-calendar-config";
 import { centralOwnedByAnother } from "@/lib/google-calendar-connection-service";
@@ -13,14 +14,19 @@ const noStore = { "Cache-Control": "no-store" };
 // Inicia a conexão: devolve a URL de consentimento do Google e grava o cookie de fluxo (httpOnly, assinado, 10 min).
 export async function POST(request: Request) {
   if (!isSameOrigin(request)) return NextResponse.json({ message: "Origem da requisição não permitida." }, { status: 403, headers: noStore });
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401, headers: noStore });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const body = await request.json().catch(() => null) as { type?: unknown } | null;
   const type = parseConnectionType(body?.type);
   if (!type) return NextResponse.json({ message: "Tipo de conexão inválido." }, { status: 400, headers: noStore });
 
   const result = await startCalendarOAuth({ user, type, config: getCalendarConfig(), secret: getAuthSecret() });
   if (!result.ok) return NextResponse.json({ message: result.message, configured: result.status !== 503 }, { status: result.status, headers: noStore });
+  // Papel já validado acima; agora o recurso do plano (googleCalendar = Premium).
+  const planDenied = denyUnlessFeature(user, "googleCalendar", "write");
+  if (planDenied) return planDenied;
   if (type === "ADMIN" && await centralOwnedByAnother(prisma, user)) {
     return NextResponse.json({ message: "A clínica já tem uma agenda central conectada por outra pessoa. Desconecte-a antes de conectar outra." }, { status: 409, headers: noStore });
   }

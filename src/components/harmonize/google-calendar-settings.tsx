@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LoadingSkeleton } from "./shared";
+import { useHasFeature } from "./current-user";
+import { FeatureUpsellNote } from "./feature-locked-notice";
 import { Modal } from "@/components/ui/modal";
 import { getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import { securityRequest } from "@/lib/security-client";
@@ -23,7 +25,78 @@ function formatDateTime(value: string | null | undefined) {
   return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Sao_Paulo" });
 }
 
+// Sem o recurso no plano o status devolve só { planBlocked, central, individual } (existe conexão ativa?): a conexão anterior fica
+// preservada e só se oferece desconectar quando ela existe. Connect/sync seguem 403.
 export function GoogleCalendarSettings() {
+  return useHasFeature("googleCalendar") ? <GoogleCalendarCard /> : <GoogleCalendarLocked />;
+}
+
+type LockedStatus = { planBlocked: true; central: boolean; individual: boolean };
+// Chave própria (não mistura com o status completo do Premium); invalidar GOOGLE_CALENDAR_STATUS_KEY também derruba esta.
+const LOCKED_STATUS_KEY = `${GOOGLE_CALENDAR_STATUS_KEY}?locked=1`;
+
+function GoogleCalendarLocked() {
+  const [status, setStatus] = useState<LockedStatus | null>(() => readClientCache<LockedStatus>(LOCKED_STATUS_KEY) ?? null);
+  const [loading, setLoading] = useState(status === null);
+  const [confirmType, setConfirmType] = useState<ConnectionType | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback((active: () => boolean) => {
+    getCachedJson<LockedStatus>(LOCKED_STATUS_KEY)
+      .then((data) => { if (active()) setStatus(data); })
+      .catch(() => { /* sem estado confiável: só o aviso, nenhuma ação */ })
+      .finally(() => { if (active()) setLoading(false); });
+  }, []);
+  useEffect(() => {
+    let live = true;
+    load(() => live);
+    return () => { live = false; };
+  }, [load]);
+
+  async function disconnect(type: ConnectionType) {
+    setBusy(true);
+    setError("");
+    const result = await securityRequest("POST", `${API}/disconnect`, { type });
+    setBusy(false);
+    if (!result.ok) { setError(result.status === 404 ? "Nenhuma conexão ativa para desconectar." : result.message); if (result.status === 404) { invalidateClientCache(GOOGLE_CALENDAR_STATUS_KEY); load(() => true); } return; }
+    invalidateClientCache(GOOGLE_CALENDAR_STATUS_KEY);
+    setStatus((current) => (current ? { ...current, central: type === "ADMIN" ? false : current.central, individual: type === "PROFESSIONAL" ? false : current.individual } : current));
+    setConfirmType(null);
+    toast.success("Google Agenda desconectado.");
+  }
+
+  const anyConnection = Boolean(status?.central || status?.individual);
+  return (
+    <Card className="border-border/70">
+      <CardHeader className="border-b border-border/70">
+        <CardTitle className="flex items-center gap-2"><CalendarCheck className="h-4 w-4" aria-hidden="true" />Google Agenda</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4 pt-4">
+        <FeatureUpsellNote feature="googleCalendar">Google Agenda é um recurso do plano Premium. A sincronização está pausada neste plano.{anyConnection ? " A conexão existente está preservada e volta a funcionar quando o plano a incluir." : ""}</FeatureUpsellNote>
+        {loading && !status ? <LoadingSkeleton className="h-9 w-48" /> : null}
+        {status ? <p className="text-sm text-muted-foreground" role="status">{anyConnection ? "Há uma conexão ativa com o Google Agenda." : "Nenhuma conexão com o Google Agenda."}</p> : null}
+        {anyConnection ? (
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+            {status?.central ? <Button variant="outline" onClick={() => { setError(""); setConfirmType("ADMIN"); }}>Desconectar agenda central</Button> : null}
+            {status?.individual ? <Button variant="outline" onClick={() => { setError(""); setConfirmType("PROFESSIONAL"); }}>Desconectar minha agenda</Button> : null}
+          </div>
+        ) : null}
+      </CardContent>
+      <Modal closeOnOverlayClick={!busy} description="Os eventos já criados permanecem no Google; novos agendamentos deixam de ser sincronizados." mascot={false} onClose={() => { if (!busy) setConfirmType(null); }} open={confirmType !== null} panelClassName="max-w-md" title="Desconectar Google Agenda">
+        <div className="space-y-4">
+          {error ? <p className="text-sm text-destructive" role="alert">{error}</p> : null}
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button disabled={busy} onClick={() => setConfirmType(null)} variant="outline">Cancelar</Button>
+            <Button disabled={busy} onClick={() => confirmType && void disconnect(confirmType)} variant="destructive">{busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}Desconectar</Button>
+          </div>
+        </div>
+      </Modal>
+    </Card>
+  );
+}
+
+function GoogleCalendarCard() {
   const [status, setStatus] = useState<CalendarStatus | null>(() => readClientCache<CalendarStatus>(GOOGLE_CALENDAR_STATUS_KEY) ?? null);
   const [loading, setLoading] = useState(status === null);
   const [loadError, setLoadError] = useState(false);

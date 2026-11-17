@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { parseDateOnly } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
@@ -8,9 +9,13 @@ import { validateQuantity } from "@/lib/stock-rules";
 
 // Saldo inicial: entrada de um lote que já está na prateleira, sem compra e sem despesa.
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "stock:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const featureDenied = denyUnlessFeature(user, "stock", "write");
+  if (featureDenied) return featureDenied;
   const productId = (await params).id;
   const body = await request.json().catch(() => null) as { lotCode?: string; expiresOn?: string; quantity?: number } | null;
   const product = await prisma.product.findFirst({ where: { id: productId, clinicId: user.clinicId, archivedAt: null }, select: { id: true, unit: true } });

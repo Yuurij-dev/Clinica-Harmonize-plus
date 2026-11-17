@@ -106,8 +106,27 @@ const sectionPermission: Record<SectionId, Permission> = {
   financeiro: "finance:access", relatorios: "reports:access", configuracoes: "settings:access",
 };
 
-export function visibleSections(role: string | null | undefined, matrix?: unknown, isOwner = false): SectionId[] {
-  return allSections.filter((section) => canForUser({ role, rolePermissions: matrix, isOwner }, sectionPermission[section]));
+// Seções que dependem de um recurso do plano (ids de src/lib/plans.ts). O servidor decide de verdade; isto só reflete na interface.
+const sectionFeature: Partial<Record<SectionId, string>> = { estoque: "stock", compras: "purchases", financeiro: "finance", relatorios: "reports" };
+
+/** Recurso do plano exigido pela seção (undefined = nenhum). */
+export function sectionRequiredFeature(section: SectionId): string | undefined {
+  return sectionFeature[section];
+}
+
+function sectionHasFeature(section: SectionId, features?: readonly string[]) {
+  const required = sectionFeature[section];
+  return !features || !required || features.includes(required);
+}
+
+/** `features` ausente (undefined) mantém o comportamento sem plano; com a lista, seções de recurso não contratado saem. */
+export function visibleSections(role: string | null | undefined, matrix?: unknown, isOwner = false, features?: readonly string[]): SectionId[] {
+  return allSections.filter((section) => canForUser({ role, rolePermissions: matrix, isOwner }, sectionPermission[section]) && sectionHasFeature(section, features));
+}
+
+/** Seções que o papel enxerga mas o plano não inclui (para o aviso de recurso bloqueado). */
+export function lockedSections(role: string | null | undefined, matrix: unknown, isOwner: boolean, features: readonly string[]): SectionId[] {
+  return allSections.filter((section) => canForUser({ role, rolePermissions: matrix, isOwner }, sectionPermission[section]) && !sectionHasFeature(section, features));
 }
 
 export function observationKindsFor(role: string | null | undefined, matrix?: unknown): ObservationKind[] {

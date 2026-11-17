@@ -9,6 +9,18 @@ import { reportQueryString, type ReportFilters } from "./reports-ui-rules.ts";
 
 export type ReportCapabilities = { finance: boolean; quotes: boolean; stock: boolean };
 
+/**
+ * Abas por área que a interface oferece SEM a visão geral (Pro): papel E plano, no mesmo critério do servidor
+ * (financeiro: não para PROFESSIONAL e exige `finance`; estoque exige `stock`). Só reflete; quem decide é o servidor.
+ */
+export function planReportCapabilities(input: { isProfessional: boolean; canFinance: boolean; canQuotes: boolean; canStock: boolean; hasFinance: boolean; hasStock: boolean }): ReportCapabilities {
+  return {
+    finance: input.canFinance && !input.isProfessional && input.hasFinance,
+    quotes: input.canQuotes,
+    stock: input.canStock && input.hasStock,
+  };
+}
+
 // Cartões da central por categoria (ordem do catálogo); categoria sem nenhum relatório permitido não aparece.
 export function reportCenterGroups(capabilities: ReportCapabilities): Array<{ category: ReportCategory; reports: ReportDefinition[] }> {
   const allowed = new Set<ReportId>(allowedReportIds(capabilities));

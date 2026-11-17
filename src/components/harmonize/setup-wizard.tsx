@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, Info, LogOut, MailPlus, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CountUp } from "@/components/ui/count-up";
@@ -62,11 +62,11 @@ function stepStatus(key: SetupStepKey, state: SetupStepState, summary: SetupSumm
     case "procedimentos":
       return summary.procedures > 0 ? { text: `${plural(summary.procedures, "procedimento cadastrado", "procedimentos cadastrados")}.`, ok: true } : { text: "Nenhum procedimento cadastrado.", ok: false };
     case "materiais":
-      return summary.materials > 0 ? { text: `${plural(summary.materials, "material cadastrado", "materiais cadastrados")}.`, ok: true } : { text: decided ? `Etapa ${decided}.` : "Nenhum material cadastrado.", ok: state.done };
+      return (summary.materials ?? 0) > 0 ? { text: `${plural(summary.materials ?? 0, "material cadastrado", "materiais cadastrados")}.`, ok: true } : { text: decided ? `Etapa ${decided}.` : "Nenhum material cadastrado.", ok: state.done };
     case "produtos":
-      return summary.products > 0 ? { text: `${plural(summary.products, "produto cadastrado", "produtos cadastrados")}.`, ok: true } : { text: decided ? `Etapa ${decided}.` : "Nenhum produto cadastrado.", ok: state.done };
+      return (summary.products ?? 0) > 0 ? { text: `${plural(summary.products ?? 0, "produto cadastrado", "produtos cadastrados")}.`, ok: true } : { text: decided ? `Etapa ${decided}.` : "Nenhum produto cadastrado.", ok: state.done };
     case "financeiro":
-      return summary.recurringExpenses > 0 ? { text: `${plural(summary.recurringExpenses, "custo fixo cadastrado", "custos fixos cadastrados")}.`, ok: true } : { text: decided ? `Etapa ${decided}.` : "Nenhum custo fixo cadastrado.", ok: state.done };
+      return (summary.recurringExpenses ?? 0) > 0 ? { text: `${plural(summary.recurringExpenses ?? 0, "custo fixo cadastrado", "custos fixos cadastrados")}.`, ok: true } : { text: decided ? `Etapa ${decided}.` : "Nenhum custo fixo cadastrado.", ok: state.done };
     case "custos":
     case "notificacoes":
       return { text: decided ? `Etapa ${decided}.` : "Ainda não revisado.", ok: state.done };
@@ -94,8 +94,8 @@ function StepExtras({ stepKey, summary }: { stepKey: SetupStepKey; summary: Setu
         <ul className="space-y-0.5">
           <li><span className="font-semibold text-foreground">Alertas de agendamento:</span> {onOff(alerts.appointments)}</li>
           <li><span className="font-semibold text-foreground">Som de notificação:</span> {onOff(alerts.sound)}</li>
-          <li><span className="font-semibold text-foreground">Alertas de estoque:</span> {onOff(alerts.stock)}</li>
-          <li><span className="font-semibold text-foreground">Aviso de validade:</span> {plural(alerts.expiryWarningDays, "dia", "dias")} antes do vencimento</li>
+          {alerts.stock !== undefined ? <li><span className="font-semibold text-foreground">Alertas de estoque:</span> {onOff(alerts.stock)}</li> : null}
+          {alerts.expiryWarningDays !== undefined ? <li><span className="font-semibold text-foreground">Aviso de validade:</span> {plural(alerts.expiryWarningDays, "dia", "dias")} antes do vencimento</li> : null}
         </ul>
         <p className="flex items-center gap-1.5"><Info className="h-3.5 w-3.5 text-primary" aria-hidden="true" />Integrações externas (como WhatsApp) ainda não estão disponíveis.</p>
       </div>
@@ -124,6 +124,8 @@ type WizardProps = {
 /** Assistente em tela cheia. Quem decide se uma etapa está concluída é o servidor (`data.steps`); a tela só reflete. */
 export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction, onDecide, onUndo, onFinish, onExit }: WizardProps) {
   useBodyScrollLock(true);
+  // Etapas do plano: as mesmas chaves e a mesma ordem de data.steps (o servidor já tirou as indisponíveis), então os índices são paralelos.
+  const steps = useMemo(() => SETUP_STEPS.filter((step) => data.steps.some((item) => item.key === step.key)), [data.steps]);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   // A etapa exibida troca depois de uma saída curta (fade); a direção vem da posição de origem e destino.
@@ -144,11 +146,11 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
   useEffect(() => {
     if (shown === stepKey) return;
     const timer = window.setTimeout(() => {
-      setDir(SETUP_STEPS.findIndex((step) => step.key === stepKey) >= SETUP_STEPS.findIndex((step) => step.key === shown) ? "next" : "back");
+      setDir(steps.findIndex((step) => step.key === stepKey) >= steps.findIndex((step) => step.key === shown) ? "next" : "back");
       setShown(stepKey);
     }, 120);
     return () => window.clearTimeout(timer);
-  }, [stepKey, shown]);
+  }, [stepKey, shown, steps]);
   // O destaque da etapa atual desliza até o botão dela (transform), sem trocar seco.
   useLayoutEffect(() => {
     const list = listRef.current;
@@ -180,14 +182,14 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
   const [skipAskedFor, setSkipAskedFor] = useState<SetupStepKey | null>(null);
   const confirmingSkip = skipAskedFor === shown;
   const setConfirmingSkip = (asking: boolean) => setSkipAskedFor(asking ? shown : null);
-  const index = Math.max(0, SETUP_STEPS.findIndex((step) => step.key === shown));
-  const definition: SetupStepDefinition = SETUP_STEPS[index];
+  const index = Math.max(0, steps.findIndex((step) => step.key === shown));
+  const definition: SetupStepDefinition = steps[index];
   const state = data.steps[index];
   const completed = data.status === "completed";
   const isReview = definition.key === "revisao";
   const reachable = (position: number) => data.steps.slice(0, position).every((step) => !step.required || step.done);
-  const nextKey = SETUP_STEPS[index + 1]?.key;
-  const prevKey = SETUP_STEPS[index - 1]?.key;
+  const nextKey = steps[index + 1]?.key;
+  const prevKey = steps[index - 1]?.key;
   const blocked = definition.required && !state.done;
   const status = stepStatus(definition.key, state, data.summary);
   const decided = state.confirmed || state.skipped;
@@ -246,7 +248,7 @@ export function SetupWizard({ data, stepKey, busy, error, onSelectStep, onAction
         <nav aria-label="Etapas da configuração" className="lg:w-72 lg:shrink-0">
           <ol ref={listRef} className="relative flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:flex-col lg:gap-1 lg:overflow-visible lg:pb-0">
             <li ref={indicatorRef} aria-hidden="true" className="pointer-events-none absolute left-0 top-0 rounded-lg border border-primary bg-primary/10 opacity-0 transition-[transform,width,height] duration-300 ease-out motion-reduce:transition-none" />
-            {SETUP_STEPS.map((step, position) => {
+            {steps.map((step, position) => {
               const item = data.steps[position];
               const current = step.key === stepKey;
               const open = reachable(position);

@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { canForUser } from "@/lib/permissions";
+import { hasFeature } from "@/lib/plan-guards";
 import { prisma } from "@/lib/prisma";
 import type { SectionId } from "@/types/clinic";
 
@@ -38,14 +39,18 @@ export async function GET(request: Request) {
        AND (a."procedure" ILIKE ${pattern} OR a."professional" ILIKE ${pattern} ${appointmentNotesMatch}OR a."status" ILIKE ${pattern} OR p."name" ILIKE ${pattern})
      ORDER BY a."date" DESC LIMIT ${resultLimit})`);
 
+  // O texto de materiais deriva da ficha técnica: só aparece/casa com o recurso technicalSheet.
+  const sheetAllowed = hasFeature(user, "technicalSheet");
+  const materialsDescription = sheetAllowed ? Prisma.sql`, nullif(p."materials", '')` : Prisma.empty;
+  const materialsMatch = sheetAllowed ? Prisma.sql` OR p."materials" ILIKE ${pattern}` : Prisma.empty;
   if (canForUser(user, "procedures:access")) matches.push(Prisma.sql`
-    (SELECT p."id", p."name" AS title, concat_ws(' · ', nullif(p."category", ''), nullif(p."materials", '')) AS description,
+    (SELECT p."id", p."name" AS title, concat_ws(' · ', nullif(p."category", '')${materialsDescription}) AS description,
       'procedimentos' AS section, 'Procedimento' AS kind
      FROM "Procedure" p WHERE p."clinicId" = ${clinicId}
-       AND (p."name" ILIKE ${pattern} OR p."category" ILIKE ${pattern} OR p."materials" ILIKE ${pattern})
+       AND (p."name" ILIKE ${pattern} OR p."category" ILIKE ${pattern}${materialsMatch})
      ORDER BY p."name" LIMIT ${resultLimit})`);
 
-  if (canForUser(user, "stock:access")) {
+  if (canForUser(user, "stock:access") && hasFeature(user, "stock")) {
     matches.push(Prisma.sql`
       (SELECT p."id", p."name" AS title, concat_ws(' · ', nullif(p."category", ''), p."supplier", p."unit") AS description,
         'estoque' AS section, 'Estoque' AS kind
@@ -61,7 +66,7 @@ export async function GET(request: Request) {
        ORDER BY m."createdAt" DESC LIMIT ${resultLimit})`);
   }
 
-  if (canForUser(user, "purchases:access")) matches.push(Prisma.sql`
+  if (canForUser(user, "purchases:access") && hasFeature(user, "purchases")) matches.push(Prisma.sql`
     (SELECT b."id", b."supplier" AS title, concat_ws(' · ', b."invoiceNumber", to_char(b."purchasedOn", 'DD/MM/YYYY'), b."status") AS description,
       'compras' AS section, 'Compra' AS kind
      FROM "Purchase" b WHERE b."clinicId" = ${clinicId}
@@ -86,7 +91,7 @@ export async function GET(request: Request) {
        AND (pay."method" ILIKE ${pattern} OR pay."status" ILIKE ${pattern} OR pay."installments" ILIKE ${pattern} OR p."name" ILIKE ${pattern})
      ORDER BY pay."date" DESC LIMIT ${resultLimit})`);
 
-  if (canForUser(user, "finance:access")) {
+  if (canForUser(user, "finance:access") && hasFeature(user, "finance")) {
     matches.push(Prisma.sql`
       (SELECT e."id", e."description" AS title, concat_ws(' · ', e."category", e."status", to_char(e."dueOn", 'DD/MM/YYYY')) AS description,
         'financeiro' AS section, 'Despesa' AS kind

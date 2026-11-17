@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { denyUnless } from "@/lib/api-guards";
 import { prisma } from "@/lib/prisma";
 import {
@@ -85,8 +86,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
 // Upload de UM arquivo por requisição (o cliente envia vários em sequência, com progresso e erro por arquivo).
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   if (!visibleDocumentCategories(user.role, user.rolePermissions).length) return NextResponse.json({ message: "Acesso restrito." }, { status: 403 });

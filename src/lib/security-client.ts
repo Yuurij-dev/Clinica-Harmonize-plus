@@ -1,5 +1,6 @@
 // Cliente das rotas /api/security/*: tipos das respostas e uma chamada comum para as mutações.
-import { CLIENT_CACHE_UNAUTHORIZED_EVENT } from "./client-cache";
+import { CLIENT_CACHE_UNAUTHORIZED_EVENT, notifyPlanBlocked } from "./client-cache";
+import { parsePlanErrorBody } from "./plan-errors.ts";
 
 export const SECURITY_OVERVIEW_KEY = "/api/security/overview";
 export const SECURITY_EVENTS_PAGE_SIZE = 5;
@@ -33,6 +34,11 @@ export async function securityRequest<T = Record<string, unknown>>(method: "POST
   }
   const data = await response.json().catch(() => null) as (T & { message?: string; code?: string }) | null;
   if (response.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event(CLIENT_CACHE_UNAUTHORIZED_EVENT));
+  // 403 comercial não é sessão expirada: só avisa a interface; a sessão continua válida.
+  if (response.status === 403) {
+    const planError = parsePlanErrorBody(data);
+    if (planError) notifyPlanBlocked(planError);
+  }
   return {
     ok: response.ok,
     status: response.status,

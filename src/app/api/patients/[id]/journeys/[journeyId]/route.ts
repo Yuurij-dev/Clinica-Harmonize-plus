@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { denyUnless } from "@/lib/api-guards";
 import { auditEntry } from "@/lib/clinical-files-server";
 import { removeStoredBytes, type StoredRef } from "@/lib/clinical-storage";
@@ -14,8 +15,10 @@ class JourneyDeleteRace extends Error {}
 const appointmentCalendarSelect = { id: true, status: true, date: true, time: true, procedure: true, professional: true } as const;
 
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string; journeyId: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const denied = denyUnless(user, "clinical:write");
@@ -94,8 +97,10 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
 }
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string; journeyId: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const { id: patientId, journeyId } = await params;

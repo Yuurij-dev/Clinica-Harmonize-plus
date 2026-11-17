@@ -3,6 +3,7 @@ import { addDays } from "@/lib/agenda-period-rules";
 import { appointmentDurations } from "@/lib/appointment-conflict";
 import { appointmentsForAutomaticTransitions } from "@/lib/appointment-automation-rules";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature, hasFeature } from "@/lib/plan-guards";
 import { appointmentHasPassed, clinicNow } from "@/lib/clinic-time";
 import { prisma } from "@/lib/prisma";
 import { canForUser } from "@/lib/permissions";
@@ -10,9 +11,14 @@ import { canForUser } from "@/lib/permissions";
 const candidateLimit = 400;
 
 export async function POST() {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "agenda:access")) return NextResponse.json({ message: "Seu cargo não tem acesso à agenda." }, { status: 403 });
+  // Automações da agenda (faltas e conclusão) são do Pro+; no Start o fluxo é manual. Nada é gravado sem o recurso.
+  const planDenied = denyUnlessFeature(user, "agendaAutomations", "write");
+  if (planDenied) return planDenied;
 
   const clinic = await prisma.clinic.findUnique({ where: { id: user.clinicId }, select: { appointmentToleranceMinutes: true, autoMarkMissedAppointmentsEnabled: true, autoCompleteAppointmentsEnabled: true } });
   if (!clinic) return NextResponse.json({ message: "Clínica não encontrada." }, { status: 404 });
@@ -44,7 +50,8 @@ export async function POST() {
     missedIds.length ? prisma.appointment.updateMany({ where: { clinicId: user.clinicId, id: { in: missedIds }, status: "Agendado" }, data: { status: "Faltou" } }) : { count: 0 },
     completedIds.length ? prisma.appointment.updateMany({ where: { clinicId: user.clinicId, id: { in: completedIds }, status: "Em atendimento" }, data: { status: "Atendido" } }) : { count: 0 },
   ]);
-  if (completedResult.count) {
+  // Conferencia de materiais so existe com o recurso `stock` (sem ele, concluir nao deixa pendencia).
+  if (completedResult.count && hasFeature(user, "stock")) {
     await prisma.appointment.updateMany({ where: { clinicId: user.clinicId, id: { in: completedIds }, status: "Atendido", materialsCheck: null }, data: { materialsCheck: "pending" } });
   }
 

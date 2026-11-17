@@ -3,6 +3,8 @@ import { loadPatientEmailContext } from "@/lib/patient-email-context";
 import { isEmailDeliveryReady } from "@/lib/email";
 import { sendQuoteEmail } from "@/lib/patient-emails";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, hasFeature } from "@/lib/plan-guards";
+import { quoteForPlan, quoteWithoutCostFields } from "@/lib/plan-data";
 import { prisma } from "@/lib/prisma";
 import { listLimit, listPeriodFilter, serializeQuote, toCents } from "@/lib/finance";
 import { ensurePatientJourney } from "@/lib/patient-journey";
@@ -40,7 +42,9 @@ export async function GET(request: Request) {
       ...(patientId ? { evaluation: { select: { professional: true } }, clinic: { select: { name: true } } } : {}),
     },
   });
-  const serialized = quotes.map((quote) => serializeQuote({ ...quote, patient: cpfForRole(user.role, quote.patient, user.rolePermissions) }));
+  // Retrato de custos (Quote.details.costs) so sai para clinicas com o recurso `costs`; o registro continua no banco.
+  const costsAllowed = hasFeature(user, "costs");
+  const serialized = quotes.map((quote) => quoteForPlan(serializeQuote({ ...quote, patient: cpfForRole(user.role, quote.patient, user.rolePermissions) }), costsAllowed));
 
   const payments = await prisma.payment.findMany({
     where: { clinicId: user.clinicId, patientId, status: "Pago", ...(journeyId ? { journeyId } : {}) },
@@ -59,8 +63,10 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const denied = denyUnless(user, "quotes:manage");
   if (denied) return denied;
   const body = await request.json().catch(() => null) as { patientId?: string; journeyId?: string; evaluationId?: string; items?: string; details?: QuoteLineInput[]; total?: number; expires?: string; paymentMethod?: string; installments?: number; notes?: string; status?: string } | null;
@@ -81,16 +87,18 @@ export async function POST(request: Request) {
   // Só conta itens no caminho estruturado (details); sem ele a contagem seria imprecisa, então fica null e o e-mail omite.
   let itemCount: number | null = null;
   if (body?.details !== undefined) {
+    // Sem o recurso `costs` o orcamento e calculado e salvo SEM custos (nao grava retrato zerado): so os itens e descontos.
+    const costsAllowed = hasFeature(user, "costs");
     const [procedures, costSnapshot] = await Promise.all([
       prisma.procedure.findMany({ where: { clinicId: user.clinicId }, select: { id: true, name: true, price: true } }),
-      quoteCostSnapshot(user.clinicId, user.id, user.role),
+      costsAllowed ? quoteCostSnapshot(user.clinicId, user.id, user.role) : Promise.resolve({ laborCents: 0, facilityCents: 0, medicationCents: 0 }),
     ]);
     const calculated = calculateQuote(body.details, procedures.map((procedure) => ({ id: procedure.id, name: procedure.name, priceCents: toCents(procedure.price) })), costSnapshot);
     if (!calculated) return NextResponse.json({ message: "Revise os procedimentos, quantidades e descontos do orçamento." }, { status: 400 });
     items = calculated.items.map((item) => `${item.name} (${item.quantity}x)`).join(", ");
     totalCents = calculated.totalCents;
     itemCount = calculated.items.length;
-    details = JSON.stringify({ ...calculated, costs: costSnapshot });
+    details = JSON.stringify(costsAllowed ? { ...calculated, costs: costSnapshot } : quoteWithoutCostFields(calculated));
   }
   if (!items || (body?.details === undefined && !Number.isFinite(total))) return NextResponse.json({ message: "Selecione ao menos um procedimento e preencha o orçamento." }, { status: 400 });
   const notes = typeof body?.notes === "string" ? body.notes.trim() : "";
@@ -105,7 +113,7 @@ export async function POST(request: Request) {
       if (context) await sendQuoteEmail({ ...context, totalCents: quote.totalCents, expires: quote.expires?.toISOString().slice(0, 10), itemCount });
     } catch {}
   });
-  return NextResponse.json({ quote: serializeQuote(quote) }, { status: 201 });
+  return NextResponse.json({ quote: quoteForPlan(serializeQuote(quote), hasFeature(user, "costs")) }, { status: 201 });
 }
 
 function validPaymentMethod(value?: string) {
