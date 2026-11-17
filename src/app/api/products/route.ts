@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { listMaterials } from "@/lib/stock";
@@ -9,14 +10,20 @@ export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (!canForUser(user, "stock:access")) return NextResponse.json({ message: "Acesso restrito." }, { status: 403 });
+  const featureDenied = denyUnlessFeature(user, "stock", "read");
+  if (featureDenied) return featureDenied;
   const includeArchived = new URL(request.url).searchParams.get("archived") === "1";
   return NextResponse.json({ products: await listMaterials(user.clinicId, includeArchived) });
 }
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "stock:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const featureDenied = denyUnlessFeature(user, "stock", "write");
+  if (featureDenied) return featureDenied;
   const body = await request.json().catch(() => null) as { name?: string; kind?: string; unit?: string; costCents?: number; supplier?: string; minStock?: number } | null;
   const costCents = Number(body?.costCents);
   const minStock = body?.minStock === undefined ? 0 : Number(body.minStock);

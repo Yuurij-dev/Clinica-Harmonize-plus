@@ -127,9 +127,8 @@ export async function getMfaState(userId: string) {
   return { active: Boolean(user?.mfaSetting?.enabledAt), required: user ? mfaRequiredForMemberships(user.memberships) : false };
 }
 
-/** Dispositivo confiável válido (cookie harmonize_td) do MESMO usuário; atualiza lastUsedAt. */
-async function findTrustedDeviceId(userId: string) {
-  const token = (await cookies()).get(TRUSTED_DEVICE_COOKIE)?.value;
+/** Credencial válida do MESMO usuário; usada pelo cookie Web e pelo header nativo. Atualiza lastUsedAt. */
+export async function findTrustedDevice(userId: string, token: string | null | undefined) {
   if (!token || token.length > 200) return null;
   const device = await prisma.trustedDevice.findUnique({
     where: { tokenHash: hashTrustedDeviceToken(token) },
@@ -137,7 +136,11 @@ async function findTrustedDeviceId(userId: string) {
   });
   if (!device || !isTrustedDeviceValid(device, userId)) return null;
   await prisma.trustedDevice.update({ where: { id: device.id }, data: { lastUsedAt: new Date() } });
-  return device.id;
+  return { id: device.id, expiresAt: device.expiresAt };
+}
+
+async function findTrustedDeviceCookieId(userId: string) {
+  return (await findTrustedDevice(userId, (await cookies()).get(TRUSTED_DEVICE_COOKIE)?.value))?.id ?? null;
 }
 
 export type CompletedLogin = {
@@ -156,7 +159,7 @@ export async function completeLogin(input: {
   origin: "password" | "google";
 }): Promise<CompletedLogin> {
   const mfaActive = await prisma.mfaSetting.findFirst({ where: { userId: input.userId, enabledAt: { not: null } }, select: { id: true } });
-  const trustedDeviceId = mfaActive ? await findTrustedDeviceId(input.userId) : null;
+  const trustedDeviceId = mfaActive ? await findTrustedDeviceCookieId(input.userId) : null;
   if (mfaActive && !trustedDeviceId) {
     const token = await createMfaPendingToken(input.userId, input.origin);
     return { mfaRequired: true, apply: (response) => {
@@ -186,11 +189,22 @@ export async function completeLogin(input: {
 export async function createTrustedDevice(userId: string, request: { headers: { get(name: string): string | null } }) {
   const token = generateTrustedDeviceToken();
   const { userAgent } = clientInfo(request);
+  const platform = request.headers.get("x-harmonize-platform")?.toLowerCase();
+  const os = platform === "ios" ? "iOS" : platform === "android" ? "Android" : null;
   const device = await prisma.trustedDevice.create({
-    data: { userId, tokenHash: hashTrustedDeviceToken(token), label: deviceLabel(userAgent), userAgent, expiresAt: trustedDeviceExpiry() },
-    select: { id: true },
+    data: { userId, tokenHash: hashTrustedDeviceToken(token), label: os ? `Harmonize+ Mobile em ${os}` : deviceLabel(userAgent), userAgent, expiresAt: trustedDeviceExpiry() },
+    select: { id: true, expiresAt: true },
   });
-  return { id: device.id, token };
+  return { id: device.id, token, expiresAt: device.expiresAt };
+}
+
+/** Revoga um dispositivo do próprio usuário. `null` cobre inexistente, alheio ou já revogado. */
+export async function revokeTrustedDevice(userId: string, id: string, request: { headers: { get(name: string): string | null } }) {
+  const device = await prisma.trustedDevice.findFirst({ where: { id, userId, revokedAt: null }, select: { id: true, label: true, tokenHash: true } });
+  if (!device) return null;
+  const { count } = await prisma.trustedDevice.updateMany({ where: { id: device.id, userId, revokedAt: null }, data: { revokedAt: new Date() } });
+  if (count > 0) await recordSecurityEvent({ userId, type: "TRUSTED_DEVICE_REMOVED", request, detail: device.label });
+  return count > 0 ? device : null;
 }
 
 /** Revoga sessões do usuário (todas, ou todas menos `exceptSid`). Limpa o cache de auth e registra SESSION_REVOKED. */

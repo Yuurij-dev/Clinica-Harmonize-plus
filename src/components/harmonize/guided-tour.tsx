@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { SectionId } from "@/types/clinic";
 import { TOUR_SEEN, shouldShowTour, tourKey, visibleTourSteps } from "@/lib/tour-rules";
 import { tourReplayEvent } from "@/lib/section-events";
-import { useCan } from "./current-user";
+import { useCan, useHasFeature } from "./current-user";
 import { hasDraftGuard } from "./use-draft-autosave";
 import { TourOverlay, useTourStepper } from "./tour-overlay";
 
@@ -30,8 +30,10 @@ type Props = {
  */
 export function GuidedTour({ allowedSections, userId, onSelectSection, activeSection, onFinished, suppressAutoOpen = false }: Props) {
   const canReadClinical = useCan("clinical:read");
+  const hasStock = useHasFeature("stock");
+  const hasFinance = useHasFeature("finance");
   const sectionsKey = allowedSections.join(",");
-  const steps = useMemo(() => visibleTourSteps(sectionsKey ? (sectionsKey.split(",") as SectionId[]) : [], canReadClinical), [sectionsKey, canReadClinical]);
+  const steps = useMemo(() => visibleTourSteps(sectionsKey ? (sectionsKey.split(",") as SectionId[]) : [], canReadClinical, hasStock, hasFinance), [sectionsKey, canReadClinical, hasStock, hasFinance]);
   const stepper = useTourStepper(steps.length);
   const { visible, index, dir, last, open: openStepper, close, advance, back } = stepper;
   const startSection = useRef<SectionId | undefined>(undefined);

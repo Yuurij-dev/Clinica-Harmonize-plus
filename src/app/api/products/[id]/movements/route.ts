@@ -7,7 +7,7 @@ import { manualMovement } from "@/lib/stock-rules";
 // Histórico de movimentações do material (ou de um lote), da mais recente para a mais antiga.
 // Com type=attendance lista só as saídas em pacientes (rastreio de recall), paginado por ?page.
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { user, error } = await adminUser();
+  const { user, error } = await adminUser(false, "stock:manage", "stock");
   if (error) return error;
   const productId = (await params).id;
   const search = new URL(request.url).searchParams;
@@ -34,7 +34,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
 // Saída manual (perda, vencimento, uso interno) ou correção de contagem.
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { user, error } = await adminUser(true);
+  const { user, error } = await adminUser(true, "stock:manage", "stock");
   if (error) return error;
   const productId = (await params).id;
   const body = await request.json().catch(() => null) as { lotId?: string; reason?: string; direction?: "in" | "out"; quantity?: number; notes?: string } | null;

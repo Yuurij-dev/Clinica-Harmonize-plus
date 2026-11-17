@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature, hasFeature } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { parseClockMinutes } from "@/lib/clinic-time";
 import { isEmailDeliveryReady } from "@/lib/email";
@@ -64,21 +65,42 @@ async function loadClinicSettings(clinicId: string): Promise<ClinicSettings | nu
   return rows[0]?.settings ?? null;
 }
 
+// Esta rota tambem e a unica que le/salva dados GERAIS da clinica (nome, contato, horarios, tolerancia, preferencias): eles valem para
+// todos os planos. Os campos de CUSTO (mao de obra, estrutura, medicacao, custo/hora) sao do recurso `costs`: sem ele saem
+// omitidos (nao zerados) e gravar um deles responde 403 PLAN_FEATURE. Os valores continuam no banco.
+const costFields = ["laborCost", "facilityCost", "medicationCost", "professionalHourlyCost"] as const;
+function settingsForPlan(settings: ClinicSettings | null, costsAllowed: boolean) {
+  if (!settings || costsAllowed) return settings;
+  const rest: Partial<ClinicSettings> = { ...settings };
+  for (const field of costFields) delete rest[field];
+  return rest;
+}
+
 export async function GET() {
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (!canForUser(user, "settings:manage")) return NextResponse.json({ message: "Acesso restrito à administração da clínica." }, { status: 403 });
 
   const settings = await loadClinicSettings(user.clinicId);
-  return NextResponse.json({ settings, emailProviderReady: isEmailDeliveryReady() });
+  return NextResponse.json({ settings: settingsForPlan(settings, hasFeature(user, "costs")), emailProviderReady: isEmailDeliveryReady() });
 }
 
 export async function PATCH(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "settings:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
 
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+  // Sem o recurso `costs`: dados gerais continuam editaveis; enviar campo de custo e recusado (nunca ignorado em silencio) e
+  // os valores de custo ja gravados ficam intactos.
+  const costsAllowed = hasFeature(user, "costs");
+  if (!costsAllowed && costFields.some((field) => body?.[field] !== undefined)) {
+    const featureDenied = denyUnlessFeature(user, "costs", "write");
+    if (featureDenied) return featureDenied;
+  }
+  const toleranceGiven = costsAllowed || body?.appointmentToleranceMinutes !== undefined;
   const laborCost = Number(body?.laborCost);
   const facilityCost = Number(body?.facilityCost);
   const medicationCost = Number(body?.medicationCost);
@@ -101,7 +123,7 @@ export async function PATCH(request: Request) {
   const hasProfessionalHours = professionalOpeningTime !== null || professionalClosingTime !== null;
   const preferenceKeys = ["appointmentNotificationsEnabled", "appointmentNotificationSoundEnabled", "stockNotificationsEnabled", "requireCancellationReason"] as const;
   const invalidPreference = preferenceKeys.some((key) => body?.[key] !== undefined && typeof body[key] !== "boolean");
-  if (invalidPreference || (body?.name !== undefined && (name.length < 2 || name.length > 30)) || (cnpj !== null && cnpj.length > 18) || (phone !== null && phone.length > 15) || (email !== null && (email.length > 254 || (email.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))) || (address !== null && address.length > 240) || ![laborCost, facilityCost, medicationCost, appointmentToleranceMinutes, professionalHourlyCost].every((value) => Number.isFinite(value) && value >= 0) || !Number.isInteger(appointmentToleranceMinutes) || appointmentToleranceMinutes > 180 || (hasBusinessHours && (!openingTime || !closingTime || openingMinutes === null || closingMinutes === null || closingMinutes <= openingMinutes)) || (hasProfessionalHours && (!professionalOpeningTime || !professionalClosingTime || professionalOpeningMinutes === null || professionalClosingMinutes === null || professionalClosingMinutes <= professionalOpeningMinutes))) {
+  if (invalidPreference || (body?.name !== undefined && (name.length < 2 || name.length > 30)) || (cnpj !== null && cnpj.length > 18) || (phone !== null && phone.length > 15) || (email !== null && (email.length > 254 || (email.length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))) || (address !== null && address.length > 240) || ![...(costsAllowed ? [laborCost, facilityCost, medicationCost, professionalHourlyCost] : []), ...(toleranceGiven ? [appointmentToleranceMinutes] : [])].every((value) => Number.isFinite(value) && value >= 0) || (toleranceGiven && (!Number.isInteger(appointmentToleranceMinutes) || appointmentToleranceMinutes > 180)) || (hasBusinessHours && (!openingTime || !closingTime || openingMinutes === null || closingMinutes === null || closingMinutes <= openingMinutes)) || (hasProfessionalHours && (!professionalOpeningTime || !professionalClosingTime || professionalOpeningMinutes === null || professionalClosingMinutes === null || professionalClosingMinutes <= professionalOpeningMinutes))) {
     return NextResponse.json({ message: "Confira os dados, horários, custos e a tolerância informados." }, { status: 400 });
   }
 
@@ -117,11 +139,8 @@ export async function PATCH(request: Request) {
       ...(typeof body?.appointmentNotificationSoundEnabled === "boolean" ? { appointmentNotificationSoundEnabled: body.appointmentNotificationSoundEnabled } : {}),
       ...(typeof body?.stockNotificationsEnabled === "boolean" ? { stockNotificationsEnabled: body.stockNotificationsEnabled } : {}),
       ...(typeof body?.requireCancellationReason === "boolean" ? { requireCancellationReason: body.requireCancellationReason } : {}),
-      laborCost: Math.round(laborCost),
-      facilityCost: Math.round(facilityCost),
-      medicationCost: Math.round(medicationCost),
-      professionalHourlyCost,
-      appointmentToleranceMinutes,
+      ...(costsAllowed ? { laborCost: Math.round(laborCost), facilityCost: Math.round(facilityCost), medicationCost: Math.round(medicationCost), professionalHourlyCost } : {}),
+      ...(toleranceGiven ? { appointmentToleranceMinutes } : {}),
       ...(openingTime !== null ? { openingTime } : {}),
       ...(closingTime !== null ? { closingTime } : {}),
       ...(professionalOpeningTime !== null ? { professionalOpeningTime } : {}),
@@ -130,5 +149,5 @@ export async function PATCH(request: Request) {
     select: { id: true },
   });
   const settings = await loadClinicSettings(user.clinicId);
-  return NextResponse.json({ settings });
+  return NextResponse.json({ settings: settingsForPlan(settings, costsAllowed) });
 }

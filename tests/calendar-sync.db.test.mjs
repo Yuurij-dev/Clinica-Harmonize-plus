@@ -675,3 +675,125 @@ test("401/403 da Calendar API marca a conexão ERROR (sem desfazer desconexão m
   await markConnectionError(prisma, w.central.id, d.clinicId);
   assert.equal((await prisma.googleCalendarConnection.findUnique({ where: { id: w.central.id } })).status, "CONNECTED");
 });
+
+// ---------- plano (googleCalendar = Premium) ----------
+
+const setPlan = (w, plan) => prisma.clinicSubscription.update({ where: { clinicId: w.clinicId }, data: { plan, status: "ACTIVE", trialEndsAt: null, currentPeriodEnd: null } });
+// EXPIRED preserva o plano contratado (os recursos continuam no entitlements), mas o modo de acesso vira "readonly": é o
+// cenário real de "clínica Premium em somente leitura" (teste vencido, assinatura inadimplente etc.), diferente de downgrade
+// de plano (Pro), que tira o recurso.
+const setReadonly = (w, plan) => prisma.clinicSubscription.update({ where: { clinicId: w.clinicId }, data: { plan, status: "EXPIRED", trialEndsAt: null, currentPeriodEnd: null } });
+
+test("plano: job de clínica Pro fica PENDING com attempts inalterado; Premium processa", opts, async () => {
+  const pro = await world({ central: true });
+  const premium = await world({ central: true });
+  await setPlan(pro, "pro");
+  await setPlan(premium, "premium");
+  const [ap, am] = [await appt(pro), await appt(premium)];
+  await prisma.calendarSyncJob.createMany({ data: [{ clinicId: pro.clinicId, appointmentId: ap.id, operation: "CREATE" }, { clinicId: premium.clinicId, appointmentId: am.id, operation: "CREATE" }] });
+  const summaryPro = await run(pro);
+  assert.equal(summaryPro.completed, 0);
+  const [jobPro] = await jobs(pro, ap);
+  assert.equal(jobPro.status, "PENDING");
+  assert.equal(jobPro.attempts, 0);
+  assert.equal(pro.google.calls.length, 0);
+  assert.equal((await run(premium)).completed, 1);
+  assert.equal((await jobs(premium, am))[0].status, "COMPLETED");
+});
+
+test("plano: downgrade ENTRE a reserva e a execução não sincroniza, devolve o job PENDING sem consumir tentativa (inclusive trava antiga)", opts, async () => {
+  const w = await world({ central: true });
+  await setPlan(w, "premium");
+  const [a, b] = [await appt(w), await appt(w, { time: "12:00" })];
+  await prisma.calendarSyncJob.createMany({ data: [
+    { clinicId: w.clinicId, appointmentId: a.id, operation: "CREATE" },
+    { clinicId: w.clinicId, appointmentId: b.id, operation: "CREATE", status: "PROCESSING", lockedAt: new Date(Date.now() - 6 * 60_000), lockedBy: "morto", attempts: 1 },
+  ] });
+  // Proxy: logo depois de cada reserva (UPDATE -> PROCESSING) a clínica cai para Pro, antes de o processador executar o job.
+  const job = prisma.calendarSyncJob;
+  const jobProxy = new Proxy(job, {
+    get(target, prop) {
+      if (prop !== "updateMany") return Reflect.get(target, prop);
+      return async (args) => {
+        const result = await target.updateMany(args);
+        if (args?.data?.status === "PROCESSING" && result.count > 0) await setPlan(w, "pro");
+        return result;
+      };
+    },
+  });
+  const db = new Proxy(prisma, { get: (target, prop) => (prop === "calendarSyncJob" ? jobProxy : Reflect.get(target, prop)) });
+  const summary = await processCalendarSyncJobs({ limit: 20, clinicId: w.clinicId, deps: { db, client: w.google, env, appOrigin: "http://localhost:3000", workerId: "w-downgrade" } });
+  assert.equal(summary.completed, 0);
+  assert.equal(summary.failed, 0);
+  assert.equal(w.google.calls.filter((call) => call.method !== "refresh").length, 0);
+  const [ja] = await jobs(w, a);
+  assert.equal(ja.status, "PENDING");
+  assert.equal(ja.attempts, 0);
+  assert.equal(ja.lockedBy, null);
+  const [jb] = await jobs(w, b);
+  assert.equal(jb.status, "PENDING");
+  assert.equal(jb.attempts, 1, "a retomada da trava antiga não consome tentativa quando o plano bloqueia");
+  assert.equal(jb.lockedBy, null);
+  assert.equal(await prisma.googleCalendarEvent.count({ where: { clinicId: w.clinicId } }), 0);
+  // upgrade: volta a processar sozinho
+  await setPlan(w, "premium");
+  assert.equal((await run(w)).completed, 2);
+});
+
+// ---------- somente leitura (modo de acesso, não o plano) ----------
+
+test("somente leitura: clínica Premium vencida não sincroniza (recurso continua no plano, mas o acesso virou readonly)", opts, async () => {
+  const w = await world({ central: true });
+  await setReadonly(w, "premium");
+  const a = await appt(w);
+  await prisma.calendarSyncJob.create({ data: { clinicId: w.clinicId, appointmentId: a.id, operation: "CREATE" } });
+  const summary = await run(w);
+  assert.equal(summary.completed, 0);
+  assert.equal(summary.failed, 0);
+  assert.equal(summary.skipped, 0, "clínica inteira sai do groupBy antes de reservar; não conta como 'pulado'");
+  assert.equal(w.google.calls.length, 0);
+  const [job] = await jobs(w, a);
+  assert.equal(job.status, "PENDING");
+  assert.equal(job.attempts, 0);
+  assert.equal(job.lockedBy, null);
+  // Desconectar continua permitido em somente leitura (regra já existente, não tocada por este teste): o job não impede.
+});
+
+test("somente leitura: vencimento ENTRE a reserva e a execução não sincroniza, devolve o job PENDING (trava antiga não consome tentativa)", opts, async () => {
+  const w = await world({ central: true });
+  await setPlan(w, "premium");
+  const [a, b] = [await appt(w), await appt(w, { time: "12:00" })];
+  await prisma.calendarSyncJob.createMany({ data: [
+    { clinicId: w.clinicId, appointmentId: a.id, operation: "CREATE" },
+    { clinicId: w.clinicId, appointmentId: b.id, operation: "CREATE", status: "PROCESSING", lockedAt: new Date(Date.now() - 6 * 60_000), lockedBy: "morto", attempts: 1 },
+  ] });
+  // Proxy: logo depois de cada reserva a clínica vence (EXPIRED), antes de o processador executar o job.
+  const job = prisma.calendarSyncJob;
+  const jobProxy = new Proxy(job, {
+    get(target, prop) {
+      if (prop !== "updateMany") return Reflect.get(target, prop);
+      return async (args) => {
+        const result = await target.updateMany(args);
+        if (args?.data?.status === "PROCESSING" && result.count > 0) await setReadonly(w, "premium");
+        return result;
+      };
+    },
+  });
+  const db = new Proxy(prisma, { get: (target, prop) => (prop === "calendarSyncJob" ? jobProxy : Reflect.get(target, prop)) });
+  const summary = await processCalendarSyncJobs({ limit: 20, clinicId: w.clinicId, deps: { db, client: w.google, env, appOrigin: "http://localhost:3000", workerId: "w-readonly" } });
+  assert.equal(summary.completed, 0);
+  assert.equal(summary.failed, 0);
+  assert.equal(w.google.calls.filter((call) => call.method !== "refresh").length, 0);
+  const [ja] = await jobs(w, a);
+  assert.equal(ja.status, "PENDING");
+  assert.equal(ja.attempts, 0);
+  assert.equal(ja.lockedBy, null);
+  const [jb] = await jobs(w, b);
+  assert.equal(jb.status, "PENDING");
+  assert.equal(jb.attempts, 1, "a retomada da trava antiga não consome tentativa quando a clínica venceu");
+  assert.equal(jb.lockedBy, null);
+  assert.equal(await prisma.googleCalendarEvent.count({ where: { clinicId: w.clinicId } }), 0);
+  // Recuperação do acesso completo (regularizou o pagamento): volta a processar sozinho, com o job ainda válido.
+  await setPlan(w, "premium");
+  assert.equal((await run(w)).completed, 2);
+});

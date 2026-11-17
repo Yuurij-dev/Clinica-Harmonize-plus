@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { AttendanceMaterialsError, attendanceCheckData, findAttendance, registerAttendanceOutputs } from "@/lib/attendance-materials";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature } from "@/lib/plan-guards";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
 
@@ -10,16 +11,22 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const denied = denyUnless(user, "appointment:run");
   if (denied) return denied;
+  const featureDenied = denyUnlessFeature(user, "stock", "read");
+  if (featureDenied) return featureDenied;
   const data = await attendanceCheckData(user.clinicId, (await params).id);
   if (!data) return NextResponse.json({ message: "Atendimento não encontrado." }, { status: 404 });
   return NextResponse.json(data);
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const denied = denyUnless(user, "appointment:run");
   if (denied) return denied;
+  const featureDenied = denyUnlessFeature(user, "stock", "write");
+  if (featureDenied) return featureDenied;
   const attendance = await findAttendance(user.clinicId, (await params).id);
   if (!attendance) return NextResponse.json({ message: "Atendimento não encontrado." }, { status: 404 });
   if (attendance.status !== "Atendido") return NextResponse.json({ message: "Finalize o atendimento antes de conferir os materiais e produtos." }, { status: 409 });

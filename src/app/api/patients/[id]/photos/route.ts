@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
 import { canArchiveFiles, canDeleteFiles, canWritePhotos, checkUpload, isPhotoPhase, maxUploadBytes, photoCategoryNames, sanitizeFileName } from "@/lib/clinical-files-rules";
@@ -109,8 +110,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
 // Upload de UMA foto por requisição (várias em sequência no cliente). Armazenada como ClinicalPhoto; fotos antigas não são tocadas.
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const denied = denyUnless(user, "clinical:write");

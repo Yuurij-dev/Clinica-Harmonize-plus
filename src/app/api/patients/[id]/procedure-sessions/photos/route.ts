@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
 import { checkUpload, maxUploadBytes, sanitizeFileName } from "@/lib/clinical-files-rules";
@@ -10,8 +11,10 @@ import { readImageSize } from "@/lib/thumb";
 
 // Anexa UMA foto "Imediatamente após" à sessão em execução da jornada (app mobile). Só acrescenta: as demais fotos da sessão ficam intactas.
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const denied = denyUnless(user, "clinical:write");

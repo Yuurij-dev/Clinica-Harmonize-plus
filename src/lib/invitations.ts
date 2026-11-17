@@ -1,6 +1,8 @@
 import { parseCollaboratorProfile, type CollaboratorProfile } from "./collaborator-profile-rules.ts";
 import type { EmailFailureReason, EmailResult } from "./email.ts";
 import { canForUser } from "./permissions.ts";
+import { inviteeLimitBody, type PlanErrorBody } from "./plan-errors.ts";
+import { countsAsProfessional } from "./plans.ts";
 import {
   canAcceptInvitation,
   generateInviteToken,
@@ -70,6 +72,13 @@ export type InvitationTx = {
   inviterAccess(input: { userId: string; clinicId: string }): Promise<{ role: string; isOwner: boolean; rolePermissions: unknown } | null>;
   countMembershipsOutside(input: { userId: string; clinicId: string }): Promise<number>;
   createMembership(input: { userId: string; clinicId: string; role: InviteRole }): Promise<void>;
+  // Limite de profissionais do plano da clinica: trava por clinica, conta membros ADMIN/PROFESSIONAL + convites pendentes
+  // (que reservam vaga) e decide se cabe mais UM. `excludeInvitationId` = o convite que esta sendo aceito (nao conta duas vezes).
+  // Precisa rodar na MESMA transacao que cria o convite/membership.
+  reserveProfessionalSlot(input: { clinicId: string; excludeInvitationId?: string; now: Date }): Promise<{ ok: true } | { ok: false; plan: PlanErrorBody }>;
+  // Somente leitura nao cria vinculo novo com a clinica: o aceite de QUALQUER convite (inclusive STAFF) exige acesso completo
+  // da clinica de destino (assinatura lida do banco na transacao).
+  assertClinicWritable(input: { clinicId: string; now: Date }): Promise<{ ok: true } | { ok: false }>;
   findUserByEmail(email: string): Promise<{ id: string } | null>;
   createUser(input: { name: string; email: string; passwordHash: string; now: Date } & Partial<Omit<CollaboratorProfile, "name">>): Promise<string>;
   createIdentity(input: { userId: string; provider: string; sub: string; email: string; now: Date }): Promise<void>;
@@ -98,11 +107,13 @@ function toListItem(row: ListRow, now: Date): InvitationListItem {
   };
 }
 
-export type InviteFailure = { ok: false; status: 400 | 404 | 409 | 429 | 503; code: string; message: string };
+// `plan` presente = limite comercial (HTTP 403, corpo PLAN_LIMIT pronto para a rota devolver).
+export type InviteFailure = { ok: false; status: 400 | 403 | 404 | 409 | 429 | 503; code: string; message: string; plan?: PlanErrorBody };
 const DELIVERY_UNAVAILABLE = "O envio de e-mails ainda não está configurado.";
 const WINDOW_LIMIT = "Limite de convites enviados nas últimas 24 horas atingido.";
 const PENDING_LIMIT = "Há convites pendentes demais. Cancele algum antes de enviar outro.";
 const fail = (status: InviteFailure["status"], code: string, message: string): InviteFailure => ({ ok: false, status, code, message });
+const planFail = (plan: PlanErrorBody): InviteFailure => ({ ok: false, status: 403, code: plan.code, message: plan.message, plan });
 
 // clinicId e invitedById vem SEMPRE da sessao; role e validado contra a allowlist.
 export async function createInvitation(
@@ -120,6 +131,13 @@ export async function createInvitation(
     const result = await repo.transaction(async (tx) => {
       // Convites vencidos do mesmo e-mail saem do indice parcial, senao bloqueariam o novo convite.
       await tx.lockClinicInvites(input.clinicId);
+      // Convite de ADMIN/PROFESSIONAL reserva uma vaga de profissional do plano; STAFF nao consome. A reserva (que toma o lock
+      // do plano) vem ANTES de qualquer linha de convite ser travada: o PATCH de cargo e o aceite tambem tomam o lock do plano
+      // primeiro e so depois atualizam convites; a ordem invertida aqui causaria deadlock (vira 500).
+      if (countsAsProfessional(role)) {
+        const slot = await tx.reserveProfessionalSlot({ clinicId: input.clinicId, now });
+        if (!slot.ok) return planFail(slot.plan);
+      }
       await tx.expireStalePending({ clinicId: input.clinicId, email, now });
       if (await tx.isMemberByEmail({ clinicId: input.clinicId, email })) return fail(409, "already_member", "Este e-mail já faz parte da equipe.");
       if ((await tx.countPending({ clinicId: input.clinicId, now })) >= MAX_PENDING_INVITES_PER_CLINIC) {
@@ -157,6 +175,11 @@ export async function resendInvitation(
       // Volta a PENDING (estava vencido): reaplica o teto de pendentes.
       if (invitationState(current, now) !== "pending" && (await tx.countPending({ clinicId: input.clinicId, now })) >= MAX_PENDING_INVITES_PER_CLINIC) return fail(429, "pending_limit", PENDING_LIMIT);
       if ((await tx.countSentSince({ clinicId: input.clinicId, since: new Date(now.getTime() - INVITE_SEND_WINDOW_MS) })) >= MAX_INVITES_SENT_PER_WINDOW) return fail(429, "window_limit", WINDOW_LIMIT);
+      // Convite vencido que volta a PENDING reserva a vaga de novo (um ainda pendente ja a reserva: girar o token nao muda o consumo).
+      if (invitationState(current, now) !== "pending" && countsAsProfessional(current.role)) {
+        const slot = await tx.reserveProfessionalSlot({ clinicId: input.clinicId, excludeInvitationId: current.id, now });
+        if (!slot.ok) return planFail(slot.plan);
+      }
       // Outros PENDING vencidos do mesmo e-mail saem do indice parcial (inclusive o proprio, que volta a PENDING abaixo).
       await tx.expireStalePending({ clinicId: input.clinicId, email: current.email, now });
       const count = await tx.rotate({
@@ -199,8 +222,8 @@ export async function previewInvitation(repo: InvitationRepo, token: unknown, no
   return { clinicName: row.clinicName, role: row.role, email: row.email, status: invitationState(row, now) };
 }
 
-export type AcceptFailureCode = "not_found" | "expired" | "cancelled" | "accepted" | "email_mismatch" | "invalid_role";
-export type AcceptResult = { ok: true; alreadyInOtherClinic: boolean } | { ok: false; code: AcceptFailureCode };
+export type AcceptFailureCode = "not_found" | "expired" | "cancelled" | "accepted" | "email_mismatch" | "invalid_role" | "plan_limit";
+export type AcceptResult = { ok: true; alreadyInOtherClinic: boolean } | { ok: false; code: AcceptFailureCode; plan?: PlanErrorBody };
 
 // Mesma permissao exigida para ENVIAR convites (POST /api/invitations), reavaliada no momento do aceite.
 export async function inviterCanInvite(tx: Pick<InvitationTx, "inviterAccess">, invitation: Pick<InvitationRow, "invitedById" | "clinicId">): Promise<boolean> {
@@ -219,11 +242,23 @@ async function acceptInTx(tx: InvitationTx, invitation: InvitationRow, user: { i
   // Convite sem autor, ou de autor que saiu da clinica / perdeu settings:team, nao vale (mesma resposta generica de convite inexistente).
   if (!(await inviterCanInvite(tx, invitation))) return { ok: false, code: "not_found" };
 
+  // Clinica de destino em somente leitura: nenhum vinculo novo (nem STAFF). Corpo generico: nao revela o estado da assinatura.
+  const writable = await tx.assertClinicWritable({ clinicId: invitation.clinicId, now });
+  if (!writable.ok) return { ok: false, code: "plan_limit", plan: inviteeLimitBody() };
+
+  // Limite de profissionais da clinica de DESTINO, ANTES de consumir o convite (o retorno falho nao desfaz o que ja foi gravado).
+  // O convite ja reserva a propria vaga, entao ele e excluido da contagem; quem ja e membro nao consome nada.
+  const existing = await tx.findMembership({ userId: user.id, clinicId: invitation.clinicId });
+  if (!existing && countsAsProfessional(invitation.role)) {
+    const slot = await tx.reserveProfessionalSlot({ clinicId: invitation.clinicId, excludeInvitationId: invitation.id, now });
+    // Quem aceita ainda nao e membro: corpo generico (sem limite/uso/estado da assinatura da clinica).
+    if (!slot.ok) return { ok: false, code: "plan_limit", plan: inviteeLimitBody() };
+  }
+
   // Consumo atomico, amarrado ao tokenHash lido (um reenvio que gira o token invalida este aceite).
   const consumed = await tx.markAccepted({ id: invitation.id, clinicId: invitation.clinicId, tokenHash: invitation.tokenHash, userId: user.id, now });
   if (consumed !== 1) return { ok: false, code: "accepted" };
 
-  const existing = await tx.findMembership({ userId: user.id, clinicId: invitation.clinicId });
   // Ja e membro: convite consumido sem mexer em papel nem isOwner (nunca rebaixa nem promove).
   if (!existing) await tx.createMembership({ userId: user.id, clinicId: invitation.clinicId, role: invitation.role });
   const outside = await tx.countMembershipsOutside({ userId: user.id, clinicId: invitation.clinicId });
@@ -247,7 +282,8 @@ export async function acceptInvitation(
 
 export type RegisterByInviteResult =
   | { ok: true; userId: string; alreadyInOtherClinic: boolean }
-  | { ok: false; status: 400 | 404 | 409; code: "invalid_input" | "invalid_token" | "account_exists" | "race"; message: string };
+  | { ok: false; status: 400 | 404 | 409; code: "invalid_input" | "invalid_token" | "account_exists" | "race"; message: string }
+  | { ok: false; status: 403; code: "PLAN_LIMIT"; message: string; plan: PlanErrorBody };
 
 // Conta nova por senha para o convidado. O e-mail vem do CONVITE; se ja existe User com ele, recusa
 // (anexar membership a conta existente permitiria pre-hijacking).
@@ -285,22 +321,29 @@ export async function registerByInvite(
       const userId = await tx.createUser({ name, email: invitation.email, passwordHash, now, ...personal });
       const accepted = await acceptInTx(tx, invitation, { id: userId, email: invitation.email }, now);
       // Falha no aceite desfaz tambem a criacao do usuario.
-      if (!accepted.ok) throw new RollbackError();
+      if (!accepted.ok) throw new RollbackError(accepted.plan);
       return { ok: true, userId, alreadyInOtherClinic: accepted.alreadyInOtherClinic } as const;
     });
     return result;
   } catch (error) {
-    if (error instanceof RollbackError) return invalid;
+    if (error instanceof RollbackError) return error.plan ? { ok: false, status: 403, code: "PLAN_LIMIT", message: error.plan.message, plan: error.plan } : invalid;
     if (isP2002(error)) return { ok: false, status: 409, code: "race", message: "Já existe uma conta com este e-mail. Entre com sua senha e aceite o convite." };
     throw error;
   }
 }
 
-class RollbackError extends Error {}
+class RollbackError extends Error {
+  readonly plan?: PlanErrorBody;
+  constructor(plan?: PlanErrorBody) {
+    super("rollback");
+    this.plan = plan;
+  }
+}
 
 export type GoogleInviteResult =
   | { ok: true; userId: string }
-  | { ok: false; code: "invite_invalid" | "invite_email_mismatch" | "account_exists" | "race" };
+  | { ok: false; code: "invite_invalid" | "invite_email_mismatch" | "account_exists" | "race" }
+  | { ok: false; code: "plan_limit"; plan: PlanErrorBody };
 
 // Aceite via Google para quem ainda NAO tem conta: User + UserIdentity + aceite na MESMA transacao.
 // Prova dupla: o token (enviado so ao e-mail do convite) e o e-mail verificado pelo Google. Se ja existe
@@ -324,11 +367,11 @@ export async function registerGoogleByInvite(
       const userId = await tx.createUser({ name, email: invitation.email, passwordHash: input.passwordHash, now, ...personal });
       await tx.createIdentity({ userId, provider: "google", sub: input.google.sub, email: invitation.email, now });
       const accepted = await acceptInTx(tx, invitation, { id: userId, email: invitation.email }, now);
-      if (!accepted.ok) throw new RollbackError();
+      if (!accepted.ok) throw new RollbackError(accepted.plan);
       return { ok: true, userId };
     });
   } catch (error) {
-    if (error instanceof RollbackError) return { ok: false, code: "invite_invalid" };
+    if (error instanceof RollbackError) return error.plan ? { ok: false, code: "plan_limit", plan: error.plan } : { ok: false, code: "invite_invalid" };
     if (isP2002(error)) return { ok: false, code: "race" };
     throw error;
   }
@@ -372,6 +415,6 @@ export async function deliverInvitation(
   const result = await deps.send({ to: input.email, clinicName: input.clinicName, inviterName: input.inviterName, role: input.role, url });
   if (result.sent) return { emailSent: true };
   // emailFailureReason e um codigo estavel (so vai ao admin com settings:team); nada da resposta do provedor passa daqui.
-  if (result.reason === "not_configured" && url && deps.revealUrl) return { emailSent: false, emailFailureReason: result.reason, inviteUrl: url };
+  if (url && deps.revealUrl) return { emailSent: false, emailFailureReason: result.reason, inviteUrl: url };
   return { emailSent: false, emailFailureReason: result.reason };
 }

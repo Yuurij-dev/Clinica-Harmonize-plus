@@ -328,8 +328,18 @@ function isDoneByData(key: SetupStepKey, snapshot: SetupSnapshot, confirmed: boo
  * Avalia cada etapa com os dados reais e as decisões salvas. `finished` (status "completed") conclui a revisão final;
  * mesmo assim ela só conta se as obrigatórias continuam cumpridas.
  */
-export function evaluateSetup(snapshot: SetupSnapshot, decisions: SetupDecisions, finished = false): SetupEvaluation {
-  const steps: SetupStepState[] = SETUP_STEPS.map((definition) => {
+// Etapas que nao se aplicam ao plano da clinica (todas opcionais): materiais/produtos dependem de estoque; custos, do recurso costs; financeiro, do recurso finance.
+// Elas NAO entram na lista (nem no total/percentual) e a interface as esconde; os dados continuam no banco.
+export function setupUnavailableSteps(hasFeature: (feature: "stock" | "costs" | "finance") => boolean): SetupStepKey[] {
+  const unavailable: SetupStepKey[] = [];
+  if (!hasFeature("stock")) unavailable.push("materiais", "produtos");
+  if (!hasFeature("costs")) unavailable.push("custos");
+  if (!hasFeature("finance")) unavailable.push("financeiro");
+  return unavailable;
+}
+
+export function evaluateSetup(snapshot: SetupSnapshot, decisions: SetupDecisions, finished = false, unavailable: readonly SetupStepKey[] = []): SetupEvaluation {
+  const steps: SetupStepState[] = SETUP_STEPS.filter((definition) => !unavailable.includes(definition.key)).map((definition) => {
     const decision = decisions[definition.key]?.decision;
     const confirmed = decision === "confirmed" && CONFIRMABLE.has(definition.key);
     const skipped = decision === "skipped" && SKIPPABLE.has(definition.key);

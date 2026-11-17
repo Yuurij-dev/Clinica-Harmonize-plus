@@ -43,6 +43,10 @@ type SidebarProps = {
   role?: string | null;
   rolePermissions?: RolePermissionMatrix;
   isOwner?: boolean;
+  /** Recursos do plano (user.access.features); filtra Estoque/Compras sem o recurso. */
+  features?: readonly string[];
+  /** Rótulo do plano (planLabel de /api/auth/me); sem ele não mostra plano. */
+  planLabel?: string | null;
 };
 
 export function Sidebar({
@@ -53,8 +57,10 @@ export function Sidebar({
   role,
   rolePermissions,
   isOwner,
+  features,
+  planLabel,
 }: SidebarProps) {
-  const allowed = visibleSections(role, rolePermissions, isOwner);
+  const allowed = visibleSections(role, rolePermissions, isOwner, features);
   const canManageAgenda = useCan("agenda:manage");
   const canReadClinical = useCan("clinical:read");
   const visibleNavItems = navItems.filter((item) => allowed.includes(item.id));
@@ -111,7 +117,7 @@ export function Sidebar({
 
       <div className="mt-auto border-t border-border px-2 pt-4">
         <p className="text-xs font-semibold text-muted-foreground">{clinicName ?? "Clínica"}</p>
-        <p className="mt-1 text-xs font-bold text-foreground">Plano profissional</p>
+        {planLabel ? <p className="mt-1 text-xs font-bold text-foreground">{planLabel}</p> : null}
       </div>
     </aside>
     </div>

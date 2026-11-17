@@ -8,6 +8,17 @@ export { escapeHtml };
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 const TIMEOUT_MS = 8_000;
 
+function resendEndpoint(env: Env): string | null {
+  const override = env.E2E_RESEND_URL?.trim();
+  if (!override || env.NODE_ENV === "production") return RESEND_ENDPOINT;
+  try {
+    const url = new URL(override);
+    return ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 type Env = Record<string, string | undefined>;
 
 export type EmailFailureReason =
@@ -100,8 +111,10 @@ export async function sendEmail(
   const apiKey = env.RESEND_API_KEY?.trim();
   const from = env.EMAIL_FROM?.trim();
   if (!apiKey || !from) return { sent: false, reason: "not_configured" };
+  const endpoint = resendEndpoint(env);
+  if (!endpoint) return { sent: false, reason: "network" };
   try {
-    const response = await (deps.fetchImpl ?? fetch)(RESEND_ENDPOINT, {
+    const response = await (deps.fetchImpl ?? fetch)(endpoint, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ from, to: [input.to], subject: input.subject, html: input.html, text: input.text, ...(input.attachments?.length ? { attachments: input.attachments } : {}) }),

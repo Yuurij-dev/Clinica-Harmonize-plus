@@ -3,6 +3,7 @@ import { loadPatientEmailContext } from "@/lib/patient-email-context";
 import { isEmailDeliveryReady } from "@/lib/email";
 import { sendAppointmentConfirmationEmail } from "@/lib/patient-emails";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, hasFeature } from "@/lib/plan-guards";
 import { appointmentInstant, appointmentSlotError, clinicNow, parseAppointmentDay } from "@/lib/clinic-time";
 import { cleanProfessionalName } from "@/lib/appointment-conflict-rules";
 import { appointmentDurations, appointmentTransactionOptions, lockAppointmentSlots, scheduleConflictError } from "@/lib/appointment-conflict";
@@ -13,8 +14,10 @@ import { denyUnless } from "@/lib/api-guards";
 import { calendarAppointmentChanged } from "@/lib/calendar-runtime";
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const denied = denyUnless(user, "agenda:manage");
   if (denied) return denied;
 
@@ -94,8 +97,8 @@ export async function POST(request: Request) {
   const created = result.appointment;
   // Google Agenda + e-mail ao profissional: enfileira (rápido, try/catch interno) e o resto roda depois da resposta; nunca falha o agendamento.
   await calendarAppointmentChanged({ clinicId: user.clinicId, appointmentId: created.id, patientId: patient.id, actorUserId: user.id, prev: null, next: created }).catch(() => undefined);
-  // E-mail ao paciente depois da resposta; opcional e silencioso, nunca altera o agendamento.
-  after(async () => {
+  // E-mail ao paciente depois da resposta; opcional e silencioso, nunca altera o agendamento. Só com o recurso emailNotifications (Pro+).
+  if (hasFeature(user, "emailNotifications")) after(async () => {
     try {
       if (!isEmailDeliveryReady()) return;
       const context = await loadPatientEmailContext(user.clinicId, patient.id);

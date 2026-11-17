@@ -5,7 +5,7 @@ import { materialDetail } from "@/lib/stock";
 import { isStockKind, isStockUnit } from "@/lib/stock-rules";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { user, error } = await adminUser(false, "stock:access");
+  const { user, error } = await adminUser(false, "stock:access", "stock");
   if (error) return error;
   const product = await materialDetail(user.clinicId, (await params).id);
   if (!product) return NextResponse.json({ message: "Item não encontrado." }, { status: 404 });
@@ -13,7 +13,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 }
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { user, error } = await adminUser(true);
+  const { user, error } = await adminUser(true, "stock:manage", "stock");
   if (error) return error;
   const id = (await params).id;
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
@@ -55,7 +55,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const { user, error } = await adminUser(true);
+  const { user, error } = await adminUser(true, "stock:manage", "stock");
   if (error) return error;
   const id = (await params).id;
   const product = await prisma.product.findFirst({ where: { id, clinicId: user.clinicId }, select: { id: true } });

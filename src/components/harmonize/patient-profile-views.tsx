@@ -11,7 +11,7 @@ import { ScrollFade } from "@/components/ui/scroll-fade";
 import { CLIENT_CACHE_INVALIDATED_EVENT, getCachedJson, invalidateClientCache, readClientCache } from "@/lib/client-cache";
 import type { Patient } from "@/types/clinic";
 import { EmptyState, LoadingSkeleton } from "./shared";
-import { useCan } from "./current-user";
+import { useCan, useHasFeature } from "./current-user";
 import { Modal } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 import { ProcedureImage } from "./procedure-image";
@@ -107,10 +107,13 @@ export function PatientOverview({ patient, onOpen, onOpenJourney, onNewAppointme
     return () => window.removeEventListener(CLIENT_CACHE_INVALIDATED_EVENT, refresh);
   }, [patientId]);
 
-  const recentEvents = useMemo(() => summary?.events.slice(0, 6) ?? [], [summary]);
-  const pendingEvents = useMemo(() => summary?.events.filter((event) => event.kind === "Material" || (event.kind === "Agendamento" && event.status === "Agendado") || (event.kind === "Orçamento" && ["Pendente", "Aguardando aprovação"].includes(event.status ?? ""))).slice(0, 3) ?? [], [summary]);
+  // Eventos "Material" (conferência de estoque) só existem com o recurso estoque; linhas antigas de clínicas rebaixadas não aparecem.
+  const hasStock = useHasFeature("stock");
+  const events = useMemo(() => (summary?.events ?? []).filter((event) => hasStock || event.kind !== "Material"), [summary, hasStock]);
+  const recentEvents = useMemo(() => events.slice(0, 6), [events]);
+  const pendingEvents = useMemo(() => events.filter((event) => event.kind === "Material" || (event.kind === "Agendamento" && event.status === "Agendado") || (event.kind === "Orçamento" && ["Pendente", "Aguardando aprovação"].includes(event.status ?? ""))).slice(0, 3), [events]);
   const clinicalAlerts = useMemo(() => summary?.observations.filter((observation) => observation.kind === "clinical").slice(0, 2) ?? [], [summary]);
-  const lastVisit = summary?.events.find((event) => event.kind === "Procedimento" || (event.kind === "Agendamento" && ["Atendido", "Finalizado"].includes(event.status ?? "")));
+  const lastVisit = events.find((event) => event.kind === "Procedimento" || (event.kind === "Agendamento" && ["Atendido", "Finalizado"].includes(event.status ?? "")));
   const steps = journey ? journeyStagesDone(journey) : [];
   const currentIndex = journey ? JOURNEY_STAGE_LABELS.indexOf(currentJourneyStage(journey)) : -1;
   const progress = steps.length ? Math.round((steps.filter(Boolean).length / steps.length) * 100) : 0;
@@ -214,6 +217,8 @@ export function PatientTreatments({ onBeforeNewTreatment, newTreatmentRequest = 
   const [journeyCounts, setJourneyCounts] = useState(cached?.summary ?? { total: 0, inProgress: 0, completed: 0 });
   const [summary, setSummary] = useState<ProfileSummary | null>(cachedSummary ?? null);
   const [summaryLoading, setSummaryLoading] = useState(!cachedSummary);
+  const hasStock = useHasFeature("stock");
+  const timelineEvents = useMemo(() => (summary?.events ?? []).filter((event) => hasStock || event.kind !== "Material"), [summary, hasStock]);
   const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState(false);
   const [expandedJourneyId, setExpandedJourneyId] = useState<string | null>(() => !selectedJourneyId && cached?.journeys?.length === 1 ? cached.journeys[0].id : null);
@@ -418,7 +423,7 @@ export function PatientTreatments({ onBeforeNewTreatment, newTreatmentRequest = 
     </section>
     <aside className="space-y-4">
       <Card className="p-4"><IconHeading icon={Layers3} title="Resumo de tratamentos" /><div className="mt-3 space-y-3 text-xs"><p className="flex items-center gap-3"><CalendarDays className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{journeyCounts.total}</strong><span className="text-muted-foreground">tratamentos</span></p><p className="flex items-center gap-3"><Clock3 className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{journeyCounts.inProgress}</strong><span className="text-muted-foreground">em andamento</span></p><p className="flex items-center gap-3"><Check className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{journeyCounts.completed}</strong><span className="text-muted-foreground">concluídos</span></p><p className="flex items-center gap-3"><Camera className="h-4 w-4 text-primary" /><strong className="w-5 text-sm">{journeys.reduce((total, item) => total + item.photoCount, 0)}</strong><span className="text-muted-foreground">fotos nesta página</span></p></div></Card>
-      <Card className="p-4"><IconHeading icon={Clock3} title="Linha do tempo clínica" />{summaryLoading && !summary ? <div className="mt-3 space-y-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : summary?.events.length ? <ol className="mt-3 space-y-3">{summary.events.slice(0, 5).map((event, index) => { const EventIcon = eventIcon(event.kind); return <li className="relative flex gap-2.5" key={`${event.kind}-${event.date}-${index}`}><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary/10 text-primary"><EventIcon className="h-3.5 w-3.5" /></span><span className="min-w-0 flex-1"><strong className="block text-xs">{event.title}</strong><span className="mt-0.5 block text-xs leading-4 text-muted-foreground">{event.detail}</span><time className="mt-1 block text-xs text-muted-foreground">{dateLabel(event.date)}</time></span></li>; })}</ol> : <p className="mt-3 rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">Nenhuma atividade clínica registrada.</p>}</Card>
+      <Card className="p-4"><IconHeading icon={Clock3} title="Linha do tempo clínica" />{summaryLoading && !summary ? <div className="mt-3 space-y-3"><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /><LoadingSkeleton className="h-10 w-full" /></div> : timelineEvents.length ? <ol className="mt-3 space-y-3">{timelineEvents.slice(0, 5).map((event, index) => { const EventIcon = eventIcon(event.kind); return <li className="relative flex gap-2.5" key={`${event.kind}-${event.date}-${index}`}><span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary/10 text-primary"><EventIcon className="h-3.5 w-3.5" /></span><span className="min-w-0 flex-1"><strong className="block text-xs">{event.title}</strong><span className="mt-0.5 block text-xs leading-4 text-muted-foreground">{event.detail}</span><time className="mt-1 block text-xs text-muted-foreground">{dateLabel(event.date)}</time></span></li>; })}</ol> : <p className="mt-3 rounded-md bg-muted/50 p-3 text-xs text-muted-foreground">Nenhuma atividade clínica registrada.</p>}</Card>
     </aside>
     </div>
   </div><Modal open={newTreatmentOpen} title="Novo tratamento" description="Defina o nome da jornada e quem será responsável pelo acompanhamento." onClose={() => { if (!newTreatmentSaving) setNewTreatmentOpen(false); }} closeOnOverlayClick={!newTreatmentSaving}>

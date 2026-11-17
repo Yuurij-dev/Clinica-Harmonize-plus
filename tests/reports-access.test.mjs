@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { appliedProfessional, isValidProfessionalParam, resolveReportAccess } from "../src/lib/reports-access.ts";
+import { appliedProfessional, isValidProfessionalParam, missingReportFeature, reportFeaturesRequired, resolveReportAccess } from "../src/lib/reports-access.ts";
+import { resolvePlanFeatures } from "../src/lib/plans.ts";
 import { createDefaultRolePermissionMatrix } from "../src/lib/permissions.ts";
 
 const user = (role, patch = {}) => ({ role, name: `Dr ${role}`, rolePermissions: createDefaultRolePermissionMatrix(), ...patch });
@@ -73,4 +74,49 @@ test("PROFESSIONAL sem nome utilizável falha fechado: não acessa nem vê tudo"
     assert.equal(access.canChooseProfessional, false);
     assert.equal(appliedProfessional(access, "Outra pessoa"), null);
   }
+});
+
+// ===== Relatórios por plano (etapa 6) =====
+
+test("relatórios por plano: Start sem página; Pro por área e exportação; Premium com visão geral e consolidado", () => {
+  const start = resolvePlanFeatures("start");
+  const pro = resolvePlanFeatures("pro");
+  const premium = resolvePlanFeatures("premium");
+  for (const kind of ["finance", "procedures", "overview", "all", "stock", "appointments"]) assert.equal(missingReportFeature(start, kind), "reports", `start/${kind}`);
+  for (const kind of ["finance", "procedures", "professionals", "appointments", "clients", "quotes", "stock"]) {
+    assert.equal(missingReportFeature(pro, kind), null, `pro/${kind}`);
+    assert.equal(missingReportFeature(pro, kind, { exporting: true }), null, `pro/export/${kind}`);
+  }
+  assert.equal(missingReportFeature(pro, "overview"), "reportsAdvanced");
+  assert.equal(missingReportFeature(pro, "all"), "reportsConsolidated");
+  assert.equal(missingReportFeature(pro, "all", { exporting: true }), "reportsConsolidated");
+  for (const kind of ["overview", "all", "finance", "stock", "clients"]) assert.equal(missingReportFeature(premium, kind, { exporting: true }), null, `premium/${kind}`);
+  // sem a informação de plano (testes puros) nada é restringido
+  assert.equal(missingReportFeature(undefined, "all"), null);
+});
+
+test("relatórios por plano: exportar exige reportsExport; financeiro exige finance e estoque exige stock", () => {
+  assert.equal(missingReportFeature(new Set(["reports"]), "procedures", { exporting: true }), "reportsExport");
+  assert.equal(missingReportFeature(new Set(["reports", "reportsExport"]), "finance"), "finance");
+  assert.equal(missingReportFeature(new Set(["reports", "finance"]), "finance"), null);
+  assert.equal(missingReportFeature(new Set(["reports"]), "stock"), "stock");
+  assert.deepEqual(reportFeaturesRequired("overview", { exporting: true }), ["reports", "reportsExport", "reportsAdvanced"]);
+});
+
+test("relatórios por plano: capabilities compõem papel E plano; roleCapabilities é só o papel", () => {
+  const admin = (features) => resolveReportAccess({ ...user("ADMIN"), features });
+  const noFinance = admin(new Set(["reports", "stock"]));
+  assert.equal(noFinance.capabilities.finance, false);
+  assert.equal(noFinance.roleCapabilities.finance, true);
+  assert.equal(noFinance.capabilities.stock, true);
+  const noStock = admin(new Set(["reports", "finance"]));
+  assert.equal(noStock.capabilities.stock, false);
+  assert.equal(noStock.roleCapabilities.stock, true);
+  assert.equal(noStock.capabilities.finance, true);
+  const pro = admin(resolvePlanFeatures("pro"));
+  assert.deepEqual([pro.capabilities.finance, pro.capabilities.quotes, pro.capabilities.stock], [true, true, true]);
+  // papel sem permissão continua sem a capacidade mesmo com o plano
+  const staff = resolveReportAccess({ ...user("STAFF"), features: resolvePlanFeatures("premium") });
+  assert.equal(staff.allowed, false);
+  assert.equal(staff.capabilities.finance, false);
 });

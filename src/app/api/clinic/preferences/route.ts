@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature } from "@/lib/plan-guards";
+import type { Feature } from "@/lib/plans";
 import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { currentStagesFor } from "@/lib/patient-list-server";
@@ -15,9 +17,18 @@ const preferenceKeys = [
   "allowAppointmentsOutsideHours",
 ] as const;
 
+// patientEmailsEnabled fica livre: também vale para o envio manual de orçamento (núcleo). Preferências que só têm efeito com um recurso do plano: no Start a rotina não roda, então a escolha não é gravada (403 PLAN_FEATURE).
+const featureByPreference: Partial<Record<(typeof preferenceKeys)[number], Feature>> = {
+  autoMarkMissedAppointmentsEnabled: "agendaAutomations",
+  autoCompleteAppointmentsEnabled: "agendaAutomations",
+  autoAdvancePatientJourneyEnabled: "agendaAutomations",
+};
+
 export async function PATCH(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "settings:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
 
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
@@ -26,6 +37,9 @@ export async function PATCH(request: Request) {
   if (!preferenceKeys.some((item) => item === key) || typeof enabled !== "boolean") {
     return NextResponse.json({ message: "Preferência inválida." }, { status: 400 });
   }
+  const requiredFeature = featureByPreference[key as (typeof preferenceKeys)[number]];
+  const planDenied = requiredFeature ? denyUnlessFeature(user, requiredFeature, "write") : null;
+  if (planDenied) return planDenied;
 
   // When automation is turned off, capture each patient's current step so it stays put.
   if (key === "autoAdvancePatientJourneyEnabled" && enabled === false) {

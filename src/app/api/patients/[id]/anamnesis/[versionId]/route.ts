@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly } from "@/lib/plan-guards";
 import { denyUnless } from "@/lib/api-guards";
 import { anamnesisFullSelect, anamnesisMetaSelect, serializeFull } from "@/lib/anamnesis-store";
 import { appendAudit, canTransition, completionCheck, currentVersion, normalizeAnamnesisContent, parseAnamnesisContent, pruneEmptyRows, revisionConflict, staleDraftMessage } from "@/lib/anamnesis-rules";
@@ -27,8 +28,10 @@ export async function GET(_request: Request, { params }: Params) {
 
 // Ações sobre uma versão: concluir o rascunho, confirmar que a versão atual continua válida ou marcá-la para revisão.
 export async function POST(request: Request, { params }: Params) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const denied = denyUnless(user, "anamnesis:write");

@@ -11,7 +11,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
   const { id } = await params;
   const result = await resendInvitation(prismaInvitationRepo, { clinicId: user.clinicId, id, deliveryReady: isInviteDeliveryReady() });
   const noStore = { "Cache-Control": "no-store" };
-  if (!result.ok) return NextResponse.json({ message: result.message }, { status: result.status, headers: noStore });
+  if (!result.ok) return NextResponse.json(result.plan ?? { message: result.message }, { status: result.status, headers: noStore });
 
   const delivery = await deliverInvitation(
     { buildUrl: buildInviteUrl, send: sendInvitationEmail, revealUrl: canRevealInviteUrl() },

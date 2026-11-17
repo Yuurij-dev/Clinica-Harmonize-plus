@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature, hasFeature } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { parseCreateProcedure } from "@/lib/procedure-catalog-rules";
@@ -12,19 +13,29 @@ export async function GET() {
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (!canForUser(user, "procedures:access")) return NextResponse.json({ message: "Acesso restrito." }, { status: 403 });
   const procedures = await prisma.procedure.findMany({ where: { clinicId: user.clinicId }, orderBy: { name: "asc" }, select: procedureSelect });
-  return NextResponse.json({ procedures: procedures.map(serializeProcedure) });
+  const sheetAllowed = hasFeature(user, "technicalSheet");
+  return NextResponse.json({ procedures: procedures.map((procedure) => serializeProcedure(procedure, sheetAllowed)) });
 }
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "procedures:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
   const clinicId = user.clinicId;
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   const parsed = parseCreateProcedure(body);
   if (!parsed.ok) return NextResponse.json({ message: parsed.message }, { status: 400 });
   const input = parsed.data;
-  const sheet = await parseTechnicalSheet(clinicId, body?.technicalSheet ?? []);
+  // Ficha tecnica e recurso do plano (Pro/Premium, depende de estoque). Sem ele o procedimento e criado normalmente, sem ficha;
+  // enviar materiais na ficha e recusado (PLAN_FEATURE), nunca ignorado em silencio.
+  const sheetAllowed = hasFeature(user, "technicalSheet");
+  if (!sheetAllowed && Array.isArray(body?.technicalSheet) && body.technicalSheet.length > 0) {
+    const featureDenied = denyUnlessFeature(user, "technicalSheet", "write");
+    if (featureDenied) return featureDenied;
+  }
+  const sheet = sheetAllowed ? await parseTechnicalSheet(clinicId, body?.technicalSheet ?? []) : { items: [] as Array<{ productId: string; quantity: number }>, description: "" };
   if ("error" in sheet) return NextResponse.json({ message: sheet.error }, { status: 400 });
 
   let name: string;
@@ -64,7 +75,7 @@ export async function POST(request: Request) {
       });
     });
     if (!procedure) return NextResponse.json({ message: "Imagem não encontrada." }, { status: 400 });
-    return NextResponse.json({ procedure: serializeProcedure(procedure) }, { status: 201 });
+    return NextResponse.json({ procedure: serializeProcedure(procedure, sheetAllowed) }, { status: 201 });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") return NextResponse.json({ message: "Imagem não encontrada." }, { status: 400 });
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {

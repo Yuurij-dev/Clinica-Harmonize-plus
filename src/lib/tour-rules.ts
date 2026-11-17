@@ -22,14 +22,18 @@ export type TourStep = {
   plainText?: string;
   /** Título usado quando o usuário não tem acesso clínico (par do `plainText`). */
   plainTitle?: string;
+  /** Texto para clínicas sem o recurso estoque (e ficha técnica): não cita fichas técnicas nem materiais. */
+  noStockText?: string;
+  /** Texto para clínicas sem o recurso financeiro: não cita resultados financeiros. */
+  noFinanceText?: string;
 };
 
 export const TOUR_STEPS: readonly TourStep[] = [
   { key: "oi", title: "Oi, eu sou o Harmo!", text: "Vou te mostrar o Harmonize+ em menos de 1 minuto. Se preferir, é só clicar em “Pular tour”.", pose: "wave" },
-  { key: "dashboard", title: "Visão geral da sua clínica", text: "Acompanhe os principais indicadores da clínica, visualize seus resultados financeiros e entenda a evolução do negócio em um só lugar.", section: "dashboard", pose: "point" },
+  { key: "dashboard", title: "Visão geral da sua clínica", text: "Acompanhe os principais indicadores da clínica, visualize seus resultados financeiros e entenda a evolução do negócio em um só lugar.", section: "dashboard", pose: "point", noFinanceText: "Acompanhe os principais indicadores da clínica e entenda a evolução do negócio em um só lugar." },
   { key: "agenda", title: "Agenda: organize seus atendimentos", text: "Visualize seus agendamentos por dia, semana ou mês. Gerencie horários, consulte os detalhes dos atendimentos, reagende compromissos e atualize seus status com facilidade.", section: "agenda", pose: "nod" },
   { key: "clientes", title: "Clientes: histórico completo dos pacientes", text: "Cadastre, encontre e gerencie seus pacientes em um só lugar. Consulte o histórico de atendimentos, avaliações, procedimentos realizados, fotos e documentos de cada paciente.", plainTitle: "Clientes: cadastro dos pacientes", plainText: "Cadastre, encontre e gerencie seus pacientes em um só lugar. Consulte os dados de cadastro e o contato de cada paciente.", section: "clientes", pose: "peek" },
-  { key: "procedimentos", title: "Procedimentos: catálogo da sua clínica", text: "Cadastre seus procedimentos com preços, duração e fichas técnicas. Defina os materiais utilizados em cada serviço e mantenha seu catálogo organizado.", section: "procedimentos", pose: "point" },
+  { key: "procedimentos", title: "Procedimentos: catálogo da sua clínica", text: "Cadastre seus procedimentos com preços, duração e fichas técnicas. Defina os materiais utilizados em cada serviço e mantenha seu catálogo organizado.", section: "procedimentos", pose: "point", noStockText: "Cadastre seus procedimentos com preços e duração e mantenha seu catálogo organizado." },
   { key: "estoque", title: "Estoque: controle seus materiais", text: "Acompanhe a quantidade disponível de cada material, defina estoques mínimos e monitore os lotes. O consumo é atualizado automaticamente conforme a utilização dos procedimentos cadastrados nas fichas técnicas.", section: "estoque", pose: "think" },
   { key: "compras", title: "Compras: organize a reposição de materiais", text: "Registre suas compras, informe os materiais adquiridos e controle a entrada de produtos no estoque. Mantenha o histórico de reposições da sua clínica organizado.", section: "compras", pose: "shrug" },
   { key: "orcamentos", title: "Orçamentos: transforme avaliações em planos de tratamento", text: "Crie orçamentos personalizados a partir das avaliações, selecione os procedimentos desejados e apresente os valores ao paciente. Gere e compartilhe propostas de forma profissional.", plainTitle: "Orçamentos: planos de tratamento", plainText: "Crie orçamentos personalizados, selecione os procedimentos desejados e apresente os valores ao paciente. Gere e compartilhe propostas de forma profissional.", section: "orcamentos", pose: "point" },
@@ -57,11 +61,12 @@ export function shouldShowTour(raw: string | null | undefined, readFailed = fals
 }
 
 /** Passos que o usuário pode ver: abertura e fim sempre; os demais só se a seção for permitida. Sem nenhum passo de seção, não há tour. */
-export function visibleTourSteps(allowedSections: readonly SectionId[], canReadClinical = true): TourStep[] {
+export function visibleTourSteps(allowedSections: readonly SectionId[], canReadClinical = true, hasStock = true, hasFinance = true): TourStep[] {
   // O "fim" não depende mais de permissão: o botão que reabre o tour fica na topbar, visível para todos.
   const steps = TOUR_STEPS.filter((step) => !step.section || allowedSections.includes(step.section)).map((step) => {
-    if (!canReadClinical) return { ...step, title: step.plainTitle ?? step.title, text: step.plainText ?? step.text };
-    return step;
+    const text = !hasStock && step.noStockText ? step.noStockText : !hasFinance && step.noFinanceText ? step.noFinanceText : step.text;
+    if (!canReadClinical) return { ...step, title: step.plainTitle ?? step.title, text: step.plainText ?? text };
+    return text === step.text ? step : { ...step, text };
   });
   return steps.some((step) => step.section) ? steps : [];
 }

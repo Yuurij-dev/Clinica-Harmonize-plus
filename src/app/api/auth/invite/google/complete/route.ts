@@ -30,6 +30,8 @@ export async function POST(request: Request) {
 
   const response = result.ok
     ? NextResponse.json({ ok: true }, { status: 201, headers })
+    : result.code === "plan_limit"
+    ? NextResponse.json(result.plan, { status: 403, headers })
     : NextResponse.json(
       result.code === "account_exists" || result.code === "race"
         ? { code: result.code, message: "Já existe uma conta com este e-mail. Entre com sua senha e aceite o convite." }

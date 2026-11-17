@@ -319,7 +319,7 @@ test("entrega: URL nunca volta em producao; so volta fora dela e sem provedor", 
   assert.deepEqual(await inv.deliverInvitation(mk({ sent: true }, true), input), { emailSent: true });
   assert.deepEqual(await inv.deliverInvitation(mk(notConfigured, true), input), { emailSent: false, emailFailureReason: "not_configured", inviteUrl: "https://app/convite/tok" });
   assert.deepEqual(await inv.deliverInvitation(mk(notConfigured, false), input), { emailSent: false, emailFailureReason: "not_configured" });
-  assert.deepEqual(await inv.deliverInvitation(mk({ sent: false, reason: "provider_error" }, true), input), { emailSent: false, emailFailureReason: "provider_error" });
+  assert.deepEqual(await inv.deliverInvitation(mk({ sent: false, reason: "provider_error" }, true), input), { emailSent: false, emailFailureReason: "provider_error", inviteUrl: "https://app/convite/tok" });
   assert.deepEqual(await inv.deliverInvitation({ buildUrl: () => null, revealUrl: true, send: async () => notConfigured }, input), { emailSent: false, emailFailureReason: "not_configured" });
   assert.equal(emailLib.canRevealInviteUrl({ NODE_ENV: "production" }), false);
   assert.equal(emailLib.canRevealInviteUrl({ NODE_ENV: "development" }), true);
@@ -420,6 +420,19 @@ test("fake respeita @@unique([userId, provider]) de UserIdentity", async () => {
   await assert.rejects(repo.createIdentity({ userId: "u1", provider: "google", sub: "s2", email: "a@x.com", now: T0 }), (e) => e.code === "P2002");
   await assert.rejects(repo.createIdentity({ userId: "u2", provider: "google", sub: "s1", email: "b@x.com", now: T0 }), (e) => e.code === "P2002");
   await repo.createIdentity({ userId: "u1", provider: "outro", sub: "s1", email: "a@x.com", now: T0 });
+});
+
+test("entrega: ambiente de teste devolve link quando o provedor configurado recusa o destinatario", async () => {
+  const { repo } = makeRepo();
+  let attempts = 0;
+  const c = await create(repo);
+  const d = await inv.deliverInvitation({
+    buildUrl: (token) => `https://app/convite/${token}`,
+    revealUrl: true,
+    send: async () => { attempts += 1; return { sent: false, reason: "unverified_domain_or_test_recipient" }; },
+  }, { token: c.token, email: c.invitation.email, role: "STAFF", clinicName: "C", inviterName: "N" });
+  assert.equal(attempts, 1);
+  assert.deepEqual(d, { emailSent: false, emailFailureReason: "unverified_domain_or_test_recipient", inviteUrl: `https://app/convite/${c.token}` });
 });
 
 test("entrega: o motivo estavel da falha acompanha emailSent:false na criacao e no reenvio (e so ele)", async () => {

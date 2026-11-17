@@ -27,7 +27,13 @@ export const procedureSelect = {
   ...procedureImageSelect, ...technicalSheetSelect,
 } as const;
 
-export function serializeProcedure<T extends ImageFields & { technicalSheet: Parameters<typeof serializeTechnicalSheet>[0] }>({ technicalSheet, ...procedure }: T) {
+// includeSheet = a clinica tem o recurso technicalSheet. Sem ele a ficha (materiais, quantidades) e a marca de revisao dela NAO
+// saem na resposta (os dados continuam no banco). O procedimento em si (nome, preco, duracao, imagem) sempre sai.
+export function serializeProcedure<T extends ImageFields & { technicalSheet: Parameters<typeof serializeTechnicalSheet>[0] }>({ technicalSheet, ...procedure }: T, includeSheet = true) {
+  if (!includeSheet) {
+    const { materialsNeedReview: _review, ...withoutSheet } = procedure as T & { materialsNeedReview?: unknown };
+    return { ...withImage(withoutSheet as unknown as Omit<T, "technicalSheet">) };
+  }
   return { ...withImage(procedure), technicalSheet: serializeTechnicalSheet(technicalSheet) };
 }
 

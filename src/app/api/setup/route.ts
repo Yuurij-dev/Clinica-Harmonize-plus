@@ -1,31 +1,37 @@
 import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, hasFeature } from "@/lib/plan-guards";
 import { denyUnless } from "@/lib/api-guards";
 import { prisma } from "@/lib/prisma";
 import { loadSetupSnapshot } from "@/lib/setup-snapshot";
-import { SETUP_FIRST_STEP, canDecide, evaluateSetup, isSetupStatus, isSetupStepKey, parseSetupDecisions, type SetupStatus, type SetupStepKey } from "@/lib/setup-rules";
+import { SETUP_FIRST_STEP, SETUP_STEPS, canDecide, evaluateSetup, setupUnavailableSteps, isSetupStatus, isSetupStepKey, parseSetupDecisions, type SetupStatus, type SetupStepKey } from "@/lib/setup-rules";
 
 type SetupRow = { status: string; currentStep: string; decisions: Prisma.JsonValue; };
 
 const setupSelect = { status: true, currentStep: true, decisions: true } as const;
 
-async function buildPayload(clinicId: string) {
+async function buildPayload(clinicId: string, unavailable: SetupStepKey[]) {
   const [row, snapshot] = await Promise.all([
     prisma.clinicSetup.findUnique({ where: { clinicId }, select: setupSelect }),
     loadSetupSnapshot(clinicId),
   ]);
   if (!snapshot) return null;
-  return payloadFrom(row, snapshot);
+  return payloadFrom(row, snapshot, unavailable);
 }
 
-function payloadFrom(row: SetupRow | null, snapshot: NonNullable<Awaited<ReturnType<typeof loadSetupSnapshot>>>) {
+function payloadFrom(row: SetupRow | null, snapshot: NonNullable<Awaited<ReturnType<typeof loadSetupSnapshot>>>, unavailable: SetupStepKey[]) {
   const status: SetupStatus = row && isSetupStatus(row.status) ? row.status : "pending";
-  const currentStep: SetupStepKey = row && isSetupStepKey(row.currentStep) ? row.currentStep : SETUP_FIRST_STEP;
-  const evaluation = evaluateSetup(snapshot, parseSetupDecisions(row?.decisions), status === "completed");
+  const storedStep: SetupStepKey = row && isSetupStepKey(row.currentStep) ? row.currentStep : SETUP_FIRST_STEP;
+  const evaluation = evaluateSetup(snapshot, parseSetupDecisions(row?.decisions), status === "completed", unavailable);
+  // A etapa atual nunca aponta para uma etapa indisponivel no plano: cai na proxima disponivel.
+  const currentStep: SetupStepKey = unavailable.includes(storedStep)
+    ? SETUP_STEPS.slice(SETUP_STEPS.findIndex((step) => step.key === storedStep)).find((step) => !unavailable.includes(step.key))?.key ?? SETUP_FIRST_STEP
+    : storedStep;
   return {
     status,
     currentStep,
+    unavailableSteps: unavailable,
     ...evaluation,
     summary: {
       clinicName: snapshot.name,
@@ -33,15 +39,14 @@ function payloadFrom(row: SetupRow | null, snapshot: NonNullable<Awaited<ReturnT
       professionals: snapshot.professionalCount,
       pendingInvitations: snapshot.pendingInvitations,
       procedures: snapshot.procedureCount,
-      materials: snapshot.materialCount,
-      products: snapshot.productCount,
-      recurringExpenses: snapshot.recurringExpenseCount,
+      ...(unavailable.includes("materiais") ? {} : { materials: snapshot.materialCount }),
+      ...(unavailable.includes("produtos") ? {} : { products: snapshot.productCount }),
+      ...(unavailable.includes("financeiro") ? {} : { recurringExpenses: snapshot.recurringExpenseCount }),
       hours: { opening: snapshot.openingTime, closing: snapshot.closingTime, professionalOpening: snapshot.professionalOpeningTime, professionalClosing: snapshot.professionalClosingTime },
       alerts: {
         appointments: snapshot.appointmentNotificationsEnabled,
         sound: snapshot.appointmentNotificationSoundEnabled,
-        stock: snapshot.stockNotificationsEnabled,
-        expiryWarningDays: snapshot.expiryWarningDays,
+        ...(unavailable.includes("produtos") ? {} : { stock: snapshot.stockNotificationsEnabled, expiryWarningDays: snapshot.expiryWarningDays }),
       },
     },
   };
@@ -52,14 +57,16 @@ export async function GET() {
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   const denied = denyUnless(user, "settings:manage");
   if (denied) return denied;
-  const payload = await buildPayload(user.clinicId);
+  const payload = await buildPayload(user.clinicId, setupUnavailableSteps((feature) => hasFeature(user, feature)));
   if (!payload) return NextResponse.json({ message: "Clínica não encontrada." }, { status: 404 });
   return NextResponse.json(payload);
 }
 
 export async function PATCH(request: Request) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const denied = denyUnless(user, "settings:manage");
   if (denied) return denied;
 
@@ -110,5 +117,5 @@ export async function PATCH(request: Request) {
     update: data,
     select: setupSelect,
   }) : row;
-  return NextResponse.json(payloadFrom(saved, snapshot));
+  return NextResponse.json(payloadFrom(saved, snapshot, setupUnavailableSteps((feature) => hasFeature(user, feature))));
 }

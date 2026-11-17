@@ -26,6 +26,7 @@ import type { Product } from "@/types/clinic";
 import { sendJson } from "@/lib/send-json";
 import { ProcedureImage } from "./procedure-image";
 import { readTechnicalSheet, TechnicalSheetEditor, type TechnicalSheetItem } from "./technical-sheet-editor";
+import { useHasFeature } from "./current-user";
 
 export const procedureCatalogCacheKey = "/api/procedure-catalog?limit=100";
 
@@ -96,6 +97,7 @@ export function ProcedureFormModal({ open, editing, procedures, materials, onClo
   const [busy, setBusy] = useState(false);
   const step = selection ? "configure" : "choose";
 
+  const hasSheetPlan = useHasFeature("technicalSheet");
   return (
     <Modal
       open={open}
@@ -103,7 +105,7 @@ export function ProcedureFormModal({ open, editing, procedures, materials, onClo
       closeOnOverlayClick={!busy}
       panelClassName="max-w-2xl"
       title={editing ? "Editar procedimento" : step === "choose" ? "Novo procedimento" : "Configurar procedimento"}
-      description={step === "choose" ? "Escolha um procedimento do catálogo ou crie um personalizado." : "Defina valor, duração, margem e os materiais usados em cada atendimento."}
+      description={step === "choose" ? "Escolha um procedimento do catálogo ou crie um personalizado." : (hasSheetPlan ? "Defina valor, duração, margem e os materiais usados em cada atendimento." : "Defina valor e duração do procedimento.")}
     >
       {selection ? (
         <ConfigureStep
@@ -222,6 +224,8 @@ function ConfigureStep({ editing, selection, procedures, materials, onBack, onSa
   onBusy: (busy: boolean) => void;
 }) {
   const isCatalogNew = selection.kind === "catalog" && !editing;
+  // Sem o recurso ficha técnica o procedimento é cadastrado normalmente, sem editor e sem enviar technicalSheet.
+  const hasSheet = useHasFeature("technicalSheet");
   const nameEditable = !isCatalogNew;
   const [name, setName] = useState(selection.kind === "catalog" ? selection.item.name : selection.name);
   const [pick, setPick] = useState<Pick>(editing ? { kind: "keep" } : { kind: "none" });
@@ -266,13 +270,15 @@ function ConfigureStep({ editing, selection, procedures, materials, onBack, onSa
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const sheet = readTechnicalSheet(form, materialOptions);
+    const sheet = hasSheet ? readTechnicalSheet(form, materialOptions) : { items: [] };
     if (sheet.error !== undefined) { fail(sheet.error); return; }
     const fields = {
       price: parseCurrency(form.get("price")),
       durationMinutes: parseInteger(form.get("duration")),
       technicalSheet: sheet.items,
     };
+    // Sem o recurso a chave nem vai no corpo (a ficha antiga, se existir, fica intacta no servidor).
+    const bodyFields = hasSheet ? fields : { price: fields.price, durationMinutes: fields.durationMinutes } as typeof fields;
     const problem = findFieldProblem({ name: nameEditable ? name : undefined, ...fields });
     if (problem) { fail(problem.message, problem.field); return; }
     if (nameEditable && nameAlreadyUsed(name, procedures, editing?.id)) { fail("Já existe um procedimento com este nome.", "name"); return; }
@@ -284,8 +290,8 @@ function ConfigureStep({ editing, selection, procedures, materials, onBack, onSa
     if ("error" in image) { setSaving(false); onBusy(false); fail(image.error); return; }
 
     const response = editing
-      ? await sendJson(`/api/procedures/${encodeURIComponent(editing.id)}`, "PATCH", buildPatchBody(name, image, fields))
-      : await sendJson("/api/procedures", "POST", selection.kind === "catalog" ? buildCatalogCreateBody(selection.item.id, fields) : buildCustomCreateBody(name, image, fields));
+      ? await sendJson(`/api/procedures/${encodeURIComponent(editing.id)}`, "PATCH", buildPatchBody(name, image, bodyFields))
+      : await sendJson("/api/procedures", "POST", selection.kind === "catalog" ? buildCatalogCreateBody(selection.item.id, bodyFields) : buildCustomCreateBody(name, image, bodyFields));
     setSaving(false);
     onBusy(false);
     if (!response.ok) { fail(response.data?.message ?? "Não foi possível salvar o procedimento.", response.status === 409 && nameEditable ? "name" : null); return; }
@@ -376,7 +382,7 @@ function ConfigureStep({ editing, selection, procedures, materials, onBack, onSa
         <FormField label="Duração (minutos)" htmlFor="procedure-duration"><MaskedInput {...invalidProps("duration")} id="procedure-duration" className={fieldClassName} formatter={(value) => formatInteger(value, 4)} name="duration" inputMode="numeric" defaultValue={editing ? String(editing.durationMinutes) : ""} placeholder="60" required /></FormField>
       </div>
 
-      <TechnicalSheetEditor materials={materialOptions} defaultValue={editing?.technicalSheet ?? []} materialsNeedReview={editing?.materialsNeedReview} onCatalogProduct={(product) => setCatalogMaterials((current) => current.some((item) => item.id === product.id) ? current : [...current, product])} />
+      {hasSheet ? <TechnicalSheetEditor materials={materialOptions} defaultValue={editing?.technicalSheet ?? []} materialsNeedReview={editing?.materialsNeedReview} onCatalogProduct={(product) => setCatalogMaterials((current) => current.some((item) => item.id === product.id) ? current : [...current, product])} /> : null}
 
       {error ? <p id="procedure-form-error" role="alert" className="rounded-[7px] bg-destructive/10 px-3 py-2 text-xs font-semibold text-destructive">{error}</p> : null}
       <div className="flex flex-col-reverse justify-end gap-2 sm:flex-row">

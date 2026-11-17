@@ -2,8 +2,9 @@ import type { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { canForUser } from "@/lib/permissions";
+import { denyUnlessFeature } from "@/lib/plan-guards";
 import { clinicToday, dateOnly } from "@/lib/clinic-time";
-import { ensureRecurringOccurrences, optionalDateBounds, parsePagination, paymentDayBounds, requestedDateRange } from "@/lib/finance";
+import { optionalDateBounds, parsePagination, paymentDayBounds, requestedDateRange } from "@/lib/finance";
 import { accountStatus } from "@/lib/finance-rules";
 import { prisma } from "@/lib/prisma";
 
@@ -19,6 +20,8 @@ export async function GET(request: Request) {
   const kind = params.get("kind");
   if (kind !== "receivable" && kind !== "payable") return NextResponse.json({ message: "Informe kind=receivable ou kind=payable." }, { status: 400 });
   if (!canForUser(user, kind === "receivable" ? "payments:access" : "finance:manage")) return NextResponse.json({ message: "Acesso restrito." }, { status: 403 });
+  const planDenied = denyUnlessFeature(user, "finance", "read");
+  if (planDenied) return planDenied;
 
   const status = params.get("status") || "open";
   const q = (params.get("q") ?? "").trim().slice(0, 100);
@@ -73,7 +76,6 @@ export async function GET(request: Request) {
     });
   }
 
-  await ensureRecurringOccurrences(user.clinicId);
   const base: Prisma.ExpenseWhereInput = {
     clinicId: user.clinicId,
     status: { not: "cancelled" },

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, hasFeature } from "@/lib/plan-guards";
+import { quoteForPlan, quoteWithoutCostFields, storedQuoteCosts } from "@/lib/plan-data";
 import { serializeQuote, toCents } from "@/lib/finance";
 import { prisma } from "@/lib/prisma";
 import { can, quoteChangeAllowed, quoteProfessional } from "@/lib/permissions";
@@ -8,8 +10,10 @@ import { quoteCostSnapshot } from "@/lib/quote-cost-snapshot";
 import { denyUnless } from "@/lib/api-guards";
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const denied = denyUnless(user, "quotes:manage");
   if (denied) return denied;
   const body = await request.json().catch(() => null) as { status?: string; items?: string; details?: QuoteLineInput[]; total?: number; paymentMethod?: string; installments?: number; notes?: string; evaluationId?: string } | null;
@@ -35,7 +39,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     });
     if (!evaluation) return NextResponse.json({ message: "A avaliação não pertence ao mesmo paciente, clínica e jornada deste orçamento." }, { status: 400 });
   }
-  const details = body?.details === undefined ? undefined : await quoteDetails(body.details, user.clinicId, user.id, user.role);
+  const details = body?.details === undefined ? undefined : await quoteDetails(body.details, user.clinicId, user.id, user.role, hasFeature(user, "costs"), existing.details);
   if (body?.details !== undefined && !details) return NextResponse.json({ message: "Revise os procedimentos, quantidades e descontos do orçamento." }, { status: 400 });
   if (body?.notes !== undefined && (typeof body.notes !== "string" || body.notes.length > 2000)) return NextResponse.json({ message: "As observações devem ter até 2.000 caracteres." }, { status: 400 });
   if (body?.installments !== undefined && (!Number.isInteger(body.installments) || body.installments < 1 || body.installments > 12)) return NextResponse.json({ message: "O número de parcelas deve ficar entre 1 e 12." }, { status: 400 });
@@ -88,14 +92,18 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     // (a sessão é apagada em cascata com o procedimento; orçamento de avaliação sempre cai aqui ao mudar de status).
     await prisma.patientProcedure.deleteMany({ where: { clinicId: user.clinicId, quoteId: quote.id, beforePhoto: null, afterPhoto: null, photoSessions: { none: {} }, sessions: { none: {} } } });
   }
-  return NextResponse.json({ quote: quote ? serializeQuote(quote) : null });
+  return NextResponse.json({ quote: quote ? quoteForPlan(serializeQuote(quote), hasFeature(user, "costs")) : null });
 }
 
-async function quoteDetails(lines: QuoteLineInput[], clinicId: string, userId: string, role: string) {
+async function quoteDetails(lines: QuoteLineInput[], clinicId: string, userId: string, role: string, costsAllowed: boolean, existingDetails: string) {
+  // Sem o recurso `costs`: nunca consulta/forma custos. Se o orçamento já tem retrato de custos (criado no Pro/Premium), ele é
+  // PRESERVADO como estava (nem recalculado, nem zerado) e continua compondo o total; a resposta o omite (quoteForPlan).
+  // Sem retrato histórico, calcula e salva sem custos.
+  const historical = costsAllowed ? null : storedQuoteCosts(existingDetails);
   const [procedures, costSnapshot] = await Promise.all([
     prisma.procedure.findMany({ where: { clinicId }, select: { id: true, name: true, price: true } }),
-    quoteCostSnapshot(clinicId, userId, role),
+    costsAllowed ? quoteCostSnapshot(clinicId, userId, role) : Promise.resolve(historical ?? { laborCents: 0, facilityCents: 0, medicationCents: 0 }),
   ]);
   const calculated = calculateQuote(lines, procedures.map((procedure) => ({ id: procedure.id, name: procedure.name, priceCents: toCents(procedure.price) })), costSnapshot);
-  return calculated ? { ...calculated, costs: costSnapshot } : null;
+  return calculated ? (costsAllowed || historical ? { ...calculated, costs: costSnapshot } : quoteWithoutCostFields(calculated)) : null;
 }

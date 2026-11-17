@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, hasFeature } from "@/lib/plan-guards";
 import { denyUnless } from "@/lib/api-guards";
 import { appointmentHasPassed, clinicNow } from "@/lib/clinic-time";
 import { approvedProcedureNames, isProcedureAppointmentName, splitCombinedProcedureName } from "@/lib/procedure-session-rules";
@@ -137,7 +138,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
         { name: { contains: search, mode: "insensitive" } },
         { procedures: { some: { name: { contains: search, mode: "insensitive" } } } },
         { procedureSessions: { some: { procedureName: { contains: search, mode: "insensitive" } } } },
-        { quotes: { some: { OR: [{ items: { contains: search, mode: "insensitive" } }, { details: { contains: search, mode: "insensitive" } }] } } },
+        // details guarda o retrato de custos em JSON: sem o recurso `costs` a busca não o alcança (items já traz os nomes).
+        { quotes: { some: { OR: [{ items: { contains: search, mode: "insensitive" } }, ...(hasFeature(user, "costs") ? [{ details: { contains: search, mode: "insensitive" as const } }] : [])] } } },
         { appointments: { some: { procedure: { contains: search, mode: "insensitive" } } } },
       ] } : {}),
     };
@@ -154,8 +156,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const patientId = (await params).id;
@@ -175,8 +179,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 }
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const patientDenied = denyUnless(user, "patients:access");
   if (patientDenied) return patientDenied;
   const patientId = (await params).id;

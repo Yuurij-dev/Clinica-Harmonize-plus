@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { parseCollaboratorProfile } from "@/lib/collaborator-profile-rules";
 import { getCurrentUser, invalidateUserAuthCache } from "@/lib/auth";
+import { denyIfReadonly, hasFeature } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 
@@ -20,13 +21,15 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     },
   });
   if (!member) return NextResponse.json({ message: "Colaborador não encontrado nesta clínica." }, { status: 404 });
-  return NextResponse.json({ member });
+  return NextResponse.json({ member: hasFeature(user, "costs") ? member : { ...member, laborCostCents: null } });
 }
 
 // Edita os dados pessoais do colaborador (nome, CPF, endereço). E-mail não muda aqui: é a identidade de login.
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "settings:team")) return NextResponse.json({ message: "Apenas administradores podem alterar os dados da equipe." }, { status: 403 });
   const { id } = await params;
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
@@ -49,5 +52,5 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     where: { id: member.id, clinicId: user.clinicId },
     select: { id: true, role: true, isOwner: true, laborCostCents: true, user: { select: { id: true, name: true, email: true, createdAt: true, cpf: true, postalCode: true, address: true, city: true, state: true, country: true } } },
   });
-  return NextResponse.json({ member: updated });
+  return NextResponse.json({ member: updated && !hasFeature(user, "costs") ? { ...updated, laborCostCents: null } : updated });
 }

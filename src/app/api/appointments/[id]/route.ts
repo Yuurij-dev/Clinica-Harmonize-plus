@@ -3,6 +3,7 @@ import { loadPatientEmailContext } from "@/lib/patient-email-context";
 import { isEmailDeliveryReady } from "@/lib/email";
 import { sendAppointmentCancelledEmail, sendAppointmentRescheduledEmail } from "@/lib/patient-emails";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, hasFeature } from "@/lib/plan-guards";
 import { appointmentDay, appointmentHasPassed, appointmentInstant, appointmentSlotError, clinicNow, parseAppointmentDay, parseClockMinutes } from "@/lib/clinic-time";
 import { appointmentDurations, appointmentTransactionOptions, lockAppointmentSlots, scheduleConflictError } from "@/lib/appointment-conflict";
 import { appointmentNeedsConflictCheck, cleanProfessionalName, professionalKey } from "@/lib/appointment-conflict-rules";
@@ -15,8 +16,10 @@ import { calendarAppointmentChanged, snapshotsBeforeDelete } from "@/lib/calenda
 const appointmentStatuses = ["Agendado", "Em atendimento", "Atendido", "Finalizado", "Faltou", "Cancelado"];
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
 
   const body = await request.json().catch(() => null) as { status?: string; date?: string; time?: string; procedure?: string; professional?: string; notes?: string; cancellationReason?: string } | null;
   if (!body || [body.status, body.date, body.time, body.procedure, body.professional, body.notes, body.cancellationReason].some((value) => value !== undefined && typeof value !== "string")) {
@@ -96,8 +99,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   if (result === "duplicate") return NextResponse.json({ message: DUPLICATE_PROCEDURE_APPOINTMENT_MESSAGE }, { status: 409 });
   if ("conflict" in result) return NextResponse.json({ message: result.conflict }, { status: 409 });
   if (result.count === 0) return NextResponse.json({ message: "O atendimento já foi iniciado." }, { status: 409 });
-  // Todo atendimento finalizado (na tela ou automaticamente pela agenda) fica com a conferência de materiais pendente.
-  if (body.status === "Atendido") await prisma.appointment.updateMany({ where: { id, clinicId: user.clinicId, materialsCheck: null }, data: { materialsCheck: "pending" } });
+  // Todo atendimento finalizado (na tela ou automaticamente pela agenda) fica com a conferência de materiais pendente, SE a clínica
+  // tem o recurso `stock`. Sem estoque (Start) o atendimento conclui normalmente e nunca fica "pendente" (estado impossível de resolver).
+  if (body.status === "Atendido" && hasFeature(user, "stock")) await prisma.appointment.updateMany({ where: { id, clinicId: user.clinicId, materialsCheck: null }, data: { materialsCheck: "pending" } });
   const appointment = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, include: { patient: { select: { name: true } } } });
   if (appointment) {
     // Google Agenda + e-mail ao profissional (só quando data/hora/profissional/procedimento/cancelamento mudam; o resto é ignorado). Nunca falha a requisição.
@@ -108,7 +112,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     const cancelled = body.status === "Cancelado" && current.status === "Agendado";
     const rescheduled = !cancelled && current.status === "Agendado" && appointment.status === "Agendado" && (oldDate !== newDate || current.time !== appointment.time);
     // E-mail ao paciente depois da resposta; opcional e silencioso, nunca altera o agendamento. Sem motivo de cancelamento (nota interna).
-    if (cancelled || rescheduled) after(async () => {
+    if ((cancelled || rescheduled) && hasFeature(user, "emailNotifications")) after(async () => {
       try {
         if (!isEmailDeliveryReady()) return;
         const context = await loadPatientEmailContext(user.clinicId, current.patientId);
@@ -122,8 +126,10 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 }
 
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   const id = (await params).id;
   const current = await prisma.appointment.findFirst({ where: { id, clinicId: user.clinicId }, select: { status: true, date: true, time: true, procedure: true, professional: true, patientId: true } });
   if (!current) return NextResponse.json({ message: "Agendamento não encontrado." }, { status: 404 });

@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { clinicToday, parseDateOnly } from "@/lib/clinic-time";
 import { expenseSelect, isExpenseCategory, serializeExpense } from "@/lib/finance";
@@ -8,9 +9,13 @@ import { prisma } from "@/lib/prisma";
 
 // Ações: pay (marca como paga), unpay (volta para a pagar), cancel, ou edição dos campos enquanto está a pagar.
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "finance:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const planDenied = denyUnlessFeature(user, "finance", "write");
+  if (planDenied) return planDenied;
   const id = (await params).id;
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   const expense = await prisma.expense.findFirst({ where: { id, clinicId: user.clinicId }, select: { id: true, status: true, source: true } });
@@ -26,12 +31,21 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (expense.status !== "paid") return NextResponse.json({ message: "Esta despesa não está paga." }, { status: 409 });
     data = { status: "open", paidOn: null };
   } else if (body?.action === "cancel") {
-    if (expense.source === "purchase") return NextResponse.json({ message: "Esta despesa veio de uma compra. Cancele a compra no Estoque." }, { status: 409 });
+    if (expense.source === "purchase") {
+      // Compra bloqueada pelo plano (ex.: após downgrade): mensagem de plano, não o "cancele no Estoque" (inacessível). Dado preservado.
+      const featureDenied = denyUnlessFeature(user, "purchases", "write");
+      if (featureDenied) return featureDenied;
+      return NextResponse.json({ message: "Esta despesa veio de uma compra. Cancele a compra no Estoque." }, { status: 409 });
+    }
     if (expense.status === "cancelled") return NextResponse.json({ message: "Esta despesa já está cancelada." }, { status: 409 });
     data = { status: "cancelled", paidOn: null };
   } else {
     if (expense.status !== "open") return NextResponse.json({ message: "Só despesas a pagar podem ser editadas." }, { status: 409 });
-    if (expense.source === "purchase") return NextResponse.json({ message: "Despesas de compra são editadas pela compra." }, { status: 409 });
+    if (expense.source === "purchase") {
+      const featureDenied = denyUnlessFeature(user, "purchases", "write");
+      if (featureDenied) return featureDenied;
+      return NextResponse.json({ message: "Despesas de compra são editadas pela compra." }, { status: 409 });
+    }
     data = {};
     if (body?.description !== undefined) {
       if (typeof body.description !== "string" || !body.description.trim()) return NextResponse.json({ message: "Informe a descrição." }, { status: 400 });

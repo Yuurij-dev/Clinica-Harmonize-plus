@@ -1,13 +1,14 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useCan } from "./current-user";
 import { clinicToday } from "@/lib/clinic-time";
 import { financePeriods, isFinancePeriod, type FinancePeriod } from "@/lib/finance-rules";
 import { FinanceAccounts, type AccountsTab } from "./finance-accounts";
 import { FinanceDashboard } from "./finance-dashboard";
 import { FinanceMovements } from "./finance-movements";
 import { FinanceRecurring } from "./finance-recurring";
-import { LoadingBlock, useFinanceUrl } from "./finance-shared";
+import { invalidateFinanceCache, LoadingBlock, useFinanceUrl } from "./finance-shared";
 
 // Importados por Compras e Estoque.
 export { invalidateFinanceCache, paymentMethods } from "./finance-shared";
@@ -44,6 +45,30 @@ function FinanceRouter() {
   );
 }
 
+// As despesas fixas geram as ocorrências do mês numa ESCRITA autorizada (POST), não nos GETs: ao abrir o Financeiro, quem tem acesso
+// chama a sincronização ANTES de listar. Em somente leitura, sem o recurso no plano ou se o POST falhar, segue direto para a
+// leitura, sem aviso: o 403 aqui não é erro para o usuário. Idempotente (índice único no servidor).
+function useRecurringSync() {
+  const canSync = useCan("finance:access");
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    if (!canSync) return;
+    let active = true;
+    // Timeout: uma requisição pendurada nunca deixa o Financeiro em "carregando"; ao estourar, a lista abre como está.
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 8_000);
+    fetch("/api/recurring-expenses/sync", { method: "POST", cache: "no-store", signal: controller.signal })
+      .then(async (response) => (response.ok ? await response.json() as { created?: number } : null))
+      .then((data) => { if (data?.created) invalidateFinanceCache(); })
+      .catch(() => undefined)
+      .finally(() => { window.clearTimeout(timer); if (active) setDone(true); });
+    return () => { active = false; window.clearTimeout(timer); controller.abort(); };
+  }, [canSync]);
+  return !canSync || done;
+}
+
 export function FinanceSection() {
+  const ready = useRecurringSync();
+  if (!ready) return <LoadingBlock className="py-16" />;
   return <Suspense fallback={<LoadingBlock className="py-16" />}><FinanceRouter /></Suspense>;
 }

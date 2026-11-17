@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { clinicToday, parseDateOnly } from "@/lib/clinic-time";
 import { ensureRecurringOccurrences, expenseSelect, isExpenseCategory, parseRecurringSchedule, recurringNextInfo, recurringSelect, serializeExpense, serializeRecurring } from "@/lib/finance";
@@ -13,13 +14,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
   if (!canForUser(user, "finance:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const planDenied = denyUnlessFeature(user, "finance", "read");
+  if (planDenied) return planDenied;
   const id = (await params).id;
   const rawLimit = new URL(request.url).searchParams.get("limit");
   const limit = rawLimit === null ? historyLimit : Number(rawLimit);
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) return NextResponse.json({ message: "Limite inválido." }, { status: 400 });
   const item = await prisma.recurringExpense.findFirst({ where: { id, clinicId: user.clinicId }, select: recurringSelect });
   if (!item) return NextResponse.json({ message: "Despesa fixa não encontrada." }, { status: 404 });
-  await ensureRecurringOccurrences(user.clinicId);
   const today = clinicToday();
   const [occurrences, info] = await Promise.all([
     prisma.expense.findMany({ where: { clinicId: user.clinicId, recurringExpenseId: id }, orderBy: [{ occurrenceOn: "desc" }, { id: "asc" }], take: limit, select: expenseSelect }),
@@ -38,9 +40,13 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 // ocorrências em aberto (source recurring) com vencimento de hoje em diante são refeitas pela regra;
 // pagas, canceladas e as já vencidas ficam intactas.
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "finance:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const planDenied = denyUnlessFeature(user, "finance", "write");
+  if (planDenied) return planDenied;
   const id = (await params).id;
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   const current = await prisma.recurringExpense.findFirst({ where: { id, clinicId: user.clinicId }, select: { id: true, startsOn: true, endsOn: true, frequency: true, weekday: true, dayOfMonth: true, month: true } });
@@ -104,9 +110,13 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
 // Remove a despesa fixa e as ocorrências não pagas. Com alguma ocorrência paga: 409 (use "encerrar", endsOn).
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "finance:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const planDenied = denyUnlessFeature(user, "finance", "write");
+  if (planDenied) return planDenied;
   const id = (await params).id;
   const current = await prisma.recurringExpense.findFirst({ where: { id, clinicId: user.clinicId }, select: { id: true } });
   if (!current) return NextResponse.json({ message: "Despesa fixa não encontrada." }, { status: 404 });

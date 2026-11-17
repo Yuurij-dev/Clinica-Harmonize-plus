@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { denyIfReadonly, denyUnlessFeature } from "@/lib/plan-guards";
 import { canForUser } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { lockLots, lotBalances, movementTypes } from "@/lib/stock";
@@ -9,9 +10,13 @@ import { roundQuantity } from "@/lib/stock-rules";
 // É recusado se o saldo de algum lote já não cobre o que a compra adicionou
 // (parte dele saiu do estoque): nesse caso, corrija com um ajuste.
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const user = await getCurrentUser({ requireActiveTrial: true });
+  const user = await getCurrentUser();
   if (!user) return NextResponse.json({ message: "Não autenticado." }, { status: 401 });
+  const readonlyDenied = denyIfReadonly(user);
+  if (readonlyDenied) return readonlyDenied;
   if (!canForUser(user, "purchases:manage")) return NextResponse.json({ message: "Acesso restrito a administradores." }, { status: 403 });
+  const featureDenied = denyUnlessFeature(user, "purchases", "write");
+  if (featureDenied) return featureDenied;
   const body = await request.json().catch(() => null) as { action?: string } | null;
   if (body?.action !== "cancel" && body?.action !== "restore") return NextResponse.json({ message: "Ação inválida." }, { status: 400 });
   const id = (await params).id;

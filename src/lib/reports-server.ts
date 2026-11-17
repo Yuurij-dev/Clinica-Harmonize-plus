@@ -3,7 +3,7 @@
 import { clinicToday, dateOnly } from "./clinic-time";
 import { addDays } from "./finance-rules";
 import { prisma } from "./prisma";
-import type { ReportAccess } from "./reports-access";
+import { costsAreHidden, type ReportAccess } from "./reports-access";
 import { buildInsights } from "./reports-insights";
 import {
   alignSeries, averageTicket, changePct, changePp, clientStats, consumptionStats, cumulativeSeries, doneInRange, doneStatuses, financeSummary,
@@ -82,7 +82,7 @@ async function queryCatalog(ctx: ReportContext): Promise<ProcedureCatalogEntry[]
     // Custo de material só é conhecido com ficha técnica E custo cadastrado em todos os itens (costCents 0 = sem custo, não R$ 0,00).
     const sheet = procedure.technicalSheet;
     // PROFESSIONAL (escopo forçado) nunca recebe custo de material nem margem (derivam do custo de estoque): aplicado aqui, no dado.
-    const reason = ctx.access.forcedProfessional ? "restricted" : sheet.length === 0 ? "no_sheet" : sheet.some((item) => item.product.costCents <= 0) ? "item_without_cost" : null;
+    const reason = costsAreHidden(ctx.access) ? "restricted" : sheet.length === 0 ? "no_sheet" : sheet.some((item) => item.product.costCents <= 0) ? "item_without_cost" : null;
     return {
       name: procedure.name,
       priceCents: Math.round(procedure.price * 100),
@@ -152,6 +152,16 @@ async function periodMetrics(ctx: ReportContext, range: ReportRange, rows: Appoi
 }
 
 const limitations = { revenueByProfessional: "payment_without_professional", categories: "category_not_registered" } as const;
+
+// ---------- Filtro de profissionais (Pro: não depende da visão geral) ----------
+
+// Mesmo recorte da visão geral: só quem pode escolher profissional recebe a lista (clínica da sessão); PROFESSIONAL (escopo
+// forçado) recebe lista vazia e nunca a equipe. Só nomes: sem valores, custos nem contagens.
+export async function reportProfessionalNames(ctx: ReportContext): Promise<string[]> {
+  if (!ctx.access.canChooseProfessional) return [];
+  const rows = await prisma.appointment.groupBy({ by: ["professional"], where: { clinicId: ctx.clinicId } });
+  return rows.map((row) => row.professional).sort((a, b) => a.localeCompare(b, "pt-BR"));
+}
 
 // ---------- Visão geral ----------
 
@@ -361,7 +371,7 @@ export async function stockReport(ctx: ReportContext) {
       productId: movement.product.id,
       productName: movement.product.name,
       unit: movement.product.unit,
-      costCents: ctx.access.forcedProfessional ? 0 : movement.product.costCents, // PROFESSIONAL não recebe custo
+      costCents: costsAreHidden(ctx.access) ? 0 : movement.product.costCents, // PROFESSIONAL e clinica sem estoque nao recebem custo
       quantity: -movement.quantity,
       day: clinicToday(movement.attendanceDate ?? movement.createdAt),
       appointmentProcedure: movement.appointment?.procedure ?? null,
@@ -372,7 +382,7 @@ export async function stockReport(ctx: ReportContext) {
   return {
     range: ctx.range,
     appliedProfessional: ctx.professional,
-    costNote: ctx.access.forcedProfessional ? "Custos não são exibidos para o seu perfil (escopo de profissional)." : stats.movementsWithoutCost > 0 ? `Custo estimado pelo custo atual do item. ${stats.movementsWithoutCost} movimento(s) de itens sem custo cadastrado ficaram fora (custo "—", não R$ 0,00).` : "Custo estimado pelo custo atual do item.",
+    costNote: costsAreHidden(ctx.access) ? "Custos não são exibidos para o seu perfil ou plano." : stats.movementsWithoutCost > 0 ? `Custo estimado pelo custo atual do item. ${stats.movementsWithoutCost} movimento(s) de itens sem custo cadastrado ficaram fora (custo "—", não R$ 0,00).` : "Custo estimado pelo custo atual do item.",
     granularity: ctx.granularity,
     ...stats,
   };

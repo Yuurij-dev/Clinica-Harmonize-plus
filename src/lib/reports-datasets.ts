@@ -5,6 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { clinicToday, dateOnly } from "./clinic-time";
 import { addDays } from "./finance-rules";
 import { prisma } from "./prisma";
+import { costsAreHidden } from "./reports-access";
 import { MAX_TABLE_ROWS } from "./reports-document";
 import { appointmentStats, doneSeries, executionSeries, procedureProfessionals, professionalExtras, quoteFunnel, visitDistribution } from "./reports-extra-rules";
 import { doneInRange, type ReportRange } from "./reports-rules";
@@ -120,7 +121,7 @@ export async function stockPositionDataset(ctx: ReportContext) {
     warningDays,
   });
   // PROFESSIONAL (escopo forçado) não vê custo: zera custo unitário/valor aqui, no dado, e sinaliza costHidden.
-  if (ctx.access.forcedProfessional) {
+  if (costsAreHidden(ctx.access)) {
     const items = position.items.map((item) => ({ ...item, unitCostCents: null, valueCents: null }));
     return { asOf: ctx.today, warningDays, ...position, items, summary: { ...position.summary, totalValueCents: null, itemsWithoutCost: 0 }, costHidden: true };
   }
@@ -176,7 +177,7 @@ export async function stockMovementsDataset(ctx: ReportContext) {
   const productRows = ids.length ? await prisma.product.findMany({ where: { clinicId: ctx.clinicId, id: { in: ids } }, select: { id: true, name: true, unit: true, kind: true, costCents: true } }) : [];
   // PROFESSIONAL (escopo forçado) não recebe custo derivado: o custo unitário some aqui, no dado (todos os custos de
   // movimentação e consumo ficam desconhecidos) e o documento omite colunas, KPIs e gráfico de custo (costHidden).
-  const costHidden = Boolean(ctx.access.forcedProfessional);
+  const costHidden = costsAreHidden(ctx.access);
   const products = new Map<string, MovementProduct>(productRows.map((product) => [product.id, costHidden ? { ...product, costCents: 0 } : product]));
   const groups = [
     ...groupsIn.map((group) => ({ productId: group.productId, type: group.type, sign: "in" as const, quantity: group._sum.quantity ?? 0, count: group._count._all })),
