@@ -9,7 +9,7 @@ const existing = {
   legalGuardianName: null, legalGuardianCpf: null, legalGuardianPhone: null, legalGuardianRelationship: null,
   careType: "Particular", insuranceProvider: null, insuranceCardNumber: null, privacyConsentAt: "2026-11-03T12:00:00.000Z", whatsappReminders: false,
 };
-const full = { fullCpf: true };
+const full = { fullCpf: true, clinicalWrite: true };
 
 test("formValuesFromRecord converte data, CEP e telefone para o formato do formulário", () => {
   const values = formValuesFromRecord({ ...existing, postalCode: "01310100", emergencyContactPhone: "11987654321" });
@@ -105,4 +105,32 @@ test("responsável legal sem birthDate é recusado com fields", () => {
 test("age isolado é ignorado quando o registro já tem data de nascimento", () => {
   assert.deepEqual(buildPatientUpdate({ age: 50 }, existing, full).data, {});
   assert.equal(buildPatientUpdate({ age: 50 }, { ...existing, birthDate: null }, full).data.age, 50);
+});
+
+// Dado clínico (regra permanente): alergias/medicações/notas de saúde só são gravadas com clinicalWrite. A API já recusa
+// a requisição inteira se vier sem clinicalWrite e esses campos estiverem no corpo (ver src/app/api/patients/[id]/route.ts);
+// esta é a segunda camada, para nunca gravar mesmo se outro chamador pular a checagem da rota.
+test("dado clínico: allergies/currentMedications/healthNotes só entram em data com clinicalWrite", () => {
+  const withClinical = buildPatientUpdate({ allergies: "Penicilina", currentMedications: "Losartana", healthNotes: "Hipertensa" }, existing, full);
+  assert.equal(withClinical.ok, true);
+  assert.deepEqual(withClinical.data, { allergies: "Penicilina", currentMedications: "Losartana", healthNotes: "Hipertensa" });
+
+  const withoutClinical = buildPatientUpdate({ allergies: "Penicilina", currentMedications: "Losartana", healthNotes: "Hipertensa" }, existing, { fullCpf: true, clinicalWrite: false });
+  assert.equal(withoutClinical.ok, true);
+  assert.deepEqual(withoutClinical.data, {});
+});
+
+test("dado clínico: limpar com string vazia vira null, só com clinicalWrite", () => {
+  const record = { ...existing, allergies: "Penicilina", currentMedications: "Losartana", healthNotes: "Hipertensa" };
+  assert.deepEqual(buildPatientUpdate({ allergies: "" }, record, full).data, { allergies: null });
+  assert.deepEqual(buildPatientUpdate({ allergies: "" }, record, { fullCpf: true, clinicalWrite: false }).data, {});
+});
+
+test("dado clínico: campos existentes de saúde não são apagados ao editar outra coisa sem clinicalWrite", () => {
+  const record = { ...existing, allergies: "Penicilina", currentMedications: "Losartana", healthNotes: "Hipertensa" };
+  const result = buildPatientUpdate({ profession: "Dentista" }, record, { fullCpf: true, clinicalWrite: false });
+  assert.equal(result.ok, true);
+  assert.equal("allergies" in result.data, false);
+  assert.equal("currentMedications" in result.data, false);
+  assert.equal("healthNotes" in result.data, false);
 });

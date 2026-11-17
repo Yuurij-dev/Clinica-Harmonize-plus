@@ -10,13 +10,16 @@ import { formatCep, formatCpf, formatDate, formatPhone } from "@/lib/input-masks
 import { isMaskedCpf } from "@/lib/patient-cpf-mask";
 import { emptyPatientFormValues, type PatientFormValues } from "@/lib/patient-update-rules";
 import { birthDateFromPtBr, fieldMaxLength, isMinorBirthDate, referralSources, relationshipOptions, sexOptions, PRIVACY_CONSENT_TEXT, validateRegistration } from "@/lib/patient-registration-rules";
+import { useCan } from "./current-user";
 
 type Values = PatientFormValues;
 
+// Alergias/medicações/notas de saúde moram dentro da seção "insurance" ("Convênio e saúde"); não há seção própria.
 type SectionId = "personal" | "address" | "emergency" | "insurance";
 // Qual seção recolhível contém cada campo validado (para abrir sozinha quando há erro).
 const sectionOfField: Record<string, SectionId> = {
   postalCode: "address", emergencyContactPhone: "emergency", insuranceProvider: "insurance", insuranceCardNumber: "insurance",
+  allergies: "insurance", currentMedications: "insurance", healthNotes: "insurance",
 };
 
 export type NewPatientResult = { ok: true } | { ok: false; message: string; fields?: Record<string, string>; existingPatientId?: string };
@@ -24,11 +27,11 @@ export type NewPatientResult = { ok: true } | { ok: false; message: string; fiel
 type TextOptions = { label: string; required?: boolean; format?: (value: string) => string; placeholder?: string; inputMode?: "numeric" | "tel" | "email" | "text"; maxLength?: number; autoComplete?: string; onValue?: (value: string) => void; type?: string };
 type TextKey = { [K in keyof Values]: Values[K] extends string ? K : never }[keyof Values];
 
-const sectionHasData = (section: SectionId, values: Values) => ({
+const sectionHasData = (section: SectionId, values: Values, canSeeHealth: boolean) => ({
   personal: [values.socialName, values.sex, values.profession, values.referralSource],
   address: [values.postalCode, values.address, values.addressNumber, values.addressComplement, values.neighborhood, values.city, values.state],
   emergency: [values.emergencyContactName, values.emergencyContactPhone, values.emergencyContactRelationship],
-  insurance: [values.careType === "Convênio" ? "x" : ""],
+  insurance: [values.careType === "Convênio" ? "x" : "", ...(canSeeHealth ? [values.allergies, values.currentMedications, values.healthNotes] : [])],
 })[section].some(Boolean);
 
 // Formulário único do cadastro ("create") e da edição de um cliente existente ("edit"): mesmos campos, seções e regras.
@@ -45,6 +48,10 @@ export function PatientForm({ saving, onSubmit, onCancel, onOpenExisting, mode =
   consentAt?: string | null;
 }) {
   const editing = mode === "edit";
+  // Alergias/medicações/notas de saúde são dado clínico (regra permanente). Mesma permissão do cadastro de paciente
+  // (anamnesis:write, não clinical:write — fica consistente com POST /api/patients): sem ela a seção não aparece e
+  // nada é enviado por este formulário (a API recusa de todo jeito, mas a tela já não oferece o que seria negado).
+  const canSeeHealth = useCan("anamnesis:write");
   const validate = (next: Values) => {
     const found = validateRegistration(editing ? { ...next, privacyConsent: true } : next, undefined, { editing });
     // CPF do responsável mascarado (vindo do servidor) = manter o atual.
@@ -55,10 +62,11 @@ export function PatientForm({ saving, onSubmit, onCancel, onOpenExisting, mode =
   const formRef = useRef<HTMLFormElement>(null);
   const [values, setValues] = useState<Values>(initialValues ?? emptyPatientFormValues);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [open, setOpen] = useState<Set<SectionId>>(() => new Set(editing && initialValues ? (["personal", "address", "emergency", "insurance"] as SectionId[]).filter((section) => sectionHasData(section, initialValues)) : []));
+  const [open, setOpen] = useState<Set<SectionId>>(() => new Set(editing && initialValues ? (["personal", "address", "emergency", "insurance"] as SectionId[]).filter((section) => sectionHasData(section, initialValues, canSeeHealth)) : []));
   const [attempt, setAttempt] = useState<{ tick: number; fields: string[] }>({ tick: 0, fields: [] });
   const [serverError, setServerError] = useState<{ message: string; existingPatientId?: string } | null>(null);
   const [cepStatus, setCepStatus] = useState("");
+  const cepRequest = useRef<{ id: number; controller: AbortController | null }>({ id: 0, controller: null });
   const birth = birthDateFromPtBr(values.birthDate);
   const minor = isMinorBirthDate(values.birthDate);
   const errorCount = Object.keys(errors).length;
@@ -103,15 +111,23 @@ export function PatientForm({ saving, onSubmit, onCancel, onOpenExisting, mode =
     if (!errors[name]) shake([name]);
   }
 
+  useEffect(() => () => cepRequest.current.controller?.abort(), []);
+
   async function lookupCep(cep: string) {
+    cepRequest.current.controller?.abort();
+    const controller = new AbortController();
+    const requestId = ++cepRequest.current.id;
+    cepRequest.current.controller = controller;
     setCepStatus("Buscando endereço...");
     try {
-      const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
+      const response = await fetch(`https://viacep.com.br/ws/${cep}/json/`, { signal: controller.signal });
       const data = await response.json() as { erro?: boolean; logradouro?: string; bairro?: string; localidade?: string; uf?: string };
+      if (requestId !== cepRequest.current.id) return;
       if (!response.ok || data.erro) { setCepStatus("CEP não encontrado. Preencha o endereço manualmente."); return; }
       setValues((current) => ({ ...current, address: data.logradouro || current.address, neighborhood: data.bairro || current.neighborhood, city: data.localidade || current.city, state: data.uf || current.state }));
       setCepStatus("");
     } catch {
+      if (controller.signal.aborted || requestId !== cepRequest.current.id) return;
       setCepStatus("Não foi possível buscar o CEP. Preencha o endereço manualmente.");
     }
   }
@@ -129,6 +145,9 @@ export function PatientForm({ saving, onSubmit, onCancel, onOpenExisting, mode =
     }
     const { privacyConsent, ...rest } = values;
     void privacyConsent;
+    // Sem clinical:write a seção não aparece: nunca manda esses 3 campos na edição (o valor em `values` é sempre "" aqui,
+    // mas enviar a chave mesmo vazia faria a API recusar a edição inteira, como se tentasse apagar um dado que nem vê).
+    if (!canSeeHealth) for (const key of ["allergies", "currentMedications", "healthNotes"] as const) delete rest[key];
     const payload: Record<string, unknown> = editing ? rest : { ...values };
     if (editing && maskedCpf && !values.cpf) delete payload.cpf;
     const result = await onSubmit(payload);
@@ -209,7 +228,7 @@ export function PatientForm({ saving, onSubmit, onCancel, onOpenExisting, mode =
             {select("emergencyContactRelationship", { label: "Parentesco", options: relationshipOptions, empty: "Selecione" })}
           </Section>
 
-          <Section id="insurance" title="Convênio" open={open} onToggle={toggle} uid={uid}>
+          <Section id="insurance" title="Convênio e saúde" open={open} onToggle={toggle} uid={uid}>
             <div className="min-[521px]:col-span-2">
               <Field name="careType" label="Forma de atendimento" uid={uid}>{() => (
                 <div role="radiogroup" aria-label="Forma de atendimento" className="flex gap-2">
@@ -224,6 +243,11 @@ export function PatientForm({ saving, onSubmit, onCancel, onOpenExisting, mode =
             {values.careType === "Convênio" ? <>
               {text("insuranceProvider", { label: "Operadora", required: true })}
               {text("insuranceCardNumber", { label: "Carteirinha", required: true })}
+            </> : null}
+            {canSeeHealth ? <>
+              <Field name="allergies" label="Alergias" uid={uid}>{(a11y) => <textarea {...a11y} name="allergies" value={values.allergies} maxLength={200} onChange={(event) => setValue("allergies", event.target.value)} className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" placeholder="Alergias conhecidas" />}</Field>
+              <Field name="currentMedications" label="Medicamentos em uso" uid={uid}>{(a11y) => <textarea {...a11y} name="currentMedications" value={values.currentMedications} maxLength={200} onChange={(event) => setValue("currentMedications", event.target.value)} className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" placeholder="Medicamentos atuais" />}</Field>
+              <div className="min-[521px]:col-span-2"><Field name="healthNotes" label="Observações de saúde" uid={uid}>{(a11y) => <textarea {...a11y} name="healthNotes" value={values.healthNotes} maxLength={200} onChange={(event) => setValue("healthNotes", event.target.value)} className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" placeholder="Informações relevantes para o atendimento" />}</Field></div>
             </> : null}
           </Section>
 

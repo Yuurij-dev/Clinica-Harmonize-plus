@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { denyIfReadonly } from "@/lib/plan-guards";
+import { denyIfReadonly, hasFeature } from "@/lib/plan-guards";
 import { duplicateCpfResponse, rejectInvalidCpf } from "@/lib/patient-cpf";
 import { canSeeFullCpf, cpfForRole, maskCpf } from "@/lib/patient-cpf-mask";
 import { patientCreatedSelect, patientEditSelect, patientListSelect, withCurrentStage } from "@/lib/patient-list-server";
@@ -8,6 +8,7 @@ import { isPatientIdFormat } from "@/lib/patient-list-rules";
 import { buildPatientUpdate } from "@/lib/patient-update-rules";
 import { prisma } from "@/lib/prisma";
 import { denyUnless } from "@/lib/api-guards";
+import { canForUser } from "@/lib/permissions";
 
 // Um paciente no mesmo formato de um item da lista (abrir o perfil fora da página carregada, ex.: vindo da Agenda).
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -24,11 +25,15 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const record = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: patientEditSelect });
     if (!record) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
     const masked = canSeeFullCpf(user.role, user.rolePermissions) ? record : { ...record, cpf: maskCpf(record.cpf), legalGuardianCpf: maskCpf(record.legalGuardianCpf) };
-    return NextResponse.json({ patient: masked });
+    // Alergias, medicações e notas de saúde são dado clínico (regra permanente). Mesma permissão do cadastro
+    // (POST /api/patients usa anamnesis:write para os 3 campos): sem anamnesis:read saem omitidas (nunca zeradas no
+    // banco), igual ao CPF mascarado acima — o valor existente continua intacto para quem tem acesso.
+    const patientResponse = canForUser(user, "anamnesis:read") ? masked : { ...masked, allergies: null, currentMedications: null, healthNotes: null };
+    return NextResponse.json({ patient: patientResponse });
   }
   const patient = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: patientListSelect });
   if (!patient) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
-  const [withStage] = await withCurrentStage(user.clinicId, [patient]);
+  const [withStage] = await withCurrentStage(user.clinicId, [patient], hasFeature(user, "agendaAutomations")); // avanço automático = automação (Pro+)
   return NextResponse.json({ patient: cpfForRole(user.role, withStage, user.rolePermissions) });
 }
 
@@ -45,13 +50,22 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const body = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!body || typeof body !== "object" || Array.isArray(body)) return NextResponse.json({ message: "Dados do cadastro inválidos." }, { status: 400 });
 
+  // Alergias, medicações e notas de saúde são dado clínico (regra permanente). Mesma permissão do cadastro
+  // (POST /api/patients usa anamnesis:write para os 3 campos, não clinical:write, para não divergir entre criar e
+  // editar o mesmo dado): enviar qualquer um deles sem anamnesis:write é recusado (nunca ignorado em silêncio).
+  const clinicalWrite = canForUser(user, "anamnesis:write");
+  if (!clinicalWrite && ["allergies", "currentMedications", "healthNotes"].some((key) => body[key] !== undefined)) {
+    const clinicalDenied = denyUnless(user, "anamnesis:write");
+    if (clinicalDenied) return clinicalDenied;
+  }
+
   const id = (await params).id;
   if (!isPatientIdFormat(id)) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
   // Registro atual (escopado pela clínica) é a base da edição parcial: campo ausente no corpo = manter.
   const existing = await prisma.patient.findFirst({ where: { id, clinicId: user.clinicId }, select: patientEditSelect });
   if (!existing) return NextResponse.json({ message: "Paciente não encontrado." }, { status: 404 });
 
-  const update = buildPatientUpdate(body, existing, { fullCpf: canSeeFullCpf(user.role, user.rolePermissions) });
+  const update = buildPatientUpdate(body, existing, { fullCpf: canSeeFullCpf(user.role, user.rolePermissions), clinicalWrite });
   if (!update.ok) return NextResponse.json({ message: update.message, ...(update.fields ? { fields: update.fields } : {}) }, { status: 400 });
   const cpfError = await rejectInvalidCpf(user.clinicId, update.data.cpf as string | null | undefined, id);
   if (cpfError) return cpfError;
