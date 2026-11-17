@@ -13,7 +13,7 @@ import { isMascotPose, poseForKey, type MascotPose } from "@/lib/mascot-rules";
 type ModalProps = {
   open: boolean;
   title: string;
-  description?: string;
+  description?: React.ReactNode;
   children: React.ReactNode;
   onClose: () => void;
   overlayContent?: React.ReactNode;

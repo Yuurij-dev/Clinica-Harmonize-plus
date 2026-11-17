@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { getCurrentUser } from "@/lib/auth";
 import { denyUnless } from "@/lib/api-guards";
 import { can } from "@/lib/permissions";
@@ -8,6 +10,7 @@ import { Prisma } from "@prisma/client";
 import { recordReadAudit } from "@/lib/clinical-files-server";
 
 const json = (message: string, status: number) => Response.json({ message }, { status });
+const patientAvatarCache = new Map<string, Uint8Array>();
 
 // A miniatura é servida sob demanda; o JSON da lista de pacientes nunca inclui bytes nem base64 de fotos.
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -15,15 +18,26 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   if (!user) return json("Não autenticado.", 401);
   const denied = denyUnless(user, "patients:access");
   if (denied) return denied;
-  if (!can(user.role, "clinical:read", user.rolePermissions)) return new Response(null, { status: 204, headers: { "Cache-Control": "private, no-store" } });
 
   const patientId = (await params).id;
-  const patient = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true, profilePhotoRef: true } });
+  const patient = await prisma.patient.findFirst({ where: { id: patientId, clinicId: user.clinicId }, select: { id: true, profilePhotoRef: true, sex: true } });
   if (!patient) return json("Paciente não encontrado.", 404);
+
+  // Avatares genéricos não são dados clínicos; usuários com acesso aos pacientes podem vê-los.
+  // A leitura de fotos clínicas continua protegida pela permissão específica.
+  if (!can(user.role, "clinical:read", user.rolePermissions)) {
+    const avatar = await defaultPatientAvatar(patient.sex);
+    if (!avatar) return new Response(null, { status: 204, headers: { "Cache-Control": "private, no-store" } });
+    return new Response(avatar as Uint8Array<ArrayBuffer>, { headers: { "Content-Type": "image/webp", "Content-Length": String(avatar.length), "Cache-Control": "private, no-store", Vary: "Cookie", "X-Content-Type-Options": "nosniff" } });
+  }
 
   const selected = patient.profilePhotoRef ? await loadUsablePhoto(user.clinicId, patientId, patient.profilePhotoRef) : null;
   const chosen = selected ? patient.profilePhotoRef! : await findFallbackRef(user.clinicId, patientId);
-  if (!chosen) return new Response(null, { status: 204, headers: { "Cache-Control": "private, no-store" } });
+  if (!chosen) {
+    const avatar = await defaultPatientAvatar(patient.sex);
+    if (!avatar) return new Response(null, { status: 204, headers: { "Cache-Control": "private, no-store" } });
+    return new Response(avatar as Uint8Array<ArrayBuffer>, { headers: { "Content-Type": "image/webp", "Content-Length": String(avatar.length), "Cache-Control": "private, no-store", Vary: "Cookie", "X-Content-Type-Options": "nosniff" } });
+  }
   const photo = selected ?? await loadPhotoBytes(user.clinicId, patientId, chosen);
   if (!photo) return new Response(null, { status: 204, headers: { "Cache-Control": "private, no-store" } });
 
@@ -33,6 +47,20 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const thumbnail = await makeAvatarThumbnail(photo.bytes);
   if (!thumbnail) return new Response(null, { status: 204, headers: { "Cache-Control": "private, no-store" } });
   return new Response(thumbnail as Uint8Array<ArrayBuffer>, { headers: { "Content-Type": "image/jpeg", "Content-Length": String(thumbnail.length), "Cache-Control": "private, no-store", Vary: "Cookie", "X-Content-Type-Options": "nosniff" } });
+}
+
+async function defaultPatientAvatar(sex: string | null): Promise<Uint8Array | null> {
+  const fileName = sex === "Masculino" ? "patient-avatar-male.webp" : sex === "Feminino" ? "patient-avatar-female.webp" : null;
+  if (!fileName) return null;
+  const cached = patientAvatarCache.get(fileName);
+  if (cached) return cached;
+  try {
+    const bytes = new Uint8Array(await readFile(join(process.cwd(), "public", "images", "patients", fileName)));
+    patientAvatarCache.set(fileName, bytes);
+    return bytes;
+  } catch {
+    return null;
+  }
 }
 
 async function makeAvatarThumbnail(bytes: Uint8Array) {

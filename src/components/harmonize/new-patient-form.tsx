@@ -9,11 +9,11 @@ import { cn } from "@/lib/utils";
 import { formatCep, formatCpf, formatDate, formatPhone } from "@/lib/input-masks";
 import { isMaskedCpf } from "@/lib/patient-cpf-mask";
 import { emptyPatientFormValues, type PatientFormValues } from "@/lib/patient-update-rules";
-import { birthDateFromPtBr, fieldMaxLength, isMinorBirthDate, referralSources, relationshipOptions, sexOptions, PRIVACY_CONSENT_TEXT, validateRegistration } from "@/lib/patient-registration-rules";
+import { birthDateFromPtBr, fieldMaxLength, isMinorBirthDate, relationshipOptions, sexOptions, PRIVACY_CONSENT_TEXT, validateRegistration } from "@/lib/patient-registration-rules";
 
 type Values = PatientFormValues;
 
-type SectionId = "personal" | "address" | "emergency" | "insurance";
+type SectionId = "address" | "emergency" | "insurance";
 // Qual seção recolhível contém cada campo validado (para abrir sozinha quando há erro).
 const sectionOfField: Record<string, SectionId> = {
   postalCode: "address", emergencyContactPhone: "emergency", insuranceProvider: "insurance", insuranceCardNumber: "insurance",
@@ -25,7 +25,6 @@ type TextOptions = { label: string; required?: boolean; format?: (value: string)
 type TextKey = { [K in keyof Values]: Values[K] extends string ? K : never }[keyof Values];
 
 const sectionHasData = (section: SectionId, values: Values) => ({
-  personal: [values.socialName, values.sex, values.profession, values.referralSource],
   address: [values.postalCode, values.address, values.addressNumber, values.addressComplement, values.neighborhood, values.city, values.state],
   emergency: [values.emergencyContactName, values.emergencyContactPhone, values.emergencyContactRelationship],
   insurance: [values.careType === "Convênio" ? "x" : ""],
@@ -174,6 +173,7 @@ export function PatientForm({ saving, onSubmit, onCancel, onOpenExisting, mode =
           {text("cpf", { label: "CPF", required: contactRequired && !editing, format: formatCpf, placeholder: maskedCpf ? `${maskedCpf} (em branco mantém)` : "000.000.000-00", inputMode: "numeric", maxLength: 14 })}
           {text("phone", { label: "Telefone / WhatsApp", required: contactRequired, format: formatPhone, placeholder: "(00) 00000-0000", inputMode: "tel", maxLength: 15, autoComplete: "tel" })}
           <div className="min-[521px]:col-span-2">{text("email", { label: "E-mail", type: "email", inputMode: "email", placeholder: "nome@email.com", autoComplete: "email" })}</div>
+          <div className="min-[521px]:col-span-2">{select("sex", { label: "Sexo", required: true, options: sexOptions, empty: "Selecione o sexo" })}</div>
 
           {minor ? (
             <fieldset className="grid gap-4 rounded-[8px] border border-border bg-[#faf9ff] p-4 min-[521px]:col-span-2 min-[521px]:grid-cols-2">
@@ -184,13 +184,6 @@ export function PatientForm({ saving, onSubmit, onCancel, onOpenExisting, mode =
               <div className="min-[521px]:col-span-2">{select("legalGuardianRelationship", { label: "Parentesco", required: true, options: relationshipOptions, empty: "Selecione" })}</div>
             </fieldset>
           ) : null}
-
-          <Section id="personal" title="Dados pessoais" open={open} onToggle={toggle} uid={uid}>
-            {text("socialName", { label: "Nome social" })}
-            {select("sex", { label: "Sexo", options: sexOptions, empty: "Não informado" })}
-            {text("profession", { label: "Profissão" })}
-            {select("referralSource", { label: "Como nos conheceu", options: referralSources, empty: "Selecione" })}
-          </Section>
 
           <Section id="address" title="Endereço" open={open} onToggle={toggle} uid={uid}>
             {text("postalCode", { label: "CEP", format: formatCep, placeholder: "00000-000", inputMode: "numeric", maxLength: 9, autoComplete: "postal-code", onValue: (value) => { const digits = value.replace(/\D/g, ""); if (digits.length === 8) void lookupCep(digits); else setCepStatus(""); } })}

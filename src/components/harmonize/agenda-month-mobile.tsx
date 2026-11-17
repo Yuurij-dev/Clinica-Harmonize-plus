@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { defaultMonthDay, monthCellDays } from "@/lib/agenda-mobile-rules";
 import { cn } from "@/lib/utils";
+import { PatientAvatar } from "./patient-avatar";
 
-type MonthAppointment = { id: string; date: string; time: string; patient: string; procedure: string; status: string };
+type MonthAppointment = { id: string; patientId: string; date: string; time: string; patient: string; procedure: string; status: string };
 
 const weekdays = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
 const dayKeyOf = (year: number, monthIndex: number, day: number) => `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
@@ -65,6 +66,7 @@ export function AgendaMonthMobile<T extends MonthAppointment>({ date, appointmen
               <li key={item.id}>
                 <button className="flex min-h-14 w-full items-center gap-3 rounded-[8px] border border-border bg-card px-3 py-2 text-left shadow-sm transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" type="button" onClick={() => onSelect(item)}>
                   <span className="w-12 shrink-0 text-sm font-bold tabular-nums text-foreground">{item.time}</span>
+                  <PatientAvatar patientId={item.patientId} name={item.patient} size="xs" />
                   <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-foreground">{item.patient}</span><span className="block truncate text-xs text-muted-foreground">{item.procedure}</span></span>
                   <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold", tone(item).pill)}>{item.status}</span>
                 </button>

@@ -44,21 +44,22 @@ function collectCachedSearchResults(query: string, access: SearchAccess) {
   };
   const dashboard = readClientCache<{
     patients?: Array<{ id: string; name: string; status?: string }>;
-    appointments?: Array<{ id: string; date: string; time: string; procedure: string; status: string; patient?: { name?: string } | null }>;
-    quotes?: Array<{ id: string; items: string; status: string; patient?: { name?: string } | null }>;
+    appointments?: Array<{ id: string; date: string; time: string; procedure: string; status: string; patient?: { id?: string; name?: string } | null }>;
+    quotes?: Array<{ id: string; items: string; status: string; patient?: { id?: string; name?: string } | null }>;
   }>("/api/dashboard/bootstrap");
   if (access.patients) {
-    for (const patient of dashboard?.patients ?? []) add({ id: patient.id, title: patient.name, description: patient.status ?? "", section: "clientes", kind: "Paciente" }, [patient.name, patient.status]);
+    for (const patient of dashboard?.patients ?? []) add({ id: patient.id, title: patient.name, description: patient.status ?? "", section: "clientes", kind: "Paciente", patientId: patient.id, patientName: patient.name }, [patient.name, patient.status]);
     const patientPage = readClientCache<{ patients?: Array<{ id: string; name: string; phone?: string; status?: string }> }>(patientListKey());
-    for (const patient of patientPage?.patients ?? []) add({ id: patient.id, title: patient.name, description: [patient.phone, patient.status].filter(Boolean).join(" · "), section: "clientes", kind: "Paciente" }, [patient.name, patient.phone, patient.status]);
+    for (const patient of patientPage?.patients ?? []) add({ id: patient.id, title: patient.name, description: [patient.phone, patient.status].filter(Boolean).join(" · "), section: "clientes", kind: "Paciente", patientId: patient.id, patientName: patient.name }, [patient.name, patient.phone, patient.status]);
   }
-  if (access.agenda) for (const item of dashboard?.appointments ?? []) add({ id: item.id, title: `${item.patient?.name ?? "Paciente"} · ${item.procedure}`, description: `${item.date} ${item.time} · ${item.status}`, section: "agenda", kind: "Agendamento" }, [item.patient?.name, item.procedure, item.status]);
-  if (access.quotes) for (const item of dashboard?.quotes ?? []) add({ id: item.id, title: item.patient?.name ?? "Orçamento", description: `${item.items} · ${item.status}`, section: "orcamentos", kind: "Orçamento" }, [item.patient?.name, item.items, item.status]);
+  if (access.agenda) for (const item of dashboard?.appointments ?? []) add({ id: item.id, title: `${item.patient?.name ?? "Paciente"} · ${item.procedure}`, description: `${item.date} ${item.time} · ${item.status}`, section: "agenda", kind: "Agendamento", patientId: item.patient?.id, patientName: item.patient?.name }, [item.patient?.name, item.procedure, item.status]);
+  if (access.quotes) for (const item of dashboard?.quotes ?? []) add({ id: item.id, title: item.patient?.name ?? "Orçamento", description: `${item.items} · ${item.status}`, section: "orcamentos", kind: "Orçamento", patientId: item.patient?.id, patientName: item.patient?.name }, [item.patient?.name, item.items, item.status]);
   if (access.quotes) {
-    const data = readClientCache<{ quotes?: Array<{ id: string; items: string; status: string; patient?: string | { name?: string } | null }> }>("/api/quotes");
+    const data = readClientCache<{ quotes?: Array<{ id: string; items: string; status: string; patient?: string | { id?: string; name?: string } | null }> }>("/api/quotes");
     for (const item of data?.quotes ?? []) {
       const patient = typeof item.patient === "string" ? item.patient : item.patient?.name;
-      add({ id: item.id, title: patient ?? "Orçamento", description: `${item.items} · ${item.status}`, section: "orcamentos", kind: "Orçamento" }, [patient, item.items, item.status]);
+      const patientId = typeof item.patient === "string" ? undefined : item.patient?.id;
+      add({ id: item.id, title: patient ?? "Orçamento", description: `${item.items} · ${item.status}`, section: "orcamentos", kind: "Orçamento", patientId, patientName: patient ?? undefined }, [patient, item.items, item.status]);
     }
   }
 
@@ -75,10 +76,11 @@ function collectCachedSearchResults(query: string, access: SearchAccess) {
     for (const item of data?.purchases ?? []) add({ id: item.id, title: item.supplier, description: [item.invoiceNumber, item.purchasedOn].filter(Boolean).join(" · "), section: "compras", kind: "Compra" }, [item.supplier, item.invoiceNumber, item.purchasedOn, ...(item.items ?? []).flatMap((line) => [line.name, line.lotCode])]);
   }
   if (access.payments) {
-    const data = readClientCache<{ payments?: Array<{ id: string; patient?: string | { name?: string } | null; method: string; status: string; date: string }> }>("/api/payments");
+    const data = readClientCache<{ payments?: Array<{ id: string; patientId?: string | null; patient?: string | { id?: string; name?: string } | null; method: string; status: string; date: string }> }>("/api/payments");
     for (const item of data?.payments ?? []) {
       const patient = typeof item.patient === "string" ? item.patient : item.patient?.name;
-      add({ id: item.id, title: patient ?? "Pagamento", description: `${item.method} · ${item.status}`, section: "pagamentos", kind: "Pagamento" }, [patient, item.method, item.status, item.date]);
+      const patientId = typeof item.patient === "string" ? item.patientId ?? undefined : item.patient?.id ?? item.patientId ?? undefined;
+      add({ id: item.id, title: patient ?? "Pagamento", description: `${item.method} · ${item.status}`, section: "pagamentos", kind: "Pagamento", patientId, patientName: patient ?? undefined }, [patient, item.method, item.status, item.date]);
     }
   }
   return [...new Map(matches.map((result) => [`${result.kind}:${result.id}`, result])).values()].slice(0, 30);
@@ -144,7 +146,7 @@ export function Topbar({ onDashboard, onSettings, onProfile, onNavigate, onQuick
   const [tourAskOpen, setTourAskOpen] = useState(false);
   // Recusar o tour também deixa o assistente de configuração convidar o administrador que ainda não decidiu.
   const declineTour = () => { setTourAskOpen(false); window.dispatchEvent(new Event(setupInviteEvent)); };
-  const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string }>>([]);
+  const [appointmentAlerts, setAppointmentAlerts] = useState<Array<{ id: string; message: string; patientId?: string; patientName?: string }>>([]);
   const [stockNotificationsEnabled, setStockNotificationsEnabled] = useState(true);
   const [appointmentNotificationSoundEnabled, setAppointmentNotificationSoundEnabled] = useState(true);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -316,7 +318,7 @@ export function Topbar({ onDashboard, onSettings, onProfile, onNavigate, onQuick
       }
       const response = await fetch("/api/agenda/alerts", { cache: "no-store" }).catch(() => null);
       if (!response?.ok) return;
-      const data = await response.json() as { appointments?: Array<{ id: string; date: string; time: string; status: string; patient?: { name?: string } }>; settings?: { appointmentNotificationsEnabled?: boolean; appointmentNotificationSoundEnabled?: boolean; stockNotificationsEnabled?: boolean } };
+      const data = await response.json() as { appointments?: Array<{ id: string; date: string; time: string; status: string; patient?: { id?: string; name?: string } }>; settings?: { appointmentNotificationsEnabled?: boolean; appointmentNotificationSoundEnabled?: boolean; stockNotificationsEnabled?: boolean } };
       if (!active) return;
       setStockNotificationsEnabled(data.settings?.stockNotificationsEnabled ?? true);
       setAppointmentNotificationSoundEnabled(data.settings?.appointmentNotificationSoundEnabled ?? true);
@@ -334,7 +336,7 @@ export function Topbar({ onDashboard, onSettings, onProfile, onNavigate, onQuick
             && appointment.status !== "Faltou"
             && appointment.status !== "Cancelado";
         })
-        .map((appointment) => ({ id: appointment.id, message: `É hora do atendimento de ${appointment.patient?.name ?? "um cliente"}.` }));
+        .map((appointment) => ({ id: appointment.id, patientId: appointment.patient?.id, patientName: appointment.patient?.name, message: `É hora do atendimento de ${appointment.patient?.name ?? "um cliente"}.` }));
       const previousAlertIds = previousAlertIdsRef.current;
       const soundEnabled = data.settings?.appointmentNotificationSoundEnabled ?? appointmentNotificationSoundEnabled;
       if (soundEnabled && previousAlertIds && alerts.some((alert) => !previousAlertIds.includes(alert.id))) playNotificationSound();
@@ -480,7 +482,7 @@ export function Topbar({ onDashboard, onSettings, onProfile, onNavigate, onQuick
               {group.results.map((result) => {
                 const optionIndex = selectableSearchItems.findIndex((item) => item.type === "result" && item.value.id === result.id && item.value.kind === result.kind);
                 return <button key={`${result.kind}:${result.id}`} id={`global-search-option-${optionIndex}`} type="button" role="option" aria-selected={activeSearchIndex === optionIndex} tabIndex={-1} className={`flex w-full flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left transition-colors ${activeSearchIndex === optionIndex ? "bg-accent" : "hover:bg-accent"}`} onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActiveSearchIndex(optionIndex)} onClick={() => openSearchResult(result)}>
-                  <span className="flex w-full min-w-0 items-center gap-2 truncate text-sm font-medium">{result.kind === "Paciente" && result.section === "clientes" ? <PatientAvatar patientId={result.id} name={result.title} size="xs" /> : null}<span className="truncate"><HighlightedSearchText value={result.title} query={searchQuery.trim()} /></span></span>
+                  <span className="flex w-full min-w-0 items-center gap-2 truncate text-sm font-medium">{result.patientId || (result.kind === "Paciente" && result.section === "clientes") ? <PatientAvatar patientId={result.patientId ?? result.id} name={result.patientName ?? result.title} size="xs" /> : null}<span className="truncate"><HighlightedSearchText value={result.title} query={searchQuery.trim()} /></span></span>
                   <span className="w-full truncate text-xs text-muted-foreground">{result.kind}{result.description ? <> · <HighlightedSearchText value={result.description} query={searchQuery.trim()} /></> : ""}</span>
                   <span className="w-full truncate text-[10px] text-muted-foreground">Abrir em {result.settingsSection ? `Configurações › ${result.settingsSection}` : ({ dashboard: "Dashboard", agenda: "Agenda", clientes: "Clientes", procedimentos: "Procedimentos", estoque: "Estoque", compras: "Compras", orcamentos: "Orçamentos", pagamentos: "Pagamentos", financeiro: "Financeiro", relatorios: "Relatórios", configuracoes: "Configurações" } as Record<SectionId, string>)[result.section]}</span>
                 </button>;
@@ -512,7 +514,7 @@ export function Topbar({ onDashboard, onSettings, onProfile, onNavigate, onQuick
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="max-h-[70vh] w-[min(20rem,calc(100vw-2rem))] overflow-y-auto p-4 max-lg:border-input">
             <p className="text-xs font-semibold">Notificações</p>
-            {appointmentAlerts.length ? appointmentAlerts.map((alert) => <p className="mt-3 rounded-md bg-accent p-3 text-xs leading-5 text-accent-foreground" key={alert.id}>{alert.message}</p>) : <><p className="mt-3 rounded-md bg-muted p-3 text-xs leading-5 text-muted-foreground">Nenhum atendimento no horário neste momento.</p><p className="mt-2 rounded-md bg-muted p-3 text-xs leading-5 text-muted-foreground">As notificações dos próximos atendimentos aparecerão aqui.</p></>}
+            {appointmentAlerts.length ? appointmentAlerts.map((alert) => <p className="mt-3 flex items-center gap-2 rounded-md bg-accent p-3 text-xs leading-5 text-accent-foreground" key={alert.id}>{alert.patientId && alert.patientName ? <PatientAvatar patientId={alert.patientId} name={alert.patientName} size="xs" /> : null}{alert.message}</p>) : <><p className="mt-3 rounded-md bg-muted p-3 text-xs leading-5 text-muted-foreground">Nenhum atendimento no horário neste momento.</p><p className="mt-2 rounded-md bg-muted p-3 text-xs leading-5 text-muted-foreground">As notificações dos próximos atendimentos aparecerão aqui.</p></>}
             {stockAlerts.length ? <>
               <p className="mt-4 text-xs font-semibold">Estoque</p>
               <div className="mt-2 space-y-3"><StockAlertGroups alerts={stockAlerts} onOpen={(alert) => { setNotificationsOpen(false); onOpenStockAlert(alert); }} /></div>

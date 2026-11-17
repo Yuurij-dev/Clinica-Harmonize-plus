@@ -16,7 +16,7 @@ export async function GET() {
         date: { gte: new Date(now - 2 * 86_400_000), lte: new Date(now + 2 * 86_400_000) },
         status: { notIn: ["Atendido", "Faltou", "Cancelado"] },
       },
-      select: { id: true, date: true, time: true, status: true, patient: { select: { name: true } } },
+      select: { id: true, date: true, time: true, status: true, patient: { select: { id: true, name: true } } },
     }),
     prisma.clinic.findUnique({
       where: { id: user.clinicId },

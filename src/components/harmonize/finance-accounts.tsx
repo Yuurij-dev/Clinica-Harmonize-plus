@@ -13,6 +13,7 @@ import { PaginationBar } from "./clinical-pagination";
 import { useCan } from "./current-user";
 import { DetailsModal, ErrorNote, ExpenseFormModal, FinanceHeader, financeKey, formatCents, formatDate, LoadingBlock, patchExpense, PayExpenseModal, sourceLabels, useFinanceResource, type ExpenseRow } from "./finance-shared";
 import { PaymentEditModal, ReceivePaymentModal } from "./payment-modals";
+import { PatientAvatar } from "./patient-avatar";
 import { DateRangeFilter, EmptyState } from "./shared";
 
 export type AccountsTab = "receber" | "pagar";
@@ -123,8 +124,8 @@ function AccountsList({ kind }: { kind: AccountsTab }) {
                 <TableBody>
                   {items.map((item) => (
                     <TableRow key={item.id} className={rowTint(item)}>
-                      <TableCell className="font-semibold text-foreground">{item.description}</TableCell>
-                      <TableCell>{receivable ? (item as Receivable).patientName ?? "—" : (item as Payable).category}</TableCell>
+                      <TableCell className="font-semibold text-foreground">{receivable && (item as Receivable).patientName ? <span className="inline-flex items-center gap-2"><PatientAvatar patientId={(item as Receivable).patientId ?? undefined} name={(item as Receivable).patientName!} size="xs" />{item.description}</span> : item.description}</TableCell>
+                      <TableCell>{receivable ? (item as Receivable).patientName ? <span className="inline-flex items-center gap-2"><PatientAvatar patientId={(item as Receivable).patientId ?? undefined} name={(item as Receivable).patientName!} size="xs" />{(item as Receivable).patientName}</span> : "—" : (item as Payable).category}</TableCell>
                       <TableCell className="whitespace-nowrap font-semibold">{formatCents(item.amountCents)}</TableCell>
                       <TableCell className={cn("whitespace-nowrap", item.status === "overdue" && "font-bold text-destructive")}>{formatDate(item.dueOn)}</TableCell>
                       <TableCell><StatusBadge status={item.status} receivable={receivable} /></TableCell>
@@ -138,7 +139,7 @@ function AccountsList({ kind }: { kind: AccountsTab }) {
               {items.map((item) => (
                 <li key={item.id} className={cn("space-y-2 py-3", rowTint(item))}>
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0"><p className="font-bold text-foreground">{item.description}</p><p className="text-xs text-muted-foreground">{receivable ? (item as Receivable).patientName ?? "—" : (item as Payable).category}</p></div>
+                    <div className="min-w-0"><p className="flex items-center gap-2 font-bold text-foreground">{receivable && (item as Receivable).patientName ? <PatientAvatar patientId={(item as Receivable).patientId ?? undefined} name={(item as Receivable).patientName!} size="xs" /> : null}{item.description}</p>{receivable && (item as Receivable).patientName ? <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><PatientAvatar patientId={(item as Receivable).patientId ?? undefined} name={(item as Receivable).patientName!} size="xs" />{(item as Receivable).patientName}</p> : <p className="text-xs text-muted-foreground">{receivable ? "—" : (item as Payable).category}</p>}</div>
                     <StatusBadge status={item.status} receivable={receivable} />
                   </div>
                   <div className="flex items-center justify-between text-sm"><strong>{formatCents(item.amountCents)}</strong><span className={cn("text-xs", item.status === "overdue" ? "font-bold text-destructive" : "text-muted-foreground")}>Vence {formatDate(item.dueOn)}</span></div>
@@ -163,7 +164,7 @@ function AccountModal({ modal, receivable, onClose, onDone }: { modal: { kind: "
     if (modal.kind === "settle") return <ReceivePaymentModal payment={payment} onClose={onClose} onSaved={() => onDone("Recebimento registrado.")} />;
     if (modal.kind === "edit") return <PaymentEditModal payment={payment} onClose={onClose} onSaved={() => onDone("Pagamento atualizado.")} />;
     return <DetailsModal onClose={onClose} title="Detalhes da conta a receber" rows={[
-      ["Descrição", item.description], ["Cliente", item.patientName ?? "—"], ["Valor", formatCents(item.amountCents)], ["Vencimento", formatDate(item.dueOn)],
+      ["Descrição", item.patientName ? <span className="inline-flex items-center gap-2"><PatientAvatar patientId={item.patientId ?? undefined} name={item.patientName} size="xs" />{item.description}</span> : item.description], ["Cliente", item.patientName ? <span className="inline-flex items-center gap-2"><PatientAvatar patientId={item.patientId ?? undefined} name={item.patientName} size="xs" />{item.patientName}</span> : "—"], ["Valor", formatCents(item.amountCents)], ["Vencimento", formatDate(item.dueOn)],
       ["Situação", item.status === "overdue" ? "Vencida" : item.status === "settled" ? "Recebida" : "Pendente"], ["Status do pagamento", item.paymentStatus], ["Forma de pagamento", item.method], ["Parcelamento", item.installments],
     ]} />;
   }

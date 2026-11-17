@@ -2,7 +2,7 @@ import { permissionGroups } from "./permissions.ts";
 import { navItems } from "../data/navigation.ts";
 import type { SectionId } from "../types/clinic";
 
-export type GlobalSearchResult = { id: string; title: string; description: string; section: SectionId; kind: string; settingsSection?: string };
+export type GlobalSearchResult = { id: string; title: string; description: string; section: SectionId; kind: string; settingsSection?: string; patientId?: string; patientName?: string };
 export type SearchAccess = { dashboard: boolean; patients: boolean; agenda: boolean; appointmentRun: boolean; procedures: boolean; stock: boolean; purchases: boolean; quotes: boolean; payments: boolean; finance: boolean; reports: boolean; settings: boolean; settingsPermissions: boolean; settingsTeam: boolean; clinical: boolean; anamnesis: boolean };
 export type SearchResultGroup = { id: string; label: string; results: GlobalSearchResult[] };
 export type SearchQuickAction = { id: string; title: string; description: string; section: SectionId; dialog: "appointment" | "client" | "procedure" | "quote" | "payment"; terms: string };

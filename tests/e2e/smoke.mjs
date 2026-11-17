@@ -28,6 +28,8 @@ async function api(method, path, body) {
   // Cadastro: o .env local tem provedor de e-mail (Resend), e /api/auth/register então enviaria e-mail de verdade.
   // O roteiro cria a conta direto no banco (mesmo efeito do modo "direct" do cadastro, sem e-mail). A rota real é coberta por verificacao_email_cadastro.
   if (method === "POST" && path === "/api/auth/register") return registerWithoutEmail(body);
+  // Os demais fluxos usam pacientes de teste com sexo definido; envie `sex: ""` explicitamente quando for testar a validação obrigatória.
+  if (method === "POST" && path === "/api/patients" && body && !Object.hasOwn(body, "sex")) body = { ...body, sex: "Masculino" };
   const response = await fetch(`${baseUrl}${path}`, {
     method,
     headers: { ...(body ? { "Content-Type": "application/json" } : {}), ...(cookie ? { cookie } : {}) },
@@ -201,6 +203,8 @@ async function login() {
 async function patientsAndPayments() {
   let r = await api("POST", "/api/patients", { ...regDefaults, name: `Paciente ${run}`, phone: "11999990000", age: 30, cpf: "123" });
   check("CPF inválido no cadastro é recusado", r.status === 400, r.status);
+  r = await api("POST", "/api/patients", { ...regDefaults, name: `Sexo ausente ${run}`, phone: "11999990000", age: 30, cpf: randomCpf(), sex: "" });
+  check("sexo vazio no cadastro é recusado", r.status === 400 && Boolean(r.data.fields?.sex), r.status);
   const cpf = randomCpf();
   r = await api("POST", "/api/patients", { ...regDefaults, name: `Paciente ${run}`, phone: "11999990000", age: 30, cpf });
   const patient = r.data.patient;

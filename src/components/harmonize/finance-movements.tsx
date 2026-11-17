@@ -16,6 +16,7 @@ import { PaginationBar } from "./clinical-pagination";
 import { useCan } from "./current-user";
 import { ConfirmModal, DetailsModal, ErrorNote, ExpenseFormModal, FinanceHeader, financeKey, formatCents, formatDate, invalidatePaymentCache, LoadingBlock, patchExpense, PayExpenseModal, sourceLabels, StatusDot, useFinanceResource, type ExpenseRow } from "./finance-shared";
 import { PaymentCreateModal, PaymentEditModal, ReceivePaymentModal } from "./payment-modals";
+import { PatientAvatar } from "./patient-avatar";
 import { DateRangeFilter, EmptyState } from "./shared";
 
 export type MovementItem = { id: string; kind: "revenue" | "expense"; date: string; description: string; category: string; amountCents: number; status: string; method: string; source?: string; patientId?: string | null; patientName?: string | null };
@@ -133,7 +134,7 @@ export function FinanceMovements({ reference, initialRange, onBack }: { referenc
                     return (
                       <TableRow key={`${item.kind}-${item.id}`}>
                         <TableCell className="whitespace-nowrap">{formatDate(item.date)}</TableCell>
-                        <TableCell className="font-semibold text-foreground">{item.description}</TableCell>
+                        <TableCell className="font-semibold text-foreground">{item.patientName ? <span className="inline-flex items-center gap-2"><PatientAvatar patientId={item.patientId ?? undefined} name={item.patientName} size="xs" />{item.description}</span> : item.description}</TableCell>
                         <TableCell>{categoryBadge(item)}</TableCell>
                         <TableCell className="whitespace-nowrap">{amount(item)}</TableCell>
                         <TableCell>{item.kind === "revenue" ? "Receita" : "Despesa"}</TableCell>
@@ -151,7 +152,7 @@ export function FinanceMovements({ reference, initialRange, onBack }: { referenc
                 return (
                   <li key={`${item.kind}-${item.id}`} className="flex items-start justify-between gap-2 py-3">
                     <div className="min-w-0 space-y-1">
-                      <p className="font-bold text-foreground">{item.description}</p>
+                      <p className="flex items-center gap-2 font-bold text-foreground">{item.patientName ? <PatientAvatar patientId={item.patientId ?? undefined} name={item.patientName} size="xs" /> : null}{item.description}</p>
                       <p className="text-xs text-muted-foreground">{formatDate(item.date)}</p>
                       <div className="flex flex-wrap items-center gap-2">{categoryBadge(item)}<StatusDot tone={status.tone}>{status.label}</StatusDot></div>
                     </div>
@@ -177,9 +178,9 @@ function MovementModals({ modal, onClose, onDone, canManage }: { modal: Extract<
   const status = movementStatus(item);
   if (modal.kind === "view") {
     return <DetailsModal onClose={onClose} title={item.kind === "revenue" ? "Detalhes da receita" : "Detalhes da despesa"} rows={[
-      ["Descrição", item.description], ["Data", formatDate(item.date)], ["Valor", formatCents(item.amountCents)], ["Categoria", item.category],
+      ["Descrição", item.patientName ? <span key="description" className="inline-flex items-center gap-2"><PatientAvatar patientId={item.patientId ?? undefined} name={item.patientName} size="xs" />{item.description}</span> : item.description], ["Data", formatDate(item.date)], ["Valor", formatCents(item.amountCents)], ["Categoria", item.category],
       ["Situação", status.label], ["Forma de pagamento", item.method],
-      ...(item.patientName ? [["Paciente", item.patientName] as [string, string]] : []),
+      ...(item.patientName ? [["Paciente", <span key="patient" className="inline-flex items-center gap-2"><PatientAvatar patientId={item.patientId ?? undefined} name={item.patientName} size="xs" />{item.patientName}</span>] as [string, React.ReactNode]] : []),
       ...(item.source ? [["Origem", sourceLabels[item.source] ?? item.source] as [string, string]] : []),
     ]} />;
   }

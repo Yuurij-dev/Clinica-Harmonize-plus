@@ -78,12 +78,12 @@ export const referralSources = ["Indicação de paciente", "Indicação de profi
 export const relationshipOptions = ["Mãe", "Pai", "Avó", "Avô", "Madrasta", "Padrasto", "Irmã", "Irmão", "Tia", "Tio", "Cônjuge", "Filha", "Filho", "Responsável legal", "Outro"] as const;
 const inList = (list: readonly string[], value: string) => list.includes(value);
 
-// Sexo na edição: undefined = manter o atual, "" = limpar (null), valor fora da lista = inválido.
+// Sexo na edição: undefined = manter o atual; vazio ou valor fora da lista = inválido.
 export function parseSexUpdate(value: unknown): { ok: true; sex: string | null | undefined } | { ok: false } {
   if (value === undefined) return { ok: true, sex: undefined };
   if (typeof value !== "string") return { ok: false };
   const trimmed = value.trim();
-  if (!trimmed) return { ok: true, sex: null };
+  if (!trimmed) return { ok: false };
   return inList(sexOptions, trimmed) ? { ok: true, sex: trimmed } : { ok: false };
 }
 
@@ -122,7 +122,8 @@ export function validateRegistration(values: RegistrationValues, now = clinicRef
   if (!minor && !values.phone.replace(/\D/g, "")) errors.phone = "Informe o telefone ou WhatsApp.";
   else if (values.phone.replace(/\D/g, "")) { const message = phoneError(values.phone); if (message) errors.phone = message; }
 
-  if (values.sex && !inList(sexOptions, values.sex)) errors.sex = "Escolha uma das opções de sexo.";
+  if (!values.sex) errors.sex = "Selecione o sexo do paciente.";
+  else if (!inList(sexOptions, values.sex)) errors.sex = "Escolha uma das opções de sexo.";
   if (values.referralSource && !inList(referralSources, values.referralSource)) errors.referralSource = "Escolha uma das opções de como nos conheceu.";
   if (values.emergencyContactRelationship && !inList(relationshipOptions, values.emergencyContactRelationship)) errors.emergencyContactRelationship = "Escolha uma das opções de parentesco.";
   if (values.email.trim() && !validEmail(values.email)) errors.email = "Informe um e-mail válido, como nome@email.com.";

@@ -4,17 +4,18 @@ import { ArrowLeft, ChevronRight, Loader2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { saveIndicator } from "@/lib/facial-editor-rules";
+import { PatientAvatar } from "../patient-avatar";
 
 export const saveDotClass = { ok: "bg-emerald-500", busy: "bg-amber-500", error: "bg-destructive", idle: "bg-muted-foreground/50" } as const;
 
 /** Cabeçalho compacto da área de trabalho ampliada (overlay): título, estado do salvamento, Salvar e Recolher. */
-export function FacialExpandedBar({ patientName, readOnly, autosaveState, isSaving, lastSavedAt, hasRecord, onCollapse }: {
-  patientName: string; readOnly: boolean; autosaveState: "saved" | "pending" | "saving" | "error"; isSaving: boolean; lastSavedAt: number | null; hasRecord: boolean; onCollapse: () => void;
+export function FacialExpandedBar({ patientId, patientName, readOnly, autosaveState, isSaving, lastSavedAt, hasRecord, onCollapse }: {
+  patientId: string; patientName: string; readOnly: boolean; autosaveState: "saved" | "pending" | "saving" | "error"; isSaving: boolean; lastSavedAt: number | null; hasRecord: boolean; onCollapse: () => void;
 }) {
   const indicator = saveIndicator({ readOnly, autosave: autosaveState, saving: isSaving, lastSavedAt, hasRecord, now: 0 });
   return (
     <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
-      <div className="flex min-w-0 items-baseline gap-3"><h2 className="text-lg font-semibold text-foreground">Avaliação facial</h2><span className="max-w-[18rem] truncate text-sm text-muted-foreground">{patientName}</span></div>
+      <div className="flex min-w-0 items-center gap-3"><h2 className="text-lg font-semibold text-foreground">Avaliação facial</h2><span className="inline-flex max-w-[18rem] items-center gap-1.5 truncate text-sm text-muted-foreground"><PatientAvatar patientId={patientId} name={patientName} size="xs" />{patientName}</span></div>
       <div className="flex items-center gap-3">
         <span aria-live="polite" className="flex items-center gap-2 text-sm text-muted-foreground" role="status"><span aria-hidden="true" className={cn("h-2.5 w-2.5 shrink-0 rounded-full", saveDotClass[indicator.tone], indicator.tone === "busy" && "animate-pulse")} /><span className={cn(indicator.tone === "error" && "font-medium text-destructive")}>{indicator.header}</span></span>
         <Button data-facial-collapse variant="outline" onClick={onCollapse}><Minimize2 className="h-4 w-4" /><span className="text-sm font-semibold">Recolher (Esc)</span></Button>

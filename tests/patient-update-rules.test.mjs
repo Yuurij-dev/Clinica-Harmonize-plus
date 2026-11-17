@@ -25,9 +25,9 @@ test("corpo legado (name, cpf, phone, age, sex) continua valendo", () => {
   assert.deepEqual(result.data, { name: "Maria Souza", cpf: "529.982.247-25", phone: "(11) 98888-7777", age: 31, sex: "Feminino" });
 });
 
-test("campos ausentes não são alterados; sexo vazio limpa", () => {
+test("campos ausentes não são alterados; sexo vazio é recusado", () => {
   assert.deepEqual(buildPatientUpdate({}, existing, full).data, {});
-  assert.deepEqual(buildPatientUpdate({ sex: "" }, existing, full).data, { sex: null });
+  assert.equal(buildPatientUpdate({ sex: "" }, existing, full).ok, false);
   assert.equal(buildPatientUpdate({ sex: "X" }, existing, full).ok, false);
 });
 

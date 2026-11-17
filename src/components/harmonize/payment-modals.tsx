@@ -10,6 +10,7 @@ import { formatCurrency, parseCurrency } from "@/lib/input-masks";
 import { sendJson } from "@/lib/send-json";
 import { ErrorNote, formatCents, invalidatePaymentCache, paymentMethods } from "./finance-shared";
 import { usePatientLookup, type LookupPatient } from "./use-patient-lookup";
+import { PatientAvatar } from "./patient-avatar";
 
 export type CreatedPayment = { id: string; value: number; method: string; date: string; status: string; installments: string; patient?: { name: string } | null };
 
@@ -46,9 +47,9 @@ export function PaymentCreateModal({ open, onClose, onCreated }: { open: boolean
         <div className="relative sm:col-span-2">
           <FormField label="Paciente"><input className={fieldClassName} name="patientSearch" placeholder="Pesquise por nome ou CPF" required value={paymentPatientQuery} onChange={(event) => { setPaymentPatientQuery(event.target.value); setPaymentPatient(null); }} /></FormField>
           {paymentPatientQuery && !paymentPatient ? <div className="absolute left-0 right-0 top-[68px] z-20 max-h-44 overflow-auto rounded-[7px] border border-[#e5e5ee] bg-white p-1 shadow-xl">
-            {paymentLookup.patients.length ? paymentLookup.patients.map((item) => <button className="flex w-full items-center justify-between rounded-[5px] px-3 py-2 text-left text-xs transition hover:bg-[#f5f4ff]" key={item.id} type="button" onClick={() => { setPaymentPatient(item); setPaymentPatientQuery(`${item.name}${item.cpf ? ` · ${item.cpf}` : ""}`); }}><span className="font-bold text-[#303144]">{item.name}</span><span className="text-[10px] text-[#858696]">{item.cpf || "CPF não informado"}</span></button>) : <p className="px-3 py-2 text-xs text-[#858696]">{paymentLookup.tooShort ? "Digite pelo menos 2 letras." : paymentLookup.loading ? "Buscando pacientes..." : paymentLookup.error ? "Não foi possível buscar pacientes." : "Nenhum paciente encontrado."}</p>}
+            {paymentLookup.patients.length ? paymentLookup.patients.map((item) => <button className="flex w-full items-center justify-between rounded-[5px] px-3 py-2 text-left text-xs transition hover:bg-[#f5f4ff]" key={item.id} type="button" onClick={() => { setPaymentPatient(item); setPaymentPatientQuery(`${item.name}${item.cpf ? ` · ${item.cpf}` : ""}`); }}><span className="flex min-w-0 items-center gap-2"><PatientAvatar patientId={item.id} name={item.name} size="xs" /><span className="truncate font-bold text-[#303144]">{item.name}</span></span><span className="text-[10px] text-[#858696]">{item.cpf || "CPF não informado"}</span></button>) : <p className="px-3 py-2 text-xs text-[#858696]">{paymentLookup.tooShort ? "Digite pelo menos 2 letras." : paymentLookup.loading ? "Buscando pacientes..." : paymentLookup.error ? "Não foi possível buscar pacientes." : "Nenhum paciente encontrado."}</p>}
           </div> : null}
-          {paymentPatient ? <p className="mt-1 text-[10px] font-semibold text-[#5147dc]">Paciente selecionado: {paymentPatient.name}</p> : null}
+          {paymentPatient ? <p className="mt-1 flex items-center gap-1.5 text-[10px] font-semibold text-[#5147dc]"><PatientAvatar patientId={paymentPatient.id} name={paymentPatient.name} size="xs" className="h-5 w-5 text-[7px]" />Paciente selecionado: {paymentPatient.name}</p> : null}
         </div>
         <FormField label="Valor"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="value" inputMode="decimal" placeholder="R$ 0,00" required /></FormField>
         <FormField label="Forma"><select className={fieldClassName} name="method"><option>Pix</option><option>Cartão de crédito</option><option>Cartão de débito</option><option>Dinheiro</option></select></FormField>
@@ -84,7 +85,7 @@ export function PaymentEditModal({ payment, onClose, onSaved }: { payment: Edita
   }
 
   return (
-    <Modal open onClose={onClose} title="Editar pagamento" description={payment.patientName ? `Paciente: ${payment.patientName}` : undefined}>
+    <Modal open onClose={onClose} title="Editar pagamento" description={payment.patientName ? <span className="inline-flex items-center gap-1.5"><PatientAvatar patientId={payment.patientId ?? undefined} name={payment.patientName} size="xs" />Paciente: {payment.patientName}</span> : undefined}>
       <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
         <FormField label="Valor"><MaskedInput className={fieldClassName} formatter={formatCurrency} name="value" inputMode="decimal" placeholder="R$ 0,00" defaultValue={formatCents(payment.amountCents)} required /></FormField>
         <FormField label="Forma"><select className={fieldClassName} name="method" defaultValue={payment.method}>{methods.map((method) => <option key={method}>{method}</option>)}</select></FormField>
@@ -105,7 +106,7 @@ export function ReceivePaymentModal({ payment, onClose, onSaved }: { payment: Ed
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   return (
-    <Modal open onClose={onClose} title="Registrar recebimento" description={`${payment.patientName ?? "Paciente"} · ${formatCents(payment.amountCents)}`}>
+    <Modal open onClose={onClose} title="Registrar recebimento" description={<span className="inline-flex items-center gap-1.5">{payment.patientName ? <PatientAvatar patientId={payment.patientId ?? undefined} name={payment.patientName} size="xs" /> : null}{payment.patientName ?? "Paciente"} · {formatCents(payment.amountCents)}</span>}>
       <div className="space-y-4">
         <FormField label="Data do recebimento"><input className={fieldClassName} type="date" value={receivedOn} onChange={(event) => setReceivedOn(event.target.value)} /></FormField>
         {error ? <ErrorNote message={error} /> : null}

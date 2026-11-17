@@ -730,7 +730,7 @@ function PatientEditModal({ patient, open, onClose, onUpdated }: { patient: Pati
   const closeModal = () => { setLoaded(null); onClose(); };
   const cpfMasked = isMaskedCpf(record?.cpf);
   return (
-    <Modal open={open} onClose={() => { if (!saving) closeModal(); }} title="Editar dados" description={`Atualize os dados cadastrais de ${patient.name}.`} panelClassName="max-w-2xl flex flex-col overflow-hidden" bodyClassName="flex min-h-0 flex-1 flex-col p-0 sm:p-0">
+    <Modal open={open} onClose={() => { if (!saving) closeModal(); }} title="Editar dados" description={<span className="inline-flex items-center gap-1.5"><PatientAvatar patientId={patient.id} name={patient.name} size="xs" />Atualize os dados cadastrais de {patient.name}.</span>} panelClassName="max-w-2xl flex flex-col overflow-hidden" bodyClassName="flex min-h-0 flex-1 flex-col p-0 sm:p-0">
       {record ? (
         <PatientForm key={`${patient.id}-${loaded?.seq}`} mode="edit" saving={saving} onSubmit={save} onCancel={closeModal} maskedCpf={cpfMasked ? record.cpf ?? undefined : undefined} consentAt={record.privacyConsentAt ? String(record.privacyConsentAt) : null}
           initialValues={{ ...formValuesFromRecord(record), cpf: cpfMasked ? "" : record.cpf ?? "" }} />

@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { useCan } from "./current-user";
 import { anamnesisKey, anamnesisVersionKey, formatDate, formatTime, useCachedResource, type AnamnesisOverview, type AnamnesisVersionFull, type AnamnesisVersionMeta } from "./patient-clinical-data";
 import { EmptyState, LoadingSkeleton } from "./shared";
+import { PatientAvatar } from "./patient-avatar";
 import { useDraftAutosave } from "./use-draft-autosave";
 
 const jsonHeaders = { "Content-Type": "application/json" };
@@ -388,7 +389,7 @@ export function PatientAnamnesis({ patientId, patientName, request = null, onReq
       <Card className="p-6 text-center">
         <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-primary/10 text-primary"><ClipboardList className="h-6 w-6" /></span>
         <h3 className="mt-3 text-base font-bold">Nenhuma anamnese registrada</h3>
-        <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">A anamnese reúne queixa, histórico de saúde, alergias, medicamentos e procedimentos anteriores de {patientName}. Ela não é obrigatória para atender, mas ajuda a equipe a conduzir o tratamento com mais segurança.</p>
+        <p className="mx-auto mt-1 flex max-w-md flex-wrap items-center justify-center gap-1.5 text-xs text-muted-foreground">A anamnese reúne queixa, histórico de saúde, alergias, medicamentos e procedimentos anteriores de <PatientAvatar patientId={patientId} name={patientName} size="xs" />{patientName}. Ela não é obrigatória para atender, mas ajuda a equipe a conduzir o tratamento com mais segurança.</p>
         {startError ? <p role="alert" className="mx-auto mt-3 max-w-md rounded-md bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive">{startError}</p> : null}
         {canWrite ? <div className="mt-4 flex flex-wrap justify-center gap-2"><Button disabled={starting} onClick={() => void startDraft("empty")}>{starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}Iniciar anamnese</Button>{fallback ? <Button className="h-auto min-h-11 max-w-full whitespace-normal py-2 text-left max-lg:h-auto" variant="outline" disabled={starting} onClick={() => void startDraft("evaluation", fallback.evaluationId)}><FileText className="h-4 w-4" />Usar dados da avaliação de {formatDate(fallback.createdAt)}</Button> : null}</div> : <p className="mt-4 text-xs text-muted-foreground">Seu perfil não permite preencher a anamnese.</p>}
       </Card>

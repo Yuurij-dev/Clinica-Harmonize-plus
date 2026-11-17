@@ -865,12 +865,12 @@ export function PhotoEditor({ patientId, evaluationId, journeyId, patientName, o
       </> : null}
       <Card className={cn("overflow-hidden max-lg:overflow-clip border-[#e3e5f0] bg-white p-0 text-[#25263a] shadow-[0_12px_34px_rgba(38,39,58,0.06)]", encounter && "border-0 bg-transparent shadow-none")}>
         {!encounter ? <div className="flex flex-col gap-3 border-b border-[#ececf3] bg-white px-5 py-4 md:flex-row md:items-center md:justify-between">
-          <div><div className="flex items-center gap-2"><Camera className="h-4 w-4 text-[#5147dc]" /><h3 className="text-sm font-bold">{encounter ? "Avaliação clínica" : "Fotos da avaliação"}</h3></div><p className="mt-1 text-xs text-[#858696]">Registre as informações clínicas e as fotografias de {patientName}.</p></div>
+          <div><div className="flex items-center gap-2"><Camera className="h-4 w-4 text-[#5147dc]" /><h3 className="text-sm font-bold">{encounter ? "Avaliação clínica" : "Fotos da avaliação"}</h3></div><p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-[#858696]">Registre as informações clínicas e as fotografias de <PatientAvatar patientId={patientId} name={patientName} size="xs" />{patientName}.</p></div>
           <div className="flex items-center gap-2 text-xs text-[#858696]"><FileJson className="h-3.5 w-3.5 text-[#5147dc]" />Marcações editáveis salvas separadamente</div>
         </div> : null}
 
         {facialMode ? <div ref={facialRootRef} role={expanded ? "dialog" : undefined} aria-modal={expanded ? true : undefined} aria-label={expanded ? "Área de trabalho ampliada da avaliação facial" : undefined} onKeyDown={expanded ? trapTab : undefined} className={cn("space-y-3", expanded && "fixed inset-0 z-[70] flex flex-col gap-3 space-y-0 overflow-auto bg-background p-3")}>
-          {expanded ? <FacialExpandedBar autosaveState={autosave.state} hasRecord={Boolean(currentEvaluationId)} isSaving={isSaving} lastSavedAt={lastSavedAt} patientName={patientName} readOnly={readOnly} onCollapse={toggleExpanded} /> : null}
+          {expanded ? <FacialExpandedBar patientId={patientId} autosaveState={autosave.state} hasRecord={Boolean(currentEvaluationId)} isSaving={isSaving} lastSavedAt={lastSavedAt} patientName={patientName} readOnly={readOnly} onCollapse={toggleExpanded} /> : null}
           <FacialWorkspace {...workspaceProps} />
           <input ref={fileInputRef} aria-hidden="true" className="sr-only" tabIndex={-1} type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void uploadPhotos(event.target.files); event.target.value = ""; }} />
           <FacialFooter autosaveState={autosave.state} hasRecord={Boolean(currentEvaluationId)} isSaving={isSaving} lastSavedAt={lastSavedAt} markings={activePhoto?.annotations.length ?? 0} readOnly={readOnly} onRetry={() => void autosave.flush()} />
