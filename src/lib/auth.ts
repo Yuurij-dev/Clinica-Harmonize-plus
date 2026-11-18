@@ -4,7 +4,6 @@ import { parseBearerToken } from "./bearer-rules";
 import { getAuthSecret } from "./auth-secret";
 import { prisma } from "./prisma";
 import { pickMembership } from "./active-clinic-rules";
-import { mfaRequiredForMemberships } from "./mfa-rules";
 import { canForUser, normalizeRolePermissionMatrix, type Permission, type RolePermissionMatrix } from "./permissions";
 
 export const sessionCookieName = "harmonize_session";
@@ -27,13 +26,10 @@ type AuthenticatedUser = {
   clinic: { id: string; name: string; slug: string; trialEndsAt: Date | null };
   /** id da AuthSession (claim sid); não expor ao cliente. */
   sessionId: string;
-  /** Exige 2FA e ainda não ativou: só rotas com allowMfaSetup enxergam este usuário. */
-  mfaSetupRequired: boolean;
 };
 
 type CurrentUserOptions = {
   requireActiveTrial?: boolean;
-  allowMfaSetup?: boolean;
 };
 
 const globalAuthCache = globalThis as typeof globalThis & {
@@ -108,7 +104,6 @@ async function loadAuthenticatedUser(userId: string, sid: string): Promise<Authe
         email: true,
         role: true,
         activeClinicId: true,
-        mfaSetting: { select: { enabledAt: true } },
         memberships: {
           orderBy: { id: "asc" },
           select: { role: true, isOwner: true, clinic: { select: { id: true, name: true, slug: true, trialEndsAt: true, rolePermissions: true } } },
@@ -133,11 +128,10 @@ async function loadAuthenticatedUser(userId: string, sid: string): Promise<Authe
     rolePermissions: normalizeRolePermissionMatrix(membership.clinic.rolePermissions),
     clinic: { id: membership.clinic.id, name: membership.clinic.name, slug: membership.clinic.slug, trialEndsAt: membership.clinic.trialEndsAt },
     sessionId: sid,
-    mfaSetupRequired: mfaRequiredForMemberships(user.memberships) && !user.mfaSetting?.enabledAt,
   };
 }
 
-export async function getCurrentUser({ requireActiveTrial = false, allowMfaSetup = false }: CurrentUserOptions = {}) {
+export async function getCurrentUser({ requireActiveTrial = false }: CurrentUserOptions = {}) {
   // Web: cookie. App mobile: "Authorization: Bearer <jwt>" (mesmo JWT). Cookie válido tem prioridade; cookie inválido/expirado cai para o Bearer.
   const cookieToken = (await cookies()).get(sessionCookieName)?.value;
   const session = await verifiedSession(cookieToken) ?? await verifiedSession(parseBearerToken((await headers()).get("authorization")));
@@ -146,7 +140,6 @@ export async function getCurrentUser({ requireActiveTrial = false, allowMfaSetup
   const cacheKey = `${userId}:${sid}`;
   const finish = (user: AuthenticatedUser | null) => {
     if (!user) return null;
-    if (user.mfaSetupRequired && !allowMfaSetup) return null;
     return requireActiveTrial && user.trialExpired ? null : user;
   };
 

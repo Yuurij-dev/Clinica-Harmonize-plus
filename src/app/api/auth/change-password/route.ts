@@ -52,7 +52,8 @@ export async function POST(request: Request) {
   await recordSecurityEvent({ userId: user.id, type: "PASSWORD_CHANGED", request });
 
   const login = await completeLogin({ request, userId: user.id, origin: "password" });
-  const response = NextResponse.json({ success: true, clinicName: membership.clinic.name, ...(login.mfaRequired ? { mfaRequired: true } : {}) });
+  if (!login.ok) return NextResponse.json({ message: login.message }, { status: login.status });
+  const response = NextResponse.json({ success: true, clinicName: membership.clinic.name, ...(login.mfaRequired ? { mfaRequired: true, method: login.method } : {}) });
   login.apply(response);
   return response;
 }

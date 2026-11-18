@@ -41,6 +41,7 @@ model User {
   avatar                     UserAvatar?
   mfaSetting                 MfaSetting?
   mfaRecoveryCodes           MfaRecoveryCode[]
+  loginVerificationCode      LoginVerificationCode?
   trustedDevices             TrustedDevice[]
   authSessions               AuthSession[]
   securityEvents             SecurityEvent[]
@@ -1009,6 +1010,26 @@ model PendingSignup {
   createdAt    DateTime @default(now()) @db.Timestamptz(6)
 
   @@index([expiresAt])
+}
+
+// Código de verificação por e-mail do LOGIN (2º fator padrão quando o TOTP não está ativo). Mesma semântica de
+// janela/limites do PendingSignup (cadastro), mas ligado a um usuário já existente (um pendente por usuário).
+model LoginVerificationCode {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  /// HMAC-SHA256 do código (nunca o código)
+  codeHash        String
+  expiresAt       DateTime  @db.Timestamptz(6)
+  attempts        Int       @default(0)
+  /// Envios do código (inicial + reenvios) neste pendente
+  sends           Int       @default(1)
+  lastSentAt      DateTime  @db.Timestamptz(6)
+  /// Janela de 24 h por usuário: limites de envio/palpites sobrevivem à expiração do código
+  windowStartedAt DateTime  @default(now()) @db.Timestamptz(6)
+  totalAttempts   Int       @default(0)
+  lockedUntil     DateTime? @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @db.Timestamptz(6)
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 }
 
 model MfaSetting {

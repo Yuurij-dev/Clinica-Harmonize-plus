@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import { Check, Copy, Download, Loader2, Printer, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { fieldClassName, Modal } from "@/components/ui/modal";
-import { AuthShell } from "./login-screen";
 import { OtpInput } from "./otp-input";
 import { invalidateClientCache } from "@/lib/client-cache";
 import { SECURITY_OVERVIEW_KEY, securityRequest } from "@/lib/security-client";
@@ -29,12 +28,10 @@ type WizardProps = {
   onCancel?: () => void;
   /** Informa se fechar agora perderia os códigos (passo 4): o container deve bloquear o fechamento. */
   onLockChange?: (locked: boolean) => void;
-  /** Ativação obrigatória logo após o login: pula a senha (a sessão acabou de ser autenticada) e abre direto no QR. */
-  autoStart?: boolean;
 };
 
 // Assistente de ativação do 2FA: senha, QR + chave, código de 6 dígitos e códigos de recuperação (mostrados uma única vez).
-export function MfaSetupWizard({ onDone, onCancel, onLockChange, autoStart = false }: WizardProps) {
+export function MfaSetupWizard({ onDone, onCancel, onLockChange }: WizardProps) {
   const [step, setStep] = useState<Step>("password");
   const [password, setPassword] = useState("");
   const [qr, setQr] = useState<{ dataUrl: string | null; manualKey: string } | null>(null);
@@ -47,8 +44,6 @@ export function MfaSetupWizard({ onDone, onCancel, onLockChange, autoStart = fal
   const [copied, setCopied] = useState(false);
   const feedbackId = useId();
   const passwordId = useId();
-  const autoStarted = useRef(false);
-  const [starting, setStarting] = useState(autoStart);
 
   useEffect(() => { onLockChange?.(step === "codes"); }, [step, onLockChange]);
   useEffect(() => () => onLockChange?.(false), [onLockChange]);
@@ -68,15 +63,6 @@ export function MfaSetupWizard({ onDone, onCancel, onLockChange, autoStart = fal
     setQr({ dataUrl: qrSvgDataUrl(result.data.qrSvg), manualKey: result.data.manualKey });
     setStep("scan");
   }
-
-  // Sem senha: o servidor aceita porque a sessão é recente e o usuário está preso na ativação obrigatória.
-  // Se recusar (sessão antiga), cai no passo da senha normalmente.
-  useEffect(() => {
-    if (!autoStart || autoStarted.current) return;
-    autoStarted.current = true;
-    void start(false).finally(() => setStarting(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoStart]);
 
   async function confirm(event: FormEvent) {
     event.preventDefault();
@@ -118,11 +104,7 @@ export function MfaSetupWizard({ onDone, onCancel, onLockChange, autoStart = fal
         <h3 className="mt-1 text-base font-bold text-foreground">{stepTitle[step]}</h3>
       </div>
 
-      {step === "password" && starting ? (
-        <p aria-live="polite" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />Preparando a verificação em duas etapas…</p>
-      ) : null}
-
-      {step === "password" && !starting ? (
+      {step === "password" ? (
         <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (password && !busy) void start(true); }}>
           <p className="text-sm leading-6 text-muted-foreground">Por segurança, informe sua senha atual para começar a configurar a verificação em duas etapas.</p>
           <div className="space-y-2">
@@ -242,18 +224,5 @@ export function MfaSetupModal({ open, onClose, onActivated }: { open: boolean; o
     <Modal closeOnOverlayClick={false} description="Proteja sua conta com um código gerado pelo aplicativo autenticador." onClose={() => { if (!locked) onClose(); }} open={open} panelClassName="max-w-md" title="Ativar verificação em duas etapas">
       <MfaSetupWizard onCancel={onClose} onDone={() => { onActivated(); onClose(); }} onLockChange={setLocked} />
     </Modal>
-  );
-}
-
-// Tela cheia do assistente obrigatório (proprietário e administradores): nada do app abre antes da ativação.
-export function MfaRequiredGate({ onDone, onLogout }: { onDone: () => void; onLogout: () => void }) {
-  // Continua na própria tela de login (painel de marca + cartão), no lugar do formulário.
-  return (
-    <AuthShell action={<Button className="mt-8 h-11 rounded-full bg-white px-6 text-sm font-semibold text-[#4938f4] shadow-none hover:bg-white/90" onClick={onLogout} type="button">Sair</Button>}>
-      <div aria-hidden="true" className="mb-4 grid h-12 w-12 place-items-center rounded-full bg-[#eeecff] text-[#4938f4]"><ShieldCheck className="h-6 w-6" /></div>
-      <h2 className="text-xl font-black tracking-tight text-[#17134d]">Ative a verificação em duas etapas</h2>
-      <p className="mt-1 text-sm leading-6 text-[#6b7491]">Para o seu perfil de acesso, a verificação em duas etapas é obrigatória. Configure agora para entrar na clínica.</p>
-      <div className="mt-5 border-t border-[#e9edf5] pt-5"><MfaSetupWizard autoStart onDone={onDone} /></div>
-    </AuthShell>
   );
 }

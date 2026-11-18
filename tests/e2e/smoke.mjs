@@ -6,7 +6,7 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { chromium } from "playwright-core";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import http from "node:http";
 import sharp from "sharp";
 
@@ -105,6 +105,39 @@ async function helperTotp(userId) {
   return mfaLib.totpAtStep(secret, mfaLib.totpStep(Date.now()));
 }
 
+// ---------------------------------------------------------------------------------------------
+// Login SEM TOTP ativo agora exige um código de 6 dígitos por e-mail (2º fator padrão). O .env local tem
+// provedor de e-mail de verdade (Resend): o roteiro nunca lê a caixa de entrada; em vez disso, grava
+// diretamente o hash do código conhecido (mesma técnica de "seed" usada em verificacao_email_cadastro),
+// usando a MESMA fórmula HMAC de login-code-rules.ts (rótulo "login-verification", AUTH_SECRET). Nunca loga o código.
+// ---------------------------------------------------------------------------------------------
+const AUTH_SECRET_RAW = process.env.AUTH_SECRET ?? "";
+const KNOWN_EMAIL_CODE = "123456";
+function loginCodeHashFor(userId, code = KNOWN_EMAIL_CODE) {
+  return createHmac("sha256", new TextEncoder().encode(AUTH_SECRET_RAW)).update(`login-verification:${userId}:${code}`).digest("hex");
+}
+// Sobrescreve (ou cria) o código pendente do login por e-mail do usuário com um valor conhecido pelo roteiro,
+// sem depender do envio real. Chamar só depois de algo ter gerado a pendência (POST /api/auth/login ou
+// /api/mobile/auth/login sem mfaCode), que é quem cria a linha; aqui só trocamos o hash e destravamos tentativas.
+async function seedEmailLoginCode(userId, code = KNOWN_EMAIL_CODE) {
+  await prisma.loginVerificationCode.upsert({
+    where: { userId },
+    create: { userId, codeHash: loginCodeHashFor(userId, code), expiresAt: new Date(Date.now() + 600_000), attempts: 0, totalAttempts: 0, sends: 1, lastSentAt: new Date(0), windowStartedAt: new Date() },
+    update: { codeHash: loginCodeHashFor(userId, code), expiresAt: new Date(Date.now() + 600_000), attempts: 0, totalAttempts: 0, lockedUntil: null },
+  });
+  return code;
+}
+// Cookie harmonize_mfa (JWT assinado com AUTH_SECRET) pronto, sem depender da resposta real do login: mesma
+// estrutura de createMfaPendingToken em auth-session.ts ({userId, mfaPending:true, origin, method}).
+async function mintMfaPendingCookie(userId, method, origin = "password") {
+  const { SignJWT } = await import("jose");
+  return new SignJWT({ userId, mfaPending: true, origin, method })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("600s")
+    .sign(new TextEncoder().encode(AUTH_SECRET_RAW));
+}
+
 async function activateMfa(jar, userId, pw) {
   const start = await jar.call("POST", "/api/security/mfa/setup/start", { password: pw });
   if (start.s !== 200) throw new Error(`Ativação do 2FA (start) falhou: ${start.s}`);
@@ -117,8 +150,11 @@ async function activateMfa(jar, userId, pw) {
   return confirm.d.recoveryCodes;
 }
 
-// Login completo de uma conta pelo fluxo real (senha -> [troca de senha do primeiro acesso] -> [TOTP] -> sessão).
-// Se a conta é proprietário/ADMIN e ainda sem 2FA, ativa o 2FA e segue com a mesma sessão.
+// Login completo de uma conta pelo fluxo real (senha -> [troca de senha do primeiro acesso] -> [TOTP ou
+// e-mail] -> sessão). TOTP não é mais obrigatório para nenhum papel: sem ele (e sem dispositivo confiável),
+// o login pede o código por e-mail (method "email"); o roteiro nunca lê a caixa de entrada real — sobrescreve
+// o código pendente com um valor conhecido (seedEmailLoginCode) e confirma, exatamente como o cadastro faz
+// com PendingSignup. Sempre pede trustDevice:true para os logins seguintes da mesma conta pularem a verificação.
 async function fullLogin(loginName, secret) {
   const id = await userIdOf(loginName);
   if (id) touchedUsers.add(id);
@@ -131,8 +167,14 @@ async function fullLogin(loginName, secret) {
     r = await jar.call("POST", "/api/auth/change-password", { password: usedPassword });
   }
   if (r.s === 200 && r.d.mfaRequired) {
-    if (!id || !mfaSecrets.has(id)) throw new Error(`Conta ${loginName} pede 2FA e o roteiro não tem o segredo.`);
-    r = await jar.call("POST", "/api/auth/mfa/verify", { code: await helperTotp(id), trustDevice: true });
+    if (r.d.method === "email") {
+      if (!id) throw new Error(`Conta ${loginName} pede verificação por e-mail e o roteiro não achou o userId.`);
+      await seedEmailLoginCode(id);
+      r = await jar.call("POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE, trustDevice: true });
+    } else {
+      if (!id || !mfaSecrets.has(id)) throw new Error(`Conta ${loginName} pede 2FA e o roteiro não tem o segredo.`);
+      r = await jar.call("POST", "/api/auth/mfa/verify", { code: await helperTotp(id), trustDevice: true });
+    }
   }
   const sessionCookie = jar.c.harmonize_session ? `harmonize_session=${jar.c.harmonize_session}` : "";
   if (id && jar.c.harmonize_td) trustTokens.set(id, jar.c.harmonize_td);
@@ -159,6 +201,7 @@ async function wipeSecurityOf(userIds) {
     prisma.trustedDevice.deleteMany({ where: { userId: { in: userIds } } }),
     prisma.mfaRecoveryCode.deleteMany({ where: { userId: { in: userIds } } }),
     prisma.mfaSetting.deleteMany({ where: { userId: { in: userIds } } }),
+    prisma.loginVerificationCode.deleteMany({ where: { userId: { in: userIds } } }),
   ]);
 }
 
@@ -175,7 +218,9 @@ async function registerWithoutEmail(body) {
   return { status: 201, data: { success: true } };
 }
 
-// Login do app com a conta que exige 2FA: se a API pedir o código (401 mfaRequired) ou a ativação (403), o roteiro cumpre o 2FA e repete.
+// Login do app com a conta que exige 2FA (TOTP, se ativo) ou o código por e-mail (sempre, quando TOTP não
+// está ativo: mobile não tem conceito de dispositivo confiável): se a API pedir o código (401 mfaRequired) ou
+// a ativação (403), o roteiro cumpre o 2FA e repete. Código por e-mail: mesma técnica de seed, sem ler a caixa de entrada.
 async function mobileFetch(loginName, secret, rawBody) {
   const post = (extra) => fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: rawBody ?? JSON.stringify({ login: loginName, password: secret, ...extra }) });
   const first = await post({});
@@ -186,7 +231,12 @@ async function mobileFetch(loginName, secret, rawBody) {
   if (!needsCode && !needsSetup) return first;
   if (needsSetup && (await fullLogin(loginName, secret)).status !== 200) return first;
   const id = await userIdOf(loginName);
-  if (!id || !mfaSecrets.has(id)) return first;
+  if (!id) return first;
+  if (peek?.method === "email") {
+    await seedEmailLoginCode(id);
+    return post({ mfaCode: KNOWN_EMAIL_CODE });
+  }
+  if (!mfaSecrets.has(id)) return first;
   return post({ mfaCode: await helperTotp(id) });
 }
 
@@ -963,8 +1013,8 @@ async function withSession(sessionCookie, fn) {
 }
 
 async function loginAs(loginName, secret) {
-  // Colaborador novo entra com sessão de primeiro acesso: fullLogin troca a senha para obter a sessão completa e,
-  // para proprietário/ADMIN (2FA obrigatório), cumpre/ativa o 2FA.
+  // Colaborador novo entra com sessão de primeiro acesso: fullLogin troca a senha para obter a sessão completa e
+  // cumpre o 2º fator que a conta pedir (TOTP se ativo; senão o código por e-mail, sempre opcional/sem dono especial).
   return fullLogin(loginName, secret);
 }
 
@@ -6002,15 +6052,21 @@ async function googleSignup() {
     const losers = [a, b].filter((r) => r.status === 409);
     check("cadastro Google: clique duplo = um 201 e um 409 account_exists", wins.length === 1 && losers.length === 1 && losers[0].data?.code === "account_exists", `${a.status}/${b.status}`);
     const ok = wins[0];
-    const sessionSet = ok?.setCookie.find((c) => c.startsWith("harmonize_session=") && !/Max-Age=0/i.test(c));
-    check("cadastro Google: 201 abre sessão (Set-Cookie) e limpa o cookie pendente", Boolean(sessionSet) && clears(ok), `${ok?.status} ${ok?.setCookie.map((c) => c.split("=")[0]).join(",")}`);
+    // Conta nova, sem TOTP nem dispositivo confiável: igual a qualquer login, o cadastro Google NÃO abre sessão
+    // direto, pede o código por e-mail (cookie harmonize_mfa) e limpa o cookie pendente do Google.
+    const mfaSet = ok?.setCookie.find((c) => c.startsWith("harmonize_mfa=") && !/Max-Age=0/i.test(c));
+    check("cadastro Google: 201 com mfaRequired/method email (cookie harmonize_mfa, SEM sessão ainda) e limpa o cookie pendente do Google", ok?.data?.mfaRequired === true && ok?.data?.method === "email" && Boolean(mfaSet) && clears(ok), `${ok?.status} ${JSON.stringify(ok?.data)} ${ok?.setCookie.map((c) => c.split("=")[0]).join(",")}`);
     const user = await prisma.user.findUnique({ where: { email: mailOf("ok") }, include: { memberships: { include: { clinic: true } }, identities: true } });
     const m = user?.memberships[0];
     check("cadastro Google: e-mail do cookie (não do corpo), ADMIN verificado, 1 identidade google com o sub do cookie", Boolean(user) && user.role === "ADMIN" && !!user.emailVerifiedAt && user.identities.length === 1 && user.identities[0].provider === "google" && user.identities[0].providerSubject === sub && await prisma.user.count({ where: { email: mailOf("hacker") } }) === 0, JSON.stringify({ role: user?.role, ids: user?.identities.length }));
     check("cadastro Google: uma clínica nova, membership owner ADMIN e trial de 3 dias", user?.memberships.length === 1 && m.isOwner === true && m.role === "ADMIN" && m.clinic.name === profile.clinicName && (m.clinic.trialEndsAt - m.clinic.trialStartedAt) === 3 * 86_400_000 && await prisma.clinic.count({ where: { name: profile.clinicName } }) === 1, JSON.stringify({ n: user?.memberships.length, owner: m?.isOwner }));
+    // Confirma o código por e-mail (seed, sem ler a caixa de entrada real) para obter a sessão completa.
+    await seedEmailLoginCode(user.id);
+    const verify = await fetch(`${baseUrl}/api/auth/mfa/verify`, { method: "POST", headers: { "Content-Type": "application/json", cookie: mfaSet.split(";")[0] }, body: JSON.stringify({ code: KNOWN_EMAIL_CODE }) });
+    const sessionSet = verify.headers.getSetCookie().find((c) => c.startsWith("harmonize_session=") && !/Max-Age=0/i.test(c));
     const me = sessionSet ? await fetch(`${baseUrl}/api/auth/me`, { headers: { cookie: sessionSet.split(";")[0] } }) : null;
     const meBody = await me?.json().catch(() => null);
-    check("cadastro Google: a sessão devolvida autentica o dono na clínica nova", me?.status === 200 && meBody?.user?.email === mailOf("ok") && meBody?.user?.clinic?.name === profile.clinicName, `${me?.status}`);
+    check("cadastro Google: com o código por e-mail, a sessão autentica o dono na clínica nova", verify.status === 200 && me?.status === 200 && meBody?.user?.email === mailOf("ok") && meBody?.user?.clinic?.name === profile.clinicName, `${verify.status}/${me?.status}`);
 
     const again = await post(await sign("google_signup_pending", { sub: `${prefix}-sub2`, email: mailOf("ok"), name: "N" }), profile);
     check("cadastro Google: e-mail já cadastrado = 409 account_exists e nenhuma clínica extra", again.status === 409 && again.data?.code === "account_exists" && await prisma.clinic.count({ where: { name: profile.clinicName } }) === 1, `${again.status}`);
@@ -7715,6 +7771,143 @@ async function signupEmailVerification() {
   }
 }
 
+// Login por e-mail (2º fator padrão quando o TOTP não está ativo): web, reenvio, mobile, isolamento entre
+// contas e a liberdade de ADMIN/owner para desativar o TOTP voluntariamente. Só @example.invalid, prefixo
+// e2e-mle-<run>, clínica própria. O roteiro NUNCA lê a caixa de entrada real: sobrescreve o código pendente
+// com um valor conhecido (seedEmailLoginCode/mintMfaPendingCookie), mesma técnica de verificacao_email_cadastro.
+async function loginEmailVerification() {
+  if (AUTH_SECRET_RAW.length < 32) { check("login por e-mail: SEM AUTH_SECRET no ambiente do teste (parte ignorada)", false); return; }
+  const { hash } = await import("bcryptjs");
+  const prefix = `e2e-mle-${run}`;
+  const pw = `E2e-${run}-Mle9!`;
+  const passwordHash = await hash(pw, 4);
+  const mail = (tag) => `${prefix}-${tag}@example.invalid`;
+  const users = [];
+  let clinic = null;
+  const mk = async (tag, role, isOwner = false) => {
+    const user = await prisma.user.create({ data: { name: `Mle ${tag}`, email: mail(tag), passwordHash, role, emailVerifiedAt: new Date() } });
+    await prisma.clinicMembership.create({ data: { userId: user.id, clinicId: clinic.id, role, isOwner } });
+    users.push(user.id); touchedUsers.add(user.id);
+    return { id: user.id, email: user.email, tag };
+  };
+  const login = (jar, loginName, password = pw) => jar.call("POST", "/api/auth/login", { login: loginName, password });
+  try {
+    clinic = await prisma.clinic.create({ data: { name: `${prefix} Clínica`, slug: `${prefix}-clinica` } });
+    const owner = await mk("owner", "ADMIN", true);
+    const pro = await mk("pro", "PROFESSIONAL");
+    const other = await mk("other", "PROFESSIONAL");
+
+    // ===== 1) sem TOTP: login por senha exige código por e-mail (não TOTP) =====
+    {
+      const jar = newJar();
+      const r = await login(jar, owner.email);
+      check("login sem TOTP: senha certa devolve mfaRequired:true, method:email, cookie harmonize_mfa e nenhuma sessão", r.s === 200 && r.d.mfaRequired === true && r.d.method === "email" && !r.d.user && Boolean(jar.c.harmonize_mfa) && !jar.c.harmonize_session, `${r.s} ${JSON.stringify(r.d)}`);
+      check("login sem TOTP: já existe uma linha de LoginVerificationCode pendente para a conta", await prisma.loginVerificationCode.count({ where: { userId: owner.id } }) === 1);
+      const before = await jar.call("GET", "/api/auth/me");
+      check("login sem TOTP: antes de verificar, /me continua 401", before.s === 401, before.s);
+
+      const wrong = await jar.call("POST", "/api/auth/mfa/verify", { code: "000000" });
+      check("login sem TOTP: código errado = 401 com mensagem genérica, sem sessão", wrong.s === 401 && wrong.d.message === "Código inválido ou expirado." && !jar.c.harmonize_session, `${wrong.s} ${JSON.stringify(wrong.d)}`);
+
+      await seedEmailLoginCode(owner.id);
+      const ok = await jar.call("POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE, trustDevice: true });
+      check("login sem TOTP: código certo = 200 com user e sessão; cookie harmonize_mfa apagado; código de uso único (apagado no banco)", ok.s === 200 && ok.d.user?.email === owner.email && Boolean(jar.c.harmonize_session) && !jar.c.harmonize_mfa && await prisma.loginVerificationCode.count({ where: { userId: owner.id } }) === 0, `${ok.s} ${JSON.stringify(ok.d)}`);
+      check("login sem TOTP: dispositivo confiável foi criado (cookie harmonize_td)", Boolean(jar.c.harmonize_td));
+
+      const jar2 = newJar();
+      jar2.c.harmonize_td = jar.c.harmonize_td;
+      const skip = await login(jar2, owner.email);
+      check("login sem TOTP: trustDevice=true faz o próximo login PULAR a verificação (200 direto, sem mfaRequired)", skip.s === 200 && !skip.d.mfaRequired && skip.d.user?.email === owner.email && Boolean(jar2.c.harmonize_session), `${skip.s} ${JSON.stringify(skip.d)}`);
+    }
+
+    // ===== 2) reenvio: dentro do limite funciona; exceder cooldown/limite não revela qual =====
+    {
+      const jar = newJar();
+      await login(jar, pro.email);
+      const before = await prisma.loginVerificationCode.findUnique({ where: { userId: pro.id }, select: { sends: true, lastSentAt: true } });
+      const r1 = await jar.call("POST", "/api/auth/mfa/resend");
+      check("reenvio: dentro do limite devolve {ok:true} igual a qualquer outra negativa (não vaza qual limite)", r1.s === 200 && Object.keys(r1.d).join() === "ok", `${r1.s} ${JSON.stringify(r1.d)}`);
+      await prisma.loginVerificationCode.update({ where: { userId: pro.id }, data: { lastSentAt: new Date(Date.now() - 5_000) } }); // dentro do cooldown de 60s
+      const immediate = await jar.call("POST", "/api/auth/mfa/resend");
+      const afterImmediate = await prisma.loginVerificationCode.findUnique({ where: { userId: pro.id }, select: { sends: true } });
+      check("reenvio: pedir de novo dentro do cooldown (60s) devolve {ok:true} igual, mas NÃO incrementa sends (reenvio real não aconteceu)", immediate.s === 200 && Object.keys(immediate.d).join() === "ok" && afterImmediate.sends === before.sends, `sends ${before.sends} -> ${afterImmediate.sends}`);
+      await prisma.loginVerificationCode.update({ where: { userId: pro.id }, data: { lastSentAt: new Date(Date.now() - 120_000), sends: 6 } }); // MAX_SENDS=6, limite da janela esgotado
+      const atLimit = await jar.call("POST", "/api/auth/mfa/resend");
+      const afterLimit = await prisma.loginVerificationCode.findUnique({ where: { userId: pro.id }, select: { sends: true } });
+      check("reenvio: limite de envios da janela esgotado também devolve {ok:true} igual (resposta neutra) e não incrementa sends", atLimit.s === 200 && Object.keys(atLimit.d).join() === "ok" && afterLimit.sends === 6, `sends ${afterLimit.sends}`);
+      const noPending = await newJar().call("POST", "/api/auth/mfa/resend");
+      check("reenvio: sem cookie harmonize_mfa (pendente) = {ok:true} igual, sem efeito", noPending.s === 200 && Object.keys(noPending.d).join() === "ok");
+    }
+
+    // ===== 3) conta com TOTP ativo: login continua pedindo TOTP, não e-mail =====
+    {
+      const jar = newJar();
+      await login(jar, pro.email);
+      await seedEmailLoginCode(pro.id);
+      await jar.call("POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE }); // entra sem trustDevice (não deve valer p/ próximo login)
+      pro.recovery = await activateMfa(jar, pro.id, pw);
+      pro.secret = mfaSecrets.get(pro.id);
+
+      const jar2 = newJar();
+      const r2 = await login(jar2, pro.email);
+      check("TOTP ativo: login volta a pedir method:totp (não email)", r2.s === 200 && r2.d.mfaRequired === true && r2.d.method === "totp", `${r2.s} ${JSON.stringify(r2.d)}`);
+      const wrongEmailCode = await jar2.call("POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE });
+      check("TOTP ativo: um código de e-mail (6 dígitos quaisquer) não serve como TOTP (401)", wrongEmailCode.s === 401, wrongEmailCode.s);
+      const good = await jar2.call("POST", "/api/auth/mfa/verify", { code: await helperTotp(pro.id) });
+      check("TOTP ativo: o TOTP correto entra normalmente (200)", good.s === 200 && good.d.user?.email === pro.email, good.s);
+    }
+
+    // ===== 4) ADMIN/owner pode desativar o TOTP voluntariamente =====
+    {
+      const jar = newJar();
+      await login(jar, owner.email);
+      await seedEmailLoginCode(owner.id);
+      await jar.call("POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE, trustDevice: true });
+      await activateMfa(jar, owner.id, pw);
+      check("ADMIN/owner: TOTP ativo no banco antes de desativar", (await prisma.mfaSetting.findUnique({ where: { userId: owner.id } }))?.enabledAt != null);
+      const code = await helperTotp(owner.id);
+      const dis = await jar.call("POST", "/api/security/mfa/disable", { password: pw, code });
+      check("ADMIN/owner: desativa o próprio TOTP com sucesso (200), diferente do bloqueio antigo", dis.s === 200 && dis.d.success === true, `${dis.s} ${JSON.stringify(dis.d)}`);
+      check("ADMIN/owner: TOTP realmente removido do banco", (await prisma.mfaSetting.findUnique({ where: { userId: owner.id } })) === null);
+      const jar2 = newJar();
+      const r2 = await login(jar2, owner.email);
+      check("ADMIN/owner: depois de desativar, login volta a pedir o código por e-mail (não TOTP)", r2.s === 200 && r2.d.mfaRequired === true && r2.d.method === "email", `${r2.s} ${JSON.stringify(r2.d)}`);
+    }
+
+    // ===== 5) mobile: sem TOTP exige o código por e-mail (401), código certo abre sessão =====
+    {
+      const mob = (body) => fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => null) }));
+      const first = await mob({ login: other.email, password: pw });
+      check("mobile sem TOTP: pede o código por e-mail (401 mfaRequired, method email), sem token", first.status === 401 && first.data.mfaRequired === true && first.data.method === "email" && !first.data.token, `${first.status} ${JSON.stringify(first.data)}`);
+      const wrong = await mob({ login: other.email, password: pw, mfaCode: "000000" });
+      check("mobile sem TOTP: código errado = 401 mfaRequired method email, sem token", wrong.status === 401 && wrong.data.mfaRequired === true && wrong.data.method === "email" && !wrong.data.token, wrong.status);
+      await seedEmailLoginCode(other.id);
+      const ok = await mob({ login: other.email, password: pw, mfaCode: KNOWN_EMAIL_CODE });
+      check("mobile sem TOTP: código certo abre sessão (200, token)", ok.status === 200 && Boolean(ok.data.token), `${ok.status} ${JSON.stringify(ok.data)}`);
+    }
+
+    // ===== 6) isolamento: o código de um usuário não valida para outro =====
+    {
+      const jarOwner = newJar();
+      await login(jarOwner, owner.email);
+      await seedEmailLoginCode(owner.id, "654321");
+      const jarPro = newJar();
+      await login(jarPro, pro.email); // esse já tem TOTP ativo (bloco 3): não gera LoginVerificationCode
+      // Troca o cookie pendente do pro pelo code do owner (pendente é só "method"; o código real é validado por userId do PRÓPRIO cookie assinado).
+      jarPro.c.harmonize_mfa = await mintMfaPendingCookie(pro.id, "email");
+      const cross = await jarPro.call("POST", "/api/auth/mfa/verify", { code: "654321" });
+      check("isolamento: código de e-mail do owner NÃO valida para outra conta (401), mesmo pendente method:email", cross.s === 401 && !jarPro.c.harmonize_session, `${cross.s} ${JSON.stringify(cross.d)}`);
+      const sameUser = await jarOwner.call("POST", "/api/auth/mfa/verify", { code: "654321" });
+      check("isolamento: o mesmo código, pelo dono certo, continua valendo (200)", sameUser.s === 200, sameUser.s);
+    }
+  } finally {
+    await wipeSecurityOf(users);
+    await prisma.clinicMembership.deleteMany({ where: { userId: { in: users } } });
+    await prisma.user.deleteMany({ where: { id: { in: users } } });
+    if (clinic) await prisma.clinic.deleteMany({ where: { id: clinic.id } });
+  }
+}
+
 // Segurança: 2FA TOTP, dispositivos confiáveis, sessões revogáveis e histórico, pelos fluxos reais (login -> TOTP -> verify).
 // Só @example.invalid, prefixo e2e-sec-<run>, clínica própria (não toca a clínica de teste). Limpeza no finally.
 // Não cobre o callback real do Google (exige o Google): só o cadastro/aceite com cookie assinado, como em cadastro_google.
@@ -7740,7 +7933,10 @@ async function security2fa() {
   const pending = async (u, cookies = {}, secret = pw) => { const jar = newJar(); Object.assign(jar.c, cookies); const r = await call(jar, "POST", "/api/auth/login", { login: u.email, password: secret }); return { jar, r }; };
   const session = async (u, { trust = false, cookies = {} } = {}) => {
     const { jar, r } = await pending(u, cookies);
-    if (r.d?.mfaRequired) await call(jar, "POST", "/api/auth/mfa/verify", { code: await fresh(u), trustDevice: trust });
+    if (r.d?.mfaRequired) {
+      if (r.d.method === "email") { await seedEmailLoginCode(u.id); await call(jar, "POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE, trustDevice: trust }); }
+      else await call(jar, "POST", "/api/auth/mfa/verify", { code: await fresh(u), trustDevice: trust });
+    }
     if (jar.c.harmonize_session) seen.tokens.add(jar.c.harmonize_session);
     if (jar.c.harmonize_td) seen.td.add(jar.c.harmonize_td);
     return jar;
@@ -7774,39 +7970,46 @@ async function security2fa() {
     for (const u of [staff, proN]) {
       const jar = newJar();
       const r = await call(jar, "POST", "/api/auth/login", { login: u.email, password: pw });
+      check(`2FA: ${u.tag} sem TOTP ainda pede o código por e-mail (mfaRequired true, method email, sem sessão)`, r.s === 200 && r.d.mfaRequired === true && r.d.method === "email" && !r.d.user && Boolean(jar.c.harmonize_mfa) && !jar.c.harmonize_session, `${r.s} ${JSON.stringify(r.d)}`);
+      await seedEmailLoginCode(u.id);
+      const v = await call(jar, "POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE });
       const me = await call(jar, "GET", "/api/auth/me");
-      check(`2FA: ${u.tag} sem 2FA entra normal (200, user, sessão, sem mfaRequired)`, r.s === 200 && !r.d.mfaRequired && r.d.user?.email === u.email && Boolean(jar.c.harmonize_session) && !jar.c.harmonize_mfa && me.s === 200 && me.d.mfaSetupRequired === false, `${r.s} ${JSON.stringify(Object.keys(r.d))}`);
+      check(`2FA: ${u.tag} com o código certo entra normal (200, user, sessão) e /me mostra mfaSetupRequired false`, v.s === 200 && v.d.user?.email === u.email && Boolean(jar.c.harmonize_session) && !jar.c.harmonize_mfa && me.s === 200 && !me.d.mfaSetupRequired, `${v.s} ${JSON.stringify(v.d)}`);
     }
     const jN = await session(proN);
     const ovN = await overview(jN);
-    check("2FA: PROFESSIONAL sem 2FA acessa rotas comuns (/api/patients 200) e o resumo mostra 2FA desativado e não obrigatório", (await call(jN, "GET", "/api/patients")).s === 200 && ovN.mfa?.enabled === false && ovN.mfa?.required === false);
+    check("2FA: PROFESSIONAL sem 2FA acessa rotas comuns (/api/patients 200) e o resumo mostra 2FA desativado (campo required não existe mais: TOTP é sempre opcional, não há mais noção de obrigatório)", (await call(jN, "GET", "/api/patients")).s === 200 && ovN.mfa?.enabled === false && !("required" in (ovN.mfa ?? {})));
 
-    // ===== 14) proprietário/ADMIN sem 2FA ficam bloqueados =====
+    // ===== 14) proprietário/ADMIN: TOTP agora é opcional também para eles (antes era obrigatório) =====
     {
       const jo = newJar();
       const r = await call(jo, "POST", "/api/auth/login", { login: owner.email, password: pw });
+      check("2FA: owner sem TOTP segue a MESMA regra de qualquer papel (mfaRequired true, method email, não é bloqueado antes de verificar)", r.s === 200 && r.d.mfaRequired === true && r.d.method === "email", `${r.s} ${JSON.stringify(r.d)}`);
+      await seedEmailLoginCode(owner.id);
+      const v = await call(jo, "POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE, trustDevice: true });
       const me = await call(jo, "GET", "/api/auth/me");
-      const blocked = [await call(jo, "GET", "/api/patients"), await call(jo, "GET", "/api/quotes"), await call(jo, "GET", "/api/security/events"), await call(jo, "DELETE", "/api/security/sessions"), await call(jo, "DELETE", "/api/security/trusted-devices")];
-      check("2FA obrigatório: owner sem 2FA entra (200), mas /api/patients, orçamentos, histórico e revogações dão 401", r.s === 200 && blocked.every((x) => x.s === 401), `${r.s} ${blocked.map((x) => x.s)}`);
-      check("2FA obrigatório: /api/auth/me devolve 200 com mfaSetupRequired true, sem sid no corpo", me.s === 200 && me.d.mfaSetupRequired === true && me.d.user?.email === owner.email && !JSON.stringify(me.d).includes("sessionId"), `${me.s} ${JSON.stringify(me.d).slice(0, 120)}`);
+      const allowed = [await call(jo, "GET", "/api/patients"), await call(jo, "GET", "/api/quotes"), await call(jo, "GET", "/api/security/events")];
+      check("2FA: owner verificado por e-mail acessa /api/patients, orçamentos e histórico (200) SEM precisar de TOTP", v.s === 200 && me.s === 200 && !me.d.mfaSetupRequired && allowed.every((x) => x.s === 200), `${v.s} ${allowed.map((x) => x.s)}`);
       const ov = await call(jo, "GET", "/api/security/overview");
-      check("2FA obrigatório: /api/security/overview responde 200 (required true, enabled false) para o assistente", ov.s === 200 && ov.d.mfa?.required === true && ov.d.mfa?.enabled === false, ov.s);
-      const outStart = await call(jo, "POST", "/api/security/mfa/setup/start", { password: pw });
-      check("2FA obrigatório: setup/start funciona com o 2FA ainda pendente (200, QR SVG e chave manual)", outStart.s === 200 && /^<(svg|\?xml)/.test(outStart.d.qrSvg ?? "") && typeof outStart.d.manualKey === "string" && outStart.d.manualKey.replace(/[\s-]/g, "").length >= 32, `${outStart.s}`);
+      check("2FA: /api/security/overview nem tem mais o campo required (não existe exigência de TOTP, nem para owner) e enabled:false", ov.s === 200 && !("required" in (ov.d.mfa ?? {})) && ov.d.mfa?.enabled === false, ov.s);
       const lo = await call(jo, "POST", "/api/auth/logout");
-      check("2FA obrigatório: logout funciona mesmo bloqueado e derruba a sessão", lo.s === 200 && (await call(jo, "GET", "/api/auth/me")).s === 401);
+      check("2FA: logout funciona normalmente e derruba a sessão", lo.s === 200 && (await call(jo, "GET", "/api/auth/me")).s === 401);
       const ja = newJar();
       await call(ja, "POST", "/api/auth/login", { login: adm2.email, password: pw });
-      check("2FA obrigatório: ADMIN que não é dono também fica bloqueado (me.mfaSetupRequired, /api/patients 401)", (await call(ja, "GET", "/api/auth/me")).d.mfaSetupRequired === true && (await call(ja, "GET", "/api/patients")).s === 401);
-      // Ativa o owner (fluxo real) e confere que libera.
+      await seedEmailLoginCode(adm2.id);
+      await call(ja, "POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE });
+      check("2FA: ADMIN que não é dono segue a mesma regra (código por e-mail, depois acesso normal, sem bloqueio especial)", (await call(ja, "GET", "/api/auth/me")).s === 200 && (await call(ja, "GET", "/api/patients")).s === 200);
+      // Ativa o TOTP do owner (fluxo real) e confere que ele pode desativar de novo voluntariamente (antes era bloqueado p/ owner).
       const j2 = newJar();
       await call(j2, "POST", "/api/auth/login", { login: owner.email, password: pw });
+      await seedEmailLoginCode(owner.id);
+      await call(j2, "POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE });
       owner.recovery = await activateMfa(j2, owner.id, pw);
       owner.secret = mfaSecrets.get(owner.id);
       seen.secrets.add(owner.secret); owner.recovery.forEach((c) => seen.recovery.add(c));
-      check("2FA obrigatório: depois de ativar, /api/patients passa a responder 200 na mesma sessão", (await call(j2, "GET", "/api/patients")).s === 200 && (await call(j2, "GET", "/api/auth/me")).d.mfaSetupRequired === false);
+      check("2FA: depois de ativar o TOTP por opção própria, /api/patients continua respondendo (200) na mesma sessão", (await call(j2, "GET", "/api/patients")).s === 200 && !(await call(j2, "GET", "/api/auth/me")).d.mfaSetupRequired);
       const dis = await call(j2, "POST", "/api/security/mfa/disable", { password: pw, code: await fresh(owner) });
-      check("2FA obrigatório: owner NÃO pode desativar (403 mfa_required) e o 2FA continua ativo", dis.s === 403 && dis.d.code === "mfa_required" && (await prisma.mfaSetting.findUnique({ where: { userId: owner.id } }))?.enabledAt !== null, `${dis.s} ${dis.d.code}`);
+      check("2FA: owner PODE desativar o próprio TOTP agora (200), diferente do bloqueio antigo (403 mfa_required)", dis.s === 200 && dis.d.success === true && (await prisma.mfaSetting.findUnique({ where: { userId: owner.id } })) === null, `${dis.s} ${JSON.stringify(dis.d)}`);
     }
 
     // ===== 6) Ativação (PROFESSIONAL opta pelo 2FA) =====
@@ -7970,7 +8173,8 @@ async function security2fa() {
       const ok = await call(jd, "POST", "/api/security/mfa/disable", { password: pw, code: await fresh(proD) });
       check("desativar: senha + código = 200; apaga segredo, códigos e dispositivos; revoga as OUTRAS sessões e mantém a atual", ok.s === 200 && await prisma.mfaSetting.count({ where: { userId: proD.id } }) === 0 && await prisma.mfaRecoveryCode.count({ where: { userId: proD.id } }) === 0 && await prisma.trustedDevice.count({ where: { userId: proD.id } }) === 0 && (await call(other, "GET", "/api/auth/me")).s === 401 && (await call(trusted, "GET", "/api/auth/me")).s === 401 && (await call(jd, "GET", "/api/auth/me")).s === 200, `${ok.s}`);
       const lg = await pending(proD);
-      check("desativar: depois, o login volta a ser só senha; grava MFA_DISABLED; desativar de novo = 409", lg.r.s === 200 && !lg.r.d.mfaRequired && await dbEvents(proD, "MFA_DISABLED") === 1 && (await call(jd, "POST", "/api/security/mfa/disable", { password: pw, code: "123456" })).s === 409);
+      // Desativar o TOTP também apaga o dispositivo confiável: sem TOTP e sem dispositivo, o login volta a pedir o código por e-mail (não entra só com a senha).
+      check("desativar: depois, o login volta a pedir o código por e-mail (não TOTP); grava MFA_DISABLED; desativar de novo = 409", lg.r.s === 200 && lg.r.d.mfaRequired === true && lg.r.d.method === "email" && await dbEvents(proD, "MFA_DISABLED") === 1 && (await call(jd, "POST", "/api/security/mfa/disable", { password: pw, code: "123456" })).s === 409);
     }
 
     // ===== 11) bloqueio =====
@@ -8090,10 +8294,14 @@ async function security2fa() {
       const web = await session(pro);
       const revoked = await call(web, "DELETE", `/api/security/sessions/${claims.sid}`);
       check("mobile: revogar a sessão do app pela tela de segurança invalida o Bearer na hora (401)", revoked.s === 200 && await bearerMe(ok.data.token) === 401, `${revoked.s}`);
-      const plain = await mob(proN.email, pw);
-      check("mobile: usuário SEM 2FA entra só com senha (200) e o token tem sid", plain.status === 200 && Boolean(plain.data.token) && JSON.parse(Buffer.from(plain.data.token.split(".")[1], "base64url").toString()).sid !== undefined);
+      // Mobile não tem conceito de dispositivo confiável: usuário sem TOTP sempre pede o código por e-mail (mesmo já tendo um "trusted" na web).
+      const plainFirst = await mob(proN.email, pw);
+      check("mobile: usuário sem TOTP pede o código por e-mail (401 mfaRequired, method email), mesmo com dispositivo confiável na web", plainFirst.status === 401 && plainFirst.data.mfaRequired === true && plainFirst.data.method === "email" && !plainFirst.data.token, `${plainFirst.status} ${JSON.stringify(plainFirst.data)}`);
+      await seedEmailLoginCode(proN.id);
+      const plain = await mob(proN.email, pw, { mfaCode: KNOWN_EMAIL_CODE });
+      check("mobile: com o código por e-mail certo, entra (200) e o token tem sid", plain.status === 200 && Boolean(plain.data.token) && JSON.parse(Buffer.from(plain.data.token.split(".")[1], "base64url").toString()).sid !== undefined, `${plain.status} ${JSON.stringify(plain.data)}`);
       const need = await mob(adm2.email, pw);
-      check("mobile: ADMIN que exige 2FA e ainda não ativou = 403 mfaSetupRequired, sem token", need.status === 403 && need.data.mfaSetupRequired === true && !need.data.token, `${need.status}`);
+      check("mobile: ADMIN sem TOTP também pede o código por e-mail (401 mfaRequired, method email), sem token — TOTP não é mais obrigatório", need.status === 401 && need.data.mfaRequired === true && need.data.method === "email" && !need.data.token, `${need.status} ${JSON.stringify(need.data)}`);
       const unknownBefore = await prisma.securityEvent.count({ where: { userId: null } });
       await mob(`ninguem-${run}@example.invalid`, pw);
       await call(newJar(), "POST", "/api/auth/login", { login: `ninguem-${run}@example.invalid`, password: pw });
@@ -8126,7 +8334,11 @@ async function security2fa() {
       await prisma.user.update({ where: { id: proM2.id }, data: { mustChangePassword: true } });
       const m2 = await pending(proM2);
       const ch2 = await call(m2.jar, "POST", "/api/auth/change-password", { password: newPw });
-      check("troca de senha (sem 2FA): abre sessão nova (200) e derruba as outras sessões do usuário", ch2.s === 200 && !ch2.d.mfaRequired && (await call(m2.jar, "GET", "/api/auth/me")).s === 200 && (await call(o1, "GET", "/api/auth/me")).s === 401 && (await call(o2, "GET", "/api/auth/me")).s === 401, `${ch2.s}`);
+      // Troca de senha revoga TAMBÉM os dispositivos confiáveis: sem TOTP e sem dispositivo, pede o código por e-mail antes da sessão nova.
+      check("troca de senha (sem TOTP): devolve mfaRequired/method email (não abre sessão direto) e já derruba as outras sessões do usuário", ch2.s === 200 && ch2.d.mfaRequired === true && ch2.d.method === "email" && (await call(o1, "GET", "/api/auth/me")).s === 401 && (await call(o2, "GET", "/api/auth/me")).s === 401, `${ch2.s} ${JSON.stringify(ch2.d)}`);
+      await seedEmailLoginCode(proM2.id);
+      const v2 = await call(m2.jar, "POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE });
+      check("troca de senha (sem TOTP): o código por e-mail abre a sessão nova (200)", v2.s === 200 && (await call(m2.jar, "GET", "/api/auth/me")).s === 200, v2.s);
     }
 
     // ===== 19) Google: cookies assinados (o callback real exige o Google e não é testável aqui) =====
@@ -8139,10 +8351,14 @@ async function security2fa() {
       const done = await call(jar, "POST", "/api/auth/google/signup/complete", { clinicName: `${prefix} Google`, name: "Google Sec" });
       const guser = await prisma.user.findUnique({ where: { email: gmail }, select: { id: true } });
       if (guser) { created.push(guser.id); touchedUsers.add(guser.id); }
+      // Conta nova, sem TOTP nem dispositivo confiável: cai no mesmo 2º fator por e-mail de qualquer login (não abre sessão ainda).
+      check("Google (cadastro): 201 e, SEM TOTP/dispositivo confiável, pede o código por e-mail (mfaRequired, method email), ainda sem sessão", done.s === 201 && Boolean(guser) && done.d.mfaRequired === true && done.d.method === "email" && !jar.c.harmonize_session && Boolean(jar.c.harmonize_mfa), `${done.s} ${JSON.stringify(done.d)}`);
+      await seedEmailLoginCode(guser.id);
+      const verified = await call(jar, "POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE });
       const gsid = jar.c.harmonize_session ? sidOf(jar) : null;
       const row = gsid ? await prisma.authSession.findUnique({ where: { id: gsid } }) : null;
       const me = await call(jar, "GET", "/api/auth/me");
-      check("Google (cadastro): abre sessão com sid (AuthSession), registra LOGIN_GOOGLE e, sendo dono, cai no 2FA obrigatório (me.mfaSetupRequired, /api/patients 401)", done.s === 201 && Boolean(guser) && row?.userId === guser.id && me.d.mfaSetupRequired === true && (await call(jar, "GET", "/api/patients")).s === 401 && await prisma.securityEvent.count({ where: { userId: guser.id, type: "LOGIN_GOOGLE" } }) === 1, `${done.s}`);
+      check("Google (cadastro): com o código por e-mail, abre sessão completa com sid (AuthSession), registra LOGIN_GOOGLE e NÃO exige TOTP (/api/patients 200)", verified.s === 200 && row?.userId === guser.id && !me.d.mfaSetupRequired && (await call(jar, "GET", "/api/patients")).s === 200 && await prisma.securityEvent.count({ where: { userId: guser.id, type: "LOGIN_GOOGLE" } }) === 1, `${verified.s} ${JSON.stringify(me.d)}`);
       if (guser && gsid) {
         const st = await call(jar, "POST", "/api/security/mfa/setup/start", {});
         check("Google (conta só-Google): sem senha, sessão recente reautentica o início da ativação (200)", st.s === 200, st.s);
@@ -10586,6 +10802,7 @@ const suites = {
   google_agenda: { needs: [], run: () => googleAgenda() },
   editar_dados_cliente: { needs: [], run: () => editPatientData() },
   seguranca_2fa: { needs: [], run: () => security2fa() },
+  login_email: { needs: [], run: () => loginEmailVerification() },
   verificacao_email_cadastro: { needs: [], run: () => signupEmailVerification() },
   chave_email_clientes: { needs: [], run: () => patientEmailsSwitch() },
   catalogo_materiais: { needs: [], run: () => stockCatalog() },

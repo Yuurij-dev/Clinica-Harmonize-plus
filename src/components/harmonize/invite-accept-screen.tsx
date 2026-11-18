@@ -23,6 +23,13 @@ function openApp() {
   window.location.assign("/?google=ok");
 }
 
+// Sem dispositivo confiável/TOTP: o login pede o código (TOTP ou e-mail) antes de abrir sessão. O cookie
+// pendente já foi aplicado pelo servidor; a tela de verificação do login completa o acesso.
+function goToMfaVerification() {
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+  window.location.assign("/login?mfa=1");
+}
+
 async function readMessage(response: Response, fallback: string) {
   const data = await response.json().catch(() => null) as { message?: string } | null;
   return data?.message ?? fallback;
@@ -220,7 +227,12 @@ export function InviteAcceptScreen({ token, googleStatus }: { token: string; goo
     setError("");
     try {
       const response = await fetch("/api/auth/invite/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, name, password, ...readPersonal(form, cpf, address) }) });
-      if (response.ok) { openApp(); return; }
+      if (response.ok) {
+        const data = await response.json().catch(() => null) as { mfaRequired?: boolean } | null;
+        if (data?.mfaRequired) { goToMfaVerification(); return; }
+        openApp();
+        return;
+      }
       if (response.status === 409) { go("signin"); setError("Já existe uma conta com este e-mail. Entre com sua senha para aceitar o convite."); return; }
       setError(await readMessage(response, "Não foi possível criar a conta agora. Tente novamente."));
     } catch {
@@ -239,8 +251,14 @@ export function InviteAcceptScreen({ token, googleStatus }: { token: string; goo
     setError("");
     try {
       const response = await fetch("/api/auth/invite/google/complete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, name, ...readPersonal(form, cpf, address) }) });
-      if (response.ok) { openApp(); return; }
-      const data = await response.json().catch(() => null) as { code?: string; message?: string } | null;
+      const data = await response.json().catch(() => null) as { code?: string; message?: string; mfaRequired?: boolean } | null;
+      if (response.ok) {
+        // Conta criada, mas o código por e-mail não pôde ser enviado: sem sessão nem pendente, recomeça pelo login.
+        if (data?.code === "mfa_email_failed") { setError(data.message ?? "Convite aceito, mas não foi possível enviar o código de verificação agora."); go("signin"); return; }
+        if (data?.mfaRequired) { goToMfaVerification(); return; }
+        openApp();
+        return;
+      }
       const message = data?.message ?? "Não foi possível concluir o cadastro agora. Tente novamente.";
       if (response.status === 409) { go("signin"); setError(message); return; }
       // Verificação do Google ausente/expirada ou convite inválido: não adianta reenviar, recomeça pelo Google.
@@ -260,9 +278,11 @@ export function InviteAcceptScreen({ token, googleStatus }: { token: string; goo
     setError("");
     try {
       const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ login: invitation.email, password }) });
-      const data = await response.json().catch(() => null) as { message?: string; passwordChangeRequired?: boolean } | null;
+      const data = await response.json().catch(() => null) as { message?: string; passwordChangeRequired?: boolean; mfaRequired?: boolean } | null;
       if (!response.ok) { setError(loginMessageFor(response.status, data?.message)); return; }
       if (data?.passwordChangeRequired) { go("change-password"); return; }
+      // Sem sessão ainda (sem dispositivo confiável/TOTP): completa a verificação no login antes de aceitar o convite.
+      if (data?.mfaRequired) { goToMfaVerification(); return; }
       await acceptWithSession();
     } catch {
       setError("Não foi possível conectar ao servidor. Verifique sua conexão e tente novamente.");
@@ -282,6 +302,9 @@ export function InviteAcceptScreen({ token, googleStatus }: { token: string; goo
       if (!response.ok) { setError(await readMessage(response, "Não foi possível salvar a nova senha.")); return; }
       // A senha provisória já foi trocada: se o aceite falhar (resposta de erro ou exceção de rede), volta ao login (reenviar a troca daria 403 enganoso).
       changed = true;
+      const data = await response.json().catch(() => null) as { mfaRequired?: boolean } | null;
+      // Sem sessão ainda (sem dispositivo confiável/TOTP): completa a verificação no login antes de aceitar o convite.
+      if (data?.mfaRequired) { goToMfaVerification(); return; }
       const accepted = await acceptWithSession();
       const next = stepAfterPasswordChange({ changed: true, accepted });
       if (next.step === "signin") { go("signin"); setError(next.message); }

@@ -5,7 +5,7 @@ export const SECURITY_OVERVIEW_KEY = "/api/security/overview";
 export const SECURITY_EVENTS_PAGE_SIZE = 5;
 
 export type SecurityOverview = {
-  mfa: { enabled: boolean; enabledAt: string | null; setupPending: boolean; required: boolean; recoveryCodesRemaining: number };
+  mfa: { enabled: boolean; enabledAt: string | null; setupPending: boolean; recoveryCodesRemaining: number };
   trustedDevices: Array<{ id: string; label: string; createdAt: string; lastUsedAt: string; expiresAt: string; current: boolean }>;
   sessions: Array<{ id: string; label: string; browser: string; os: string; ipMasked: string; createdAt: string; lastSeenAt: string; expiresAt: string; current: boolean; trusted: boolean }>;
 };

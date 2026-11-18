@@ -10,10 +10,10 @@ const alreadyActive = "A verificação em duas etapas já está ativa.";
 // Passo 1 da ativação: reautentica (senha; conta só-Google com sessão recente) e cria um segredo PENDENTE.
 // O segredo só é devolvido aqui (QR + chave manual) e só ativa depois de setup/confirm com um código válido.
 export async function POST(request: Request) {
-  const { user, error } = await requireSecurityUser(request, { mutation: true, allowMfaSetup: true });
+  const { user, error } = await requireSecurityUser(request, { mutation: true });
   if (error) return error;
   const body = await request.json().catch(() => null) as { password?: unknown } | null;
-  const denied = await reauthenticate(user, body?.password, { freshSessionOk: user.mfaSetupRequired });
+  const denied = await reauthenticate(user, body?.password);
   if (denied) return denied;
 
   const existing = await prisma.mfaSetting.findUnique({ where: { userId: user.id }, select: { enabledAt: true } });
