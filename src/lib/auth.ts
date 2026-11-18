@@ -4,7 +4,6 @@ import { parseBearerToken } from "./bearer-rules";
 import { getAuthSecret } from "./auth-secret";
 import { prisma } from "./prisma";
 import { pickMembership } from "./active-clinic-rules";
-import { mfaRequiredForMemberships } from "./mfa-rules";
 import { resolveEntitlements, type Entitlements } from "./entitlements.ts";
 import { canForUser, normalizeRolePermissionMatrix, type Permission, type RolePermissionMatrix } from "./permissions";
 
@@ -31,12 +30,6 @@ type AuthenticatedUser = {
   clinic: { id: string; name: string; slug: string; trialEndsAt: Date | null };
   /** id da AuthSession (claim sid); não expor ao cliente. */
   sessionId: string;
-  /** Exige 2FA e ainda não ativou: só rotas com allowMfaSetup enxergam este usuário. */
-  mfaSetupRequired: boolean;
-};
-
-type CurrentUserOptions = {
-  allowMfaSetup?: boolean;
 };
 
 const globalAuthCache = globalThis as typeof globalThis & {
@@ -110,7 +103,6 @@ async function loadAuthenticatedUser(userId: string, sid: string, activeClinicId
         email: true,
         role: true,
         activeClinicId: true,
-        mfaSetting: { select: { enabledAt: true } },
         memberships: {
           orderBy: { id: "asc" },
           // A assinatura vem no mesmo select da clínica (um único round-trip, já coberto pelo cache de 15 s).
@@ -138,18 +130,12 @@ async function loadAuthenticatedUser(userId: string, sid: string, activeClinicId
     // A contagem regressiva só existe durante o teste: o término vem da assinatura, não de Clinic.trialEndsAt.
     clinic: { id: membership.clinic.id, name: membership.clinic.name, slug: membership.clinic.slug, trialEndsAt: subscription?.status === "TRIALING" ? subscription.trialEndsAt : null },
     sessionId: sid,
-    mfaSetupRequired: mfaRequiredForMemberships(user.memberships) && !user.mfaSetting?.enabledAt,
   };
 }
 
-async function resolveCurrentUser(session: { userId: string; sid: string } | null, { allowMfaSetup = false }: CurrentUserOptions = {}) {
+async function resolveCurrentUser(session: { userId: string; sid: string } | null) {
   if (!session) return null;
   const { userId, sid } = session;
-  const finish = (user: AuthenticatedUser | null) => {
-    if (!user) return null;
-    if (user.mfaSetupRequired && !allowMfaSetup) return null;
-    return user;
-  };
 
   // Única leitura obrigatória por requisição: AuthSession é a fonte compartilhada de revogação entre instâncias.
   // Os dados maiores de usuário/permissões continuam no cache local de 15 s.
@@ -168,7 +154,7 @@ async function resolveCurrentUser(session: { userId: string; sid: string } | nul
 
   const cached = authCache.get(cacheKey);
   if (cached?.expiresAt && cached.expiresAt > Date.now()) {
-    return finish(cached.pending ? await cached.pending : cached.value ?? null);
+    return cached.pending ? await cached.pending : cached.value ?? null;
   }
 
   const pending = loadAuthenticatedUser(userId, sid, sessionRow.user?.activeClinicId ?? null);
@@ -185,24 +171,24 @@ async function resolveCurrentUser(session: { userId: string; sid: string } | nul
   }
   // Só grava o resultado se a entrada não foi invalidada (revogação) enquanto a consulta rodava.
   if (authCache.get(cacheKey) === entry) authCache.set(cacheKey, { expiresAt: Date.now() + authCacheTtl, value: user });
-  return finish(user);
+  return user;
 }
 
 // Devolve o usuário autenticado ou null (401). Somente leitura NÃO é falha de autenticação: o usuário é devolvido normalmente
 // e as rotas de escrita chamam denyIfReadonly (plan-guards.ts), que responde 403 SUBSCRIPTION_READONLY sem encerrar a sessão.
-export async function getCurrentUser({ allowMfaSetup = false }: CurrentUserOptions = {}) {
+export async function getCurrentUser() {
   // Authorization explícito seleciona o Bearer e nunca cai para um cookie ambiental; Web sem Bearer segue autenticando por cookie.
   const cookieToken = (await cookies()).get(sessionCookieName)?.value;
   const authorization = (await headers()).get("authorization");
   const session = authorization !== null
     ? await verifiedSession(parseBearerToken(authorization))
     : await verifiedSession(cookieToken);
-  return resolveCurrentUser(session, { allowMfaSetup });
+  return resolveCurrentUser(session);
 }
 
 /** Identidade exclusivamente do JWT fornecido; ignora cookies ambientais do navegador. */
-export async function getCurrentUserFromToken(token: string, options: CurrentUserOptions = {}) {
-  return resolveCurrentUser(await verifiedSession(token), options);
+export async function getCurrentUserFromToken(token: string) {
+  return resolveCurrentUser(await verifiedSession(token));
 }
 
 /** Claims (userId, sid) de um JWT de sessão válido, sem consultar o banco. Usado pelo logout para revogar mesmo se getCurrentUser devolver null. */

@@ -1,6 +1,5 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { mfaRequiredForMemberships } from "@/lib/mfa-rules";
 import { prisma } from "@/lib/prisma";
 import { noStore, requireSecurityUser } from "@/lib/security-api";
 import { maskIp } from "@/lib/security-events";
@@ -9,14 +8,13 @@ import { deviceLabel, parseUserAgent } from "@/lib/user-agent";
 
 // Estado de segurança do próprio usuário. Sem hashes, segredos nem IP completo (ipMasked).
 export async function GET(request: Request) {
-  const { user, error } = await requireSecurityUser(request, { allowMfaSetup: true });
+  const { user, error } = await requireSecurityUser(request);
   if (error) return error;
   const now = new Date();
 
   const trustedToken = (await cookies()).get(TRUSTED_DEVICE_COOKIE)?.value;
-  const [setting, memberships, remaining, devices, sessions] = await Promise.all([
+  const [setting, remaining, devices, sessions] = await Promise.all([
     prisma.mfaSetting.findUnique({ where: { userId: user.id }, select: { enabledAt: true } }),
-    prisma.clinicMembership.findMany({ where: { userId: user.id }, select: { role: true, isOwner: true } }),
     prisma.mfaRecoveryCode.count({ where: { userId: user.id, usedAt: null } }),
     prisma.trustedDevice.findMany({
       where: { userId: user.id, revokedAt: null, expiresAt: { gt: now } },
@@ -38,7 +36,6 @@ export async function GET(request: Request) {
       enabled: Boolean(setting?.enabledAt),
       enabledAt: setting?.enabledAt ?? null,
       setupPending: Boolean(setting && !setting.enabledAt),
-      required: mfaRequiredForMemberships(memberships),
       recoveryCodesRemaining: setting?.enabledAt ? remaining : 0,
     },
     trustedDevices: devices.map((device) => ({

@@ -19,7 +19,6 @@ import {
   isMfaLocked,
   isRecentAuth,
   isStepFresh,
-  mfaRequiredForMemberships,
   nextFailureState,
 } from "../src/lib/mfa-rules.ts";
 import { deviceLabel, parseUserAgent } from "../src/lib/user-agent.ts";
@@ -99,20 +98,6 @@ test("dispositivo confiavel: token, hash, TTL e validade", () => {
   assert.equal(isTrustedDeviceValid(device, "u1", new Date(expiresAt.getTime())), false);
   assert.equal(isTrustedDeviceValid(device, "u1", new Date(expiresAt.getTime() - 1)), true);
   assert.equal(isTrustedDeviceValid(null, "u1", now), false);
-});
-
-test("obrigatoriedade: proprietario ou ADMIN em qualquer clinica", () => {
-  assert.equal(mfaRequiredForMemberships([]), false);
-  assert.equal(mfaRequiredForMemberships([{ role: "PROFESSIONAL", isOwner: false }]), false);
-  assert.equal(mfaRequiredForMemberships([{ role: "STAFF", isOwner: false }]), false);
-  assert.equal(mfaRequiredForMemberships([{ role: "STAFF", isOwner: true }]), true);
-  assert.equal(
-    mfaRequiredForMemberships([
-      { role: "STAFF", isOwner: false },
-      { role: "ADMIN", isOwner: false },
-    ]),
-    true,
-  );
 });
 
 test("lockout: 5 falhas bloqueiam por 15 min e o lock expirado reinicia", () => {

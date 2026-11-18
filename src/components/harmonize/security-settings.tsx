@@ -77,7 +77,7 @@ export function SecuritySettings() {
         <CardHeader className="border-b border-border/70">
           <div>
             <CardTitle className="flex items-center gap-2"><ShieldCheck className="h-4 w-4" />Verificação em duas etapas</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">Exige um código do aplicativo autenticador, além da senha, ao entrar em um dispositivo novo.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Opcional: ative para usar um aplicativo autenticador como 2º fator. Sem ela, confirmamos o login por um código enviado ao seu e-mail.</p>
           </div>
           {mfa.enabled ? <Badge variant="green">Ativada</Badge> : mfa.setupPending ? <Badge variant="amber">Configuração pendente</Badge> : <Badge variant="slate">Desativada</Badge>}
         </CardHeader>
@@ -91,11 +91,10 @@ export function SecuritySettings() {
             {!mfa.enabled ? <Button onClick={() => setSetupOpen(true)}><ShieldCheck />{mfa.setupPending ? "Configurar" : "Ativar"}</Button> : (
               <>
                 <Button onClick={() => setRegenerateOpen(true)} variant="outline"><KeyRound />Gerar novos códigos</Button>
-                <Button disabled={mfa.required} onClick={() => setDisableOpen(true)} variant="outline"><ShieldOff />Desativar</Button>
+                <Button onClick={() => setDisableOpen(true)} variant="outline"><ShieldOff />Desativar</Button>
               </>
             )}
           </div>
-          {mfa.required ? <p className="text-xs leading-5 text-muted-foreground">A verificação em duas etapas é obrigatória para proprietários e administradores da clínica e não pode ser desativada.</p> : null}
         </CardContent>
       </Card>
 

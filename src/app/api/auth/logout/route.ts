@@ -5,7 +5,7 @@ import { clearMfaPendingCookie, recordSecurityEvent } from "@/lib/auth-session";
 import { prisma } from "@/lib/prisma";
 import { isSameOrigin } from "@/lib/same-origin";
 
-// Funciona também com 2FA obrigatório pendente. Revoga a AuthSession do JWT (por sid) mesmo que getCurrentUser devolva null.
+// Funciona também com a verificação (TOTP/e-mail) ainda pendente. Revoga a AuthSession do JWT (por sid) mesmo que getCurrentUser devolva null.
 // Cross-site explícito (Sec-Fetch-Site/Origin divergente) = 403; sem esses cabeçalhos (cliente não-navegador) segue permitido.
 export async function POST(request: Request) {
   const hasOriginSignal = Boolean(request.headers.get("sec-fetch-site") || request.headers.get("origin"));

@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { invalidateUserAuthCache } from "@/lib/auth";
 import { recordSecurityEvent, revokeUserSessions } from "@/lib/auth-session";
 import { MFA_GENERIC_ERROR, MFA_LOCKED_ERROR, verifyMfaCode } from "@/lib/mfa-verify";
 import { prisma } from "@/lib/prisma";
@@ -8,7 +7,7 @@ import { noStore, requireSecurityUser, securityError } from "@/lib/security-api"
 
 // Passo 2: só um código TOTP válido ativa o 2FA. Gera 10 códigos de recuperação (mostrados UMA vez) e revoga as outras sessões.
 export async function POST(request: Request) {
-  const { user, error } = await requireSecurityUser(request, { mutation: true, allowMfaSetup: true });
+  const { user, error } = await requireSecurityUser(request, { mutation: true });
   if (error) return error;
   const body = await request.json().catch(() => null) as { code?: unknown } | null;
 
@@ -31,7 +30,6 @@ export async function POST(request: Request) {
   });
   if (!activated) return securityError("A verificação em duas etapas já está ativa.", 409);
 
-  invalidateUserAuthCache(user.id); // mfaSetupRequired muda agora
   await recordSecurityEvent({ userId: user.id, type: "MFA_ENABLED", request });
   await revokeUserSessions(user.id, { exceptSid: user.sessionId, request, reason: "2FA ativado" });
   return NextResponse.json({ enabledAt, recoveryCodes: codes }, { headers: noStore });

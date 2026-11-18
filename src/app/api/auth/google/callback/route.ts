@@ -26,8 +26,7 @@ export async function GET(request: Request) {
     repo: prismaGoogleRepo,
     invitations: prismaInvitationRepo,
     getSessionUser: async () => {
-      // allowMfaSetup: quem está no assistente de 2FA obrigatório ainda pode vincular o Google. Sem bypass: aqui só se lê id/e-mail para vincular a identidade; nenhum dado é exposto.
-      const user = await getCurrentUser({ allowMfaSetup: true });
+      const user = await getCurrentUser();
       return user ? { id: user.id, email: user.email } : null;
     },
     makePasswordHash: makeUnusablePasswordHash,
@@ -38,9 +37,11 @@ export async function GET(request: Request) {
     flowToken,
   });
 
-  // Login com 2FA ativo (sem dispositivo confiável): sem sessão; cookie harmonize_mfa e a tela de verificação.
+  // Sem 2FA ativo/dispositivo confiável: sem sessão; cookie harmonize_mfa e a tela de verificação (TOTP ou e-mail).
   const login = result.sessionUserId ? await completeLogin({ request, userId: result.sessionUserId, origin: "google" }) : null;
-  const response = NextResponse.redirect(new URL(login?.mfaRequired ? "/login?mfa=1" : result.redirect, request.url), 302);
+  // Código por e-mail não pôde ser enviado: sem sessão nem pendente; volta ao login com um aviso.
+  const destination = login && !login.ok ? "/login?google=mfa_email_failed" : login?.ok && login.mfaRequired ? "/login?mfa=1" : result.redirect;
+  const response = NextResponse.redirect(new URL(destination, request.url), 302);
   response.headers.set("Cache-Control", "no-store");
   // Cookie de fluxo e de uso unico: apagado em qualquer desfecho.
   response.cookies.set({ name: oauthCookieName, value: "", httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: 0, path: "/api/auth/google" });
@@ -68,6 +69,6 @@ export async function GET(request: Request) {
       path: GOOGLE_SIGNUP_PATH,
     });
   }
-  login?.apply(response);
+  if (login?.ok) login.apply(response);
   return response;
 }

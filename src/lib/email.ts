@@ -177,3 +177,24 @@ export async function sendSignupCodeEmail(
   });
   return sendEmail({ to: input.to, subject: "Seu código de verificação do Harmonize+", html: body.html, text: body.text }, deps);
 }
+
+// Codigo de verificacao do LOGIN (2o fator por e-mail, quando o TOTP nao esta ativo). O codigo so aparece
+// no corpo do e-mail (nunca em log nem na resposta da API).
+export async function sendLoginCodeEmail(
+  input: { to: string; code: string; ttlMinutes: number },
+  deps: { env?: Env; fetchImpl?: typeof fetch } = {},
+): Promise<EmailResult> {
+  const env = deps.env ?? process.env;
+  if (!isEmailDeliveryReady(env)) return { sent: false, reason: "not_configured" };
+  const body = composeEmail({
+    preheader: `Seu código de verificação é ${input.code}.`,
+    blocks: [
+      heading("Confirme que é você"),
+      paragraph("Use o código abaixo para continuar o login no Harmonize+."),
+      highlight("Código de verificação", input.code.split("").join(" ")),
+      note(`O código expira em ${input.ttlMinutes} minutos.`),
+      note("Se não foi você, troque sua senha e revise os dispositivos confiáveis em Configurações > Segurança."),
+    ],
+  });
+  return sendEmail({ to: input.to, subject: "Confirme seu login no Harmonize+", html: body.html, text: body.text }, deps);
+}

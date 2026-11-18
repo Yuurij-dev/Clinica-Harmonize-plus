@@ -1,5 +1,16 @@
 import { NextResponse } from "next/server";
-import { createTrustedDevice, findTrustedDevice, getMfaState, issueSession, MOBILE_SESSION_TTL_SECONDS, recordMfaOutcome, recordSecurityEvent } from "@/lib/auth-session";
+import {
+  createTrustedDevice,
+  findTrustedDevice,
+  getMfaState,
+  issueSession,
+  MOBILE_SESSION_TTL_SECONDS,
+  recordEmailCodeOutcome,
+  recordMfaOutcome,
+  recordSecurityEvent,
+  sendLoginVerificationCode,
+  verifyLoginEmailCode,
+} from "@/lib/auth-session";
 import { authenticateLogin } from "@/lib/login";
 import { classifyMfaCode } from "@/lib/mfa-input";
 import { MFA_GENERIC_ERROR, MFA_LOCKED_ERROR, verifyMfaCode } from "@/lib/mfa-verify";
@@ -9,7 +20,9 @@ import { MFA_GENERIC_ERROR, MFA_LOCKED_ERROR, verifyMfaCode } from "@/lib/mfa-ve
 const noStore = { "Cache-Control": "no-store" };
 
 // Login do app: mesma validação da web, mas devolve o JWT no corpo (sem cookie). Só equipe clínica; troca de senha inicial é feita na web.
-// Com 2FA ativo exige `mfaCode` (TOTP de 6 dígitos ou código de recuperação), com o mesmo bloqueio/replay da web.
+// Com TOTP ativo exige `mfaCode` (TOTP de 6 dígitos ou código de recuperação), com o mesmo bloqueio/replay da web.
+// Sem TOTP ativo, exige o mesmo código por e-mail da web (mobile não tem conceito de dispositivo confiável: sempre
+// pede o código nesse caso — aceitável porque o token do app já dura 3 dias sem precisar logar de novo).
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as { login?: string; password?: string; mfaCode?: unknown; trustDevice?: unknown } | null;
   const result = await authenticateLogin(body?.login, body?.password);
@@ -25,9 +38,6 @@ export async function POST(request: Request) {
   if (role === "STAFF") return NextResponse.json({ message: "O app é para a equipe clínica." }, { status: 403, headers: noStore });
 
   const mfa = await getMfaState(user.id);
-  if (mfa.required && !mfa.active) {
-    return NextResponse.json({ mfaSetupRequired: true, message: "Ative a verificação em duas etapas pelo sistema web antes de usar o app." }, { status: 403, headers: noStore });
-  }
   const presentedDeviceToken = request.headers.get("x-harmonize-trusted-device");
   const recognizedDevice = mfa.active ? await findTrustedDevice(user.id, presentedDeviceToken) : null;
   const trustedDeviceInvalid = Boolean(presentedDeviceToken && !recognizedDevice);
@@ -48,6 +58,20 @@ export async function POST(request: Request) {
       // Código de recuperação nunca cria confiança; seu uso também revoga as credenciais anteriores.
       if (body?.trustDevice === true && verified.method === "totp") trustedDevice = await createTrustedDevice(user.id, request);
       if (trustedDevice) await recordSecurityEvent({ userId: user.id, type: "TRUSTED_DEVICE_ADDED", request });
+    }
+  } else {
+    const code = typeof body?.mfaCode === "string" ? body.mfaCode : undefined;
+    if (!code) {
+      const sent = await sendLoginVerificationCode(user.id, user.email);
+      if (!sent.ok) {
+        return NextResponse.json({ message: "Não foi possível enviar o código de verificação agora. Tente novamente em instantes." }, { status: 502, headers: noStore });
+      }
+      return NextResponse.json({ mfaRequired: true, method: "email", message: "Informe o código enviado ao seu e-mail." }, { status: 401, headers: noStore });
+    }
+    const verified = await verifyLoginEmailCode(user.id, code);
+    await recordEmailCodeOutcome(user.id, request, verified);
+    if (!verified.ok) {
+      return NextResponse.json({ mfaRequired: true, method: "email", message: verified.locked ? MFA_LOCKED_ERROR : MFA_GENERIC_ERROR }, { status: verified.locked ? 429 : 401, headers: noStore });
     }
   }
 

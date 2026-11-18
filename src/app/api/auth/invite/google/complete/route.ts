@@ -28,21 +28,22 @@ export async function POST(request: Request) {
   // Dados invalidos: o cookie continua valido para a pessoa corrigir e reenviar.
   if (!result.ok && result.code === "invalid_profile") return NextResponse.json({ code: result.code, message: result.message }, { status: 400, headers });
 
-  const response = result.ok
-    ? NextResponse.json({ ok: true }, { status: 201, headers })
-    : result.code === "plan_limit"
-    ? NextResponse.json(result.plan, { status: 403, headers })
-    : NextResponse.json(
-      result.code === "account_exists" || result.code === "race"
-        ? { code: result.code, message: "Já existe uma conta com este e-mail. Entre com sua senha e aceite o convite." }
-        : { code: result.code, message: "Este convite não é mais válido. Peça um novo convite à clínica." },
-      { status: result.code === "invite_invalid" ? 404 : 409, headers },
-    );
+  // Conta nova (Google): sem trusted device/TOTP ainda, então o login pode pedir o código por e-mail.
+  const login = result.ok ? await completeLogin({ request, userId: result.userId, origin: "google" }) : null;
+  const response = !result.ok
+    ? result.code === "plan_limit"
+      ? NextResponse.json(result.plan, { status: 403, headers })
+      : NextResponse.json(
+        result.code === "account_exists" || result.code === "race"
+          ? { code: result.code, message: "Já existe uma conta com este e-mail. Entre com sua senha e aceite o convite." }
+          : { code: result.code, message: "Este convite não é mais válido. Peça um novo convite à clínica." },
+        { status: result.code === "invite_invalid" ? 404 : 409, headers },
+      )
+    : login && !login.ok
+      ? NextResponse.json({ code: "mfa_email_failed", message: "Convite aceito, mas não foi possível enviar o código de verificação agora. Entre novamente em alguns instantes." }, { status: 201, headers })
+      : NextResponse.json({ ok: true, ...(login?.mfaRequired ? { mfaRequired: true, method: login.method } : {}) }, { status: 201, headers });
   // Uso unico: apagado em qualquer desfecho definitivo.
   response.cookies.set({ ...cookieBase, name: GOOGLE_PENDING_COOKIE, value: "", maxAge: 0 });
-  if (result.ok) {
-    // Conta nova (Google): sem 2FA ainda, então sessão normal.
-    (await completeLogin({ request, userId: result.userId, origin: "google" })).apply(response);
-  }
+  if (login?.ok) login.apply(response);
   return response;
 }

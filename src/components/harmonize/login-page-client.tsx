@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { LoginScreen, type GoogleSignupValues, type MfaVerifyInput, type MfaVerifyResult, type RegisterResult, type RegisterValues, type VerifyResult } from "./login-screen";
+import { LoginScreen, type GoogleSignupValues, type MfaMethod, type MfaVerifyInput, type MfaVerifyResult, type RegisterResult, type RegisterValues, type VerifyResult } from "./login-screen";
 import { setClientCacheScope } from "@/lib/client-cache";
 
 export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "login" | "register" | "mfa"; googleStatus?: string }) {
@@ -19,10 +19,10 @@ export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "l
       body: JSON.stringify(credentials),
     });
 
-    const data = await response.json().catch(() => null) as { message?: string; passwordChangeRequired?: boolean; mfaRequired?: boolean; user?: { id?: string; clinic?: { id?: string; name?: string } } } | null;
+    const data = await response.json().catch(() => null) as { message?: string; passwordChangeRequired?: boolean; mfaRequired?: boolean; method?: MfaMethod; user?: { id?: string; clinic?: { id?: string; name?: string } } } | null;
     if (!response.ok) return { error: data?.message ?? "Usuário ou senha inválidos." };
-    // 2FA ativo: ainda não há sessão; a tela de verificação conclui o login.
-    if (data?.mfaRequired) return { mfaRequired: true };
+    // 2FA ou código por e-mail pendente: ainda não há sessão; a tela de verificação conclui o login.
+    if (data?.mfaRequired) return { mfaRequired: true, mfaMethod: data.method };
     // Login novo: com 2+ clínicas a tela de escolha volta a aparecer.
     try { window.sessionStorage.removeItem("harmonize-clinic-chosen"); } catch { /* ignora */ }
     setClientCacheScope(data?.user?.id && data.user.clinic?.id ? `${data.user.id}:${data.user.clinic.id}` : null);
@@ -39,9 +39,9 @@ export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "l
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ password }),
     });
-    const data = await response.json().catch(() => null) as { message?: string; clinicName?: string; mfaRequired?: boolean } | null;
+    const data = await response.json().catch(() => null) as { message?: string; clinicName?: string; mfaRequired?: boolean; method?: MfaMethod } | null;
     if (!response.ok) return { error: data?.message ?? "Não foi possível salvar a nova senha." };
-    if (data?.mfaRequired) return { mfaRequired: true };
+    if (data?.mfaRequired) return { mfaRequired: true, mfaMethod: data.method };
     router.replace("/");
     router.refresh();
     return {};
@@ -68,6 +68,23 @@ export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "l
     setClientCacheScope(data?.user?.id && data.user.clinic?.id ? `${data.user.id}:${data.user.clinic.id}` : null);
     window.localStorage.setItem("harmonize-session-change", String(Date.now()));
     return typeof data?.recoveryCodesRemaining === "number" ? { recoveryCodesRemaining: data.recoveryCodesRemaining } : {};
+  }
+
+  // Reenvio do código por e-mail do 2º estágio do login (sem efeito se o método pendente for TOTP: a rota devolve
+  // uma resposta neutra). O userId vem só do cookie harmonize_mfa assinado, nunca do corpo.
+  async function handleResendMfaCode() {
+    const response = await fetch("/api/auth/mfa/resend", { method: "POST" }).catch(() => null);
+    if (!response?.ok) return { error: "Não foi possível reenviar o código agora." };
+    return {};
+  }
+
+  // Retorno do login com Google (redirect, sem corpo): descobre o método pendente (TOTP ou e-mail) pelo
+  // cookie harmonize_mfa assinado antes de decidir o que a tela de verificação mostra.
+  async function handlePendingMfaMethod(): Promise<MfaMethod | null> {
+    const response = await fetch("/api/auth/mfa/pending", { cache: "no-store" }).catch(() => null);
+    if (!response?.ok) return null;
+    const data = await response.json().catch(() => null) as { method?: MfaMethod } | null;
+    return data?.method ?? null;
   }
 
   function handleEnterApp() {
@@ -140,11 +157,24 @@ export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "l
       }
       return { error: data?.message ?? "Não foi possível criar a conta agora. Tente novamente." } satisfies RegisterResult;
     }
+    const data = await response.json().catch(() => null) as { code?: string; mfaRequired?: boolean } | null;
+    // Código por e-mail não pôde ser enviado: a conta existe, mas sem sessão nem pendente; o login recomeça.
+    if (data?.code === "mfa_email_failed") {
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+      window.location.assign("/login?google=mfa_email_failed");
+      return {} satisfies RegisterResult;
+    }
+    // Sem dispositivo confiável/TOTP: a tela de verificação do login completa o acesso.
+    if (data?.mfaRequired) {
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+      window.location.assign("/login?mfa=1");
+      return {} satisfies RegisterResult;
+    }
     // Navegação completa: o app abre já autenticado e `?google=ok` avisa as outras abas da troca de sessão.
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.assign("/?google=ok");
     return {} satisfies RegisterResult;
   }
 
-  return <LoginScreen initialMode={initialMode} googleStatus={googleStatus} onLogin={handleLogin} onChangePassword={handlePasswordChange} onVerifyMfa={handleVerifyMfa} onEnterApp={handleEnterApp} onRegister={handleRegister} onVerifyEmail={handleVerifyEmail} onResendCode={handleResendCode} onGoogleSignup={handleGoogleSignup} />;
+  return <LoginScreen initialMode={initialMode} googleStatus={googleStatus} onLogin={handleLogin} onChangePassword={handlePasswordChange} onVerifyMfa={handleVerifyMfa} onResendMfaCode={handleResendMfaCode} onPendingMfaMethod={handlePendingMfaMethod} onEnterApp={handleEnterApp} onRegister={handleRegister} onVerifyEmail={handleVerifyEmail} onResendCode={handleResendCode} onGoogleSignup={handleGoogleSignup} />;
 }

@@ -26,7 +26,7 @@ export default function TermsPage() {
       <Section id="conta" title="2. Conta e acesso">
         <List>
           <li>O cadastro exige informações verdadeiras e um e-mail válido, confirmado por código. Quem cria a clínica é o administrador principal; os demais usuários entram por convite.</li>
-          <li>Você é responsável por manter sua senha e seus códigos de recuperação em sigilo e por tudo o que for feito com a sua conta. A verificação em duas etapas é obrigatória para administradores e recomendada a todos.</li>
+          <li>Você é responsável por manter sua senha e seus códigos de recuperação em sigilo e por tudo o que for feito com a sua conta. Todo login é confirmado por um código enviado ao seu e-mail (ou pelo aplicativo autenticador, se você ativar essa opção).</li>
           <li>Cada conta é pessoal. Não compartilhe o acesso: a clínica deve convidar cada profissional ou atendente com a sua própria conta e função.</li>
           <li>Avise-nos pelo contato abaixo se suspeitar de acesso indevido. Você pode encerrar sessões e dispositivos na tela de segurança da sua conta.</li>
         </List>
