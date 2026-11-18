@@ -37,8 +37,9 @@ export async function POST(request: Request) {
   }
 
   const login = await completeLogin({ request, userId: user.id, origin: "password" });
+  if (!login.ok) return NextResponse.json({ message: login.message }, { status: login.status });
   const response = login.mfaRequired
-    ? NextResponse.json({ mfaRequired: true })
+    ? NextResponse.json({ mfaRequired: true, method: login.method })
     : NextResponse.json({ user: { id: user.id, name: user.name, email: user.email, role: result.role, clinic: result.clinic } });
   login.apply(response);
   return response;

@@ -1,17 +1,12 @@
-// Regras puras do 2FA: obrigatoriedade, bloqueio por tentativas e replay do TOTP. Sem Prisma.
+// Regras puras do 2FA: bloqueio por tentativas e replay do TOTP. Sem Prisma.
+// O TOTP (app autenticador) e sempre OPCIONAL, qualquer papel: quem nao tem ativado passa pela
+// verificacao por e-mail (ver login-code-rules.ts), que e o 2o fator padrao do login.
 
 export const MFA_MAX_FAILED_ATTEMPTS = 5;
 export const MFA_LOCK_MS = 15 * 60 * 1000;
 export const MFA_PENDING_TTL_SECONDS = 10 * 60;
 /** Reautenticacao por sessao recente (contas so-Google, sem senha utilizavel). */
 export const RECENT_AUTH_WINDOW_MS = 10 * 60 * 1000;
-
-/** Exige 2FA quem e proprietario ou ADMIN em qualquer clinica. */
-export function mfaRequiredForMemberships(
-  memberships: ReadonlyArray<{ role: string; isOwner: boolean }>,
-): boolean {
-  return memberships.some((m) => m.isOwner === true || m.role === "ADMIN");
-}
 
 export function isMfaLocked(lockedUntil: Date | null | undefined, now: Date = new Date()): boolean {
   return !!lockedUntil && lockedUntil.getTime() > now.getTime();

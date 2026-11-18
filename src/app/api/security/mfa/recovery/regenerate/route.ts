@@ -7,7 +7,7 @@ import { noStore, reauthenticate, requireSecurityUser, securityError } from "@/l
 
 // Novos 10 códigos de recuperação (os antigos deixam de valer). Exige senha + código TOTP; revoga os dispositivos confiáveis.
 export async function POST(request: Request) {
-  const { user, error } = await requireSecurityUser(request, { mutation: true, allowMfaSetup: true });
+  const { user, error } = await requireSecurityUser(request, { mutation: true });
   if (error) return error;
   const body = await request.json().catch(() => null) as { password?: unknown; code?: unknown } | null;
 

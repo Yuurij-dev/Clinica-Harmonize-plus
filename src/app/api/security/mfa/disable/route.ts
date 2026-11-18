@@ -5,15 +5,15 @@ import { MFA_GENERIC_ERROR, MFA_LOCKED_ERROR, verifyMfaCode } from "@/lib/mfa-ve
 import { prisma } from "@/lib/prisma";
 import { noStore, reauthenticate, requireSecurityUser, securityError } from "@/lib/security-api";
 
-// Desativa o 2FA com senha + código (TOTP ou recuperação). Proibido para quem EXIGE 2FA (proprietário/ADMIN).
+// Desativa o 2FA com senha + código (TOTP ou recuperação). Qualquer papel pode desativar: o TOTP é sempre opcional;
+// quem desativa volta a usar o código por e-mail como 2º fator do login.
 export async function POST(request: Request) {
-  const { user, error } = await requireSecurityUser(request, { mutation: true, allowMfaSetup: true });
+  const { user, error } = await requireSecurityUser(request, { mutation: true });
   if (error) return error;
   const body = await request.json().catch(() => null) as { password?: unknown; code?: unknown; recoveryCode?: unknown } | null;
 
   const state = await getMfaState(user.id);
   if (!state.active) return securityError("A verificação em duas etapas não está ativa.", 409);
-  if (state.required) return securityError("A verificação em duas etapas é obrigatória para o seu perfil e não pode ser desativada.", 403, { code: "mfa_required" });
 
   const denied = await reauthenticate(user, body?.password);
   if (denied) return denied;

@@ -70,6 +70,8 @@ export const SECURITY_EVENT_LABELS: Record<SecurityEventType, string> = {
   MFA_FAILED: "Código de verificação inválido",
   MFA_ENABLED: "Verificação em duas etapas ativada",
   MFA_DISABLED: "Verificação em duas etapas desativada",
+  EMAIL_CODE_VERIFIED: "Código por e-mail confirmado",
+  EMAIL_CODE_FAILED: "Código por e-mail inválido",
   RECOVERY_CODE_USED: "Código de recuperação utilizado",
   RECOVERY_CODES_REGENERATED: "Novos códigos de recuperação gerados",
   TRUSTED_DEVICE_ADDED: "Dispositivo confiável adicionado",

@@ -14,9 +14,14 @@ export async function POST(request: Request) {
   });
   if (!result.ok) return NextResponse.json("plan" in result ? result.plan : { message: result.message }, { status: result.status, headers: { "Cache-Control": "no-store" } });
 
-  // Conta nova de convite não tem 2FA: sessão normal (se exigir 2FA, cai no assistente obrigatório).
+  // Conta nova de convite: sem trusted device/TOTP ainda, então o login pode pedir o código por e-mail.
   const login = await completeLogin({ request, userId: result.userId, origin: "password" });
-  const response = NextResponse.json({ ok: true, alreadyInOtherClinic: result.alreadyInOtherClinic }, { status: 201, headers: { "Cache-Control": "no-store" } });
+  if (!login.ok) return NextResponse.json({ message: login.message }, { status: login.status });
+  const response = NextResponse.json({
+    ok: true,
+    alreadyInOtherClinic: result.alreadyInOtherClinic,
+    ...(login.mfaRequired ? { mfaRequired: true, method: login.method } : {}),
+  }, { status: 201, headers: { "Cache-Control": "no-store" } });
   login.apply(response);
   return response;
 }
