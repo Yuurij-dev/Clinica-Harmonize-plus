@@ -126,7 +126,8 @@ export function validateRegistration(values: RegistrationValues, now = clinicRef
   else if (!inList(sexOptions, values.sex)) errors.sex = "Escolha uma das opções de sexo.";
   if (values.referralSource && !inList(referralSources, values.referralSource)) errors.referralSource = "Escolha uma das opções de como nos conheceu.";
   if (values.emergencyContactRelationship && !inList(relationshipOptions, values.emergencyContactRelationship)) errors.emergencyContactRelationship = "Escolha uma das opções de parentesco.";
-  if (values.email.trim() && !validEmail(values.email)) errors.email = "Informe um e-mail válido, como nome@email.com.";
+  if (!values.email.trim() && !options.editing) errors.email = "Informe o e-mail do cliente.";
+  else if (values.email.trim() && !validEmail(values.email)) errors.email = "Informe um e-mail válido, como nome@email.com.";
   if (values.postalCode.trim() && !validPostalCode(values.postalCode)) errors.postalCode = "O CEP precisa ter 8 números.";
   if (values.emergencyContactPhone.replace(/\D/g, "")) { const message = phoneError(values.emergencyContactPhone); if (message) errors.emergencyContactPhone = message; }
 

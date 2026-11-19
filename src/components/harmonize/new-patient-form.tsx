@@ -54,7 +54,7 @@ export function PatientForm({ saving, onSubmit, onCancel, onOpenExisting, mode =
   const formRef = useRef<HTMLFormElement>(null);
   const [values, setValues] = useState<Values>(initialValues ?? emptyPatientFormValues);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [open, setOpen] = useState<Set<SectionId>>(() => new Set(editing && initialValues ? (["personal", "address", "emergency", "insurance"] as SectionId[]).filter((section) => sectionHasData(section, initialValues)) : []));
+  const [open, setOpen] = useState<Set<SectionId>>(() => new Set(editing && initialValues ? (["address", "emergency", "insurance"] satisfies SectionId[]).filter((section) => sectionHasData(section, initialValues)) : []));
   const [attempt, setAttempt] = useState<{ tick: number; fields: string[] }>({ tick: 0, fields: [] });
   const [serverError, setServerError] = useState<{ message: string; existingPatientId?: string } | null>(null);
   const [cepStatus, setCepStatus] = useState("");
@@ -172,7 +172,7 @@ export function PatientForm({ saving, onSubmit, onCancel, onOpenExisting, mode =
           </div>
           {text("cpf", { label: "CPF", required: contactRequired && !editing, format: formatCpf, placeholder: maskedCpf ? `${maskedCpf} (em branco mantém)` : "000.000.000-00", inputMode: "numeric", maxLength: 14 })}
           {text("phone", { label: "Telefone / WhatsApp", required: contactRequired, format: formatPhone, placeholder: "(00) 00000-0000", inputMode: "tel", maxLength: 15, autoComplete: "tel" })}
-          <div className="min-[521px]:col-span-2">{text("email", { label: "E-mail", type: "email", inputMode: "email", placeholder: "nome@email.com", autoComplete: "email" })}</div>
+          <div className="min-[521px]:col-span-2">{text("email", { label: "E-mail", required: !editing, type: "email", inputMode: "email", placeholder: "nome@email.com", autoComplete: "email" })}</div>
           <div className="min-[521px]:col-span-2">{select("sex", { label: "Sexo", required: true, options: sexOptions, empty: "Selecione o sexo" })}</div>
 
           {minor ? (
