@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getAuthSecret } from "@/lib/auth-secret";
 import { mfaCookieName, verifyMfaPendingToken } from "@/lib/auth-session";
 import { sendLoginCodeEmail } from "@/lib/email";
-import { CODE_TTL_MS, canSendCode, expiresAtFrom, generateCode, hashLoginCode } from "@/lib/login-code-rules";
+import { CODE_TTL_MS, DEV_TEST_LOGIN_CODE, canSendCode, expiresAtFrom, generateCode, hashLoginCode, isDevTestLoginEmail } from "@/lib/login-code-rules";
 import { prisma } from "@/lib/prisma";
 
 const noStore = { "Cache-Control": "no-store" };
@@ -29,7 +29,8 @@ export async function POST(_request: Request) {
     const user = await prisma.user.findUnique({ where: { id: pending.userId }, select: { email: true } });
     if (!user) return neutral();
 
-    const code = generateCode();
+    const devTest = isDevTestLoginEmail(user.email);
+    const code = devTest ? DEV_TEST_LOGIN_CODE : generateCode();
     const codeHash = hashLoginCode(code, pending.userId, getAuthSecret());
     // Reserva o envio de forma atomica: duas requisicoes paralelas enviam um e-mail so.
     const reserved = await prisma.loginVerificationCode.updateMany({
@@ -38,7 +39,8 @@ export async function POST(_request: Request) {
     });
     if (reserved.count === 0) return neutral();
 
-    await sendLoginCodeEmail({ to: user.email, code, ttlMinutes: CODE_TTL_MS / 60_000 });
+    // Teste local (@teste.com, nunca em produção): código fixo, sem enviar e-mail de verdade.
+    if (!devTest) await sendLoginCodeEmail({ to: user.email, code, ttlMinutes: CODE_TTL_MS / 60_000 });
     return neutral();
   } catch (error) {
     console.error("[mfa-resend]", (error as { code?: unknown } | null)?.code);

@@ -11,6 +11,7 @@ import { sendLoginCodeEmail } from "./email";
 import { MFA_PENDING_TTL_SECONDS } from "./mfa-rules";
 import {
   CODE_TTL_MS,
+  DEV_TEST_LOGIN_CODE,
   INVALIDATED_AT,
   MAX_ATTEMPTS,
   MAX_TOTAL_ATTEMPTS,
@@ -19,6 +20,7 @@ import {
   expiresAtFrom,
   generateCode,
   hashLoginCode,
+  isDevTestLoginEmail,
   isExpired,
   isLocked,
   isValidCodeFormat,
@@ -183,6 +185,7 @@ const pendingCookieApply = (token: string) => (response: NextResponse) => {
  * sem reenviar e-mail (login resubmetido não deve consumir o limite de envios); fora disso segue os MESMOS
  * limites do cadastro (6 dígitos, TTL 10 min, cooldown de 60 s, 5 tentativas por código, 15 por janela de 24 h,
  * 6 envios por janela). Falha do provedor invalida o código recém-gerado (nunca deixa um código sem e-mail enviado).
+ * Fora de produção, @teste.com usa sempre o código fixo 000000 e não envia e-mail (ver isDevTestLoginEmail).
  */
 export async function sendLoginVerificationCode(userId: string, email: string): Promise<{ ok: true } | { ok: false }> {
   const now = new Date();
@@ -194,8 +197,9 @@ export async function sendLoginVerificationCode(userId: string, email: string): 
   // Login resubmetido com um código ainda válido: reaproveita, sem reenviar e-mail nem gastar o limite de envios.
   if (pending && !isWindowExpired(pending.windowStartedAt, now) && !isExpired(pending.expiresAt, now)) return { ok: true };
 
+  const devTest = isDevTestLoginEmail(email);
   const secret = getAuthSecret();
-  const code = generateCode();
+  const code = devTest ? DEV_TEST_LOGIN_CODE : generateCode();
   const data = { codeHash: hashLoginCode(code, userId, secret), expiresAt: expiresAtFrom(now), attempts: 0, lastSentAt: now };
 
   let id: string;
@@ -219,6 +223,8 @@ export async function sendLoginVerificationCode(userId: string, email: string): 
     id = pending.id;
   }
 
+  // Teste local (@teste.com, nunca em produção): código fixo, sem enviar e-mail de verdade.
+  if (devTest) return { ok: true };
   const sent = await sendLoginCodeEmail({ to: email, code, ttlMinutes: CODE_TTL_MS / 60_000 });
   if (!sent.sent) {
     // Mantem a linha e os contadores; so invalida o codigo que o usuario nunca recebeu.
