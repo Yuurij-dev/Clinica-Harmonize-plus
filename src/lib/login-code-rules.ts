@@ -31,6 +31,18 @@ export {
   type PendingState,
 } from "./signup-verification-rules.ts";
 
+// Teste local: e-mail @teste.com usa sempre este código fixo, sem enviar e-mail de verdade. Fecha por padrão
+// (fail-closed): exige NODE_ENV explicitamente development/test (nunca basta "não ser production", que deixaria
+// passar um ambiente mal configurado, ex. staging sem NODE_ENV) E a flag ENABLE_DEV_TEST_LOGIN=1 (opt-in; sem
+// ela, nenhum deploy liga isso por acidente mesmo rodando em modo development).
+export const DEV_TEST_LOGIN_CODE = "000000";
+const DEV_TEST_EMAIL_SUFFIX = "@teste.com";
+const DEV_TEST_ALLOWED_NODE_ENVS = new Set(["development", "test"]);
+
+export function isDevTestLoginEmail(email: string, env: { NODE_ENV?: string; ENABLE_DEV_TEST_LOGIN?: string } = process.env): boolean {
+  return DEV_TEST_ALLOWED_NODE_ENVS.has(env.NODE_ENV ?? "") && env.ENABLE_DEV_TEST_LOGIN === "1" && email.trim().toLowerCase().endsWith(DEV_TEST_EMAIL_SUFFIX);
+}
+
 export function hashLoginCode(code: string, userId: string, secret: Uint8Array | string): string {
   return createHmac("sha256", secret).update(`login-verification:${userId}:${code}`).digest("hex");
 }
