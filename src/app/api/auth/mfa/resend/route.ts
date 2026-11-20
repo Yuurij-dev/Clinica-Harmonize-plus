@@ -3,7 +3,8 @@ import { NextResponse } from "next/server";
 import { getAuthSecret } from "@/lib/auth-secret";
 import { mfaCookieName, verifyMfaPendingToken } from "@/lib/auth-session";
 import { sendLoginCodeEmail } from "@/lib/email";
-import { CODE_TTL_MS, DEV_TEST_LOGIN_CODE, canSendCode, expiresAtFrom, generateCode, hashLoginCode, isDevTestLoginEmail } from "@/lib/login-code-rules";
+import { CODE_TTL_MS, canSendCode, expiresAtFrom, generateCode, hashLoginCode } from "@/lib/login-code-rules";
+import { DEV_TEST_CODE, isDevTestEmail } from "@/lib/dev-test-auth";
 import { prisma } from "@/lib/prisma";
 
 const noStore = { "Cache-Control": "no-store" };
@@ -29,8 +30,8 @@ export async function POST(_request: Request) {
     const user = await prisma.user.findUnique({ where: { id: pending.userId }, select: { email: true } });
     if (!user) return neutral();
 
-    const devTest = isDevTestLoginEmail(user.email);
-    const code = devTest ? DEV_TEST_LOGIN_CODE : generateCode();
+    const devTest = isDevTestEmail(user.email);
+    const code = devTest ? DEV_TEST_CODE : generateCode();
     const codeHash = hashLoginCode(code, pending.userId, getAuthSecret());
     // Reserva o envio de forma atomica: duas requisicoes paralelas enviam um e-mail so.
     const reserved = await prisma.loginVerificationCode.updateMany({
