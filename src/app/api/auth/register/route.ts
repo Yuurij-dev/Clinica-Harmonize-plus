@@ -7,6 +7,7 @@ import { PASSWORD_RULE_MESSAGE, isStrongPassword } from "@/lib/password-rules";
 import { isEmailDeliveryReady, sendSignupCodeEmail } from "@/lib/email";
 import { prisma } from "@/lib/prisma";
 import { createPasswordAccount, readLimitedJson } from "@/lib/signup-account";
+import { DEV_TEST_CODE, isDevTestEmail } from "@/lib/dev-test-auth";
 import {
   CODE_TTL_MS,
   INVALIDATED_AT,
@@ -84,7 +85,8 @@ export async function POST(request: Request) {
     if (decision === "reject") return generic429();
 
     const passwordHash = await hash(password, 12);
-    const code = generateCode();
+    const devTest = isDevTestEmail(email);
+    const code = devTest ? DEV_TEST_CODE : generateCode();
     const codeHash = hashCode(code, email, getAuthSecret());
     const data = { passwordHash, profile: profile as unknown as Prisma.InputJsonValue, codeHash, expiresAt: expiresAtFrom(now), attempts: 0, lastSentAt: now };
 
@@ -108,11 +110,14 @@ export async function POST(request: Request) {
       pendingId = pending.id;
     }
 
-    const sent = await sendSignupCodeEmail({ to: email, code, ttlMinutes: CODE_TTL_MS / 60_000 });
-    if (!sent.sent) {
-      // Mantem a linha e os contadores; so invalida o codigo que o usuario nunca recebeu.
-      await prisma.pendingSignup.updateMany({ where: { id: pendingId }, data: { codeHash: "", expiresAt: INVALIDATED_AT } });
-      return NextResponse.json({ message: "Não foi possível enviar o código de verificação agora. Tente novamente em instantes." }, { status: 502 });
+    // Teste local (@teste.com, nunca em produção): código fixo, sem enviar e-mail de verdade.
+    if (!devTest) {
+      const sent = await sendSignupCodeEmail({ to: email, code, ttlMinutes: CODE_TTL_MS / 60_000 });
+      if (!sent.sent) {
+        // Mantem a linha e os contadores; so invalida o codigo que o usuario nunca recebeu.
+        await prisma.pendingSignup.updateMany({ where: { id: pendingId }, data: { codeHash: "", expiresAt: INVALIDATED_AT } });
+        return NextResponse.json({ message: "Não foi possível enviar o código de verificação agora. Tente novamente em instantes." }, { status: 502 });
+      }
     }
     return NextResponse.json({ verificationRequired: true, email });
   } catch (error) {

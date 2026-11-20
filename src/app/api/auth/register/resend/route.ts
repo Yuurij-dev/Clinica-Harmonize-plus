@@ -3,6 +3,7 @@ import { getAuthSecret } from "@/lib/auth-secret";
 import { isEmailDeliveryReady, sendSignupCodeEmail } from "@/lib/email";
 import { prisma } from "@/lib/prisma";
 import { readLimitedJson } from "@/lib/signup-account";
+import { DEV_TEST_CODE, isDevTestEmail } from "@/lib/dev-test-auth";
 import { CODE_TTL_MS, MAX_BODY_BYTES, canSendCode, expiresAtFrom, generateCode, hashCode } from "@/lib/signup-verification-rules";
 
 // Reenvio do codigo. A resposta e SEMPRE `{ ok: true }` 200 (pendente ou nao, bloqueado, em cooldown, no limite
@@ -24,7 +25,8 @@ export async function POST(request: Request) {
     });
     if (!pending || !canSendCode(pending, now)) return neutral();
 
-    const code = generateCode();
+    const devTest = isDevTestEmail(email);
+    const code = devTest ? DEV_TEST_CODE : generateCode();
     const codeHash = hashCode(code, email, getAuthSecret());
     // Reserva o envio de forma atomica: duas requisicoes paralelas enviam um e-mail so.
     const reserved = await prisma.pendingSignup.updateMany({
@@ -33,7 +35,8 @@ export async function POST(request: Request) {
     });
     if (reserved.count === 0) return neutral();
 
-    await sendSignupCodeEmail({ to: email, code, ttlMinutes: CODE_TTL_MS / 60_000 });
+    // Teste local (@teste.com, nunca em produção): código fixo, sem enviar e-mail de verdade.
+    if (!devTest) await sendSignupCodeEmail({ to: email, code, ttlMinutes: CODE_TTL_MS / 60_000 });
     return neutral();
   } catch (error) {
     console.error("[register-resend]", (error as { code?: unknown } | null)?.code);

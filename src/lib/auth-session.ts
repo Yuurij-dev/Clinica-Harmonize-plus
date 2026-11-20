@@ -11,7 +11,6 @@ import { sendLoginCodeEmail } from "./email";
 import { MFA_PENDING_TTL_SECONDS } from "./mfa-rules";
 import {
   CODE_TTL_MS,
-  DEV_TEST_LOGIN_CODE,
   INVALIDATED_AT,
   MAX_ATTEMPTS,
   MAX_TOTAL_ATTEMPTS,
@@ -20,7 +19,6 @@ import {
   expiresAtFrom,
   generateCode,
   hashLoginCode,
-  isDevTestLoginEmail,
   isExpired,
   isLocked,
   isValidCodeFormat,
@@ -30,6 +28,7 @@ import {
   windowCutoff,
   windowEndsAt,
 } from "./login-code-rules";
+import { DEV_TEST_CODE, isDevTestEmail } from "./dev-test-auth";
 import { clampEventDetail, type SecurityEventType } from "./security-events";
 import {
   TRUSTED_DEVICE_COOKIE,
@@ -197,9 +196,9 @@ export async function sendLoginVerificationCode(userId: string, email: string): 
   // Login resubmetido com um código ainda válido: reaproveita, sem reenviar e-mail nem gastar o limite de envios.
   if (pending && !isWindowExpired(pending.windowStartedAt, now) && !isExpired(pending.expiresAt, now)) return { ok: true };
 
-  const devTest = isDevTestLoginEmail(email);
+  const devTest = isDevTestEmail(email);
   const secret = getAuthSecret();
-  const code = devTest ? DEV_TEST_LOGIN_CODE : generateCode();
+  const code = devTest ? DEV_TEST_CODE : generateCode();
   const data = { codeHash: hashLoginCode(code, userId, secret), expiresAt: expiresAtFrom(now), attempts: 0, lastSentAt: now };
 
   let id: string;
