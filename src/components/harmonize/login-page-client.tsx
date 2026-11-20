@@ -104,6 +104,7 @@ export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "l
     // Com provedor de e-mail a conta só nasce após o código; sem provedor (dev) o cadastro já foi criado.
     if (data?.verificationRequired) return { verificationRequired: true } satisfies RegisterResult;
     const result = await handleLogin({ login: values.email, password: values.password });
+    if (result.mfaRequired) return { mfaRequired: true, mfaMethod: result.mfaMethod } satisfies RegisterResult;
     return { error: result.error } satisfies RegisterResult;
   }
 
@@ -123,6 +124,7 @@ export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "l
     // Conta criada: se o login automático falhar, não é erro de código (a tela volta ao login).
     try {
       const result = await handleLogin({ login: values.email, password: values.password });
+      if (result.mfaRequired) return { mfaRequired: true, mfaMethod: result.mfaMethod };
       return result.error ? { createdButLoginFailed: true } : {};
     } catch {
       return { createdButLoginFailed: true };

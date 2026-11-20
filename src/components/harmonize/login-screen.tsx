@@ -32,11 +32,16 @@ export type RegisterValues = {
 export type GoogleSignupValues = Omit<RegisterValues, "email" | "password">;
 
 // createdButLoginFailed: a conta foi criada mas o login automático falhou; o usuário entra manualmente.
-export type VerifyResult = { error?: string; createdButLoginFailed?: boolean };
+// mfaRequired: conta criada, mas o login automático parou no 2º fator (e-mail obrigatório quando TOTP não está ativo).
+export type VerifyResult = { error?: string; createdButLoginFailed?: boolean; mfaRequired?: boolean; mfaMethod?: MfaMethod };
 
+// mfaRequired: conta criada direto (sem etapa de verificação por e-mail, ex. sem provedor de e-mail configurado),
+// mas o login automático parou no 2º fator (e-mail obrigatório quando TOTP não está ativo).
 export type RegisterResult = {
   verificationRequired?: boolean;
   error?: string;
+  mfaRequired?: boolean;
+  mfaMethod?: MfaMethod;
 };
 
 // Segundo estágio do login (2FA). `expired`: o cookie de verificação venceu e o login recomeça.
@@ -211,7 +216,10 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
     }
     setError("");
     setIsSubmitting(false);
-    if (result.verificationRequired) setMode("verify-email");
+    if (result.verificationRequired) { setMode("verify-email"); return; }
+    // Conta criada direto (sem etapa de verificação por e-mail), mas o login automático parou no 2º fator:
+    // mesmo tratamento do caminho com verificação por e-mail (handleVerifyCode) — a tela assume a etapa de MFA.
+    if (result.mfaRequired) { setMfaMethod(result.mfaMethod ?? "email"); setMode("mfa"); }
   }
 
   // Conta criada mas login automático falhou: volta ao login com o e-mail preenchido (não é erro de código).
@@ -224,6 +232,15 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
       return {};
     }
     const result = await onVerifyEmail({ email, password: registerValues.password, code });
+    // Conta criada, mas o login automático parou no 2º fator (sem TOTP ativo, o e-mail é obrigatório):
+    // a própria tela de verificação assume a etapa de MFA em vez de ficar esperando um redirecionamento que não vem.
+    if (result.mfaRequired) {
+      setError("");
+      setPassword("");
+      setMfaMethod(result.mfaMethod ?? "email");
+      setMode("mfa");
+      return {};
+    }
     if (!result.createdButLoginFailed) return result;
     setLogin(email);
     setPassword("");
