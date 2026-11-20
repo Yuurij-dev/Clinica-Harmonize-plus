@@ -7773,8 +7773,20 @@ async function signupEmailVerification() {
     const user = await prisma.user.findUnique({ where: { email: ok }, include: { memberships: { include: { clinic: true } } } });
     const m = user?.memberships[0];
     check("verify: criou usuário ADMIN verificado, clínica, membership owner e apagou o pendente", user?.role === "ADMIN" && !!user.emailVerifiedAt && user.memberships.length === 1 && m.isOwner && m.role === "ADMIN" && m.clinic.name === profile.clinicName && await pend(ok) === null, JSON.stringify({ role: user?.role, n: user?.memberships.length }));
-    const lg = await post("/api/auth/login", { login: ok, password: pw });
-    check("verify: login com a senha do cadastro funciona", lg.status === 200 && lg.data.user?.clinic?.name === profile.clinicName, `${lg.status}`);
+    // Login pós-cadastro: a conta criada não tem TOTP, então o login (mesmo o automático feito pela tela
+    // de cadastro) pede o código por e-mail (2º fator padrão) em vez de abrir sessão direto — é o cenário que
+    // travava a tela antiga em "Verificando...". O roteiro completa o 2º fator pelo fluxo real.
+    const jarOk = newJar();
+    const lg = await jarOk.call("POST", "/api/auth/login", { login: ok, password: pw });
+    check("verify: login com a senha do cadastro pede o código por e-mail (sem TOTP ativo, sem sessão ainda)", lg.s === 200 && lg.d.mfaRequired === true && lg.d.method === "email" && !lg.d.user && Boolean(jarOk.c.harmonize_mfa) && !jarOk.c.harmonize_session, `${lg.s} ${JSON.stringify(lg.d)}`);
+    await seedEmailLoginCode(user.id);
+    const mfaOk = await jarOk.call("POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE });
+    check("verify: código de e-mail certo completa o login pós-cadastro (200, user, sessão)", mfaOk.s === 200 && mfaOk.d.user?.clinic?.name === profile.clinicName && Boolean(jarOk.c.harmonize_session), `${mfaOk.s} ${JSON.stringify(mfaOk.d)}`);
+    const jarWrong = newJar();
+    const lg2 = await jarWrong.call("POST", "/api/auth/login", { login: ok, password: pw });
+    await seedEmailLoginCode(user.id, "222222");
+    const mfaWrong = await jarWrong.call("POST", "/api/auth/mfa/verify", { code: "111111" });
+    check("verify: no login pós-cadastro, código de e-mail errado = 401 genérico, sem sessão", lg2.s === 200 && mfaWrong.s === 401 && mfaWrong.d.message === "Código inválido ou expirado." && !jarWrong.c.harmonize_session, `${lg2.s} ${mfaWrong.s} ${JSON.stringify(mfaWrong.d)}`);
     r = await verify(ok, "123456");
     check("verify: repetir após criar = mesma resposta genérica", isBad(r) && r.text === wrongBody, `${r.status} ${r.text}`);
 
