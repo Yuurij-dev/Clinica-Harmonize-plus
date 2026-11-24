@@ -24,6 +24,7 @@ type TrialEndedModalProps = {
   feature: string | null;
   onClose: () => void;
   plans?: PlanOffer[];
+  supportWhatsappLink?: string | null;
 };
 
 function PlanCard({ plan }: { plan: PlanOffer }) {
@@ -61,7 +62,7 @@ function PlanCard({ plan }: { plan: PlanOffer }) {
 }
 
 /** Modal de encerramento do teste grátis: abre só quando o usuário tenta usar algo bloqueado (nunca sozinho). Planos mockados em data/plans.ts. */
-export function TrialEndedModal({ open, variant = "trial_ended", feature, onClose, plans = planOffers }: TrialEndedModalProps) {
+export function TrialEndedModal({ open, variant = "trial_ended", feature, onClose, plans = planOffers, supportWhatsappLink }: TrialEndedModalProps) {
   const texts = variantTexts[variant];
   return (
     <Modal open={open} title={texts.title} description={texts.subtitle} onClose={onClose} hideHeader mascot={false} panelClassName="max-w-5xl" bodyClassName="p-0 sm:p-0">
@@ -78,7 +79,7 @@ export function TrialEndedModal({ open, variant = "trial_ended", feature, onClos
         <div className="mt-7 grid gap-5 sm:grid-cols-2 lg:grid-cols-3 lg:items-stretch">
           {plans.map((plan) => <PlanCard key={plan.id} plan={plan} />)}
         </div>
-        <p className="mt-5 text-center text-xs text-muted-foreground">Precisa de ajuda para escolher? <button className="font-semibold text-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-primary" onClick={() => toast("Fale com o administrador da clínica ou com o suporte do Harmonize+.", { duration: 3600 })} type="button">Falar com suporte</button></p>
+        <p className="mt-5 text-center text-xs text-muted-foreground">Precisa de ajuda para escolher? <button className="font-semibold text-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-primary" onClick={() => { if (supportWhatsappLink) { window.open(supportWhatsappLink, "_blank", "noopener,noreferrer"); return; } toast("Fale com o administrador da clínica ou com o suporte do Harmonize+.", { duration: 3600 }); }} type="button">Falar com suporte</button></p>
         <p className="mt-3 flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground"><Lock aria-hidden="true" className="h-3 w-3" />Seus dados permanecem seguros.</p>
       </div>
     </Modal>

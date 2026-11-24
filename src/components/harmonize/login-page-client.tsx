@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { LoginScreen, type GoogleSignupValues, type MfaMethod, type MfaVerifyInput, type MfaVerifyResult, type RegisterResult, type RegisterValues, type VerifyResult } from "./login-screen";
 import { setClientCacheScope } from "@/lib/client-cache";
 
-export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "login" | "register" | "mfa"; googleStatus?: string }) {
+export function LoginPageClient({ initialMode, googleStatus, supportWhatsappLink }: { initialMode: "login" | "register" | "mfa"; googleStatus?: string; supportWhatsappLink?: string | null }) {
   const router = useRouter();
 
   useEffect(() => {
@@ -178,5 +178,5 @@ export function LoginPageClient({ initialMode, googleStatus }: { initialMode: "l
     return {} satisfies RegisterResult;
   }
 
-  return <LoginScreen initialMode={initialMode} googleStatus={googleStatus} onLogin={handleLogin} onChangePassword={handlePasswordChange} onVerifyMfa={handleVerifyMfa} onResendMfaCode={handleResendMfaCode} onPendingMfaMethod={handlePendingMfaMethod} onEnterApp={handleEnterApp} onRegister={handleRegister} onVerifyEmail={handleVerifyEmail} onResendCode={handleResendCode} onGoogleSignup={handleGoogleSignup} />;
+  return <LoginScreen initialMode={initialMode} googleStatus={googleStatus} supportWhatsappLink={supportWhatsappLink} onLogin={handleLogin} onChangePassword={handlePasswordChange} onVerifyMfa={handleVerifyMfa} onResendMfaCode={handleResendMfaCode} onPendingMfaMethod={handlePendingMfaMethod} onEnterApp={handleEnterApp} onRegister={handleRegister} onVerifyEmail={handleVerifyEmail} onResendCode={handleResendCode} onGoogleSignup={handleGoogleSignup} />;
 }

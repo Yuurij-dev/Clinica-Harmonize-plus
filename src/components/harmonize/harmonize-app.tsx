@@ -57,7 +57,7 @@ import { guardDraftNavigation, hasDraftGuard } from "./use-draft-autosave";
 type CurrentUser = { id: string; clinicId: string; name: string; role: string; avatarVersion?: string | null; isOwner?: boolean; trialExpired?: boolean; access?: { mode?: "full" | "readonly"; reason?: string; plan?: string | null; contractedPlan?: string | null; features?: string[] }; rolePermissions?: RolePermissionMatrix; clinic?: { name: string; trialEndsAt?: string | null } };
 type AgendaFocus = { date: string; time: string };
 type CreateDialog = "appointment" | "client" | "procedure" | "quote" | "payment";
-type HarmonizeAppProps = { initialCreate?: CreateDialog };
+type HarmonizeAppProps = { initialCreate?: CreateDialog; supportWhatsappLink?: string | null };
 type UndoNotice = { id: number; message: string; undo: () => void; leaving: boolean } | null;
 type StartupState =
   | { status: "checking-session"; sessionConfirmed: false; clinicName?: string; message: string }
@@ -137,7 +137,7 @@ function sectionFromPath(pathname: string | null): SectionId {
   return entry?.[0] as SectionId ?? "agenda";
 }
 
-export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
+export function HarmonizeApp({ initialCreate, supportWhatsappLink }: HarmonizeAppProps = {}) {
   const pathname = usePathname();
   const router = useRouter();
   // "/perfil" é uma visão do shell (todos os papéis), não uma SectionId: sidebar e abas ficam sem item ativo.
@@ -486,7 +486,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
         planLabel={planLabel(currentUser?.access)}
       />
       <div className="lg:pl-[220px]">
-        <Topbar user={currentUser} clinics={clinics} onSwitchClinic={switchClinic} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onProfile={openProfile} onNavigate={selectSection} onQuickCreate={openCreate} onOpenSettingsSection={openSettingsSearchSection} onOpenStockAlert={openStockAlert} onLogout={logout} />
+        <Topbar user={currentUser} clinics={clinics} onSwitchClinic={switchClinic} onDashboard={() => selectSection("dashboard")} onSettings={() => selectSection("configuracoes")} onProfile={openProfile} onNavigate={selectSection} onQuickCreate={openCreate} onOpenSettingsSection={openSettingsSearchSection} onOpenStockAlert={openStockAlert} onLogout={logout} supportWhatsappLink={supportWhatsappLink} />
         <main className={`mx-auto w-full ${shown === "agenda" ? "max-w-none" : "max-w-[1500px]"} px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-5 sm:px-7 lg:px-9 lg:pb-10 lg:pt-7`}>
           <AnimatedPage routeKey={shown ?? "perfil"}>
           {currentUser && profileView ? <MyProfile /> : null}
@@ -514,7 +514,7 @@ export function HarmonizeApp({ initialCreate }: HarmonizeAppProps = {}) {
       {currentUser && startup.status === "ready" && !trialExpired ? <GuidedTour allowedSections={allowedSections} userId={currentUser.id} activeSection={shown ?? undefined} suppressAutoOpen={createDialog !== null || hasDraftGuard()} onFinished={() => window.dispatchEvent(new Event(setupInviteEvent))} onSelectSection={(section, replace) => selectSection(section, undefined, "purchases", replace)} /> : null}
       <SetupWizardHost onOpenDestination={openSetupDestination} onDashboard={() => { void selectSection("dashboard"); }} />
       <AppToaster />
-      <TrialEndedModal open={upgradeOpen} variant={upgradeVariant} feature={upgradeFeature} onClose={() => setUpgradeOpen(false)} />
+      <TrialEndedModal open={upgradeOpen} variant={upgradeVariant} feature={upgradeFeature} onClose={() => setUpgradeOpen(false)} supportWhatsappLink={supportWhatsappLink} />
       {undoNotice ? <div className={`${undoNotice.leaving ? "hp-snackbar-exit" : "hp-snackbar-enter"} fixed bottom-[calc(8.5rem+env(safe-area-inset-bottom))] left-1/2 lg:bottom-6 z-[90] w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-[8px] border border-border bg-card px-4 py-3 text-xs font-bold text-card-foreground shadow-[0_18px_45px_rgba(31,32,50,0.18)]`} role="status"><div className="flex items-center gap-3"><span className="min-w-0 flex-1">{undoNotice.message}</span><button className="shrink-0 rounded-full bg-muted px-3 py-1.5 text-[11px] font-black text-foreground transition hover:bg-muted/80" onClick={() => { const undo = undoNotice.undo; setUndoNotice(null); undo(); }}>Desfazer</button></div><div className="hp-snackbar-progress mt-3 h-1 rounded-full bg-success" style={{ "--snackbar-duration": "6500ms" } as CSSProperties} /></div> : null}
     </div>
     </CurrentRoleProvider>

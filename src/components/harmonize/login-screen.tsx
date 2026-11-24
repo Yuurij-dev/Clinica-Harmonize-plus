@@ -52,6 +52,7 @@ export type MfaMethod = "totp" | "email";
 type LoginScreenProps = {
   initialMode?: "login" | "register" | "mfa";
   googleStatus?: string;
+  supportWhatsappLink?: string | null;
   onLogin: (credentials: { login: string; password: string }) => Promise<{ error?: string; passwordChangeRequired?: boolean; mfaRequired?: boolean; mfaMethod?: MfaMethod }>;
   onChangePassword: (password: string) => Promise<{ error?: string; mfaRequired?: boolean; mfaMethod?: MfaMethod }>;
   onVerifyMfa: (input: MfaVerifyInput) => Promise<MfaVerifyResult>;
@@ -86,7 +87,7 @@ const googleMessages: Record<string, string> = {
   error: "Não foi possível entrar com o Google. Tente novamente.",
 };
 
-export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onChangePassword, onVerifyMfa, onResendMfaCode, onPendingMfaMethod, onEnterApp, onRegister, onVerifyEmail, onResendCode, onGoogleSignup }: LoginScreenProps) {
+export function LoginScreen({ initialMode = "login", googleStatus, supportWhatsappLink, onLogin, onChangePassword, onVerifyMfa, onResendMfaCode, onPendingMfaMethod, onEnterApp, onRegister, onVerifyEmail, onResendCode, onGoogleSignup }: LoginScreenProps) {
   const [mode, setMode] = useState<"login" | "register" | "verify-email" | "change-password" | "google-signup" | "mfa">(googleStatus === "signup" ? "google-signup" : initialMode);
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
@@ -275,7 +276,7 @@ export function LoginScreen({ initialMode = "login", googleStatus, onLogin, onCh
       ) : mode === "verify-email" ? (
         <div className="mx-auto w-full max-w-[360px]"><VerifyEmailForm email={registerValues.email.trim().toLowerCase()} onChangeEmail={openRegister} onResend={onResendCode} onVerify={handleVerifyCode} /></div>
       ) : mode === "login" ? (
-        <div className="mx-auto w-full max-w-[360px]"><LoginForm error={error} notice={notice} isSubmitting={isSubmitting} login={login} onLoginChange={setLogin} onPasswordChange={setPassword} onSubmit={handleLoginSubmit} password={password} setShowPassword={setShowPassword} showPassword={showPassword} /></div>
+        <div className="mx-auto w-full max-w-[360px]"><LoginForm error={error} notice={notice} isSubmitting={isSubmitting} login={login} onLoginChange={setLogin} onPasswordChange={setPassword} onSubmit={handleLoginSubmit} password={password} setShowPassword={setShowPassword} showPassword={showPassword} supportWhatsappLink={supportWhatsappLink} /></div>
       ) : (
         <RegisterForm error={error} isSubmitting={isSubmitting} onBack={openLogin} invalidFields={invalidFields} ruleShake={ruleShake} onChange={(field, value) => { setRegisterValues((current) => ({ ...current, [field]: value })); setInvalidFields((current) => current.filter((item) => item !== field)); if (field === "email") setEmailTaken(false); }} emailTaken={emailTaken} onSubmit={handleRegisterSubmit} values={registerValues} setShowPassword={setShowPassword} showPassword={showPassword} />
       )}
@@ -319,7 +320,7 @@ export function BrandOutline({ className }: { className: string }) {
   </svg>;
 }
 
-function LoginForm({ error, notice, isSubmitting, login, onLoginChange, onPasswordChange, onSubmit, password, setShowPassword, showPassword }: { error: string; notice?: string; isSubmitting: boolean; login: string; onLoginChange: (value: string) => void; onPasswordChange: (value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; password: string; setShowPassword: (value: boolean) => void; showPassword: boolean }) {
+function LoginForm({ error, notice, isSubmitting, login, onLoginChange, onPasswordChange, onSubmit, password, setShowPassword, showPassword, supportWhatsappLink }: { error: string; notice?: string; isSubmitting: boolean; login: string; onLoginChange: (value: string) => void; onPasswordChange: (value: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; password: string; setShowPassword: (value: boolean) => void; showPassword: boolean; supportWhatsappLink?: string | null }) {
   const [helpMessage, setHelpMessage] = useState("");
 
   // Rota de API (redirect externo ao Google): precisa de navegação completa, não de router.push.
@@ -343,7 +344,7 @@ function LoginForm({ error, notice, isSubmitting, login, onLoginChange, onPasswo
       </form>
       <div className="my-5 flex items-center gap-3"><span className="h-px flex-1 bg-[#e9edf5]" /><span className="text-xs font-medium text-[#8b94af]">ou</span><span className="h-px flex-1 bg-[#e9edf5]" /></div>
       <Button aria-label="Entrar com Google" onClick={startGoogleLogin} className="h-[42px] w-full rounded-[10px] border-[#d9dff0] bg-white px-4 text-[13px] font-semibold text-[#25263a] shadow-none hover:bg-[#f8f9fc]" size="lg" type="button" variant="outline"><GoogleMark />Entrar com Google</Button>
-      <button className="mt-5 w-full text-center text-xs font-medium text-[#4938f4] hover:underline" onClick={() => setHelpMessage("Para receber ajuda com o acesso, entre em contato com o administrador da clínica.")} type="button">Precisa de ajuda? Clique aqui.</button>
+      <button className="mt-5 w-full text-center text-xs font-medium text-[#4938f4] hover:underline" onClick={() => { if (supportWhatsappLink) { window.open(supportWhatsappLink, "_blank", "noopener,noreferrer"); return; } setHelpMessage("Para receber ajuda com o acesso, entre em contato com o administrador da clínica."); }} type="button">Precisa de ajuda? Clique aqui.</button>
       {helpMessage ? <p aria-live="polite" className="mt-3 text-center text-xs leading-5 text-[#7783a8]">{helpMessage}</p> : null}
     </>
   );
