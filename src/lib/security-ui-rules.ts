@@ -78,6 +78,7 @@ export const SECURITY_EVENT_LABELS: Record<SecurityEventType, string> = {
   TRUSTED_DEVICE_REMOVED: "Dispositivo confiável removido",
   SESSION_REVOKED: "Sessão encerrada",
   PASSWORD_CHANGED: "Senha alterada",
+  PASSWORD_RESET: "Senha redefinida por e-mail",
   ACCOUNT_RECOVERY: "Recuperação de conta",
 };
 

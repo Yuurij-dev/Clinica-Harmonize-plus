@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useId, useRef, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import {
   ArrowRight,
   Building2,
@@ -337,7 +338,7 @@ function LoginForm({ error, notice, isSubmitting, login, onLoginChange, onPasswo
         <TextField compact icon={Mail} label="seu e-mail" onChange={onLoginChange} placeholder="nome@dominio.com" value={login} autoComplete="username" />
         <div className="mt-4">
           <PasswordField compact label="sua senha" onChange={onPasswordChange} password={password} setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="current-password" />
-          <button className="mt-2 text-left text-xs font-medium text-[#4938f4] hover:underline" onClick={() => setHelpMessage("Para redefinir sua senha, entre em contato com o administrador da clínica.")} type="button">Esqueceu sua senha?</button>
+          <Link className="mt-2 inline-block text-xs font-medium text-[#4938f4] hover:underline" href="/recuperar-senha">Esqueceu sua senha?</Link>
         </div>
         {error ? <div className="mt-4"><ErrorMessage>{error}</ErrorMessage></div> : notice ? <p aria-live="polite" className="mt-4 rounded-[8px] bg-[#e7f4ef] px-3 py-2 text-xs font-semibold text-[#16805d]" role="status">{notice}</p> : null}
         <Button className="mt-5 h-[42px] w-full rounded-[10px] bg-[#4938f4] px-4 text-[13px] font-bold hover:bg-[#3d2de0]" size="lg" disabled={isSubmitting} type="submit"><ArrowRight className="h-4 w-4" />{isSubmitting ? "Validando acesso..." : "Acessar"}</Button>
@@ -365,8 +366,8 @@ function startGoogleSignup() {
   window.location.assign("/api/auth/google?intent=signup");
 }
 
-// Cabeçalho do cadastro: ícone redondo lilás, título, subtítulo e linha-acento.
-function SignupHeader({ icon: Icon, subtitle, title }: { icon: typeof Mail; subtitle: React.ReactNode; title: string }) {
+// Cabeçalho do cadastro e da recuperação de senha: ícone redondo lilás, título, subtítulo e linha-acento.
+export function SignupHeader({ icon: Icon, subtitle, title }: { icon: typeof Mail; subtitle: React.ReactNode; title: string }) {
   return <header className="mb-7 text-center"><div aria-hidden="true" className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-full bg-[#eeecff] text-[#5147dc]"><Icon className="h-6 w-6" /></div><h2 className="text-2xl font-black tracking-[0] text-[#211960]">{title}</h2><p className="mt-2 text-[13px] leading-5 text-[#7783a8]">{subtitle}</p><div aria-hidden="true" className="mx-auto mt-4 h-[3px] w-10 rounded-full bg-[#5147dc]" /></header>;
 }
 
@@ -586,7 +587,7 @@ const strengthColors = ["bg-[#e5484d]", "bg-[#e5484d]", "bg-[#f5a524]", "bg-[#8b
 const strengthTextColors = ["text-[#7783a8]", "text-[#e5484d]", "text-[#d9890a]", "text-[#5b9e1f]", "text-[#16a34a]"];
 
 // Medidor de força e checklist da senha: regras compartilhadas com o servidor (password-rules).
-function PasswordStrength({ id, password, highlightMissing = false, shakeTick = 0 }: { id: string; password: string; highlightMissing?: boolean; shakeTick?: number }) {
+export function PasswordStrength({ id, password, highlightMissing = false, shakeTick = 0 }: { id: string; password: string; highlightMissing?: boolean; shakeTick?: number }) {
   const { score, label } = passwordStrength(password);
   const checks = passwordChecks(password);
   return (
