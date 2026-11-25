@@ -23,6 +23,7 @@
     "db:local:down": "docker compose stop postgres",
     "db:local:logs": "docker compose logs -f postgres",
     "db:seed": "node prisma/seed.mjs",
+    "db:seed:plans": "node prisma/seed-plans.local.mjs",
     "db:tenant-seed": "node prisma/tenant-seed.mjs",
     "db:backup": "node prisma/backup.mjs",
     "db:restore": "node prisma/restore.mjs",
