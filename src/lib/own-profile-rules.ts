@@ -88,12 +88,18 @@ export const PASSWORD_TOO_LONG_MESSAGE = "A senha pode ter no máximo 72 bytes (
 // bcrypt só considera os 72 primeiros BYTES: acima disso a senha seria truncada em silêncio.
 const BCRYPT_MAX_BYTES = 72;
 
+/** Regras de uma senha nova (troca e recuperação): força e teto do bcrypt. */
+export function newPasswordError(password: string): string | null {
+  if (!isStrongPassword(password)) return PASSWORD_RULE_MESSAGE;
+  return new TextEncoder().encode(password).length > BCRYPT_MAX_BYTES ? PASSWORD_TOO_LONG_MESSAGE : null;
+}
+
 export function validatePasswordChange(input: Record<string, unknown> | null | undefined): PasswordChangeResult {
   const currentPassword = typeof input?.currentPassword === "string" ? input.currentPassword : "";
   const newPassword = typeof input?.newPassword === "string" ? input.newPassword : "";
   if (!currentPassword) return { ok: false, field: "currentPassword", message: PASSWORD_CURRENT_REQUIRED_MESSAGE };
-  if (!isStrongPassword(newPassword)) return { ok: false, field: "newPassword", message: PASSWORD_RULE_MESSAGE };
-  if (new TextEncoder().encode(newPassword).length > BCRYPT_MAX_BYTES) return { ok: false, field: "newPassword", message: PASSWORD_TOO_LONG_MESSAGE };
+  const error = newPasswordError(newPassword);
+  if (error) return { ok: false, field: "newPassword", message: error };
   if (newPassword === currentPassword) return { ok: false, field: "newPassword", message: PASSWORD_SAME_MESSAGE };
   return { ok: true, currentPassword, newPassword };
 }

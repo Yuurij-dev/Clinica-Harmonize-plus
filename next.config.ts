@@ -14,6 +14,14 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [
+      // Recuperação de senha: o token viaja no fragmento, mas as telas também não vazam Referer nem ficam em cache.
+      ...["/recuperar-senha", "/redefinir-senha"].map((source) => ({
+        source,
+        headers: [
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Cache-Control", value: "no-store" },
+        ],
+      })),
       {
         // O token do convite está no path: não vazar por Referer nem ficar em cache.
         source: "/convite/:path*",

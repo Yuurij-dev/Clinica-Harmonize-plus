@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     const response = NextResponse.json({ passwordChangeRequired: true, user: { id: user.id, name: user.name, email: user.email, role: result.role, clinic: result.clinic } });
     response.cookies.set({
       name: sessionCookieName,
-      value: await createPasswordChangeSession(user.id),
+      value: await createPasswordChangeSession(user.id, result.passwordHash),
       httpOnly: true,
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     return response;
   }
 
-  const login = await completeLogin({ request, userId: user.id, origin: "password" });
+  const login = await completeLogin({ request, userId: user.id, origin: "password", passwordHash: result.passwordHash });
   if (!login.ok) return NextResponse.json({ message: login.message }, { status: login.status });
   const response = login.mfaRequired
     ? NextResponse.json({ mfaRequired: true, method: login.method })

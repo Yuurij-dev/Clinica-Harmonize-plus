@@ -87,6 +87,28 @@ export function buildInviteUrl(token: string, env: Env = process.env): string | 
   }
 }
 
+// Origem publica do site. Producao sem NEXT_PUBLIC_SITE_URL => null (nao deriva do header Host).
+function siteOrigin(env: Env): string | null {
+  const site = env.NEXT_PUBLIC_SITE_URL?.trim() || (env.NODE_ENV === "production" ? "" : "http://localhost:3000");
+  if (!site) return null;
+  try {
+    return new URL(site).origin;
+  } catch {
+    return null;
+  }
+}
+
+export function buildLoginUrl(env: Env = process.env): string | null {
+  const origin = siteOrigin(env);
+  return origin ? `${origin}/login` : null;
+}
+
+// O token vai no fragmento: o navegador nao o envia ao servidor (logs) nem no Referer.
+export function buildPasswordResetUrl(token: string, env: Env = process.env): string | null {
+  const origin = siteOrigin(env);
+  return origin ? `${origin}/redefinir-senha#token=${encodeURIComponent(token)}` : null;
+}
+
 // Em producao, convite sem entrega por e-mail nao pode existir (a URL nunca e devolvida ao admin).
 export function isInviteDeliveryReady(env: Env = process.env): boolean {
   if (env.NODE_ENV !== "production") return true;
@@ -156,6 +178,67 @@ export async function sendInvitationEmail(
     ],
   });
   return sendEmail({ to: input.to, subject: `${input.inviterName} convidou você para a clínica ${input.clinicName}`, html: body.html, text: body.text }, deps);
+}
+
+// Link de redefinicao de senha. A URL so aparece no corpo do e-mail.
+export async function sendPasswordResetEmail(
+  input: { to: string; url: string; ttlMinutes: number },
+  deps: { env?: Env; fetchImpl?: typeof fetch } = {},
+): Promise<EmailResult> {
+  const env = deps.env ?? process.env;
+  if (!isEmailDeliveryReady(env)) return { sent: false, reason: "not_configured" };
+  const body = composeEmail({
+    preheader: "Crie uma nova senha para a sua conta Harmonize+.",
+    blocks: [
+      heading("Redefinir sua senha"),
+      paragraph("Recebemos um pedido para redefinir a senha da sua conta no Harmonize+."),
+      button(input.url, "Redefinir senha"),
+      note("Ou copie e cole este link no navegador:"),
+      note(input.url),
+      note(`O link vale por ${input.ttlMinutes} minutos e só pode ser usado uma vez.`),
+      note("Se não foi você, ignore este e-mail: sua senha continua a mesma. A verificação em duas etapas, se ativada, continua valendo."),
+    ],
+  });
+  return sendEmail({ to: input.to, subject: "Redefinição de senha do Harmonize+", html: body.html, text: body.text }, deps);
+}
+
+// Pedido de redefinicao para conta que so entra com o Google (nao tem senha).
+export async function sendPasswordResetGoogleEmail(
+  input: { to: string; loginUrl: string | null },
+  deps: { env?: Env; fetchImpl?: typeof fetch } = {},
+): Promise<EmailResult> {
+  const env = deps.env ?? process.env;
+  if (!isEmailDeliveryReady(env)) return { sent: false, reason: "not_configured" };
+  const body = composeEmail({
+    preheader: "Sua conta Harmonize+ entra com o Google.",
+    blocks: [
+      heading("Entre com o Google"),
+      paragraph("Recebemos um pedido para redefinir a senha da sua conta no Harmonize+. Ela não tem senha própria: use o botão “Entrar com Google” na tela de login."),
+      ...(input.loginUrl ? [button(input.loginUrl, "Ir para o login")] : []),
+      note("Se não foi você, ignore este e-mail: nada mudou na sua conta."),
+    ],
+  });
+  return sendEmail({ to: input.to, subject: "Como acessar sua conta Harmonize+", html: body.html, text: body.text }, deps);
+}
+
+// Confirmacao enviada depois da redefinicao.
+export async function sendPasswordChangedEmail(
+  input: { to: string; loginUrl: string | null },
+  deps: { env?: Env; fetchImpl?: typeof fetch } = {},
+): Promise<EmailResult> {
+  const env = deps.env ?? process.env;
+  if (!isEmailDeliveryReady(env)) return { sent: false, reason: "not_configured" };
+  const body = composeEmail({
+    preheader: "A senha da sua conta Harmonize+ foi alterada.",
+    blocks: [
+      heading("Sua senha foi alterada"),
+      paragraph("A senha da sua conta no Harmonize+ foi redefinida. Por segurança, encerramos as sessões abertas e removemos os dispositivos confiáveis."),
+      ...(input.loginUrl ? [button(input.loginUrl, "Entrar no Harmonize+")] : []),
+      note("A verificação em duas etapas, se ativada, continua valendo."),
+      note("Se não foi você, redefina a senha agora em “Esqueceu sua senha?” na tela de login e proteja o seu e-mail."),
+    ],
+  });
+  return sendEmail({ to: input.to, subject: "Sua senha do Harmonize+ foi alterada", html: body.html, text: body.text }, deps);
 }
 
 // Codigo de verificacao do cadastro. O codigo so aparece no corpo do e-mail (nunca em log nem na resposta da API).

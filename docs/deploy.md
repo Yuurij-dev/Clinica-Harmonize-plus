@@ -46,6 +46,8 @@ Vercel → **Settings → Environment Variables**:
 
 Depois de salvar, **Redeploy** — a Vercel não aplica variáveis novas num deploy já existente.
 
+As mesmas três primeiras variáveis são exigidas pela recuperação de senha (ver `docs/recuperacao-de-senha.md`).
+
 ## 4. Google OAuth em produção (login/cadastro com Google)
 Google Cloud Console → **APIs & Services → Credentials → o seu OAuth Client**:
 - **Authorized redirect URIs** → adicionar exatamente:

@@ -5,6 +5,7 @@ import { recordSecurityEvent, revokeUserSessions, revokeUserTrustedDevices } fro
 import { registerPasswordFailure } from "@/lib/login";
 import { isGoogleOnlyAccount } from "@/lib/mfa-rules";
 import { validatePasswordChange } from "@/lib/own-profile-rules";
+import { invalidatePendingResetTokens } from "@/lib/password-reset-repo";
 import { prisma } from "@/lib/prisma";
 import { noStore, requireSecurityUser, securityError } from "@/lib/security-api";
 
@@ -29,7 +30,12 @@ export async function POST(request: Request) {
   }
 
   const passwordHash = await hash(input.newPassword, 12);
-  await prisma.user.update({ where: { id: user.id }, data: { passwordHash, mustChangePassword: false, failedLogins: 0, lockedUntil: null } });
+  // Condicional ao hash conferido: uma redefinição concluída no meio do caminho prevalece. Links de recuperação pendentes caem junto.
+  const [updated] = await prisma.$transaction([
+    prisma.user.updateMany({ where: { id: user.id, passwordHash: row.passwordHash }, data: { passwordHash, mustChangePassword: false, failedLogins: 0, lockedUntil: null } }),
+    invalidatePendingResetTokens(prisma, user.id),
+  ]);
+  if (updated.count === 0) return securityError("Sua senha foi alterada em outro lugar. Entre novamente.", 409);
   invalidateUserAuthCache(user.id);
   // A senha já mudou: falha ao derrubar as outras sessões não pode virar 500 (o usuário acharia que não trocou). Avisa e segue.
   try {

@@ -1,5 +1,5 @@
 // Emissão central de sessão (cookie/Bearer), estágio MFA, revogação e registro de eventos de segurança.
-// Todo ponto que abre sessão passa por aqui (completeLogin / issueSession). Nunca gravar senha, token ou códigos em eventos.
+// Todo ponto que abre sessão passa por aqui (completeLogin / issueSessionUnlessReset). Nunca gravar senha, token ou códigos em eventos.
 import { Prisma } from "@prisma/client";
 import { jwtVerify, SignJWT } from "jose";
 import { cookies } from "next/headers";
@@ -7,6 +7,8 @@ import type { NextResponse } from "next/server";
 import { getAuthSecret } from "./auth-secret";
 import { invalidateUserAuthCache, sessionCookieName, signSessionToken } from "./auth";
 import { prisma } from "./prisma";
+import { matchesPasswordFingerprint, passwordFingerprint } from "./password-fingerprint";
+import { createSessionIfPasswordUnchanged } from "./password-reset-repo";
 import { sendLoginCodeEmail } from "./email";
 import { MFA_PENDING_TTL_SECONDS } from "./mfa-rules";
 import {
@@ -52,7 +54,8 @@ export type ClientInfo = { ip: string | null; userAgent: string | null };
 
 /**
  * IP (x-forwarded-for, depois x-real-ip) e user-agent, limitados em tamanho. Usa o PRIMEIRO valor de x-forwarded-for: na Vercel o
- * cabeçalho é sobrescrito pela borda (não vem do cliente); fora dela o IP é informativo (histórico), nunca usado para decisão de segurança.
+ * cabeçalho é sobrescrito pela borda (não vem do cliente); fora dela pode ser forjado. Além do histórico, só alimenta o limite por IP
+ * da recuperação de senha (por IP e por par e-mail + IP; há ainda um teto por e-mail que não depende do IP).
  * Sem retenção definida para SecurityEvent por ora (pendência). IP completo só no banco; a API devolve mascarado.
  */
 export function clientInfo(request: { headers: { get(name: string): string | null } } | null | undefined): ClientInfo {
@@ -85,20 +88,26 @@ export function sessionCookie(token: string, maxAge = SESSION_TTL_SECONDS) {
   return { name: sessionCookieName, value: token, httpOnly: true, sameSite: "lax", secure: secure(), maxAge, path: "/" } as const;
 }
 
-/** Cria a AuthSession e o JWT com sid. */
-export async function issueSession(input: {
+export const PASSWORD_RESET_DURING_LOGIN_MESSAGE = "Sua senha foi alterada. Entre novamente.";
+
+/**
+ * Cria a AuthSession e o JWT com sid, só se a senha ainda for a conferida neste login (`passwordHash`). null = ela mudou no meio
+ * do caminho (ex.: redefinição por e-mail): nada é criado e o dispositivo confiável informado é revogado.
+ */
+export async function issueSessionUnlessReset(input: {
   userId: string;
   request?: { headers: { get(name: string): string | null } } | null;
   trustedDeviceId?: string | null;
   ttlSeconds?: number;
-}) {
+}, passwordHash: string) {
   const { ip, userAgent } = clientInfo(input.request);
   const now = Date.now();
   const expiresAt = new Date(now + (input.ttlSeconds ?? SESSION_TTL_SECONDS) * 1000);
-  const session = await prisma.authSession.create({
-    data: { userId: input.userId, expiresAt, userAgent, ip, trustedDeviceId: input.trustedDeviceId ?? null },
-    select: { id: true },
-  });
+  const session = await createSessionIfPasswordUnchanged(prisma, passwordHash, { userId: input.userId, expiresAt, userAgent, ip, trustedDeviceId: input.trustedDeviceId ?? null });
+  if (!session) {
+    if (input.trustedDeviceId) await prisma.trustedDevice.updateMany({ where: { id: input.trustedDeviceId, userId: input.userId, revokedAt: null }, data: { revokedAt: new Date() } });
+    return null;
+  }
   // Faxina oportunista das linhas do próprio usuário: expiradas há +1 dia ou revogadas há +30 dias.
   void prisma.authSession.deleteMany({
     where: { userId: input.userId, OR: [{ expiresAt: { lt: new Date(now - 86_400_000) } }, { revokedAt: { lt: new Date(now - 30 * 86_400_000) } }] },
@@ -107,30 +116,38 @@ export async function issueSession(input: {
   return { sid: session.id, token, expiresAt };
 }
 
-// Risco aceito: o token harmonize_mfa (10 min) não é invalidado se a senha mudar nesse intervalo (não há campo barato no schema sem migration).
-// O bloqueio do 2FA (5 falhas/15 min) pode ser provocado por quem sabe a senha: decisão de produto aceita; não há limite por IP no repositório.
-export async function createMfaPendingToken(userId: string, origin: "password" | "google", method: "totp" | "email") {
-  return new SignJWT({ userId, mfaPending: true, origin, method })
+// O token harmonize_mfa (10 min) carrega a impressão do hash da senha: qualquer troca ou redefinição o invalida.
+// O bloqueio do 2FA (5 falhas/15 min) pode ser provocado por quem sabe a senha: decisão de produto aceita; não há limite por IP no 2FA.
+export async function createMfaPendingToken(userId: string, origin: "password" | "google", method: "totp" | "email", passwordHash: string) {
+  const secret = getAuthSecret();
+  return new SignJWT({ userId, mfaPending: true, origin, method, pv: passwordFingerprint(userId, passwordHash, secret) })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${MFA_PENDING_TTL_SECONDS}s`)
-    .sign(getAuthSecret());
+    .sign(secret);
 }
 
 export async function verifyMfaPendingToken(token: string | null | undefined) {
   if (!token) return null;
+  const secret = getAuthSecret();
+  let payload;
   try {
-    const { payload } = await jwtVerify(token, getAuthSecret());
-    if (payload.mfaPending !== true || typeof payload.userId !== "string") return null;
-    return {
-      userId: payload.userId,
-      origin: payload.origin === "google" ? "google" as const : "password" as const,
-      // Pendentes antigos (criados antes desta mudança) não têm `method`: tratados como TOTP, único método que existia.
-      method: payload.method === "email" ? "email" as const : "totp" as const,
-    };
+    ({ payload } = await jwtVerify(token, secret));
   } catch {
     return null;
   }
+  if (payload.mfaPending !== true || typeof payload.userId !== "string") return null;
+  // Fora do try: falha do banco não pode se passar por verificação expirada.
+  const user = await prisma.user.findUnique({ where: { id: payload.userId }, select: { passwordHash: true } });
+  if (!user || !matchesPasswordFingerprint(payload.pv, payload.userId, user.passwordHash, secret)) return null;
+  return {
+    userId: payload.userId,
+    origin: payload.origin === "google" ? "google" as const : "password" as const,
+    // Pendentes antigos (criados antes desta mudança) não têm `method`: tratados como TOTP, único método que existia.
+    method: payload.method === "email" ? "email" as const : "totp" as const,
+    /** Só no servidor: a sessão só nasce se a senha continuar esta. */
+    passwordHash: user.passwordHash,
+  };
 }
 
 export function mfaPendingCookie(token: string) {
@@ -242,12 +259,16 @@ export async function completeLogin(input: {
   request: { headers: { get(name: string): string | null } };
   userId: string;
   origin: "password" | "google";
+  /** Login por senha: o hash conferido. Se a senha mudar depois, este login não vira sessão. Google omite (usa o atual). */
+  passwordHash?: string;
 }): Promise<CompletedLogin> {
+  const passwordHash = input.passwordHash ?? (await prisma.user.findUnique({ where: { id: input.userId }, select: { passwordHash: true } }))?.passwordHash;
+  if (passwordHash === undefined) return { ok: false, status: 401, message: "Não foi possível entrar. Tente novamente." };
   const trustedDeviceId = await findTrustedDeviceCookieId(input.userId);
   if (!trustedDeviceId) {
     const mfaActive = await prisma.mfaSetting.findFirst({ where: { userId: input.userId, enabledAt: { not: null } }, select: { id: true } });
     if (mfaActive) {
-      const token = await createMfaPendingToken(input.userId, input.origin, "totp");
+      const token = await createMfaPendingToken(input.userId, input.origin, "totp", passwordHash);
       return { ok: true, mfaRequired: true, method: "totp", apply: pendingCookieApply(token) };
     }
     const user = await prisma.user.findUnique({ where: { id: input.userId }, select: { email: true } });
@@ -256,11 +277,13 @@ export async function completeLogin(input: {
     if (!sent.ok) {
       return { ok: false, status: 502, message: "Não foi possível enviar o código de verificação agora. Tente novamente em instantes." };
     }
-    const token = await createMfaPendingToken(input.userId, input.origin, "email");
+    const token = await createMfaPendingToken(input.userId, input.origin, "email", passwordHash);
     return { ok: true, mfaRequired: true, method: "email", apply: pendingCookieApply(token) };
   }
 
-  const { token } = await issueSession({ userId: input.userId, request: input.request, trustedDeviceId });
+  const session = await issueSessionUnlessReset({ userId: input.userId, request: input.request, trustedDeviceId }, passwordHash);
+  if (!session) return { ok: false, status: 401, message: PASSWORD_RESET_DURING_LOGIN_MESSAGE };
+  const { token } = session;
   await recordSecurityEvent({
     userId: input.userId,
     type: input.origin === "google" ? "LOGIN_GOOGLE" : "LOGIN",
