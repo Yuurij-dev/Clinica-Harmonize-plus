@@ -14,6 +14,8 @@ export type LoginResult =
       user: { id: string; name: string; email: string; mustChangePassword: boolean };
       role: "ADMIN" | "PROFESSIONAL" | "STAFF";
       clinic: { id: string; name: string; trialEndsAt: Date | null };
+      /** Hash conferido (nunca vai na resposta): a sessão só nasce se a senha continuar esta. */
+      passwordHash: string;
     };
 
 // Incremento atômico: tentativas simultâneas contam todas; ao chegar em 10, bloqueia por 15 minutos. Também usado na reautenticação por senha.
@@ -58,5 +60,6 @@ export async function authenticateLogin(rawLogin: unknown, rawPassword: unknown)
     user: { id: user.id, name: user.name, email: user.email, mustChangePassword: user.mustChangePassword },
     role: membership.role,
     clinic: membership.clinic,
+    passwordHash: user.passwordHash,
   };
 }

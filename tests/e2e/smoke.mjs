@@ -131,10 +131,13 @@ async function seedEmailLoginCode(userId, code = KNOWN_EMAIL_CODE) {
   return code;
 }
 // Cookie harmonize_mfa (JWT assinado com AUTH_SECRET) pronto, sem depender da resposta real do login: mesma
-// estrutura de createMfaPendingToken em auth-session.ts ({userId, mfaPending:true, origin, method}).
+// estrutura de createMfaPendingToken em auth-session.ts ({userId, mfaPending:true, origin, method, pv}).
 async function mintMfaPendingCookie(userId, method, origin = "password") {
   const { SignJWT } = await import("jose");
-  return new SignJWT({ userId, mfaPending: true, origin, method })
+  const { passwordFingerprint } = await import("../../src/lib/password-fingerprint.ts");
+  const { passwordHash } = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { passwordHash: true } });
+  const pv = passwordFingerprint(userId, passwordHash, new TextEncoder().encode(AUTH_SECRET_RAW));
+  return new SignJWT({ userId, mfaPending: true, origin, method, pv })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("600s")
@@ -12504,7 +12507,438 @@ async function planReports() {
   }
 }
 
+// Mock local do Resend: quando E2E_RESEND_URL aponta para este host e a porta está livre, o próprio roteiro recebe os envios
+// (nenhum e-mail real). O servidor testado precisa da mesma variável e rodar fora de produção.
+const resendMock = { server: null, mails: [], failFor: new Set() };
+async function startResendMock() {
+  if (!process.env.E2E_RESEND_URL) return;
+  const url = new URL(process.env.E2E_RESEND_URL);
+  if (!["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("E2E_RESEND_URL precisa ser local.");
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      let mail = null;
+      try { mail = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { /* corpo inválido */ }
+      const to = String(mail?.to?.[0] ?? "");
+      if (mail) resendMock.mails.push({ ...mail, to });
+      const fail = resendMock.failFor.has(to);
+      // A parte "convites" conta com o destinatário de teste recusado (o que o Resend faz sem domínio verificado): emailSent false.
+      if (to.startsWith("e2e-conv-") && String(mail.subject).includes("convidou você")) { res.writeHead(403, { "content-type": "application/json" }); res.end(JSON.stringify({ name: "validation_error" })); return; }
+      res.writeHead(fail ? 500 : 200, { "content-type": "application/json" });
+      res.end(JSON.stringify(fail ? { name: "internal_server_error" } : { id: "e2e" }));
+    });
+  });
+  await new Promise((resolve) => { server.once("error", () => resolve()); server.listen(Number(url.port), url.hostname, () => { resendMock.server = server; resolve(); }); });
+}
+
+// Recuperação de senha por e-mail: /api/auth/password-reset/{request,validate,confirm} e os efeitos nos logins, 2FA e trocas de senha.
+// Só @example.invalid (prefixo e2e-rs-<run>), clínica própria, banco local. E-mails lidos do mock do Resend.
+async function passwordReset() {
+  const P = "recuperação:";
+  if (!resendMock.server) { check(`${P} precisa de E2E_RESEND_URL local com a porta livre (mock do Resend)`, false); return; }
+  if (!["localhost", "127.0.0.1"].includes(new URL(process.env.DATABASE_URL).hostname)) { check(`${P} só roda no PostgreSQL local`, false); return; }
+  const rules = await import("../../src/lib/password-reset-rules.ts");
+  const secret = new TextEncoder().encode(AUTH_SECRET_RAW);
+  const { hash } = await import("bcryptjs");
+  const prefix = `e2e-rs-${run}`;
+  const mail = (t) => `${prefix}-${t}@example.invalid`;
+  const pw = `E2e-${run}-Old9!`;
+  const newPw = `E2e-${run}-New9!`;
+  const passwordHash = await hash(pw, 4);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const rateBefore = new Set((await prisma.passwordResetRateLimit.findMany({ select: { key: true } })).map((r) => r.key));
+  const users = [];
+  let clinic = null;
+  const mk = async (tag, data = {}) => {
+    const user = await prisma.user.create({ data: { name: `Reset ${tag}`, email: mail(tag), passwordHash, role: "PROFESSIONAL", emailVerifiedAt: new Date(), ...data } });
+    await prisma.clinicMembership.create({ data: { userId: user.id, clinicId: clinic.id, role: "PROFESSIONAL" } });
+    users.push(user.id); touchedUsers.add(user.id);
+    return { id: user.id, email: user.email };
+  };
+  let ipSeq = 0;
+  const ipBase = Math.floor(Math.random() * 200) + 20;
+  const newIp = () => `10.${ipBase}.${Math.floor(++ipSeq / 250)}.${ipSeq % 250 + 1}`;
+  const post = async (path, body, { ip = newIp(), headers = {}, raw } = {}) => {
+    const h = { "content-type": "application/json", origin: baseUrl, "x-forwarded-for": ip, ...headers };
+    const r = await fetch(`${baseUrl}/api/auth/password-reset/${path}`, { method: "POST", headers: h, body: raw ?? JSON.stringify(body), redirect: "manual" });
+    const text = await r.text();
+    let d; try { d = JSON.parse(text); } catch { d = text.slice(0, 200); }
+    return { s: r.status, d, text, h: r.headers };
+  };
+  const brief = (r) => `${r.s} ${r.text.slice(0, 200)}`;
+  const mailsTo = (to, subject) => resendMock.mails.filter((m) => m.to === to && (!subject || m.subject === subject));
+  const SUBJ_LINK = "Redefinição de senha do Harmonize+";
+  const SUBJ_GOOGLE = "Como acessar sua conta Harmonize+";
+  const SUBJ_DONE = "Sua senha do Harmonize+ foi alterada";
+  const waitFor = async (fn, ms = 20_000) => { const end = Date.now() + ms; while (Date.now() < end) { const v = await fn(); if (v) return v; await sleep(150); } return null; };
+  const tokenOf = (m) => /redefinir-senha#token=([A-Za-z0-9_-]+)/.exec(m?.text ?? "")?.[1] ?? "";
+  const sha = (t) => createHash("sha256").update(t).digest("hex");
+  const tokens = (userId) => prisma.passwordResetToken.findMany({ where: { userId }, orderBy: { createdAt: "asc" } });
+  const pendingTokens = (userId) => prisma.passwordResetToken.count({ where: { userId, usedAt: null, invalidatedAt: null } });
+  const rateKey = (scope, value) => rules.resetRateKey(scope, value, secret);
+  const clearCooldown = (to, ip) => prisma.passwordResetRateLimit.deleteMany({ where: { key: { in: [rateKey("pair-cooldown", `${to}\n${ip}`), rateKey("email-cooldown", to)] } } });
+  const clearEmailCooldown = (to) => prisma.passwordResetRateLimit.deleteMany({ where: { key: rateKey("email-cooldown", to) } });
+  // Pede um link e devolve o token recebido pelo mock.
+  const getLink = async (user) => {
+    await clearEmailCooldown(user.email);
+    const n = mailsTo(user.email, SUBJ_LINK).length;
+    const r = await post("request", { email: user.email });
+    const m = await waitFor(() => mailsTo(user.email, SUBJ_LINK)[n]);
+    if (r.s !== 200 || !m) throw new Error(`link de redefinição não chegou ao mock (${brief(r)})`);
+    return tokenOf(m);
+  };
+  const confirm = (token, password = newPw, confirmation = password) => post("confirm", { token, password, confirmation });
+  const valid = async (token) => (await post("validate", { token })).d.valid;
+  const isBad = (r) => r.s === 400 && r.d.code === "invalid_token" && r.d.message === rules.RESET_INVALID_TOKEN_MESSAGE;
+  const login = async (user, password) => { const jar = newJar(); const r = await jar.call("POST", "/api/auth/login", { login: user.email, password }); return { jar, r }; };
+  const emailLogin = async (user, password, trust = false) => {
+    const x = await login(user, password);
+    if (x.r.s !== 200 || x.r.d.method !== "email") throw new Error(`login por e-mail inesperado ${x.r.s} ${JSON.stringify(x.r.d)}`);
+    await seedEmailLoginCode(user.id);
+    const v = await x.jar.call("POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE, trustDevice: trust });
+    if (v.s !== 200) throw new Error(`verify por e-mail ${v.s}`);
+    return x.jar;
+  };
+  const mob = async (body, headers = {}) => { const r = await fetch(`${baseUrl}/api/mobile/auth/login`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) }); return { s: r.status, d: await r.json().catch(() => ({})) }; };
+  const bearerMe = async (token) => (await fetch(`${baseUrl}/api/auth/me`, { headers: { authorization: `Bearer ${token}` } })).status;
+  const hashOf = async (id) => (await prisma.user.findUnique({ where: { id }, select: { passwordHash: true } })).passwordHash;
+  const me = async (jar) => (await jar.call("GET", "/api/auth/me")).s;
+  const liveSessions = (userId) => prisma.authSession.count({ where: { userId, revokedAt: null } });
+  // Cada bloco falha sozinho: um erro não esconde os demais.
+  const block = async (name, fn) => {
+    try { await fn(); } catch (error) { check(`${P} bloco ${name} sem exceção`, false, error.stack?.split("\n").slice(0, 4).join(" | ") ?? error.message); }
+  };
+  try {
+    clinic = await prisma.clinic.create({ data: { name: `${prefix} Clínica`, slug: `${prefix}-clinica` } });
+    const a = await mk("a");
+    const born = new Date();
+    const google = await mk("google", { createdAt: born, identities: { create: { provider: "google", providerSubject: `${prefix}-g`, email: mail("google"), createdAt: born } } });
+    const linked = await mk("linked", { createdAt: new Date(Date.now() - 30 * 86_400_000), identities: { create: { provider: "google", providerSubject: `${prefix}-l`, email: mail("linked") } } });
+
+    // ===== 1) pedido neutro, e-mails, entradas, origem, token, senha =====
+    await block("pedido/token", async () => {
+      const rExist = await post("request", { email: `  ${a.email.toUpperCase()} ` });
+      const rNone = await post("request", { email: mail("naoexiste") });
+      const rGoogle = await post("request", { email: google.email });
+      const shape = (r) => JSON.stringify([r.s, r.text, [...r.h].filter(([k]) => !["date", "etag"].includes(k))]);
+      check(`${P} pedido para e-mail existente, inexistente e só-Google: status, corpo e cabeçalhos idênticos (200 {ok:true}, no-store)`, shape(rExist) === shape(rNone) && shape(rNone) === shape(rGoogle) && rExist.s === 200 && rExist.text === '{"ok":true}' && rExist.h.get("cache-control") === "no-store" && !rExist.h.get("set-cookie"), [shape(rExist), shape(rNone), shape(rGoogle)].join(" || "));
+      const m1 = await waitFor(() => mailsTo(a.email, SUBJ_LINK)[0]);
+      const mg = await waitFor(() => mailsTo(google.email)[0]);
+      await sleep(1000);
+      const t1 = tokenOf(m1);
+      check(`${P} e-mail (maiúsculas/espaços normalizados) chega ao mock com link /redefinir-senha#token (43 chars) na origem do site, no texto e no HTML, validade 30 min`, t1.length === 43 && m1.text.includes(`${baseUrl}/redefinir-senha#token=${t1}`) && m1.html.includes(t1) && m1.text.includes("30 minutos") && mailsTo(a.email).length === 1, JSON.stringify(m1 && [m1.subject, t1.length]));
+      const row1 = (await tokens(a.id))[0];
+      const ttl = row1 ? row1.expiresAt - row1.createdAt : 0;
+      check(`${P} banco guarda só o SHA-256 do token, expiração = 30 min`, row1?.tokenHash === sha(t1) && !JSON.stringify(row1).includes(t1) && ttl === 1_800_000, ttl);
+      check(`${P} e-mail inexistente não recebe nada`, mailsTo(mail("naoexiste")).length === 0);
+      check(`${P} só-Google recebe só a orientação (Entrar com Google, sem token no corpo) e nenhum token é criado`, mailsTo(google.email).length === 1 && mg?.subject === SUBJ_GOOGLE && /Entrar com Google/.test(mg.text) && !/token=|redefinir-senha/.test(mg.text + mg.html) && (await tokens(google.id)).length === 0, mg?.subject);
+      const tl = await getLink(linked);
+      check(`${P} conta com senha que vinculou Google depois recebe link normalmente`, await valid(tl) === true);
+
+      for (const [label, body] of [["sem e-mail", {}], ["sem arroba", { email: "abc" }], ["número", { email: 5 }], ["longo demais", { email: `${"a".repeat(250)}@x.com` }]]) {
+        const r = await post("request", body);
+        check(`${P} pedido ${label} = 400 invalid_email`, r.s === 400 && r.d.code === "invalid_email", brief(r));
+      }
+      let r = await post("request", null, { raw: "{{{" });
+      check(`${P} corpo que não é JSON = 400`, r.s === 400, brief(r));
+      for (const path of ["request", "validate", "confirm"]) {
+        r = await post(path, null, { raw: JSON.stringify({ email: a.email, token: t1, password: newPw, confirmation: newPw, x: "x".repeat(5000) }) });
+        check(`${P} ${path} com corpo > 4 KB = 413`, r.s === 413, brief(r));
+      }
+      const hashBefore = await hashOf(a.id);
+      const mailsBefore = resendMock.mails.length;
+      for (const [label, headers] of [["Origin de outro site", { origin: "https://evil.example" }], ["Sec-Fetch-Site cross-site", { "sec-fetch-site": "cross-site" }], ["Sec-Fetch-Site same-site", { "sec-fetch-site": "same-site" }], ["Origin null", { origin: "null" }]]) {
+        for (const path of ["request", "validate", "confirm"]) {
+          r = await post(path, { email: linked.email, token: t1, password: newPw, confirmation: newPw }, { headers });
+          check(`${P} ${path} com ${label} = 403`, r.s === 403, brief(r));
+        }
+      }
+      await sleep(800);
+      check(`${P} requisições cross-site não trocaram senha, não consumiram o token nem enviaram e-mail`, await hashOf(a.id) === hashBefore && await valid(t1) === true && resendMock.mails.length === mailsBefore);
+      const get = await Promise.all(["request", "validate", "confirm"].map(async (p) => (await fetch(`${baseUrl}/api/auth/password-reset/${p}`)).status));
+      check(`${P} GET nas três rotas = 405`, get.every((s) => s === 405), get.join());
+
+      for (const [label, token] of [["ausente", undefined], ["curto", "abc"], ["de formato certo e inexistente", randomBytes(32).toString("base64url")], ["igual ao hash do banco", row1.tokenHash], ["objeto", { a: 1 }]]) {
+        const v = await post("validate", { token });
+        const c = await confirm(token);
+        check(`${P} token ${label}: validate {valid:false} e confirm 400 invalid_token`, v.s === 200 && v.d.valid === false && isBad(c), `${brief(v)} | ${brief(c)}`);
+      }
+      for (const [label, bad, field, conf] of [["curta", "Ab1!x", "password"], ["sem maiúscula", "abcdef1!x", "password"], ["sem número", "Abcdefg!x", "password"], ["sem especial", "Abcdefg12", "password"], [">72 bytes", `Ab1!${"é".repeat(40)}`, "password"], ["ausente", undefined, "password"], ["divergente", newPw, "confirmation", `${newPw}x`], ["sem confirmação", newPw, "confirmation", null]]) {
+        r = await post("confirm", { token: t1, password: bad, confirmation: conf === undefined ? bad : conf });
+        check(`${P} senha ${label} = 400 invalid_password no campo ${field}`, r.s === 400 && r.d.code === "invalid_password" && r.d.field === field && typeof r.d.message === "string", brief(r));
+      }
+      check(`${P} senhas recusadas não consumiram o token nem mudaram a senha`, await valid(t1) === true && await hashOf(a.id) === hashBefore && (await tokens(a.id))[0].usedAt === null);
+      const t2 = await getLink(a);
+      const old = await confirm(t1);
+      check(`${P} novo pedido substitui o link anterior (antigo inválido, novo válido, 1 pendente)`, t2 !== t1 && await valid(t1) === false && isBad(old) && await valid(t2) === true && await pendingTokens(a.id) === 1, brief(old));
+      await prisma.passwordResetToken.update({ where: { tokenHash: sha(t2) }, data: { expiresAt: new Date(Date.now() - 1000) } });
+      r = await confirm(t2);
+      check(`${P} token expirado (ajustado no banco): validate false, confirm 400, senha intacta`, await valid(t2) === false && isBad(r) && await hashOf(a.id) === hashBefore, brief(r));
+    });
+
+    // ===== 2) efeitos: sessões, dispositivos, 2FA pendente, senha antiga (conta sem TOTP) =====
+    await block("efeitos", async () => {
+      const web = await emailLogin(a, pw, true);
+      const td = web.c.harmonize_td;
+      await login(a, pw);
+      await seedEmailLoginCode(a.id);
+      const mobile = await mob({ login: a.email, password: pw, mfaCode: KNOWN_EMAIL_CODE });
+      const pend = await login(a, pw);
+      const meBefore = await me(web);
+      check(`${P} preparo: sessão web, token mobile, dispositivo confiável e 2FA pendente ativos`, meBefore === 200 && mobile.s === 200 && await bearerMe(mobile.d.token) === 200 && Boolean(td) && pend.r.d.mfaRequired === true && (await pend.jar.call("GET", "/api/auth/mfa/pending")).s === 200, `${meBefore} ${mobile.s}`);
+      const other = await emailLogin(linked, pw);
+      await prisma.user.update({ where: { id: a.id }, data: { failedLogins: 7, lockedUntil: new Date(Date.now() + 600_000) } });
+      const t = await getLink(a);
+      const r = await confirm(t);
+      check(`${P} confirm com token válido = 200 {success:true}, no-store e sem abrir sessão`, r.s === 200 && r.text === '{"success":true}' && r.h.get("cache-control") === "no-store" && !r.h.get("set-cookie"), brief(r));
+      const done = await waitFor(() => mailsTo(a.email, SUBJ_DONE)[0]);
+      check(`${P} e-mail de confirmação chega ao mock, sem a senha nem o token`, Boolean(done) && !(done.text + done.html).includes(newPw) && !(done.text + done.html).includes(t) && done.text.includes(`${baseUrl}/login`), done?.subject);
+      const u = await prisma.user.findUnique({ where: { id: a.id } });
+      const state = [u.failedLogins, u.lockedUntil, await prisma.loginVerificationCode.count({ where: { userId: a.id } }), await prisma.securityEvent.count({ where: { userId: a.id, type: "PASSWORD_RESET" } }), await liveSessions(a.id), await prisma.trustedDevice.count({ where: { userId: a.id, revokedAt: null } })];
+      check(`${P} confirm limpa bloqueio/falhas, apaga código pendente, revoga sessões e dispositivos e registra PASSWORD_RESET`, JSON.stringify(state) === "[0,null,0,1,0,0]", JSON.stringify(state));
+      const m1 = await me(web);
+      const bm = await bearerMe(mobile.d.token);
+      check(`${P} sessão web e token mobile antigos recusados (401)`, m1 === 401 && bm === 401, `${m1} ${bm}`);
+      check(`${P} outra conta da mesma clínica segue logada e com a mesma senha (isolamento)`, await me(other) === 200 && await hashOf(linked.id) === passwordHash);
+      await seedEmailLoginCode(a.id);
+      const pp = await pend.jar.call("GET", "/api/auth/mfa/pending");
+      const pr = await pend.jar.call("POST", "/api/auth/mfa/resend");
+      const codeAfter = await prisma.loginVerificationCode.findUnique({ where: { userId: a.id } });
+      const pv = await pend.jar.call("POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE });
+      check(`${P} 2FA pendente antigo: pending 401 mfa_expired, resend neutro sem reenviar, verify 401 mfa_expired sem sessão (mesmo com código certo)`, pp.s === 401 && pp.d.code === "mfa_expired" && pr.s === 200 && pr.d.ok === true && codeAfter.codeHash === loginCodeHashFor(a.id) && codeAfter.sends === 1 && pv.s === 401 && pv.d.code === "mfa_expired" && !pend.jar.c.harmonize_session && !pend.jar.c.harmonize_mfa, `${pp.s} ${pr.s} ${pv.s} ${JSON.stringify(pv.d)}`);
+      const oldWeb = await login(a, pw);
+      const oldMob = await mob({ login: a.email, password: pw });
+      check(`${P} senha antiga recusada na web e no app`, oldWeb.r.s === 401 && !oldWeb.r.d.mfaRequired && oldMob.s === 401 && !oldMob.d.mfaRequired && !oldMob.d.token, `${oldWeb.r.s} ${oldMob.s}`);
+      const again = newJar(); again.c.harmonize_td = td;
+      const nr = await again.call("POST", "/api/auth/login", { login: a.email, password: newPw });
+      check(`${P} dispositivo confiável antigo não pula a verificação com a senha nova`, nr.s === 200 && nr.d.mfaRequired === true && nr.d.method === "email" && !again.c.harmonize_session, `${nr.s} ${JSON.stringify(nr.d)}`);
+      const pn = await again.call("GET", "/api/auth/mfa/pending");
+      const rs = await again.call("POST", "/api/auth/mfa/resend");
+      await seedEmailLoginCode(a.id);
+      const nv = await again.call("POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE });
+      check(`${P} pendente novo: pending/resend/verify funcionam e a sessão nasce`, pn.s === 200 && pn.d.method === "email" && rs.s === 200 && nv.s === 200 && await me(again) === 200, `${pn.s} ${rs.s} ${nv.s}`);
+      const reuse = await confirm(t, `${newPw}z`);
+      check(`${P} token reutilizado: validate false, confirm 400, senha não muda`, await valid(t) === false && isBad(reuse) && (await login(a, `${newPw}z`)).r.s === 401, brief(reuse));
+      check(`${P} só 1 e-mail de confirmação foi enviado`, mailsTo(a.email, SUBJ_DONE).length === 1, mailsTo(a.email, SUBJ_DONE).length);
+    });
+
+    // ===== 3) conta com TOTP =====
+    await block("TOTP", async () => {
+      const c = await mk("totp");
+      const web = await emailLogin(c, pw);
+      await activateMfa(web, c.id, pw);
+      const ios = { "X-Harmonize-Platform": "ios" };
+      const mobile = await mob({ login: c.email, password: pw, mfaCode: await helperTotp(c.id), trustDevice: true }, ios);
+      const trusted = await login(c, pw);
+      await trusted.jar.call("POST", "/api/auth/mfa/verify", { code: await helperTotp(c.id), trustDevice: true });
+      const td = trusted.jar.c.harmonize_td;
+      const pend = await login(c, pw);
+      check(`${P} TOTP preparo: dispositivos confiáveis (web e app) e pendente TOTP`, mobile.s === 200 && Boolean(mobile.d.trustedDeviceToken) && Boolean(td) && pend.r.d.method === "totp", `${mobile.s} ${pend.r.d.method}`);
+      const snap = async () => JSON.stringify([await prisma.mfaSetting.findUnique({ where: { userId: c.id } }), await prisma.mfaRecoveryCode.findMany({ where: { userId: c.id }, orderBy: { id: "asc" } })]);
+      const t = await getLink(c);
+      await helperTotp(c.id);
+      const before = await snap();
+      const r = await confirm(t);
+      check(`${P} TOTP: reset = 200 e MfaSetting + códigos de recuperação intactos`, r.s === 200 && await snap() === before && before.includes("secretEnc"), brief(r));
+      const pv = await pend.jar.call("POST", "/api/auth/mfa/verify", { code: await helperTotp(c.id) });
+      check(`${P} TOTP: pendente antigo com TOTP correto = 401 mfa_expired`, pv.s === 401 && pv.d.code === "mfa_expired" && !pend.jar.c.harmonize_session, `${pv.s} ${JSON.stringify(pv.d)}`);
+      check(`${P} TOTP: sessão web e Bearer antigos = 401`, await me(web) === 401 && await me(trusted.jar) === 401 && await bearerMe(mobile.d.token) === 401);
+      const jar = newJar(); jar.c.harmonize_td = td;
+      const nl = await jar.call("POST", "/api/auth/login", { login: c.email, password: newPw });
+      check(`${P} TOTP: login com a senha nova (mesmo com cookie de dispositivo antigo) continua exigindo TOTP`, nl.s === 200 && nl.d.mfaRequired === true && nl.d.method === "totp" && !jar.c.harmonize_session, `${nl.s} ${JSON.stringify(nl.d)}`);
+      await helperTotp(c.id);
+      const nv = await jar.call("POST", "/api/auth/mfa/verify", { code: await helperTotp(c.id) });
+      check(`${P} TOTP: com o código correto entra`, nv.s === 200 && Boolean(jar.c.harmonize_session), nv.s);
+      const mt = await mob({ login: c.email, password: newPw }, { ...ios, "X-Harmonize-Trusted-Device": mobile.d.trustedDeviceToken });
+      const mok = await mob({ login: c.email, password: newPw, mfaCode: await helperTotp(c.id) });
+      check(`${P} TOTP app: dispositivo confiável antigo não vale (401 mfaRequired); com TOTP e senha nova entra`, mt.s === 401 && mt.d.mfaRequired === true && !mt.d.token && mok.s === 200 && await bearerMe(mok.d.token) === 200, `${mt.s} ${mok.s}`);
+    });
+
+    // ===== 4) concorrência =====
+    await block("concorrência", async () => {
+      const d = await mk("race");
+      const ip = newIp();
+      const pair = await Promise.all([post("request", { email: d.email }, { ip }), post("request", { email: d.email }, { ip })]);
+      await waitFor(() => mailsTo(d.email)[0]); await sleep(1500);
+      const nt = (await tokens(d.id)).length;
+      check(`${P} clique duplo no pedido: duas respostas 200 iguais, 1 e-mail e 1 token`, pair.every((x) => x.s === 200 && x.text === '{"ok":true}') && mailsTo(d.email).length === 1 && nt === 1, `${mailsTo(d.email).length} ${nt}`);
+      for (let round = 1; round <= 3; round += 1) {
+        const t = await getLink(d);
+        const pws = [`${newPw}A${round}`, `${newPw}B${round}`];
+        const n = mailsTo(d.email, SUBJ_DONE).length;
+        const res = await Promise.all(pws.map((p) => confirm(t, p)));
+        const win = res.findIndex((x) => x.s === 200);
+        await sleep(1200);
+        const okNew = win >= 0 && (await login(d, pws[win])).r.s === 200;
+        const loser = (await login(d, pws[win === 0 ? 1 : 0])).r.s;
+        check(`${P} duas confirmações simultâneas (rodada ${round}): um 200 e um 400 invalid_token; só a senha vencedora vale; 1 aviso`, res.filter((x) => x.s === 200).length === 1 && res.filter(isBad).length === 1 && okNew && loser === 401 && mailsTo(d.email, SUBJ_DONE).length === n + 1, `${res.map((x) => x.s).join()} perdedora ${loser}`);
+      }
+      for (let round = 1; round <= 3; round += 1) {
+        const e = await mk(`inflight${round}`);
+        await login(e, pw); await seedEmailLoginCode(e.id);
+        const t = await getLink(e);
+        const [m, c, ...rest] = await Promise.all([mob({ login: e.email, password: pw, mfaCode: KNOWN_EMAIL_CODE }), confirm(t), ...[0, 60, 150, 300].map((ms) => sleep(ms).then(() => mob({ login: e.email, password: pw })))]);
+        await sleep(500);
+        const live = await liveSessions(e.id);
+        check(`${P} login com senha antiga concorrendo com o reset (rodada ${round}) não deixa sessão viva nem 500`, c.s === 200 && (!m.d.token || await bearerMe(m.d.token) === 401) && live === 0 && [m, ...rest].every((x) => x.s !== 500), `mobile ${m.s} confirm ${c.s} vivas ${live} outros ${rest.map((x) => x.s).join()}`);
+      }
+    });
+
+    // ===== 5) trocas de senha por outros caminhos =====
+    await block("outras trocas", async () => {
+      const f = await mk("me");
+      const jar = await emailLogin(f, pw);
+      const pend = await login(f, pw);
+      const t = await getLink(f);
+      const wrong = await jar.call("POST", "/api/me/password", { currentPassword: "errada", newPassword: newPw });
+      check(`${P} /api/me/password com senha atual errada = 403 e link continua válido`, wrong.s === 403 && await valid(t) === true, wrong.s);
+      const weak = await jar.call("POST", "/api/me/password", { currentPassword: pw, newPassword: "fraca" });
+      check(`${P} /api/me/password com senha fraca = 400 e link continua válido`, weak.s === 400 && await valid(t) === true, weak.s);
+      const body = { currentPassword: pw, newPassword: newPw };
+      const two = await Promise.all([jar.call("POST", "/api/me/password", body), jar.call("POST", "/api/me/password", body)]);
+      const sts = two.map((x) => x.s).join();
+      check(`${P} /api/me/password em clique duplo: um 200, o outro 409/403 (ou 200), sem 500`, two.some((x) => x.s === 200) && two.every((x) => [200, 403, 409].includes(x.s)), sts);
+      const r = await confirm(t, `${newPw}-x`);
+      check(`${P} troca de senha logada invalida o link pendente (validate false, confirm 400) e mantém a sessão atual`, await valid(t) === false && isBad(r) && await me(jar) === 200 && (await login(f, newPw)).r.s === 200, brief(r));
+      await seedEmailLoginCode(f.id);
+      const pv = await pend.jar.call("POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE });
+      check(`${P} troca de senha logada derruba o 2FA pendente antigo`, pv.s === 401 && pv.d.code === "mfa_expired", `${pv.s} ${JSON.stringify(pv.d)}`);
+
+      const g = await mk("first", { mustChangePassword: true });
+      const first = await login(g, pw);
+      check(`${P} preparo: primeiro acesso pede troca de senha sem expor hash`, first.r.s === 200 && first.r.d.passwordChangeRequired === true && !/passwordHash|\$2[aby]\$/.test(JSON.stringify(first.r.d)), JSON.stringify(first.r.d));
+      const t2 = await getLink(g);
+      const ch = await first.jar.call("POST", "/api/auth/change-password", { password: newPw });
+      check(`${P} change-password funciona, invalida o link pendente e segue para a verificação`, ch.s === 200 && ch.d.success === true && ch.d.mfaRequired === true && await valid(t2) === false && isBad(await confirm(t2, `${newPw}-y`)), `${ch.s} ${JSON.stringify(ch.d)}`);
+      await seedEmailLoginCode(g.id);
+      const gv = await first.jar.call("POST", "/api/auth/mfa/verify", { code: KNOWN_EMAIL_CODE });
+      check(`${P} change-password: o pendente emitido após a troca completa o login`, gv.s === 200 && Boolean(first.jar.c.harmonize_session), gv.s);
+
+      const h = await mk("firstb", { mustChangePassword: true });
+      const hl = await login(h, pw);
+      const t3 = await getLink(h);
+      const done = await confirm(t3);
+      const stale = await hl.jar.call("POST", "/api/auth/change-password", { password: `${newPw}-z` });
+      check(`${P} token de troca provisória anterior ao reset é recusado (401) e não muda a senha`, done.s === 200 && stale.s === 401 && (await login(h, newPw)).r.s === 200 && (await login(h, `${newPw}-z`)).r.s === 401, `${done.s} ${stale.s}`);
+      const after = await login(h, newPw);
+      check(`${P} reset encerra a obrigação de trocar a senha provisória`, (await prisma.user.findUnique({ where: { id: h.id } })).mustChangePassword === false && !after.r.d.passwordChangeRequired, JSON.stringify(after.r.d));
+
+      const unv = await mk("unverified", { emailVerifiedAt: null });
+      const ur = await confirm(await getLink(unv));
+      check(`${P} reset marca o e-mail como verificado`, ur.s === 200 && Boolean((await prisma.user.findUnique({ where: { id: unv.id } })).emailVerifiedAt), ur.s);
+    });
+
+    // ===== 6) falha do provedor =====
+    await block("provedor", async () => {
+      const i = await mk("fail");
+      resendMock.failFor.add(i.email);
+      const r = await post("request", { email: i.email });
+      const m = await waitFor(() => mailsTo(i.email)[0]);
+      const gone = await waitFor(async () => (await tokens(i.id))[0]?.invalidatedAt);
+      check(`${P} provedor responde 500: resposta neutra e o link é invalidado`, r.s === 200 && r.text === '{"ok":true}' && Boolean(gone) && await valid(tokenOf(m)) === false, brief(r));
+      resendMock.failFor.delete(i.email);
+    });
+
+    // ===== 7) limites =====
+    await block("limites", async () => {
+      const j = await mk("limit");
+      const ip = newIp();
+      const send = async (from = ip) => { const x = await post("request", { email: j.email }, { ip: from }); await sleep(900); return x; };
+      const count = () => mailsTo(j.email, SUBJ_LINK).length;
+      const neutral = (x) => x.s === 200 && x.text === '{"ok":true}';
+      await send(); await waitFor(() => count() === 1);
+      const cd = await send();
+      const cd2 = await send(newIp());
+      check(`${P} cooldown de 60 s (mesmo IP e outro IP): 200 neutro, nada enviado e link anterior mantido`, neutral(cd) && neutral(cd2) && count() === 1 && (await tokens(j.id)).length === 1 && await valid(tokenOf(mailsTo(j.email)[0])) === true, count());
+      for (let n = 2; n <= 5; n += 1) { await clearCooldown(j.email, ip); await send(); await waitFor(() => count() === n); }
+      await clearCooldown(j.email, ip);
+      const sixth = await send();
+      const hits = async (scope, value) => (await prisma.passwordResetRateLimit.findUnique({ where: { key: rateKey(scope, value) } }))?.hits;
+      const h = [await hits("pair-hour", `${j.email}\n${ip}`), await hits("email-day", j.email), await hits("email-cooldown", j.email)];
+      check(`${P} 6º pedido na hora (par e-mail+IP): neutro, nada enviado, pedido barrado não gasta nenhuma chave`, neutral(sixth) && count() === 5 && h[0] === 5 && h[1] === 5 && h[2] === undefined, `${count()} ${JSON.stringify(h)}`);
+      await send(newIp()); await waitFor(() => count() === 6);
+      check(`${P} outro IP não é afetado pelo teto do par`, count() === 6, count());
+      await clearEmailCooldown(j.email);
+      await prisma.passwordResetRateLimit.update({ where: { key: rateKey("email-day", j.email) }, data: { hits: 30 } });
+      const cap = await send(newIp());
+      check(`${P} teto global de 30 por 24 h por e-mail: neutro e nada enviado`, neutral(cap) && count() === 6, count());
+      const rows = await prisma.passwordResetRateLimit.findMany({ select: { key: true } });
+      check(`${P} chaves de limite não guardam e-mail nem IP`, rows.length > 0 && rows.every((x) => /^[a-z-]+:[0-9a-f]{64}$/.test(x.key)), rows.length);
+
+      const ipR = newIp();
+      const st = [];
+      for (let n = 0; n < 20; n += 1) st.push((await post("request", { email: mail(`ninguem${n}`) }, { ip: ipR })).s);
+      const r = await post("request", { email: mail("ninguem") }, { ip: ipR });
+      check(`${P} IP: 20 pedidos 200 e o 21º = 429 rate_limited; outro IP segue 200`, st.every((s) => s === 200) && r.s === 429 && r.d.code === "rate_limited" && (await post("request", { email: mail("ninguem") })).s === 200, `${st.join()} -> ${brief(r)}`);
+      const k = await mk("iplimit");
+      const tk = await getLink(k);
+      const ipT = newIp();
+      const st2 = [];
+      for (let n = 0; n < 30; n += 1) st2.push((await post(n % 2 ? "confirm" : "validate", { token: "x" }, { ip: ipT })).s);
+      const v31 = await post("validate", { token: "x" }, { ip: ipT });
+      const c31 = await post("confirm", { token: tk, password: newPw, confirmation: newPw }, { ip: ipT });
+      check(`${P} IP: validate+confirm dividem 30 por 15 min; excedente = 429 sem consumir o token`, st2.every((s, n) => s === (n % 2 ? 400 : 200)) && v31.s === 429 && c31.s === 429 && c31.d.code === "rate_limited" && await valid(tk) === true, `${st2.join()} -> ${v31.s} ${c31.s}`);
+    });
+
+    // ===== 8) telas =====
+    await block("telas", async () => {
+      const s = await mk("tela");
+      await withPage(async (page, pageErrors) => {
+        await page.context().clearCookies();
+        await page.context().setExtraHTTPHeaders({ "x-forwarded-for": newIp() });
+        page.setDefaultTimeout(90_000);
+        await page.goto(`${baseUrl}/login`);
+        await page.waitForLoadState("networkidle");
+        await page.getByText("Esqueceu sua senha?").click();
+        await page.waitForURL("**/recuperar-senha");
+        await page.getByRole("button", { name: "Enviar link" }).waitFor();
+        await page.waitForLoadState("networkidle");
+        await page.locator('input[type="email"]').fill("invalido");
+        await page.getByRole("button", { name: "Enviar link" }).click();
+        await page.getByText("Digite um e-mail válido.").waitFor();
+        await page.locator('input[type="email"]').fill(s.email);
+        await page.getByRole("button", { name: "Enviar link" }).click();
+        await page.getByText("Solicitação enviada").waitFor();
+        const m = await waitFor(() => mailsTo(s.email, SUBJ_LINK)[0]);
+        check(`${P} tela: link no login leva à recuperação; envio mostra "Solicitação enviada" e o mock recebe o e-mail`, Boolean(m));
+        const token = tokenOf(m);
+        const resp = await page.goto(`${baseUrl}/redefinir-senha#token=${token}`);
+        await page.getByText("Criar nova senha").waitFor();
+        await page.waitForFunction(() => window.location.hash === "");
+        const stored = await page.evaluate(() => JSON.stringify([{ ...localStorage }, { ...sessionStorage }]));
+        check(`${P} tela: token sai do endereço, não vai para o storage; Referrer-Policy no-referrer`, !page.url().includes(token) && !stored.includes(token) && resp?.headers()["referrer-policy"] === "no-referrer", `${resp?.headers()["referrer-policy"]} ${resp?.headers()["cache-control"]}`);
+        const inputs = page.locator('input[autocomplete="new-password"]');
+        await inputs.nth(0).fill(newPw); await inputs.nth(1).fill(`${newPw}x`);
+        await page.getByRole("button", { name: "Salvar nova senha" }).click();
+        await page.getByText("As senhas não coincidem.").waitFor();
+        await inputs.nth(1).fill(newPw);
+        await page.getByRole("button", { name: "Salvar nova senha" }).click();
+        await page.getByText("Senha alterada", { exact: true }).waitFor();
+        check(`${P} tela: salva a senha nova ("Senha alterada") e a API passa a aceitá-la`, (await login(s, newPw)).r.s === 200 && (await login(s, pw)).r.s === 401);
+        await page.goto(`${baseUrl}/login`);
+        await page.goto(`${baseUrl}/redefinir-senha#token=${token}`);
+        await page.getByText("Link inválido ou expirado").waitFor();
+        check(`${P} tela: link usado mostra "Link inválido ou expirado"; sem erros de página`, pageErrors.length === 0, pageErrors.join(" | ").slice(0, 300));
+      });
+    });
+  } catch (error) {
+    check(`${P} execução sem exceção`, false, error.stack?.split("\n").slice(0, 4).join(" | ") ?? error.message);
+  } finally {
+    await sleep(1000);
+    await wipeSecurityOf(users);
+    await prisma.clinicMembership.deleteMany({ where: { userId: { in: users } } });
+    await prisma.user.deleteMany({ where: { id: { in: users } } });
+    if (clinic) await prisma.clinic.deleteMany({ where: { id: clinic.id } });
+    const mine = (await prisma.passwordResetRateLimit.findMany({ select: { key: true } })).map((x) => x.key).filter((k) => !rateBefore.has(k));
+    await prisma.passwordResetRateLimit.deleteMany({ where: { key: { in: mine } } });
+    const left = await prisma.user.count({ where: { email: { startsWith: prefix } } }) + await prisma.passwordResetToken.count({ where: { userId: { in: users } } });
+    check(`${P} limpeza dos usuários, tokens e limites criados`, left === 0, left);
+  }
+}
+
 const suites = {
+  recuperacao_senha: { needs: [], run: () => passwordReset() },
   planos_limites: { needs: [], run: () => planLimits() },
   planos_estado: { needs: [], run: () => planStates() },
   planos_modulos: { needs: [], run: () => planModules() },
@@ -12581,6 +13015,7 @@ async function main() {
   const selected = selectSuites(process.argv.slice(2));
   const alive = await fetch(`${baseUrl}/login`).catch(() => null);
   if (!alive?.ok) throw new Error(`Servidor fora do ar em ${baseUrl}. Rode npm run dev.`);
+  await startResendMock();
   await resetTestAccountSecurity(); // estado base: sem 2FA/sessões/histórico (recusa fora da clínica de teste)
   await login(); // ativa o 2FA da conta de teste pelo fluxo real e entra
   await resetTestClinic();
@@ -12614,4 +13049,5 @@ main().catch((error) => {
   await prisma.securityEvent.deleteMany({ where: { userId: null, createdAt: { gte: runStartedAt }, OR: [{ userAgent: e2eUserAgent }, { userAgent: "node" }, { userAgent: null }] } }).catch(() => undefined);
   if (others.length) await wipeSecurityOf(others).catch((error) => { console.error(`Limpeza de segurança das contas do roteiro falhou: ${error.message}`); process.exitCode = 1; });
   await prisma.$disconnect();
+  resendMock.server?.close();
 });

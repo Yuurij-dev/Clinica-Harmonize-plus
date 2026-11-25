@@ -2,6 +2,7 @@ import { jwtVerify, SignJWT } from "jose";
 import { cookies, headers } from "next/headers";
 import { parseBearerToken } from "./bearer-rules";
 import { getAuthSecret } from "./auth-secret";
+import { passwordFingerprint } from "./password-fingerprint";
 import { prisma } from "./prisma";
 import { pickMembership } from "./active-clinic-rules";
 import { resolveEntitlements, type Entitlements } from "./entitlements.ts";
@@ -58,12 +59,14 @@ export async function signSessionToken(userId: string, sid: string, expiresAt: D
     .sign(getAuthSecret());
 }
 
-export async function createPasswordChangeSession(userId: string) {
-  return new SignJWT({ userId, passwordChangeOnly: true })
+// Carrega a impressão do hash conferido no login: se a senha mudar (ex.: redefinição por e-mail), o token não troca mais nada.
+export async function createPasswordChangeSession(userId: string, passwordHash: string) {
+  const secret = getAuthSecret();
+  return new SignJWT({ userId, passwordChangeOnly: true, pv: passwordFingerprint(userId, passwordHash, secret) })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("15m")
-    .sign(getAuthSecret());
+    .sign(secret);
 }
 
 /** Limpa o cache de todas as sessões (sids) do usuário nesta instância. */

@@ -4,7 +4,7 @@ import { pickMembership } from "@/lib/active-clinic-rules";
 import {
   clearMfaPendingCookie,
   createTrustedDevice,
-  issueSession,
+  issueSessionUnlessReset,
   mfaCookieName,
   recordEmailCodeOutcome,
   recordMfaOutcome,
@@ -36,16 +36,19 @@ async function respondWithSession(userId: string, token: string, trusted: { id: 
   return response;
 }
 
+// Pendente ausente, vencido ou anterior a uma troca de senha: o login recomeça.
+function expired() {
+  const response = NextResponse.json({ message: "A verificação expirou. Entre novamente.", code: "mfa_expired" }, { status: 401, headers: noStore });
+  clearMfaPendingCookie(response);
+  return response;
+}
+
 // Segundo estágio do login: troca o cookie harmonize_mfa (10 min) + código (TOTP, recuperação ou e-mail) por uma
 // sessão completa. O userId vem só do token assinado, nunca do corpo. SameSite=lax + cookie de path /api/auth já barram POST cross-site.
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as { code?: unknown; recoveryCode?: unknown; trustDevice?: unknown } | null;
   const pending = await verifyMfaPendingToken((await cookies()).get(mfaCookieName)?.value);
-  if (!pending) {
-    const response = NextResponse.json({ message: "A verificação expirou. Entre novamente.", code: "mfa_expired" }, { status: 401, headers: noStore });
-    clearMfaPendingCookie(response);
-    return response;
-  }
+  if (!pending) return expired();
 
   if (pending.method === "email") {
     const verified = await verifyLoginEmailCode(pending.userId, body?.code);
@@ -56,9 +59,10 @@ export async function POST(request: Request) {
     // Dispositivo confiável: mesmo mecanismo do TOTP (sem "recuperação" no método por e-mail).
     const trusted = body?.trustDevice === true ? await createTrustedDevice(pending.userId, request) : null;
     if (trusted) await recordSecurityEvent({ userId: pending.userId, type: "TRUSTED_DEVICE_ADDED", request });
-    const { token } = await issueSession({ userId: pending.userId, request, trustedDeviceId: trusted?.id ?? null });
+    const session = await issueSessionUnlessReset({ userId: pending.userId, request, trustedDeviceId: trusted?.id ?? null }, pending.passwordHash);
+    if (!session) return expired();
     await recordSecurityEvent({ userId: pending.userId, type: pending.origin === "google" ? "LOGIN_GOOGLE" : "LOGIN", request, detail: "Com verificação em duas etapas (e-mail)" });
-    return respondWithSession(pending.userId, token, trusted);
+    return respondWithSession(pending.userId, session.token, trusted);
   }
 
   const verified = await verifyMfaCode(pending.userId, { code: body?.code, recoveryCode: body?.recoveryCode });
@@ -70,7 +74,8 @@ export async function POST(request: Request) {
   // Dispositivo confiável só com código TOTP (recuperação indica aparelho perdido).
   const trusted = body?.trustDevice === true && verified.method === "totp" ? await createTrustedDevice(pending.userId, request) : null;
   if (trusted) await recordSecurityEvent({ userId: pending.userId, type: "TRUSTED_DEVICE_ADDED", request });
-  const { token } = await issueSession({ userId: pending.userId, request, trustedDeviceId: trusted?.id ?? null });
+  const session = await issueSessionUnlessReset({ userId: pending.userId, request, trustedDeviceId: trusted?.id ?? null }, pending.passwordHash);
+  if (!session) return expired();
   await recordSecurityEvent({ userId: pending.userId, type: pending.origin === "google" ? "LOGIN_GOOGLE" : "LOGIN", request, detail: "Com verificação em duas etapas" });
-  return respondWithSession(pending.userId, token, trusted, verified.method === "recovery" ? verified.recoveryRemaining ?? 0 : undefined);
+  return respondWithSession(pending.userId, session.token, trusted, verified.method === "recovery" ? verified.recoveryRemaining ?? 0 : undefined);
 }

@@ -3,8 +3,9 @@ import {
   createTrustedDevice,
   findTrustedDevice,
   getMfaState,
-  issueSession,
+  issueSessionUnlessReset,
   MOBILE_SESSION_TTL_SECONDS,
+  PASSWORD_RESET_DURING_LOGIN_MESSAGE,
   recordEmailCodeOutcome,
   recordMfaOutcome,
   recordSecurityEvent,
@@ -76,7 +77,9 @@ export async function POST(request: Request) {
   }
 
   const trustedDeviceId = recognizedDevice?.id ?? trustedDevice?.id ?? null;
-  const { token, expiresAt } = await issueSession({ userId: user.id, request, ttlSeconds: MOBILE_SESSION_TTL_SECONDS, trustedDeviceId });
+  const session = await issueSessionUnlessReset({ userId: user.id, request, ttlSeconds: MOBILE_SESSION_TTL_SECONDS, trustedDeviceId }, result.passwordHash);
+  if (!session) return NextResponse.json({ message: PASSWORD_RESET_DURING_LOGIN_MESSAGE }, { status: 401, headers: noStore });
+  const { token, expiresAt } = session;
   await recordSecurityEvent({ userId: user.id, type: "LOGIN", request, detail: recognizedDevice ? "App mobile (dispositivo confiável)" : "App mobile" });
   return NextResponse.json({
     token,
