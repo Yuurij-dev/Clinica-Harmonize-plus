@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { isStandalonePath } from "@/lib/standalone-paths";
 import { HarmonizeApp } from "./harmonize-app";
 
-export function AppRouterShell({ children }: { children: ReactNode }) {
+export function AppRouterShell({ children, supportWhatsappLink }: { children: ReactNode; supportWhatsappLink?: string | null }) {
   const pathname = usePathname();
-  return isStandalonePath(pathname) ? children : <HarmonizeApp />;
+  return isStandalonePath(pathname) ? children : <HarmonizeApp supportWhatsappLink={supportWhatsappLink} />;
 }

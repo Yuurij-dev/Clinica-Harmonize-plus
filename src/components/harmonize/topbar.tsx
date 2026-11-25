@@ -33,6 +33,7 @@ type TopbarProps = {
   user?: { id: string; name: string; role: string; avatarVersion?: string | null; clinicId?: string; clinic?: { name?: string; trialEndsAt?: string | null }; access?: { mode?: string; features?: readonly string[] } } | null;
   clinics?: UserClinic[];
   onSwitchClinic?: (clinicId: string) => Promise<void>;
+  supportWhatsappLink?: string | null;
 };
 
 type GlobalSearchResponse = { results: GlobalSearchResult[]; partial?: boolean };
@@ -105,7 +106,7 @@ function appointmentMinutesFromTime(time: string) {
   return (hours || 0) * 60 + (minutes || 0);
 }
 
-export function Topbar({ onDashboard, onSettings, onProfile, onNavigate, onQuickCreate, onOpenSettingsSection, onOpenStockAlert, onLogout, user, clinics = [], onSwitchClinic }: TopbarProps) {
+export function Topbar({ onDashboard, onSettings, onProfile, onNavigate, onQuickCreate, onOpenSettingsSection, onOpenStockAlert, onLogout, user, clinics = [], onSwitchClinic, supportWhatsappLink }: TopbarProps) {
   const canAccessDashboard = useCan("dashboard:access");
   const canAccessSettings = useCan("settings:access");
   // Estoque e Compras exigem papel e recurso do plano; sem o recurso não se chama /api/stock nem /api/products.
@@ -562,7 +563,7 @@ export function Topbar({ onDashboard, onSettings, onProfile, onNavigate, onQuick
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
             <DropdownMenuItem onSelect={onProfile}>Meu perfil</DropdownMenuItem>
-            <DropdownMenuItem>Ajuda e suporte</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => { if (supportWhatsappLink) window.open(supportWhatsappLink, "_blank", "noopener,noreferrer"); }}>Ajuda e suporte</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" disabled={isLoggingOut} onSelect={() => void handleLogout()}>
               {isLoggingOut ? <Loader2 className="animate-spin" /> : <LogOut />}

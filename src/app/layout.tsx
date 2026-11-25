@@ -3,6 +3,7 @@ import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AppRouterShell } from "@/components/harmonize/app-router-shell";
+import { getSupportWhatsappLink } from "@/lib/support-whatsapp";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -82,7 +83,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           })).observe(document.documentElement, { attributes: true, attributeFilter: ["autocomplete"], childList: true, subtree: true });
           disableAutocomplete(document.documentElement);
         })();`}</Script>
-        <AppRouterShell>{children}</AppRouterShell>
+        <AppRouterShell supportWhatsappLink={getSupportWhatsappLink()}>{children}</AppRouterShell>
       </body>
     </html>
   );
