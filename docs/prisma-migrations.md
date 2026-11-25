@@ -27,6 +27,18 @@ npm run db:migrate:deploy
 npm run db:generate
 ```
 
+## Contas de teste por plano (seed local)
+
+`npm run db:seed:plans` (script `prisma/seed-plans.local.mjs`) cria/atualiza uma conta ADMIN e uma clínica com assinatura `ACTIVE` para cada plano atual (`start`, `pro`, `premium`), em `seed.<plano>@teste.com`. É idempotente (upsert por `slug`/`email`): rodar de novo atualiza as mesmas contas, nunca duplica. O domínio `@teste.com` aproveita o modo de teste do projeto (`ENABLE_DEV_TEST_LOGIN=1` fora de produção): login e cadastro aceitam o código fixo `000000`, sem precisar de e-mail de verdade para o 2º fator.
+
+Bloqueios de ambiente (fail-closed): recusa rodar com `NODE_ENV=production`; exige `SEED_LOCAL_PLAN_ACCOUNTS=1` explícito; e valida que `DATABASE_URL`/`DIRECT_URL` apontam exatamente para `localhost:5433/harmonize` (o Postgres local deste projeto), recusando qualquer outro host, porta ou banco — inclusive Supabase.
+
+```bash
+SEED_LOCAL_PLAN_ACCOUNTS=1 SEED_PLAN_ACCOUNTS_PASSWORD="sua-senha-de-teste" npm run db:seed:plans
+```
+
+`SEED_PLAN_ACCOUNTS_PASSWORD` não tem regra de tamanho/força: são contas de teste isoladas no banco local, sem alcance em produção.
+
 ## Criar uma migration em desenvolvimento
 
 `prisma migrate dev` exige `SHADOW_DATABASE_URL`, apontando para um banco PostgreSQL descartável e separado. Nunca use a URL de produção nem a mesma URL de `DIRECT_URL` como shadow. Com as URLs configuradas:
