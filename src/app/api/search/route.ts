@@ -34,7 +34,7 @@ export async function GET(request: Request) {
     (SELECT a."id", concat_ws(' · ', p."name", a."procedure") AS title,
       concat_ws(' · ', to_char(a."date" AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY') || ' ' || a."time", a."professional", a."status") AS description,
       'agenda' AS section, 'Agendamento' AS kind
-     FROM "Appointment" a JOIN "Patient" p ON p."id" = a."patientId"
+     FROM "Appointment" a JOIN "Patient" p ON p."id" = a."patientId" AND p."clinicId" = ${clinicId}
      WHERE a."clinicId" = ${clinicId}
        AND (a."procedure" ILIKE ${pattern} OR a."professional" ILIKE ${pattern} ${appointmentNotesMatch}OR a."status" ILIKE ${pattern} OR p."name" ILIKE ${pattern})
      ORDER BY a."date" DESC LIMIT ${resultLimit})`);
@@ -60,7 +60,7 @@ export async function GET(request: Request) {
     matches.push(Prisma.sql`
       (SELECT m."id", p."name" AS title, concat_ws(' · ', m."type", m."reason") AS description,
         'estoque' AS section, 'Movimentação de estoque' AS kind
-       FROM "StockMovement" m JOIN "Product" p ON p."id" = m."productId"
+       FROM "StockMovement" m JOIN "Product" p ON p."id" = m."productId" AND p."clinicId" = ${clinicId}
        WHERE m."clinicId" = ${clinicId}
          AND (m."type" ILIKE ${pattern} OR m."reason" ILIKE ${pattern} OR m."notes" ILIKE ${pattern} OR p."name" ILIKE ${pattern})
        ORDER BY m."createdAt" DESC LIMIT ${resultLimit})`);
@@ -71,22 +71,24 @@ export async function GET(request: Request) {
       'compras' AS section, 'Compra' AS kind
      FROM "Purchase" b WHERE b."clinicId" = ${clinicId}
        AND (b."supplier" ILIKE ${pattern} OR b."invoiceNumber" ILIKE ${pattern} OR b."userName" ILIKE ${pattern}
-         OR EXISTS (SELECT 1 FROM "PurchaseItem" i JOIN "Product" p ON p."id" = i."productId" WHERE i."purchaseId" = b."id" AND p."name" ILIKE ${pattern}))
+         OR EXISTS (SELECT 1 FROM "PurchaseItem" i JOIN "Product" p ON p."id" = i."productId" AND p."clinicId" = ${clinicId} WHERE i."purchaseId" = b."id" AND p."name" ILIKE ${pattern}))
      ORDER BY b."purchasedOn" DESC LIMIT ${resultLimit})`);
 
+  // Notas do orçamento podem conter texto clínico e não são devolvidas: só entram no filtro com clinical:read.
+  const quoteNotesMatch = canForUser(user, "clinical:read") ? Prisma.sql`OR q."notes" ILIKE ${pattern} ` : Prisma.empty;
   if (canForUser(user, "quotes:access")) matches.push(Prisma.sql`
     (SELECT q."id", coalesce(p."name", 'Orçamento') AS title, left(q."items" || ' · ' || q."status", 180) AS description,
       'orcamentos' AS section, 'Orçamento' AS kind
-     FROM "Quote" q LEFT JOIN "Patient" p ON p."id" = q."patientId"
+     FROM "Quote" q LEFT JOIN "Patient" p ON p."id" = q."patientId" AND p."clinicId" = ${clinicId}
      WHERE q."clinicId" = ${clinicId}
-       AND (q."items" ILIKE ${pattern} OR q."notes" ILIKE ${pattern} OR q."status" ILIKE ${pattern} OR p."name" ILIKE ${pattern})
+       AND (q."items" ILIKE ${pattern} ${quoteNotesMatch}OR q."status" ILIKE ${pattern} OR p."name" ILIKE ${pattern})
      ORDER BY q."createdAt" DESC LIMIT ${resultLimit})`);
 
   if (canForUser(user, "payments:access")) matches.push(Prisma.sql`
     (SELECT pay."id", coalesce(p."name", 'Pagamento') AS title,
       concat_ws(' · ', pay."method", pay."status", to_char(pay."date" AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY'), 'R$ ' || to_char(pay."valueCents" / 100.0, 'FM999999990D00')) AS description,
       'pagamentos' AS section, 'Pagamento' AS kind
-     FROM "Payment" pay LEFT JOIN "Patient" p ON p."id" = pay."patientId"
+     FROM "Payment" pay LEFT JOIN "Patient" p ON p."id" = pay."patientId" AND p."clinicId" = ${clinicId}
      WHERE pay."clinicId" = ${clinicId}
        AND (pay."method" ILIKE ${pattern} OR pay."status" ILIKE ${pattern} OR pay."installments" ILIKE ${pattern} OR p."name" ILIKE ${pattern})
      ORDER BY pay."date" DESC LIMIT ${resultLimit})`);
