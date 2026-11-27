@@ -15,6 +15,7 @@ precision highp float;
 uniform vec2 res;
 uniform float scale;
 uniform float time;
+uniform vec2 mouse;
 uniform sampler2D curves;
 
 vec3 backdrop(vec2 pos) {
@@ -50,6 +51,16 @@ void main() {
       mod(n * 233.0 + way * time * (48.0 + 9.0 * n), ${HEIGHT}.0 + 260.0) - 130.0
     );
     vec2 away = design - center;
+    float k = max(0.0, 1.0 - length(away) / radius);
+    bend -= away * k * k * 1.25;
+    vec2 spot = (away - radius * vec2(-0.16, 0.22)) / (radius * vec2(0.42, 0.10));
+    spot = mat2(0.9, -0.43, 0.43, 0.9) * spot;
+    shine += exp(-dot(spot, spot)) * 0.11;
+  }
+  // Bolha que acompanha o cursor (mouse em coordenadas de design; fica fora da tela quando não há cursor sobre o painel).
+  {
+    float radius = 104.0;
+    vec2 away = design - mouse;
     float k = max(0.0, 1.0 - length(away) / radius);
     bend -= away * k * k * 1.25;
     vec2 spot = (away - radius * vec2(-0.16, 0.22)) / (radius * vec2(0.42, 0.10));
@@ -93,12 +104,16 @@ function startBubbles(canvas: HTMLCanvasElement) {
   for (const [name, value] of [[gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE], [gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR]]) gl.texParameteri(gl.TEXTURE_2D, name, value);
 
   const uniform = (name: string) => gl.getUniformLocation(program, name);
-  const [resolution, scaleAt, timeAt] = [uniform("res"), uniform("scale"), uniform("time")];
+  const [resolution, scaleAt, timeAt, mouseAt] = [uniform("res"), uniform("scale"), uniform("time"), uniform("mouse")];
   const sheet = document.createElement("canvas");
   const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   let frame = 0;
+  // Bolha do cursor: posição em coordenadas de design, fora da tela até o ponteiro entrar no painel.
+  const mouse = new Float32Array([-1e4, -1e4]);
+  const view = { scale: 1, width: 0, height: 0, ratio: 1 };
   const draw = (milliseconds: number) => {
     gl.uniform1f(timeAt, still ? 4 : milliseconds / 1000);
+    gl.uniform2f(mouseAt, mouse[0], mouse[1]);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     canvas.style.opacity = "1";
     if (!still) frame = window.requestAnimationFrame(draw);
@@ -114,6 +129,7 @@ function startBubbles(canvas: HTMLCanvasElement) {
     canvas.width = sheet.width = width;
     canvas.height = sheet.height = height;
     const scale = Math.max(width / WIDTH, height / HEIGHT);
+    view.scale = scale; view.width = width; view.height = height; view.ratio = ratio;
     pen.fillStyle = "#000";
     pen.fillRect(0, 0, width, height);
     pen.setTransform(scale, 0, 0, scale, (width - WIDTH * scale) / 2, (height - HEIGHT * scale) / 2);
@@ -132,10 +148,31 @@ function startBubbles(canvas: HTMLCanvasElement) {
   const lost = () => { window.cancelAnimationFrame(frame); canvas.style.opacity = "0"; };
   canvas.addEventListener("webglcontextlost", lost);
 
+  // Segue o ponteiro sobre o painel; o loop de animação já redesenha com a posição nova a cada quadro.
+  const onMove = (event: PointerEvent) => {
+    if (!view.width) return;
+    const rect = canvas.getBoundingClientRect();
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) {
+      mouse[0] = mouse[1] = -1e4;
+      return;
+    }
+    mouse[0] = ((event.clientX - rect.left) * view.ratio - 0.5 * view.width) / view.scale + 0.5 * WIDTH;
+    mouse[1] = ((event.clientY - rect.top) * view.ratio - 0.5 * view.height) / view.scale + 0.5 * HEIGHT;
+  };
+  const clearMouse = () => { mouse[0] = mouse[1] = -1e4; };
+  if (!still) {
+    window.addEventListener("pointermove", onMove, { passive: true });
+    window.addEventListener("blur", clearMouse);
+  }
+
   return () => {
     window.cancelAnimationFrame(frame);
     observer.disconnect();
     canvas.removeEventListener("webglcontextlost", lost);
+    if (!still) {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("blur", clearMouse);
+    }
     gl.deleteProgram(program);
     gl.deleteBuffer(buffer);
     gl.deleteTexture(texture);
