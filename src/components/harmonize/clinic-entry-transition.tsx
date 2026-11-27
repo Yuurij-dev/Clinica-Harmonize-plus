@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { AlertCircle, Check } from "lucide-react";
+import { BrandBackdrop } from "./brand-backdrop";
 
 type ClinicEntryTransitionProps = {
   sessionConfirmed: boolean;
@@ -15,14 +16,15 @@ type ClinicEntryTransitionProps = {
 export function ClinicEntryTransition({ sessionConfirmed, clinicName, message, error, onRetry, onBackToLogin }: ClinicEntryTransitionProps) {
   return (
     <main className="clinic-entry grid min-h-svh w-full overflow-hidden bg-[#f8faff] text-[#17134d] lg:grid-cols-[51%_49%]">
-      <section className="relative flex min-h-[220px] items-center justify-center overflow-hidden bg-[#4938f4] px-6 py-6 text-center text-white sm:min-h-[260px] lg:min-h-svh lg:px-12 lg:py-12">
-        <div aria-hidden="true" className="absolute inset-0 bg-center bg-no-repeat" style={{ backgroundImage: "url('/login-brand-background.png')", backgroundSize: "100% 100%" }} />
+      <section className="relative flex min-h-[220px] items-center justify-center overflow-hidden bg-[#10091f] px-6 py-6 text-center text-white sm:min-h-[260px] lg:min-h-svh lg:px-12 lg:py-12">
+        <BrandBackdrop />
+        <Image alt="" loading="eager" className="absolute left-5 top-5 hidden h-auto w-10 sm:block sm:left-6 sm:top-6 lg:left-9 lg:top-10 lg:w-14" height={36} src="/brand/mark-white.svg" unoptimized width={36} />
         <div className="clinic-entry-brand relative z-10 flex w-full max-w-xl flex-col items-center">
-          <h1 className="w-full max-w-[220px] sm:max-w-[280px] lg:max-w-[380px]">
+          <h1 className="w-full max-w-[220px] sm:max-w-[300px] lg:max-w-[400px]">
             <Image alt="Harmonize+" className="h-auto w-full" height={300} priority src="/brand/logo-horizontal-white.svg" unoptimized width={1200} />
           </h1>
-          <p className="mt-1 text-sm font-medium sm:text-base lg:mt-2 lg:text-xl">Gestão para clínicas</p>
-          <p className="mt-3 hidden max-w-md text-sm leading-6 text-white/85 sm:block lg:mt-6 lg:text-base lg:leading-7">
+          <p className="mt-2 text-lg font-semibold sm:text-2xl">Gestão para clínicas</p>
+          <p className="mt-4 hidden max-w-md text-sm leading-6 text-white/85 sm:block lg:mt-7 lg:text-base lg:leading-7">
             Mais organização, mais tempo para o que realmente importa: seus pacientes.
           </p>
         </div>
