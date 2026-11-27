@@ -53,7 +53,10 @@ export function PatientForm({ saving, onSubmit, onCancel, onOpenExisting, mode =
   // nada é enviado por este formulário (a API recusa de todo jeito, mas a tela já não oferece o que seria negado).
   // Exige TAMBÉM anamnesis:read: só write, numa matriz personalizada, veria o campo vazio (o GET omite o valor real
   // sem read) e poderia sobrescrever sem saber que já havia algo preenchido.
-  const canSeeHealth = useCan("anamnesis:write") && useCan("anamnesis:read");
+  // Hooks chamados incondicionalmente (rules-of-hooks); a combinação é que decide a visibilidade.
+  const canWriteHealth = useCan("anamnesis:write");
+  const canReadHealth = useCan("anamnesis:read");
+  const canSeeHealth = canWriteHealth && canReadHealth;
   const validate = (next: Values) => {
     const found = validateRegistration(editing ? { ...next, privacyConsent: true } : next, undefined, { editing });
     // CPF do responsável mascarado (vindo do servidor) = manter o atual.

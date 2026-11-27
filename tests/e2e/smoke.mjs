@@ -12937,7 +12937,101 @@ async function passwordReset() {
   }
 }
 
+// --- Busca global: SQL válido (sem partial silencioso), escopo por clínica e gate das notas de orçamento ---
+async function globalSearch() {
+  const P = "busca:";
+  const search = (q) => api("GET", `/api/search?q=${encodeURIComponent(q)}`);
+  const termPatient = `Zqbusca${run}`;
+  const termNote = `Znotaorc${run}`;
+  const termOther = `Zoutraclin${run}`;
+  const otherEmail = `e2e-busca-${run}@example.com`;
+  const otherPassword = `E2e-${run}-Busca9!`;
+  const otherClinic = `E2E Clínica Busca ${run}`;
+  const staffEmail = `e2e-busca-staff-${run}@example.com`;
+  const staffPassword = `E2e-${run}-BStaff9!`;
+  let team = null;
+  let originalMatrix = null;
+  try {
+    const patient = (await api("POST", "/api/patients", { ...regDefaults, name: `${termPatient} Paciente`, phone: "11999990077", age: 30, cpf: randomCpf() })).data.patient;
+    const proc = (await api("POST", "/api/procedures", { custom: true, name: `E2E Busca ${run}`, category: "Teste", price: 100, durationMinutes: 30, margin: 30 })).data.procedure;
+    const journey = (await api("POST", `/api/patients/${patient.id}/journeys`, { name: `Jornada busca ${run}`, professionalId: (await api("GET", "/api/team/professionals")).data.professionals?.[0]?.id })).data.journey;
+    const evaluation = (await api("PUT", `/api/patients/${patient.id}/evaluation`, { journeyId: journey.id, photos: [], assessment: fullAssessment, status: "Concluída" })).data.evaluation;
+    const q = await api("POST", "/api/quotes", { patientId: patient.id, journeyId: journey.id, evaluationId: evaluation.id, details: [{ procedureId: proc.id, quantity: 1, discountCents: 0 }], paymentMethod: "Pix", installments: 1, notes: `obs ${termNote}`, status: "Rascunho" });
+    check(`${P} paciente e orçamento com nota única criados`, !!patient?.id && q.status === 201, q.status);
+    const quoteId = q.data.quote?.id;
+
+    // 1) SQL válido como ADMIN.
+    let r = await search(termPatient);
+    check(`${P} ADMIN: 200, partial false e paciente encontrado`, r.status === 200 && r.data.partial === false && r.data.results?.some((x) => x.id === patient.id && x.kind === "Paciente"), `${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+    r = await search(`E2E Busca ${run}`);
+    check(`${P} ADMIN: procedimento encontrado, partial false`, r.status === 200 && r.data.partial === false && r.data.results?.some((x) => x.id === proc.id), `${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+    r = await search("a");
+    check(`${P} menos de 2 caracteres devolve lista vazia`, r.status === 200 && r.data.results?.length === 0, r.status);
+    r = await search("%_'\";--");
+    check(`${P} caracteres especiais não quebram o SQL`, r.status === 200 && r.data.partial === false, `${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
+
+    // 3) ADMIN encontra por nota do orçamento.
+    r = await search(termNote);
+    check(`${P} ADMIN encontra orçamento pela nota`, r.status === 200 && r.data.partial === false && r.data.results?.some((x) => x.id === quoteId && x.kind === "Orçamento"), `${r.status} ${JSON.stringify(r.data).slice(0, 200)}`);
+    check(`${P} resposta não devolve o texto da nota`, !JSON.stringify(r.data).includes(termNote));
+
+    // 2) Outra clínica.
+    r = await withSession("", () => api("POST", "/api/auth/register", { clinicName: otherClinic, name: "E2E Busca", email: otherEmail, password: otherPassword }));
+    const other = r.status === 201 ? await loginAs(otherEmail, otherPassword) : null;
+    if (other?.status === 200) {
+      const otherPatient = await withSession(other.cookie, async () => (await api("POST", "/api/patients", { ...regDefaults, name: `${termOther} Externo`, phone: "11999990078", age: 40, cpf: randomCpf() })).data.patient);
+      const own = await withSession(other.cookie, () => search(termOther));
+      check(`${P} a outra clínica encontra o próprio paciente`, own.status === 200 && own.data.partial === false && own.data.results?.some((x) => x.id === otherPatient?.id), `${own.status} ${JSON.stringify(own.data).slice(0, 150)}`);
+      r = await search(termOther);
+      check(`${P} termo só da outra clínica não aparece na clínica de teste`, r.status === 200 && r.data.partial === false && r.data.results?.length === 0, JSON.stringify(r.data).slice(0, 200));
+      const reverse = await withSession(other.cookie, () => search(termPatient));
+      check(`${P} a outra clínica não vê o paciente da clínica de teste`, reverse.status === 200 && reverse.data.results?.length === 0, JSON.stringify(reverse.data).slice(0, 200));
+      const reverseNote = await withSession(other.cookie, () => search(termNote));
+      check(`${P} a outra clínica não encontra a nota do orçamento`, reverseNote.status === 200 && reverseNote.data.results?.length === 0, JSON.stringify(reverseNote.data).slice(0, 200));
+    } else {
+      check(`${P} segunda clínica criada`, false, `registro ${r.status} login ${other?.status}`);
+    }
+
+    // Sem sessão.
+    r = await withSession("", () => search(termPatient));
+    check(`${P} sem sessão: 401`, r.status === 401, r.status);
+
+    // 3) STAFF com orçamentos liberados, mas sem clinical:read.
+    const matrixRes = await api("GET", "/api/clinic/role-permissions");
+    if (matrixRes.status === 200) {
+      originalMatrix = matrixRes.data.matrix;
+      const modified = JSON.parse(JSON.stringify(originalMatrix));
+      modified.STAFF["quotes:access"] = true;
+      modified.STAFF["clinical:read"] = false;
+      const patched = await api("PATCH", "/api/clinic/role-permissions", { matrix: modified });
+      check(`${P} STAFF recebe quotes:access sem clinical:read`, patched.status === 200, `${patched.status} ${JSON.stringify(patched.data).slice(0, 120)}`);
+    } else {
+      check(`${P} matriz de permissões lida`, false, matrixRes.status);
+    }
+    r = await api("POST", "/api/team", { name: "E2E Atendente Busca", email: staffEmail, password: staffPassword, role: "STAFF", ...teamProfile() });
+    team = r.status === 201 ? r.data.member : null;
+    const staff = team ? await loginAs(staffEmail, staffPassword) : null;
+    if (staff?.status === 200) {
+      const s = await withSession(staff.cookie, async () => ({ byNote: await search(termNote), byName: await search(termPatient) }));
+      check(`${P} STAFF sem clinical:read: busca pela nota não acha o orçamento e partial false`, s.byNote.status === 200 && s.byNote.data.partial === false && !s.byNote.data.results?.some((x) => x.id === quoteId), `${s.byNote.status} ${JSON.stringify(s.byNote.data).slice(0, 200)}`);
+      check(`${P} STAFF sem clinical:read: SQL segue válido (paciente por nome, partial false)`, s.byName.status === 200 && s.byName.data.partial === false && s.byName.data.results?.some((x) => x.id === patient.id), `${s.byName.status} ${JSON.stringify(s.byName.data).slice(0, 200)}`);
+      const qs = await withSession(staff.cookie, () => search(`E2E Busca ${run}`));
+      check(`${P} STAFF sem quotes ligados ao nome do paciente: orçamento aparece por nome (SQL de orçamento válido)`, qs.status === 200 && qs.data.partial === false && qs.data.results?.some((x) => x.id === quoteId), `${qs.status} ${JSON.stringify(qs.data).slice(0, 200)}`);
+    } else {
+      check(`${P} usuário STAFF criado`, false, `team ${r.status} login ${staff?.status}`);
+    }
+  } finally {
+    if (originalMatrix) await api("PATCH", "/api/clinic/role-permissions", { matrix: originalMatrix });
+    if (team) await api("DELETE", "/api/team", { membershipId: team.id });
+    await prisma.clinicMembership.deleteMany({ where: { user: { email: { in: [otherEmail, staffEmail] } } } });
+    await prisma.clinic.deleteMany({ where: { name: otherClinic } });
+    await prisma.user.deleteMany({ where: { email: { in: [otherEmail, staffEmail] } } });
+    await resetTestClinic();
+  }
+}
+
 const suites = {
+  busca_global: { needs: [], run: () => globalSearch() },
   recuperacao_senha: { needs: [], run: () => passwordReset() },
   planos_limites: { needs: [], run: () => planLimits() },
   planos_estado: { needs: [], run: () => planStates() },
