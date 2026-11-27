@@ -289,7 +289,7 @@ export function LoginScreen({ initialMode = "login", googleStatus, supportWhatsa
 const BRAND_PILLS = ["+ Controle", "+ Tempo", "+ Gestão", "+ Visibilidade"];
 
 // Botão do painel de marca (criar conta / voltar ao login).
-export const authActionClass = "mt-6 h-11 rounded-full border-0 bg-[linear-gradient(90deg,#2b2196_0%,#4938f4_58%,#a29cf0_100%)] px-4 text-base font-normal text-white shadow-none transition hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white sm:mt-9 sm:h-12 sm:text-lg [&_svg]:ml-3";
+export const authActionClass = "mt-6 h-11 rounded-full border-0 bg-[linear-gradient(90deg,#2b2196_0%,#4938f4_58%,#a29cf0_100%)] px-4 text-base font-normal text-white shadow-none transition hover:text-white hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white sm:mt-9 sm:h-12 sm:text-lg [&_svg]:ml-3";
 
 // Casca visual compartilhada (login, convite e recuperação de senha): painel de marca + cartão branco.
 export function AuthShell({ action, children }: { action?: React.ReactNode; children: React.ReactNode }) {
