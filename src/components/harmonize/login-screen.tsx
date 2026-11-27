@@ -18,6 +18,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { BrandBackdrop } from "@/components/harmonize/brand-backdrop";
 import { revealValidationTarget } from "@/components/harmonize/reveal-validation-target";
 import { OtpInput } from "@/components/harmonize/otp-input";
 import { PASSWORD_RULE_LABELS, PASSWORD_RULE_MESSAGE, isStrongPassword, passwordChecks, passwordStrength } from "@/lib/password-rules";
@@ -264,8 +265,8 @@ export function LoginScreen({ initialMode = "login", googleStatus, supportWhatsa
 
   return (
     <AuthShell action={
-      <Button className="mt-5 h-11 rounded-full bg-white px-7 font-bold text-[#4938f4] shadow-none hover:bg-[#f2f1ff] sm:mt-9 sm:h-12" onClick={mode === "login" ? openRegister : openLogin} type="button" variant="secondary">
-        {mode === "login" ? "Crie sua conta grátis" : "Voltar ao login"}<ArrowRight className="h-4 w-4" />
+      <Button className={authActionClass} onClick={mode === "login" ? openRegister : openLogin} type="button" variant="secondary">
+        {mode === "login" ? <span>Crie sua <strong className="font-bold">conta grátis</strong></span> : "Voltar ao login"}<ArrowRight className="h-4 w-4" />
       </Button>
     }>
       {mode === "change-password" ? (
@@ -285,19 +286,28 @@ export function LoginScreen({ initialMode = "login", googleStatus, supportWhatsa
   );
 }
 
-// Casca visual compartilhada com a página pública do convite: painel de marca + cartão branco.
+const BRAND_PILLS = ["+ Controle", "+ Tempo", "+ Gestão", "+ Visibilidade"];
+
+// Botão do painel de marca (criar conta / voltar ao login).
+export const authActionClass = "mt-6 h-11 rounded-full border-0 bg-[linear-gradient(90deg,#2b2196_0%,#4938f4_58%,#a29cf0_100%)] px-4 text-base font-normal text-white shadow-none transition hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white sm:mt-9 sm:h-12 sm:text-lg [&_svg]:ml-3";
+
+// Casca visual compartilhada (login, convite e recuperação de senha): painel de marca + cartão branco.
 export function AuthShell({ action, children }: { action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <main className="grid min-h-screen w-full lg:h-screen overflow-hidden bg-white text-[#17134d] lg:grid-cols-[52%_48%]">
-      <section className="relative flex min-h-[270px] items-center justify-center overflow-hidden bg-[#4938f4] px-6 py-8 text-center text-white sm:min-h-[360px] sm:px-10 sm:py-12 lg:h-screen lg:px-14 lg:py-16">
-        <div aria-hidden="true" className="absolute inset-0 bg-center bg-no-repeat" style={{ backgroundImage: "url('/login-brand-background.png')", backgroundSize: "100% 100%" }} />
-        <div className="hp-brand-enter relative z-10 flex w-full max-w-xl flex-col items-center">
-          <h1 className="w-full max-w-[260px] sm:max-w-[340px] lg:max-w-[420px]">
+    <main className="grid min-h-screen w-full lg:h-screen overflow-hidden bg-white text-[#17134d] lg:grid-cols-2">
+      <section className="relative flex min-h-[270px] items-center justify-center overflow-hidden bg-[#10091f] px-6 py-8 text-center text-white sm:min-h-[420px] sm:px-10 sm:py-12 lg:h-screen lg:px-14 lg:pb-8 lg:pt-28">
+        <BrandBackdrop />
+        <Image alt="" loading="eager" className="absolute left-5 top-5 hidden h-auto w-10 sm:block sm:left-6 sm:top-6 lg:left-9 lg:top-12 lg:w-14" height={36} src="/brand/mark-white.svg" unoptimized width={36} />
+        <div className="hp-brand-enter relative z-10 flex w-full max-w-2xl flex-col items-center">
+          <ul className="mb-[clamp(1.5rem,14vh,9rem)] hidden flex-wrap justify-center gap-3 sm:flex xl:gap-5">
+            {BRAND_PILLS.map((pill) => <li className="rounded-full border border-white/80 px-5 py-1.5 text-sm xl:px-6" key={pill}>{pill}</li>)}
+          </ul>
+          <h1 className="w-full max-w-[260px] sm:max-w-[340px] lg:max-w-[440px]">
             <Image alt="Harmonize+" className="h-auto w-full" height={300} priority src="/brand/logo-horizontal-white.svg" unoptimized width={1200} />
           </h1>
-          <p className="mt-2 text-xl font-medium sm:text-2xl">Gestão para clínicas</p>
-          <p className="mt-5 hidden max-w-md text-sm leading-6 text-white/85 sm:mt-7 sm:block sm:text-base sm:leading-7">Mais organização, mais tempo para o que realmente importa: seus pacientes.</p>
+          <p className="mt-2 text-xl font-semibold sm:text-[28px] sm:leading-9">Gestão para clínicas</p>
           {action}
+          <p className="mt-[clamp(1.5rem,12vh,7.5rem)] hidden text-base leading-7 sm:block lg:text-lg">Mais organização, mais tempo para o que realmente importa: seus pacientes.</p>
         </div>
       </section>
 
@@ -338,7 +348,7 @@ function LoginForm({ error, notice, isSubmitting, login, onLoginChange, onPasswo
         <TextField compact icon={Mail} label="seu e-mail" onChange={onLoginChange} placeholder="nome@dominio.com" value={login} autoComplete="username" />
         <div className="mt-4">
           <PasswordField compact label="sua senha" onChange={onPasswordChange} password={password} setShowPassword={setShowPassword} showPassword={showPassword} autoComplete="current-password" />
-          <Link className="mt-2 inline-block text-xs font-medium text-[#4938f4] hover:underline" href="/recuperar-senha">Esqueceu sua senha?</Link>
+          <Link className="mt-2 inline-block text-base text-[#4938f4] hover:underline" href="/recuperar-senha">Esqueceu sua senha?</Link>
         </div>
         {error ? <div className="mt-4"><ErrorMessage>{error}</ErrorMessage></div> : notice ? <p aria-live="polite" className="mt-4 rounded-[8px] bg-[#e7f4ef] px-3 py-2 text-xs font-semibold text-[#16805d]" role="status">{notice}</p> : null}
         <Button className="mt-5 h-[42px] w-full rounded-[10px] bg-[#4938f4] px-4 text-[13px] font-bold hover:bg-[#3d2de0]" size="lg" disabled={isSubmitting} type="submit"><ArrowRight className="h-4 w-4" />{isSubmitting ? "Validando acesso..." : "Acessar"}</Button>
