@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, ArrowRight, CircleAlert, CircleCheck, KeyRound, Mail, MailCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { normalizeResetEmailInput, readResetTokenFromHash } from "@/lib/password-reset-client";
-import { AuthShell, ErrorMessage, PasswordField, PasswordStrength, SignupHeader, TextField } from "./login-screen";
+import { authActionClass, AuthShell, ErrorMessage, PasswordField, PasswordStrength, SignupHeader, TextField } from "./login-screen";
 
 const primaryButton = "h-[42px] w-full rounded-[10px] bg-[#4938f4] px-4 text-[13px] font-bold hover:bg-[#3d2de0]";
 const textLink = "inline-flex min-h-11 w-full items-center justify-center gap-1.5 text-xs font-bold text-[#5147dc] hover:underline focus-visible:outline-2 focus-visible:outline-[#5147dc]";
@@ -30,7 +30,7 @@ function ResetShell({ children }: { children: React.ReactNode }) {
   }, []);
   return (
     <AuthShell action={
-      <Button asChild className="mt-5 h-11 rounded-full bg-white px-7 font-bold text-[#4938f4] shadow-none hover:bg-[#f2f1ff] sm:mt-9 sm:h-12" variant="secondary">
+      <Button asChild className={authActionClass} variant="secondary">
         <Link href="/login">Voltar ao login<ArrowRight className="h-4 w-4" /></Link>
       </Button>
     }>
